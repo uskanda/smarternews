@@ -18,6 +18,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   isRead: false,
   starred: false,
   primaryUrl: "https://example.org/a",
+  refCount: 2,
   event: null,
   body: "The **vendor** shipped a fix.",
   bodyHtml: "<p>The <strong>vendor</strong> shipped a fix.</p>",

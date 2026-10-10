@@ -8,14 +8,14 @@ A language model does the judging and the writing, and ordinary code does the re
 
 ## Status
 
-This repository contains the server: the crawler, the API and the RSS feeds. A web app and an Android app that use the API are planned and are not in the repository yet. Until then, any RSS reader can subscribe to the feeds.
+This repository contains the server (the crawler, the API and the RSS feeds) and a web app for reading and configuring. An Android app that uses the same API is planned and is not in the repository yet. Any RSS reader can also subscribe to the feeds.
 
 ## Requirements
 
 - Linux or macOS with Node.js 24 or later and pnpm.
 - A model provider. The default is the [Claude Code](https://claude.com/claude-code) command `claude`, installed and logged in for the user that runs the server. An OpenAI-compatible server such as Ollama or LM Studio also works; see [docs/providers.md](docs/providers.md).
 
-The server runs TypeScript directly with Node, so there is no build step.
+The server runs TypeScript directly with Node and needs no build. Only the web app is built, with one command.
 
 ## Quick start
 
@@ -23,6 +23,7 @@ The server runs TypeScript directly with Node, so there is no build step.
 git clone https://github.com/uskanda/smarternews.git
 cd smarternews
 pnpm install
+pnpm build    # builds the web app; skip it to use the API and the feeds only
 
 # Load the sample categories, then replace them with your own later.
 node apps/server/src/main.ts import examples/settings.example.yaml
@@ -36,7 +37,7 @@ node apps/server/src/main.ts serve
 
 The `run` command works without the server. Once the server is running, start runs through the API instead (`POST /api/v1/categories/:id/runs`), so that they wait their turn in the server's queue.
 
-The server listens on `127.0.0.1:8787` by default. In another terminal:
+The server listens on `127.0.0.1:8787` by default. Open `http://127.0.0.1:8787/` in a browser and paste the API token, or use the API from another terminal:
 
 ```bash
 API=http://127.0.0.1:8787
@@ -47,6 +48,22 @@ curl -s "$API/api/v1/health"
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true"
 curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 ```
+
+## Web app
+
+The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. It follows the light or dark setting of the device.
+
+- Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
+- Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
+- An event category is shown as a list of upcoming events grouped by day.
+- The settings pages edit categories, topics, the reader information and the global settings, and load or save the settings file.
+- The run history shows what each run collected, what failed, and which candidates were rejected and why.
+
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, and `?` lists the keys.
+
+The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
+
+The token is stored in the browser's local storage. "このブラウザーからトークンを消す" in the settings removes it. To work on the app itself, run `pnpm --filter @smarternews/web dev` next to a running server.
 
 ## What you configure
 
@@ -112,10 +129,10 @@ A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once 
 ## Development
 
 ```bash
-make verify    # lint, type check, tests, and a scan for personal data
+make verify    # lint, type check, tests, the web build, and a scan for personal data
 ```
 
-Requirements and design live in [openspec/](openspec/) and are written in Japanese. Tests never call a real model or a real site: they use a fake provider and recorded responses.
+Requirements and design live in [openspec/](openspec/) and are written in Japanese. [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) hold the product facts and the visual tokens of the web app. Tests never call a real model or a real site: they use a fake provider and recorded responses.
 
 ## License
 

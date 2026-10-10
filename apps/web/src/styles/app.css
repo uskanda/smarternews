@@ -1,0 +1,94 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background: var(--color-background);
+    color: var(--color-on-surface);
+    @apply type-body-md;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* On touch devices, controls and stand-alone links are at least one finger tall. */
+  @media (pointer: coarse) {
+    button,
+    select,
+    textarea,
+    input:not([type="checkbox"]):not([type="radio"]),
+    label:has(> input[type="checkbox"]),
+    label:has(> input[type="radio"]),
+    .tap {
+      min-height: var(--spacing-touch);
+    }
+
+    a.tap:not(.flex) {
+      display: inline-flex;
+      align-items: center;
+    }
+  }
+
+  /* Importance five: the headline is marked like a highlighter stroke over its lower half. */
+  .headline-mark {
+    background: linear-gradient(transparent 52%, var(--color-mark-fill) 52%);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  .article-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+    overflow-wrap: anywhere;
+  }
+
+  .article-body ul,
+  .article-body ol {
+    padding-left: 1.4em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+  }
+
+  .article-body ul {
+    list-style: disc;
+  }
+
+  .article-body ol {
+    list-style: decimal;
+  }
+
+  .article-body strong {
+    font-weight: 700;
+  }
+
+  .article-body code {
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+  }
+
+  .article-body blockquote {
+    border-left: 3px solid var(--color-outline);
+    padding-left: var(--spacing-md);
+    color: var(--color-on-surface-muted);
+  }
+}

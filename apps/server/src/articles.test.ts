@@ -152,7 +152,7 @@ describe("read state and stars", () => {
 
     const response = await s.post("/api/v1/articles/mark-read", { categoryId: security.id, before: listedAt });
 
-    expect(await response.json()).toEqual({ updated: 1 });
+    expect(await response.json()).toEqual({ updated: 1, ids: [listed] });
     const unread = (await (await s.get("/api/v1/articles?unread=true")).json()).items.map((item: { id: number }) => item.id);
     expect(unread.sort()).toEqual([elsewhere, arrivedLater].sort());
     expect(unread).not.toContain(listed);
@@ -175,5 +175,141 @@ describe("read state and stars", () => {
     const id = s.article(s.category().id);
     const response = await s.patch(`/api/v1/articles/${id}`, { isRead: "yes" });
     expect(response.status).toBe(400);
+  });
+});
+
+describe("importance filter", () => {
+  it("returns only the articles at or above the given importance", async () => {
+    const s = testServer();
+    const category = s.category();
+    s.article(category.id, { importance: 3 });
+    const four = s.article(category.id, { importance: 4 });
+    const five = s.article(category.id, { importance: 5 });
+
+    const body = await (await s.get("/api/v1/articles?minImportance=4")).json();
+
+    expect(body.items.map((item: { id: number }) => item.id).sort()).toEqual([four, five]);
+  });
+
+  it("refuses an importance outside one to five", async () => {
+    const s = testServer();
+    expect((await s.get("/api/v1/articles?minImportance=9")).status).toBe(400);
+  });
+});
+
+describe("ended events in lists without a kind", () => {
+  function seeded() {
+    const s = testServer("2026-03-10T12:00:00.000Z");
+    const news = s.category("News");
+    const events = s.category("Events", "event");
+    const event = (startsAt: string, endsAt: string) =>
+      s.article(events.id, { kind: "event", event: { key: startsAt, startsAt, endsAt, venue: null, fee: null, registration: "unknown" } });
+    const story = s.article(news.id);
+    const ended = event("2026-03-09T10:00:00.000Z", "2026-03-09T16:00:00.000Z");
+    const upcoming = event("2026-03-11T10:00:00.000Z", "2026-03-11T16:00:00.000Z");
+    return { s, news, events, story, ended, upcoming };
+  }
+
+  it("leaves out events that have ended", async () => {
+    const { s, story, upcoming } = seeded();
+    const body = await (await s.get("/api/v1/articles")).json();
+    expect(body.items.map((item: { id: number }) => item.id).sort()).toEqual([story, upcoming].sort());
+  });
+
+  it("includes them when asked to", async () => {
+    const { s } = seeded();
+    const body = await (await s.get("/api/v1/articles?includeEnded=true")).json();
+    expect(body.items).toHaveLength(3);
+  });
+
+  it("counts unread per category without the ended events", async () => {
+    const { s, news, events, story } = seeded();
+    await s.patch(`/api/v1/articles/${story}`, { starred: true });
+    const second = s.article(news.id);
+    await s.patch(`/api/v1/articles/${second}`, { isRead: true });
+
+    const counts = await (await s.get("/api/v1/counts")).json();
+
+    expect(counts).toEqual({
+      unread: 2,
+      starred: 1,
+      categories: [
+        { categoryId: news.id, unread: 1, total: 2 },
+        { categoryId: events.id, unread: 1, total: 2 },
+      ],
+    });
+  });
+});
+
+describe("counts", () => {
+  it("gives the unread and total per category, and the starred total", async () => {
+    const s = testServer();
+    const a = s.category("A");
+    const b = s.category("B");
+    const empty = s.category("Empty");
+    const first = s.article(a.id);
+    s.article(a.id);
+    const read = s.article(a.id);
+    s.article(b.id);
+    await s.patch(`/api/v1/articles/${read}`, { isRead: true });
+    await s.patch(`/api/v1/articles/${first}`, { starred: true });
+
+    const counts = await (await s.get("/api/v1/counts")).json();
+
+    expect(counts).toEqual({
+      unread: 3,
+      starred: 1,
+      categories: [
+        { categoryId: a.id, unread: 2, total: 3 },
+        { categoryId: b.id, unread: 1, total: 1 },
+        { categoryId: empty.id, unread: 0, total: 0 },
+      ],
+    });
+  });
+});
+
+describe("bulk read state", () => {
+  it("marks only the articles at or above the given importance and names them", async () => {
+    const s = testServer();
+    const category = s.category();
+    s.article(category.id, { importance: 3 });
+    s.article(category.id, { importance: 3 });
+    const four = s.article(category.id, { importance: 4 });
+    s.clock.advance(60_000);
+
+    const response = await s.post("/api/v1/articles/mark-read", { before: s.clock().toISOString(), minImportance: 4 });
+
+    expect(await response.json()).toEqual({ updated: 1, ids: [four] });
+    expect((await (await s.get("/api/v1/articles?unread=true")).json()).items).toHaveLength(2);
+  });
+
+  it("names every article it marked", async () => {
+    const s = testServer();
+    const category = s.category();
+    const ids = [s.article(category.id), s.article(category.id), s.article(category.id)];
+    s.clock.advance(60_000);
+
+    const body = await (await s.post("/api/v1/articles/mark-read", { before: s.clock().toISOString() })).json();
+
+    expect(body.ids.sort()).toEqual(ids);
+  });
+
+  it("puts the named articles back to unread and leaves the others alone", async () => {
+    const s = testServer();
+    const category = s.category();
+    const ids = [s.article(category.id), s.article(category.id), s.article(category.id)];
+    const other = s.article(category.id);
+    for (const id of [...ids, other]) await s.patch(`/api/v1/articles/${id}`, { isRead: true });
+
+    const response = await s.post("/api/v1/articles/mark-unread", { ids });
+
+    expect(await response.json()).toEqual({ updated: 3 });
+    const unread = (await (await s.get("/api/v1/articles?unread=true")).json()).items.map((item: { id: number }) => item.id);
+    expect(unread.sort()).toEqual(ids);
+  });
+
+  it("refuses a request to unmark without a list of identifiers", async () => {
+    const s = testServer();
+    expect((await s.post("/api/v1/articles/mark-unread", { ids: "all" })).status).toBe(400);
   });
 });

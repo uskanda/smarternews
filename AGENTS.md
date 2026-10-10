@@ -11,7 +11,9 @@
 | `openspec/` | 仕様と変更。振る舞いを変える前に `openspec/specs/` を読む |
 | `openspec/glossary.yml` | 用語集。新しい用語は先にここへ足す |
 | `packages/core` | 型とスキーマ、保存、取得元、タスク、アダプター、実行の処理、RSSの生成 |
-| `apps/server` | HTTPの入口、スケジュール、起動用のコマンド |
+| `apps/server` | HTTPの入口、スケジュール、起動用のコマンド、画面の配信 |
+| `apps/web` | Webの画面。APIだけを使う。テストは実物のAPIに対して動かす |
+| `PRODUCT.md`、`DESIGN.md` | 画面の前提と、配色・書体・間隔の値。色や大きさは先に `DESIGN.md` へ足し、`pnpm run tokens` でCSSに反映する |
 | `scripts/` | `make verify` が呼ぶ検査 |
 | `docs/` | 利用者向けの文書（英語）。APIとプロバイダーの設定 |
 | `examples/` | 設定ファイル、`config.yaml`、systemdの設定の例。特定の個人や地域に依存しない内容にする |
