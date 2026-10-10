@@ -35,6 +35,10 @@ describe("the app configuration", () => {
     expect(load().plugins).toContain("./plugins/with-no-telemetry");
   });
 
+  it("gives the build the memory it needs", () => {
+    expect(load().plugins).toContain("./plugins/with-build-memory");
+  });
+
   it("signs the release build through the signing plugin", () => {
     expect(load().plugins).toContain("./plugins/with-release-signing");
   });

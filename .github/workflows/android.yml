@@ -78,6 +78,8 @@ jobs:
           SMARTERNEWS_KEYSTORE_PASSWORD: ${{ secrets.SMARTERNEWS_KEYSTORE_PASSWORD }}
           SMARTERNEWS_KEY_ALIAS: ${{ secrets.SMARTERNEWS_KEY_ALIAS }}
           SMARTERNEWS_KEY_PASSWORD: ${{ secrets.SMARTERNEWS_KEY_PASSWORD }}
+        # A build that stops making progress is ended here, well before the job's own limit.
+        timeout-minutes: 30
         run: ./gradlew assembleRelease --no-daemon --console=plain
 
       - name: Name the APK after its version
