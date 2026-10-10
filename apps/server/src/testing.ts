@@ -18,10 +18,10 @@ export const FEED_TOKEN = "test-feed-token-0123456789";
 export type TestResponse = Omit<Response, "json"> & { json(): Promise<any> };
 
 /** The app wired to an in-memory database. Runs are started but never finish, so tests can observe them. */
-export function testServer(start = "2026-03-01T12:00:00.000Z") {
+export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSearch?: boolean } = {}) {
   const db = createTestDb();
   const clock = fakeClock(start);
-  const llm = fakeLlm(db, clock, {});
+  const llm = fakeLlm(db, clock, {}, { webSearch: options.webSearch });
   const queue = new RunQueue({
     db,
     clock,

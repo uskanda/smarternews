@@ -13,6 +13,7 @@ import {
   findCategoryBySlug,
   getArticle,
   getCategory,
+  getCounts,
   getRun,
   getSettings,
   getTopic,
@@ -24,7 +25,9 @@ import {
   listRuns,
   listTopics,
   markArticlesRead,
+  markArticlesUnread,
   markReadSchema,
+  markUnreadSchema,
   notFound,
   renderRss,
   requestInterpretation,
@@ -46,6 +49,7 @@ import {
 } from "@smarternews/core";
 import { Hono, type Context } from "hono";
 import type { z } from "zod";
+import { serveWeb } from "./web.ts";
 
 export interface AppDeps {
   db: Database;
@@ -54,6 +58,8 @@ export interface AppDeps {
   runner: TaskRunner;
   tokens: { api: string; feed: string };
   version: string;
+  /** Directory of the built web app. The page is served from it when it holds an index.html. */
+  webDir?: string;
 }
 
 const FEED_SIZE = 50;
@@ -176,7 +182,14 @@ export function createApp(deps: AppDeps): Hono {
 
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
-  api.post("/articles/mark-read", async (c) => c.json({ updated: markArticlesRead(db, parse(markReadSchema, await jsonBody(c))) }));
+  api.post("/articles/mark-read", async (c) => {
+    const ids = markArticlesRead(db, parse(markReadSchema, await jsonBody(c)));
+    return c.json({ updated: ids.length, ids });
+  });
+  api.post("/articles/mark-unread", async (c) =>
+    c.json({ updated: markArticlesUnread(db, parse(markUnreadSchema, await jsonBody(c)).ids) }),
+  );
+  api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
   api.get("/articles/:id", (c) => c.json(getArticle(db, idParam(c, "article"))));
   api.patch("/articles/:id", async (c) =>
     c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)))),
@@ -211,5 +224,14 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.route("/api/v1", api);
+
+  // ---- web app: everything else that is a GET ---------------------------------------------------
+
+  app.get("*", (c) => {
+    const { pathname } = new URL(c.req.url);
+    const reserved = pathname.startsWith("/api/") || pathname.startsWith("/rss/");
+    const response = reserved ? null : serveWeb(deps.webDir, pathname, c.req.header("accept-encoding") ?? "");
+    return response ?? c.json(errorBody("not_found", "no such path"), 404);
+  });
   return app;
 }

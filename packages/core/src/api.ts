@@ -157,6 +157,7 @@ export const articleSummarySchema = z.object({
   isRead: z.boolean(),
   starred: z.boolean(),
   primaryUrl: z.string().nullable(),
+  refCount: z.number().int(),
   event: articleEventSchema.nullable(),
 });
 export type ArticleSummary = z.infer<typeof articleSummarySchema>;
@@ -177,6 +178,7 @@ export const articleListQuerySchema = z.object({
   unread: z.enum(["true", "false"]).optional(),
   starred: z.enum(["true", "false"]).optional(),
   includeEnded: z.enum(["true", "false"]).optional(),
+  minImportance: z.coerce.number().int().min(1).max(5).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });
@@ -193,9 +195,23 @@ export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
 
 export const markReadSchema = z.object({
   categoryId: z.number().int().optional(),
+  minImportance: importanceSchema.optional(),
   before: z.iso.datetime({ offset: true }),
 });
 export type MarkRead = z.infer<typeof markReadSchema>;
+
+export const markReadResultSchema = z.object({ updated: z.number().int(), ids: z.array(z.number().int()) });
+export type MarkReadResult = z.infer<typeof markReadResultSchema>;
+
+export const markUnreadSchema = z.object({ ids: z.array(z.number().int()).max(5000) });
+export type MarkUnread = z.infer<typeof markUnreadSchema>;
+
+export const countsSchema = z.object({
+  unread: z.number().int(),
+  starred: z.number().int(),
+  categories: z.array(z.object({ categoryId: z.number().int(), unread: z.number().int(), total: z.number().int() })),
+});
+export type Counts = z.infer<typeof countsSchema>;
 
 // ---- runs --------------------------------------------------------------------------------------
 

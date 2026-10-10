@@ -6,6 +6,7 @@ import type {
   ArticleRef,
   ArticleSummary,
   ArticleUpdate,
+  Counts,
   Kind,
   Registration,
 } from "../api.ts";
@@ -14,7 +15,9 @@ import { renderMarkdown } from "../markdown.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
-const SUMMARY_COLUMNS = `a.*, (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url`;
+const SUMMARY_COLUMNS = `a.*,
+  (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
+  (SELECT count(*) FROM article_refs r WHERE r.article_id = a.id) AS ref_count`;
 
 function toEvent(row: Row): ArticleEvent | null {
   const startsAt = strOrNull(row.event_starts_at);
@@ -45,6 +48,7 @@ function toSummary(row: Row): ArticleSummary {
     isRead: bool(row.is_read),
     starred: bool(row.starred),
     primaryUrl: strOrNull(row.primary_url),
+    refCount: num(row.ref_count),
     event: toEvent(row),
   };
 }
@@ -274,8 +278,8 @@ function decodeCursor(cursor: string): CursorValue {
 }
 
 /**
- * A page of articles. Events are ordered by start time, soonest first, and leave out events that have ended;
- * everything else is ordered by last update, newest first.
+ * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
+ * by start time, soonest first; every other list by last update, newest first.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   const limit = query.limit ?? 50;
@@ -292,8 +296,12 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   }
   if (query.unread !== undefined) where.push(`a.is_read = ${query.unread === "true" ? 0 : 1}`);
   if (query.starred !== undefined) where.push(`a.starred = ${query.starred === "true" ? 1 : 0}`);
-  if (byEventStart && query.includeEnded !== "true") {
-    where.push("a.event_ends_at >= ?");
+  if (query.minImportance !== undefined) {
+    where.push("a.importance >= ?");
+    params.push(query.minImportance);
+  }
+  if (query.includeEnded !== "true") {
+    where.push("(a.kind <> 'event' OR a.event_ends_at >= ?)");
     params.push(now);
   }
   if (query.cursor !== undefined) {
@@ -328,14 +336,50 @@ export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate):
   return getArticle(db, id);
 }
 
-/** Marks as read the unread articles last updated before the given time. Returns how many changed. */
-export function markArticlesRead(db: Database, filter: { categoryId?: number; before: string }): number {
-  const before = new Date(filter.before).toISOString();
-  const result =
-    filter.categoryId === undefined
-      ? db.prepare("UPDATE articles SET is_read = 1 WHERE is_read = 0 AND updated_at < ?").run(before)
-      : db.prepare("UPDATE articles SET is_read = 1 WHERE is_read = 0 AND updated_at < ? AND category_id = ?").run(before, filter.categoryId);
-  return num(result.changes);
+/** Marks as read the unread articles last updated before the given time, and returns which ones changed. */
+export function markArticlesRead(db: Database, filter: { categoryId?: number; minImportance?: number; before: string }): number[] {
+  const where = ["is_read = 0", "updated_at < ?"];
+  const params: Array<string | number> = [new Date(filter.before).toISOString()];
+  if (filter.categoryId !== undefined) {
+    where.push("category_id = ?");
+    params.push(filter.categoryId);
+  }
+  if (filter.minImportance !== undefined) {
+    where.push("importance >= ?");
+    params.push(filter.minImportance);
+  }
+  return db
+    .prepare(`UPDATE articles SET is_read = 1 WHERE ${where.join(" AND ")} RETURNING id`)
+    .all(...params)
+    .map((row) => num(row.id))
+    .sort((a, b) => a - b);
+}
+
+/** Puts the named articles back to unread. Returns how many changed. */
+export function markArticlesUnread(db: Database, ids: number[]): number {
+  const statement = db.prepare("UPDATE articles SET is_read = 0 WHERE id = ? AND is_read = 1");
+  let changed = 0;
+  for (const id of ids) changed += num(statement.run(id).changes);
+  return changed;
+}
+
+/** Unread and starred totals, and per category the unread count and the number of articles. */
+export function getCounts(db: Database, now: string): Counts {
+  const open = "(kind <> 'event' OR event_ends_at >= ?)";
+  const totals = db
+    .prepare(`SELECT coalesce(sum(is_read = 0 AND ${open}), 0) AS unread, coalesce(sum(starred), 0) AS starred FROM articles`)
+    .get(now)!;
+  const categories = db
+    .prepare(
+      `SELECT c.id AS category_id,
+              coalesce(sum(a.is_read = 0 AND (a.kind <> 'event' OR a.event_ends_at >= ?)), 0) AS unread,
+              count(a.id) AS total
+         FROM categories c LEFT JOIN articles a ON a.category_id = c.id
+        GROUP BY c.id ORDER BY c.id`,
+    )
+    .all(now)
+    .map((row) => ({ categoryId: num(row.category_id), unread: num(row.unread), total: num(row.total) }));
+  return { unread: num(totals.unread), starred: num(totals.starred), categories };
 }
 
 /** The newest articles for a feed, events that have ended left out. `categoryId` null means every enabled category. */
