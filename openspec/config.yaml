@@ -1,0 +1,13 @@
+# OpenSpec project config installed by uskn-harness. The `uskn` schema (grilling → proposal → specs →
+# design → tasks) is provided at the user level by `uskn-harness sync`; the repository only selects it.
+schema: uskn
+
+context: |
+  Product: 個人用のAIニュース収集システム。登録したカテゴリとウォッチ項目に沿って定期クロールし、
+  同じトピックの情報を1つの記事に集約して、API・RSS・Web・Androidアプリで読ませる。
+  Runs on: 自宅サーバー1台（Linux、systemdのユーザーサービス）。到達経路は自宅LANとTailscaleだけ。
+  Stack: TypeScript + pnpm workspace、Node 24、Hono、SQLite、Vite + React、Expo、Vitest。
+  LLM: 呼び出しは定義済みのタスクに限り、プロバイダーはアダプターで差し替える。
+  Language: ja
+  All artifacts must be written in ja.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.

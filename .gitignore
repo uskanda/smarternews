@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.sqlite
+*.sqlite-*
+.vite/
+.expo/
+coverage/
+.env
+.env*.local
