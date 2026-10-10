@@ -1,6 +1,7 @@
-// The one place that talks HTTP to other sites. It names the crawler, bounds time and size, and keeps a
-// minimum interval between requests to the same host.
+// The one place that talks HTTP to other sites. It names the crawler, bounds time and size, keeps a minimum
+// interval between requests to the same host, and refuses destinations on this machine or its own network.
 import { systemClock, type Clock } from "../clock.ts";
+import { allowSet, checkUrl, createGuardedFetch, DESTINATION_CODE } from "./guard.ts";
 
 export const REPOSITORY_URL = "https://github.com/uskanda/smarternews";
 
@@ -28,6 +29,9 @@ export interface FetcherOptions {
   hostIntervalMs: number;
   timeoutMs: number;
   maxBytes: number;
+  /** Hosts that may be fetched although they are, or resolve to, loopback, private, link-local or shared-space addresses. */
+  allowPrivateHosts?: readonly string[];
+  /** Replaces the network in tests. Without it, every connection also checks the address the name resolved to. */
   fetchImpl?: typeof fetch;
   clock?: Clock;
   sleep?: (ms: number) => Promise<void>;
@@ -56,14 +60,24 @@ function decode(bytes: Uint8Array, contentType: string): string {
   }
 }
 
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function notAllowed(url: string, reason: string): FetchError {
+  return new FetchError(`destination not allowed: ${url} (${reason}); to fetch it, list the host under fetch.allowPrivateHosts in config.yaml`);
+}
+
 export class Fetcher {
   readonly #options: Required<FetcherOptions>;
+  readonly #allowed: ReadonlySet<string>;
   /** Per host: the earliest time the next request may start. */
   readonly #nextSlot = new Map<string, number>();
 
   constructor(options: FetcherOptions) {
+    this.#allowed = allowSet(options.allowPrivateHosts ?? []);
     this.#options = {
-      fetchImpl: fetch,
+      allowPrivateHosts: [],
+      fetchImpl: createGuardedFetch(this.#allowed),
       clock: systemClock,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       ...options,
@@ -75,25 +89,45 @@ export class Fetcher {
   }
 
   async get(url: string, request: RequestOptions = {}): Promise<HttpResponse> {
-    await this.#waitForHost(new URL(url).host);
     const { fetchImpl, timeoutMs, maxBytes, userAgent } = this.#options;
+    const signal = AbortSignal.timeout(timeoutMs);
+    let current = url;
+    let method = request.method ?? "GET";
+    let body = request.body;
+    let headers: Record<string, string> = { "user-agent": userAgent, accept: "*/*", ...request.headers };
     let response: Response;
-    try {
-      response = await fetchImpl(url, {
-        method: request.method ?? "GET",
-        body: request.body,
-        headers: { "user-agent": userAgent, accept: "*/*", ...request.headers },
-        redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error) {
-      const name = (error as Error).name;
-      if (name === "TimeoutError" || name === "AbortError") throw new FetchError(`timed out after ${timeoutMs} ms: ${url}`);
-      throw new FetchError(`request failed: ${url}: ${(error as Error).message}`);
+    // Redirects are followed here and not by fetch, so that each target is checked before it is asked.
+    for (let followed = 0; ; followed++) {
+      const refusal = checkUrl(current, this.#allowed);
+      if (refusal) throw notAllowed(current, refusal);
+      await this.#waitForHost(new URL(current).host);
+      try {
+        response = await fetchImpl(current, { method, body, headers, redirect: "manual", signal });
+      } catch (error) {
+        const name = (error as Error).name;
+        if (name === "TimeoutError" || name === "AbortError") throw new FetchError(`timed out after ${timeoutMs} ms: ${url}`);
+        const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+        if (cause?.code === DESTINATION_CODE) throw notAllowed(current, cause.message ?? "refused address");
+        throw new FetchError(`request failed: ${current}: ${(error as Error).message}`);
+      }
+      const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
+      if (location === null) break;
+      await response.body?.cancel();
+      if (followed >= MAX_REDIRECTS) throw new FetchError(`more than ${MAX_REDIRECTS} redirects: ${url}`);
+      try {
+        current = new URL(location, current).toString();
+      } catch {
+        throw new FetchError(`redirect to something that is not a URL: ${url}`);
+      }
+      if (response.status !== 307 && response.status !== 308 && method !== "GET") {
+        method = "GET";
+        body = undefined;
+        headers = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== "content-type"));
+      }
     }
-    const bytes = await this.#readBody(response, url, maxBytes);
+    const bytes = await this.#readBody(response, current, maxBytes);
     const contentType = response.headers.get("content-type") ?? "";
-    return { status: response.status, url: response.url || url, contentType, text: decode(bytes, contentType) };
+    return { status: response.status, url: current, contentType, text: decode(bytes, contentType) };
   }
 
   async #waitForHost(host: string): Promise<void> {

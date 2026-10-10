@@ -43,6 +43,9 @@ fetch:
   hostIntervalMs: 1000    # minimum time between two requests to the same host
   timeoutMs: 15000
   maxBytes: 2000000
+  # The crawler sends no request to loopback, private, link-local or shared-space (100.64.0.0/10) addresses.
+  # List the hosts on your own network that it may fetch, for example a feed you host yourself.
+  allowPrivateHosts: []   # e.g. [feeds.home.example, 192.168.0.10]
 
 newsSearch:
   engine: google-news     # or bing-news
