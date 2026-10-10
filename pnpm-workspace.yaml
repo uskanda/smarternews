@@ -1,3 +1,7 @@
 packages:
   - packages/*
   - apps/*
+
+# One copy of each package, laid out flat. React Native breaks when a native library is installed more than
+# once, and pnpm's default layout installs one copy per combination of peer dependencies.
+nodeLinker: hoisted

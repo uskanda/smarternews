@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { Api } from "../api/client.ts";
+import type { Api } from "@smarternews/client";
 
 export interface AppServices {
   api: Api;

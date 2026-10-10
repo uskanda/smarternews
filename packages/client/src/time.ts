@@ -1,18 +1,32 @@
 // Dates are shown in the time zone of the server's settings, not the browser's: an event's time is its
 // local time, and a schedule runs on the server's clock.
 
+// Building a formatter is costly on a phone, and a list asks for several times per row: one per zone is kept.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatterFor(timeZone: string): Intl.DateTimeFormat {
+  let formatter = formatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("ja-JP", {
+      timeZone,
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      weekday: "long",
+      hourCycle: "h23",
+    });
+    formatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 function parts(date: Date, timeZone: string): Record<string, string> {
-  const formatter = new Intl.DateTimeFormat("ja-JP", {
-    timeZone,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    weekday: "long",
-    hourCycle: "h23",
-  });
-  return Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+  const formatter = formatterFor(timeZone);
+  const found = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+  // Not every runtime pads the hour: Android's answers "9" where Node answers "09".
+  return { ...found, hour: (found.hour ?? "").padStart(2, "0"), minute: (found.minute ?? "").padStart(2, "0") };
 }
 
 /** YYYY-M-D in the zone, for comparing calendar days. */

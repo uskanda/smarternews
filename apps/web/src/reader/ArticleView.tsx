@@ -1,10 +1,8 @@
 import type { Article } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import { ApiError } from "../api/client.ts";
+import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
 import { useArticle } from "../api/queries.ts";
-import { eventTime, registrationLabel } from "../lib/events.ts";
-import { formatDay, formatFull } from "../lib/time.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { Markdown } from "./Markdown.tsx";
 

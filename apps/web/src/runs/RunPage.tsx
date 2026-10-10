@@ -2,12 +2,10 @@ import type { Candidate } from "@smarternews/core/api";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { ApiError } from "../api/client.ts";
+import { ApiError, formatFull, stageLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
 import { useCategories, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
-import { formatFull } from "../lib/time.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
-import { stageLabel, STATUS_LABEL, TRIGGER_LABEL } from "./labels.ts";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const LINK = "tap text-primary underline underline-offset-4";

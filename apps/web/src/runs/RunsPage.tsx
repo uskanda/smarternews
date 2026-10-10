@@ -1,8 +1,7 @@
 import { Link, useSearchParams } from "react-router";
 import { useCategories, useRuns, useTimeZone } from "../api/queries.ts";
-import { formatFull } from "../lib/time.ts";
+import { formatFull, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
 import { ErrorNotice, Loading } from "../ui/controls.tsx";
-import { STATUS_LABEL, TRIGGER_LABEL } from "./labels.ts";
 
 const NUMBER = "py-sm pr-lg text-right tabular-nums";
 

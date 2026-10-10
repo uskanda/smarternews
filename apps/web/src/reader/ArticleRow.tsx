@@ -1,6 +1,6 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { Link } from "react-router";
-import { formatShort } from "../lib/time.ts";
+import { formatShort } from "@smarternews/client";
 import { Badge } from "../ui/controls.tsx";
 
 /**
