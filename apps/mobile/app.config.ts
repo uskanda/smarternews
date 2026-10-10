@@ -83,6 +83,7 @@ const config: ExpoConfig = {
     "expo-web-browser",
     "./plugins/with-release-signing",
     "./plugins/with-no-telemetry",
+    "./plugins/with-build-memory",
   ],
   experiments: { typedRoutes: true },
 };
