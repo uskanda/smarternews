@@ -9,8 +9,8 @@
 - [x] 1.2 `make verify` が1.1の3つのコマンドを呼ぶことを確かめる。`package.json` が無いときの分岐を消す
 - [x] 1.3 `make verify` に、個人情報らしい文字列を探す検査のスクリプトを足す。emailの宛先、`100.64.0.0/10` のIP、ホームのパス、リポジトリの外の禁止語の一覧を検出するテストが通ることを確かめる
 - [x] 1.4 MITの `LICENSE` を置き、`package.json` のライセンスの欄と一致することを確かめる
-- [ ] 1.5 GitHub Actionsで、PRの作成と更新、`main` と `develop` へのpushのたびに `make verify` を走らせる。最初の実行が成功することを確かめる
-- [ ] 1.6 `main` と `develop` に、直接のpushを禁じる保護を設定する。`gh api` で保護の内容を読み出して確かめる
+- [x] 1.5 GitHub Actionsで、PRの作成と更新、`main` と `develop` へのpushのたびに `make verify` を走らせる。最初の実行が成功することを確かめる
+- [x] 1.6 `main` と `develop` に、直接のpushを禁じる保護を設定する。`gh api` で保護の内容を読み出して確かめる
 - [x] 1.7 `AGENTS.md` の表に、作ったディレクトリを1行ずつ足す。`make verify` の用語の検査が通ることを確かめる
 
 ## 2. 保存
