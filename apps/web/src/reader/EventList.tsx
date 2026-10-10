@@ -1,6 +1,6 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { Link } from "react-router";
-import { eventTime, groupEvents, registrationLabel } from "../lib/events.ts";
+import { eventTime, groupEvents, registrationLabel } from "@smarternews/client";
 
 /** Upcoming events of one category, grouped by the day they start. */
 export function EventList({

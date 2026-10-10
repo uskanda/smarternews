@@ -2,11 +2,12 @@ import type { Category, Settings } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
-import { ApiError } from "../api/client.ts";
+import { ApiError } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Badge, Button, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { ConnectCode } from "./ConnectCode.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const TASK_LABEL = { interpret: "解釈", search: "検索", judge: "判定", cluster: "集約", write: "本文の生成" } as const;
@@ -362,6 +363,7 @@ export function SettingsPage() {
         <div>
           <Button onClick={clearToken}>このブラウザーからトークンを消す</Button>
         </div>
+        <ConnectCode />
       </section>
     </div>
   );

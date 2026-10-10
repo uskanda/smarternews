@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserRouter, createMemoryRouter, Navigate, RouterProvider, type RouteObject } from "react-router";
-import { createApi, type Fetch } from "./api/client.ts";
+import { createApi, type Fetch } from "@smarternews/client";
 import { AppContext, type AppServices } from "./app/context.ts";
 import { readToken, writeToken } from "./lib/token-store.ts";
 import { ReaderPage } from "./reader/ReaderPage.tsx";

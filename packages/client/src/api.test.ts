@@ -1,6 +1,6 @@
 import { API_TOKEN, testServer } from "@smarternews/server/testing";
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, createApi } from "./client.ts";
+import { ApiError, createApi } from "./api.ts";
 
 function setup(token: string | null = API_TOKEN) {
   const server = testServer();
@@ -18,6 +18,37 @@ function setup(token: string | null = API_TOKEN) {
 }
 
 describe("the API client", () => {
+  it("calls the server at the base URL it was given", async () => {
+    const server = testServer();
+    const seen: string[] = [];
+    const api = createApi({
+      baseUrl: "http://news.example:8787",
+      fetchImpl: (input, init) => {
+        seen.push(String(input));
+        return server.app.request(new URL(String(input)).pathname, init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    await api.categories();
+    expect(seen).toEqual(["http://news.example:8787/api/v1/categories"]);
+  });
+
+  it("ignores a slash at the end of the base URL", async () => {
+    const seen: string[] = [];
+    const api = createApi({
+      baseUrl: "http://news.example:8787/",
+      fetchImpl: (input) => {
+        seen.push(String(input));
+        return new Response("[]", { headers: { "content-type": "application/json" } });
+      },
+      getToken: () => null,
+      onUnauthorized: () => {},
+    });
+    await api.categories();
+    expect(seen).toEqual(["http://news.example:8787/api/v1/categories"]);
+  });
+
   it("sends the stored token as a bearer token", async () => {
     const { api, seen } = setup();
     await api.categories();

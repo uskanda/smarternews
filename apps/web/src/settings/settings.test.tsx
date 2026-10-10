@@ -1,7 +1,10 @@
 import { applyInterpretation, createTopic, getCategory, getSettings, getTopic, listCategories, listTopics, updateCategory } from "@smarternews/core";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { buildConnectLink } from "@smarternews/client";
+import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { qrPath } from "./ConnectCode.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
 
@@ -402,6 +405,51 @@ describe("the settings file", () => {
     renderApp({ route: "/settings" });
     const settingsFile = await section("設定ファイル");
     expect(settingsFile).toHaveTextContent("ファイルに書かれていないカテゴリとトピックは消えません");
+  });
+});
+
+describe("connecting the Android app", () => {
+  it("shows no connection code until the user asks for it, and says that the code holds the token", async () => {
+    renderApp({ route: "/settings" });
+
+    expect(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "接続用のQRコード" })).not.toBeInTheDocument();
+    expect(screen.getByText(/QRコードにはトークンが含まれます/)).toBeInTheDocument();
+  });
+
+  it("shows a code that holds the address of the server the browser is on, and the stored token", async () => {
+    const { user } = renderApp({ route: "/settings" });
+
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    const expected = qrPath(buildConnectLink(window.location.origin, API_TOKEN));
+    expect(code.querySelector("path")?.getAttribute("d")).toBe(expected.d);
+    expect(expected.d.length).toBeGreaterThan(100);
+  });
+
+  it("takes the code away again when the dialog is closed", async () => {
+    const { user } = renderApp({ route: "/settings" });
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+    await screen.findByRole("img", { name: "接続用のQRコード" });
+
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+
+    await waitFor(() => expect(screen.queryByRole("img", { name: "接続用のQRコード" })).not.toBeInTheDocument());
+  });
+});
+
+describe("qrPath", () => {
+  it("draws the three corner squares every QR code has, inside a quiet border", () => {
+    const { size, d } = qrPath("smarternews://connect?v=1&url=http%3A%2F%2Fnews.example&token=t");
+    const border = 4;
+    // The top-left finder pattern starts right after the border with a run of seven dark modules.
+    expect(d.startsWith(`M${border} ${border}h7v1h-7z`)).toBe(true);
+    expect(size).toBeGreaterThanOrEqual(21 + border * 2);
+  });
+
+  it("draws a different code for a different link", () => {
+    expect(qrPath("smarternews://connect?v=1&url=a&token=1").d).not.toBe(qrPath("smarternews://connect?v=1&url=a&token=2").d);
   });
 });
 

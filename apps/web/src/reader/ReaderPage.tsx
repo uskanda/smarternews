@@ -6,7 +6,7 @@ import { useArticle, useArticleFlags, useArticleList, useCategories, useTimeZone
 import { useApp } from "../app/context.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
-import { mergeKept } from "../lib/merge.ts";
+import { mergeKept } from "@smarternews/client";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";

@@ -2,7 +2,7 @@ import type { Category, CategoryUpdate, Topic, TopicUpdate } from "@smarternews/
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useBlocker, useNavigate, useParams } from "react-router";
-import { ApiError } from "../api/client.ts";
+import { ApiError } from "@smarternews/client";
 import { useCategories, useCounts, useProviders, useRuns, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
