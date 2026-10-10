@@ -79,7 +79,7 @@ describe("from a settings file to the API and the feed", () => {
     chmodSync(claude, 0o755);
     writeFileSync(
       join(env.SMARTERNEWS_CONFIG_DIR, "config.yaml"),
-      `providers:\n  fake: { adapter: claude-cli, model: test, command: ${JSON.stringify(claude)} }\nfetch: { hostIntervalMs: 0 }\n`,
+      `providers:\n  fake: { adapter: claude-cli, model: test, command: ${JSON.stringify(claude)} }\nfetch: { hostIntervalMs: 0, allowPrivateHosts: ["127.0.0.1"] }\n`,
     );
     const settings = join(root, "settings.yaml");
     writeFileSync(

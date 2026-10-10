@@ -69,6 +69,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     hostIntervalMs: config.fetch.hostIntervalMs,
     timeoutMs: config.fetch.timeoutMs,
     maxBytes: config.fetch.maxBytes,
+    allowPrivateHosts: config.fetch.allowPrivateHosts,
   });
   const queue = new RunQueue({
     db,

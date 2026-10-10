@@ -60,7 +60,17 @@ providers:
     const config = parseConfig("listen: 0.0.0.0:9000\n");
     expect(config.listen).toBe("0.0.0.0:9000");
     expect(config.limits).toEqual({ llmCallsPerRun: 40, llmCallsPerDay: 300, judgeBatchSize: 30, pagesPerRun: 20 });
-    expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000 });
+    expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000, allowPrivateHosts: [] });
+  });
+
+  it("takes the hosts on the own network that may be fetched", () => {
+    const config = parseConfig("fetch:\n  allowPrivateHosts: [feeds.home.example, 192.168.0.10]\n");
+    expect(config.fetch.allowPrivateHosts).toEqual(["feeds.home.example", "192.168.0.10"]);
+  });
+
+  it("refuses allowed hosts that are not a list of names", () => {
+    expect(() => parseConfig("fetch:\n  allowPrivateHosts: true\n")).toThrow(/fetch\.allowPrivateHosts/);
+    expect(() => parseConfig("fetch:\n  allowPrivateHosts: ['']\n")).toThrow(/fetch\.allowPrivateHosts/);
   });
 });
 

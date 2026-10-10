@@ -122,6 +122,19 @@ To read from other devices, set `listen` in `config.yaml` to an address those de
 
 News search uses the RSS output of Google News by default, and of Bing News as an alternative. Both publishers allow that output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
 
+## Where it does not go
+
+URLs reach the crawler from feeds, search results and model output, so one of them may point at your router or at another service on the same machine. The crawler therefore fetches only `http` and `https` URLs, and sends no request to a loopback, private, link-local or shared-space (`100.64.0.0/10`) address. A host name is checked against the address it resolves to at the moment of connecting. Every redirect target is checked the same way, and a fetch gives up after five redirects.
+
+To read a feed that you host on your own network, list its host in `config.yaml`:
+
+```yaml
+fetch:
+  allowPrivateHosts: [feeds.home.example]
+```
+
+A refused fetch is recorded like any other failed fetch, so the run history shows the URL and the reason. Calls to model providers are not restricted, because you choose those addresses yourself.
+
 ## Limits on model use
 
 A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (300 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
