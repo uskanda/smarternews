@@ -140,6 +140,21 @@ describe("collecting candidates", () => {
     ]);
   });
 
+  it("does not ask a feed on the own network, keeps going, and records why", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: ["http://192.168.0.1/feed.xml", FEED] });
+    h.feed(FEED, [{ title: "A", link: "https://example.org/a" }]);
+
+    const run = await h.run();
+
+    expect(h.urls().some((url) => url.includes("192.168.0.1"))).toBe(false);
+    expect(h.articles().map((article) => article.title)).toEqual(["A"]);
+    expect(run.status).toBe("partial");
+    expect(run.failures).toEqual([
+      { stage: "feed", target: "http://192.168.0.1/feed.xml", message: expect.stringContaining("destination not allowed") },
+    ]);
+  });
+
   it("marks the run as failed when every source fails", async () => {
     const h = pipelineHarness();
     h.addTopic("Topic", { feeds: ["https://example.org/down.xml"] });

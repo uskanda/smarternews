@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fakeClock } from "../testing/db.ts";
 import { fakeFetch } from "../testing/http.ts";
 import { defaultUserAgent, FetchError, Fetcher } from "./http.ts";
@@ -97,5 +99,124 @@ describe("Fetcher", () => {
       "https://example.org/meta": () => new Response(body, { headers: { "content-type": "text/html" } }),
     });
     expect((await fetcher.get("https://example.org/meta")).text).toContain("日本");
+  });
+});
+
+const redirect = (location: string, status = 302) => () => new Response(null, { status, headers: { location } });
+
+describe("Fetcher redirects", () => {
+  it("follows a redirect to another public site and reports the final URL", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/old": redirect("https://example.net/new"), "https://example.net/new": "moved" });
+    await expect(fetcher.get("https://example.org/old")).resolves.toMatchObject({ status: 200, url: "https://example.net/new", text: "moved" });
+    expect(requests.map((request) => request.url)).toEqual(["https://example.org/old", "https://example.net/new"]);
+  });
+
+  it("resolves a relative redirect against the URL that answered", async () => {
+    const { fetcher } = setup({ "https://example.org/a/old": redirect("../new"), "https://example.org/new": "moved" });
+    await expect(fetcher.get("https://example.org/a/old")).resolves.toMatchObject({ url: "https://example.org/new" });
+  });
+
+  it("does not send a request to a redirect target in a refused range", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/old": redirect("http://127.0.0.1:8080/admin") });
+    await expect(fetcher.get("https://example.org/old")).rejects.toThrow(FetchError);
+    await expect(fetcher.get("https://example.org/old")).rejects.toThrow(/destination not allowed: http:\/\/127\.0\.0\.1:8080\/admin/);
+    expect(requests.every((request) => request.url === "https://example.org/old")).toBe(true);
+  });
+
+  it("does not follow a redirect to another scheme", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/old": redirect("file:///etc/passwd") });
+    await expect(fetcher.get("https://example.org/old")).rejects.toThrow(/scheme/);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("gives up at the sixth redirect without sending another request", async () => {
+    const { fetcher, requests } = setup({
+      "https://example.org/": (request) => {
+        const step = Number(new URL(request.url).searchParams.get("n") ?? 0);
+        return new Response(null, { status: 302, headers: { location: `https://example.org/?n=${step + 1}` } });
+      },
+    });
+    await expect(fetcher.get("https://example.org/?n=0")).rejects.toThrow(/more than 5 redirects/);
+    expect(requests).toHaveLength(6);
+  });
+
+  it("asks again with GET and no body after a 303 answer to a POST", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/form": redirect("https://example.org/done", 303), "https://example.org/done": "ok" });
+    await fetcher.get("https://example.org/form", { method: "POST", body: "a=1", headers: { "content-type": "application/x-www-form-urlencoded" } });
+    expect(requests[1]).toMatchObject({ method: "GET", body: null });
+    expect(requests[1]!.headers["content-type"]).toBeUndefined();
+  });
+
+  it("repeats the method and body after a 307 answer", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/form": redirect("https://example.org/again", 307), "https://example.org/again": "ok" });
+    await fetcher.get("https://example.org/form", { method: "POST", body: "a=1" });
+    expect(requests[1]).toMatchObject({ method: "POST", body: "a=1" });
+  });
+
+  it("waits the host interval before a redirect back to the same host", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/old": redirect("https://example.org/new"), "https://example.org/new": "ok" });
+    await fetcher.get("https://example.org/old");
+    expect(requests[1]!.at - requests[0]!.at).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+describe("Fetcher destinations", () => {
+  it("does not send a request to an address in a refused range", async () => {
+    const { fetcher, requests } = setup({});
+    await expect(fetcher.get("http://192.168.0.1/feed.xml")).rejects.toThrow(/destination not allowed.*fetch\.allowPrivateHosts/);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("does not send a request to a URL with another scheme", async () => {
+    const { fetcher, requests } = setup({});
+    await expect(fetcher.get("file:///etc/passwd")).rejects.toThrow(FetchError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("sends a request to an allowed address in a refused range", async () => {
+    const { fetcher } = setup({ "http://192.168.0.10/feed.xml": "feed" }, { allowPrivateHosts: ["192.168.0.10"] });
+    await expect(fetcher.get("http://192.168.0.10/feed.xml")).resolves.toMatchObject({ text: "feed" });
+  });
+});
+
+// No stand-in here: the check on the resolved address happens where the connection is made.
+describe("Fetcher over a real connection", () => {
+  let server: Server;
+  let port: number;
+  const hits: string[] = [];
+
+  beforeAll(async () => {
+    server = createServer((request, response) => {
+      hits.push(request.url ?? "");
+      if (request.url === "/to-address") {
+        response.writeHead(302, { location: `http://127.0.0.1:${port}/page` }).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/plain" }).end("reached");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const real = (allowPrivateHosts: string[]) => new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 5000, maxBytes: 1000, allowPrivateHosts });
+
+  it("does not connect to a name that resolves to a loopback address", async () => {
+    hits.length = 0;
+    await expect(real([]).get(`http://localhost:${port}/page`)).rejects.toThrow(/destination not allowed.*localhost/);
+    expect(hits).toEqual([]);
+  });
+
+  it("connects to that name once it is listed as allowed", async () => {
+    await expect(real(["localhost"]).get(`http://localhost:${port}/page`)).resolves.toMatchObject({ status: 200, text: "reached" });
+  });
+
+  it("stops at a redirect from an allowed name to an address that is not allowed", async () => {
+    hits.length = 0;
+    await expect(real(["localhost"]).get(`http://localhost:${port}/to-address`)).rejects.toThrow(/destination not allowed: http:\/\/127\.0\.0\.1/);
+    expect(hits).toEqual(["/to-address"]);
   });
 });

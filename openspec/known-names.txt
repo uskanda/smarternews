@@ -13,3 +13,5 @@ README.ja.md
 DESIGN.md
 PRODUCT.md
 index.html
+net.BlockList
+fetch.allowPrivateHosts
