@@ -1,0 +1,103 @@
+# Builds the signed Android APK. It runs for a release tag, when started by hand, and for a pull request that
+# carries the label "apk". It is not part of the checks every pull request runs: a build takes about ten minutes.
+#
+# The signing key comes from four repository secrets. Create a key once, keep a copy of it outside GitHub, and
+# store it with:
+#   base64 -w0 release.keystore | gh secret set SMARTERNEWS_KEYSTORE_BASE64
+#   gh secret set SMARTERNEWS_KEYSTORE_PASSWORD
+#   gh secret set SMARTERNEWS_KEY_ALIAS
+#   gh secret set SMARTERNEWS_KEY_PASSWORD
+# Every release must be signed with the same key, or Android refuses to install it over the previous one.
+name: android
+
+on:
+  push:
+    tags: ["v[0-9][0-9].[0-9][0-9].*"]
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: write # attaches the APK to the release
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'apk')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The tag without its "v" is the version users see; the run number grows with every build, which is what
+      # Android compares when it decides whether an APK is newer.
+      SMARTERNEWS_APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('0.0.{0}', github.run_number) }}
+      SMARTERNEWS_APP_VERSION_CODE: ${{ github.run_number }}
+      # Phones, and the emulator a release is checked on.
+      SMARTERNEWS_ANDROID_ARCHS: arm64-v8a,x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check that the signing key is available
+        env:
+          KEYSTORE: ${{ secrets.SMARTERNEWS_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SMARTERNEWS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SMARTERNEWS_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SMARTERNEWS_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$KEYSTORE" ] || missing="$missing SMARTERNEWS_KEYSTORE_BASE64"
+          [ -n "$STORE_PASSWORD" ] || missing="$missing SMARTERNEWS_KEYSTORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ] || missing="$missing SMARTERNEWS_KEY_ALIAS"
+          [ -n "$KEY_PASSWORD" ] || missing="$missing SMARTERNEWS_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::The APK cannot be signed. Missing repository secrets:$missing. See the top of .github/workflows/android.yml."
+            exit 1
+          fi
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Generate the Android project
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild --platform android --clean
+
+      - name: Build the release APK
+        working-directory: apps/mobile/android
+        env:
+          SMARTERNEWS_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          SMARTERNEWS_KEYSTORE_PASSWORD: ${{ secrets.SMARTERNEWS_KEYSTORE_PASSWORD }}
+          SMARTERNEWS_KEY_ALIAS: ${{ secrets.SMARTERNEWS_KEY_ALIAS }}
+          SMARTERNEWS_KEY_PASSWORD: ${{ secrets.SMARTERNEWS_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon --console=plain
+
+      - name: Name the APK after its version
+        id: apk
+        run: |
+          file="smarternews-${SMARTERNEWS_APP_VERSION#v}.apk"
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$file"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          ls -l "$file"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.file }}
+          path: ${{ steps.apk.outputs.file }}
+          if-no-files-found: error
+
+      - name: Attach the APK to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes ""
+          gh release upload "$GITHUB_REF_NAME" "${{ steps.apk.outputs.file }}" --clobber
