@@ -1,0 +1,21 @@
+{
+  "name": "@smarternews/core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "fast-xml-parser": "^5.11.2",
+    "linkedom": "^0.18.13",
+    "marked": "^18.1.0",
+    "robots-parser": "^3.0.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  }
+}
