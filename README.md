@@ -8,7 +8,7 @@ A language model does the judging and the writing, and ordinary code does the re
 
 ## Status
 
-This repository contains the server (the crawler, the API and the RSS feeds) and a web app for reading and configuring. An Android app that uses the same API is planned and is not in the repository yet. Any RSS reader can also subscribe to the feeds.
+This repository contains the server (the crawler, the API and the RSS feeds), a web app for reading and configuring, and an Android app for reading. All three use the same API. Any RSS reader can also subscribe to the feeds.
 
 ## Requirements
 
@@ -64,6 +64,31 @@ Keys: `j` and `k` move to the next and the previous article, `s` toggles the sta
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
 The token is stored in the browser's local storage. "このブラウザーからトークンを消す" in the settings removes it. To work on the app itself, run `pnpm --filter @smarternews/web dev` next to a running server.
+
+## Android app
+
+The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
+
+To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
+
+- Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
+- The drawer on the left lists the same views and categories as the web app, with unread counts.
+- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories and topics are edited in the web app, which the settings screen opens in the browser.
+- The interface is in Japanese, and the screen stays in portrait.
+
+Notifications are made on the device. While the app is closed, Android lets it ask your server for new articles from time to time, no more often than every 15 minutes and at moments Android chooses. So a notification can arrive well after the article, and battery saving can delay it further; opening the app always shows the current state. Nothing is sent to a notification service. The default notifies articles of importance 5 only; the settings screen offers every new article, or none.
+
+Your server is the only thing the app talks to. Its QR scanner is Google's ML Kit, which would upload usage statistics of the scanner; the build removes the part that does the uploading. Sources open in the browser, which then talks to the site you open.
+
+To build the APK yourself you need a JDK 17 and the Android SDK:
+
+```bash
+cd apps/mobile
+pnpm exec expo prebuild --platform android --clean
+cd android && ./gradlew assembleRelease
+```
+
+Without a signing key the build is signed with the debug key, which is enough to try it. The release workflow in [.github/workflows/android.yml](.github/workflows/android.yml) signs with a key from repository secrets and attaches the APK to each release. Its first lines say how to store the key. Keep a copy of that key somewhere safe. Android only installs an update that is signed with the same key as the app it replaces. If the key is lost, the app has to be uninstalled before a new build can be installed.
 
 ## What you configure
 
@@ -145,7 +170,7 @@ A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once 
 make verify    # lint, type check, tests, the web build, and a scan for personal data
 ```
 
-Requirements and design live in [openspec/](openspec/) and are written in Japanese. [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) hold the product facts and the visual tokens of the web app. Tests never call a real model or a real site: they use a fake provider and recorded responses.
+Requirements and design live in [openspec/](openspec/) and are written in Japanese. [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) hold the product facts and the visual tokens of both apps. Tests never call a real model or a real site: they use a fake provider and recorded responses. The tests of the Android app run in Jest against a real API that a test process serves on the loopback address; `make verify` does not build the APK.
 
 ## License
 
