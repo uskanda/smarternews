@@ -174,3 +174,23 @@ terms:
     definition: "URLのうち、方式、ホスト名、ポートの3つの組。同じオリジンかどうかでブラウザーが通信を制限する。"
     aliases: []
     en: "origin"
+  - term: "アドレス"
+    definition: "ネットワークの上で機器を指す番号。IPv4とIPv6のものを指す。"
+    aliases: ["IPアドレス"]
+    en: "address"
+  - term: "ループバック"
+    definition: "機器が自分自身を指すアドレスの範囲。"
+    aliases: []
+    en: "loopback"
+  - term: "プライベート"
+    definition: "組織や家庭のネットワークの中だけで使うアドレスの範囲。外のネットワークからは届かない。"
+    aliases: []
+    en: "private"
+  - term: "リンクローカル"
+    definition: "同じ区間の機器どうしだけで使うアドレスの範囲。"
+    aliases: []
+    en: "link-local"
+  - term: "共有アドレス空間"
+    definition: "通信事業者や仮想の専用網が内側で使うアドレスの範囲（100.64.0.0/10）。"
+    aliases: ["CGNAT"]
+    en: "shared address space"
