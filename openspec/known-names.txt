@@ -10,3 +10,6 @@ config.yaml
 db.sqlite
 README.md
 README.ja.md
+DESIGN.md
+PRODUCT.md
+index.html
