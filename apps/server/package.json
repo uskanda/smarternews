@@ -13,5 +13,9 @@
   },
   "devDependencies": {
     "fast-xml-parser": "^5.11.2"
+  },
+  "exports": {
+    "./app": "./src/app.ts",
+    "./testing": "./src/testing.ts"
   }
 }

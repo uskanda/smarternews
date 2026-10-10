@@ -102,6 +102,8 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `GET /api/v1/articles/:id` | Read one with body, references and topics |
 | `PATCH /api/v1/articles/:id` | Set `isRead` or `starred` |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
+| `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
+| `GET /api/v1/counts` | Unread and starred totals, and counts per category |
 
 Query parameters of the list:
 
@@ -111,11 +113,12 @@ Query parameters of the list:
 | `kind` | `news` or `event` |
 | `unread` | `true` or `false` |
 | `starred` | `true` or `false` |
-| `includeEnded` | `true` to include events that have ended (only with `kind=event`) |
+| `minImportance` | 1 to 5; only articles at or above this importance |
+| `includeEnded` | `true` to include events that have ended |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
-Articles come ordered by last update, newest first. With `kind=event` the order is by start time, soonest first, and events that have ended are left out. Each response has two fields: `items`, the articles of this page, and `nextCursor`, which is `null` on the last page.
+Articles come ordered by last update, newest first. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given. Each response has two fields: `items`, the articles of this page, and `nextCursor`, which is `null` on the last page.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true&limit=20"
@@ -128,7 +131,16 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   -d '{"categoryId":1,"before":"2026-03-01T12:00:00Z"}' "$API/api/v1/articles/mark-read"
 ```
 
-`mark-read` marks the unread articles that were last updated before `before`. Pass the time at which you loaded the list, so that articles that arrived afterwards stay unread. Omit `categoryId` to cover every category.
+`mark-read` marks the unread articles that were last updated before `before`. Pass the time at which you loaded the list, so that articles that arrived afterwards stay unread. `categoryId` and `minImportance` narrow it; omit both to cover everything. The response lists the articles it changed as `ids`, and `mark-unread` takes such a list to undo the change:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"ids":[1,2]}' "$API/api/v1/articles/mark-unread"
+
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
+```
+
+`counts` returns `unread` and `starred` for all categories together, and `categories` with `categoryId`, `unread` and `total` for each. Unread counts leave out events that have ended.
 
 Fields of an article in the list:
 

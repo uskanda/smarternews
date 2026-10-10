@@ -79,7 +79,15 @@ export function createRuntime(options: { env: Record<string, string | undefined>
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
-  const app = createApp({ db, clock, queue, runner, tokens: { api: api.token, feed: feed.token }, version });
+  const app = createApp({
+    db,
+    clock,
+    queue,
+    runner,
+    tokens: { api: api.token, feed: feed.token },
+    version,
+    webDir: join(import.meta.dirname, "../../web/dist"),
+  });
 
   return {
     paths,

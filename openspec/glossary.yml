@@ -77,6 +77,14 @@ terms:
     definition: "実行の状態の1つで、記事の保存まで進んだが、途中の処理のいくつかが失敗したもの。"
     aliases: ["部分失敗"]
     en: "partial failure"
+  - term: "ペイン"
+    definition: "画面を縦に分けた区画の1つ。カテゴリ、記事の一覧、記事の本文の3つがある。"
+    aliases: ["カラム"]
+    en: "pane"
+  - term: "実行履歴"
+    definition: "実行ごとの契機、時刻、状態、件数、失敗を残した記録。"
+    aliases: ["実行ログ"]
+    en: "run history"
   # 一般語。terms-checkの一般語リストに無いので、この用語集で使う表記を決める。
   - term: "ニュース"
     definition: "最近公開または更新された出来事の報道や発表で、種別の1つでもある。"
@@ -130,3 +138,39 @@ terms:
     definition: "URLの「?」以降に付ける、名前と値の組。"
     aliases: ["パラメータ", "クエリ"]
     en: "parameter"
+  - term: "ブラウザー"
+    definition: "Webの画面を表示する利用者側のアプリ。"
+    aliases: ["ブラウザ"]
+    en: "browser"
+  - term: "キーボード"
+    definition: "キーを押して画面を操作する入力装置。"
+    aliases: []
+    en: "keyboard"
+  - term: "ダイアログ"
+    definition: "操作の確認や入力のために、画面の上に重ねて出す小さな画面。"
+    aliases: ["モーダル"]
+    en: "dialog"
+  - term: "ボタン"
+    definition: "押すと1つの操作が実行される画面上の部品。"
+    aliases: []
+    en: "button"
+  - term: "スクロール"
+    definition: "画面に入りきらない内容を上下に送って見ること。"
+    aliases: []
+    en: "scroll"
+  - term: "ゴシック"
+    definition: "線の太さがほぼ一定の和文書体。一覧と操作に使う。"
+    aliases: ["ゴシック体"]
+    en: "gothic"
+  - term: "コントラスト"
+    definition: "文字の色と背景の色の明るさの差。"
+    aliases: []
+    en: "contrast"
+  - term: "フォーカス"
+    definition: "キーボードの操作を受け取る部品がどれかを示す状態。"
+    aliases: []
+    en: "focus"
+  - term: "オリジン"
+    definition: "URLのうち、方式、ホスト名、ポートの3つの組。同じオリジンかどうかでブラウザーが通信を制限する。"
+    aliases: []
+    en: "origin"
