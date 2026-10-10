@@ -16,6 +16,7 @@
   },
   "exports": {
     "./app": "./src/app.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./testing-process": "./src/testing-process.ts"
   }
 }

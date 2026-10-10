@@ -1,6 +1,6 @@
-// Scans tracked files for strings that should not land in a public repository: email addresses,
-// carrier-grade NAT addresses (the range Tailscale assigns), named home directories, and the terms in a
-// deny list kept outside the repository. Run by `make verify`.
+// Scans tracked files for what should not land in a public repository: email addresses, carrier-grade NAT
+// addresses (the range Tailscale assigns), named home directories, the terms in a deny list kept outside the
+// repository, and files that hold a signing key. Run by `make verify`.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -56,6 +56,11 @@ export function findPrivateStrings(text: string, options: { denyTerms: string[] 
     .flatMap((line, index) => findInLine(line, denyTerms).map((finding) => ({ ...finding, line: index + 1 })));
 }
 
+/** True for a file that holds a signing key by its name. Such a file never belongs in the repository. */
+export function isKeyFile(path: string): boolean {
+  return /\.(jks|keystore|p12|pfx|key)$/i.test(path);
+}
+
 function loadDenyTerms(): string[] {
   const path =
     process.env.SMARTERNEWS_PRIVATE_TERMS ??
@@ -76,6 +81,11 @@ function main(): void {
   const denyTerms = loadDenyTerms();
   let count = 0;
   for (const file of files) {
+    if (isKeyFile(file)) {
+      count += 1;
+      console.error(`${file}: key-file: a signing key must stay outside the repository`);
+      continue;
+    }
     const buffer = readFileSync(file);
     if (buffer.includes(0)) continue;
     for (const finding of findPrivateStrings(buffer.toString("utf8"), { denyTerms })) {

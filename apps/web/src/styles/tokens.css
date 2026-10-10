@@ -29,6 +29,7 @@
   --spacing-list: 380px;
   --spacing-measure: 36em;
   --spacing-touch: 44px;
+  --spacing-touch-android: 48px;
 }
 
 /* The dark values replace the light ones when the device asks for a dark colour scheme. */

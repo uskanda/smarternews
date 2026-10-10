@@ -194,3 +194,31 @@ terms:
     definition: "通信事業者や仮想の専用網が内側で使うアドレスの範囲（100.64.0.0/10）。"
     aliases: ["CGNAT"]
     en: "shared address space"
+  - term: "エミュレーター"
+    definition: "開発用のマシンの上で、Androidの端末の動きを再現するプログラム。"
+    aliases: ["エミュレータ"]
+    en: "emulator"
+  - term: "カメラ"
+    definition: "端末に付いている撮影の機能。アプリではQRコードの読み取りに使う。"
+    aliases: []
+    en: "camera"
+  - term: "アイコン"
+    definition: "端末のアプリの一覧に出る、アプリを表す絵。"
+    aliases: []
+    en: "icon"
+  - term: "タブレット"
+    definition: "画面の大きい携帯端末。"
+    aliases: []
+    en: "tablet"
+  - term: "ライブラリー"
+    definition: "ほかのプログラムから呼び出して使う、部品としてのプログラム。"
+    aliases: ["ライブラリ"]
+    en: "library"
+  - term: "引き出し"
+    definition: "アプリの画面の左から出てくる、項目の一覧。"
+    aliases: ["ドロワー"]
+    en: "drawer"
+  - term: "通知"
+    definition: "アプリを開いていないときに、端末が画面の上部や待ち受けの画面に出す知らせ。"
+    aliases: []
+    en: "notification"

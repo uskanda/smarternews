@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findPrivateStrings } from "./check-private.ts";
+import { findPrivateStrings, isKeyFile } from "./check-private.ts";
 
 // The samples are assembled at run time so that this file does not trip the check it tests.
 const at = "@";
@@ -48,5 +48,15 @@ describe("findPrivateStrings", () => {
   it("reports the line number of each finding", () => {
     const findings = findPrivateStrings(`first\nsecond ${cgnat}\n`, { denyTerms: [] });
     expect(findings).toEqual([{ kind: "cgnat-ip", match: cgnat, line: 2 }]);
+  });
+});
+
+describe("isKeyFile", () => {
+  it.each(["release.jks", "apps/mobile/release.keystore", "certs/signing.p12", "a/b/upload.PFX", "id_rsa.key"])("reports %s as a signing key", (path) => {
+    expect(isKeyFile(path)).toBe(true);
+  });
+
+  it.each(["apps/mobile/plugins/with-release-signing.js", "docs/keystore.md", "src/keys.ts", "notes.keystore.txt"])("accepts %s", (path) => {
+    expect(isKeyFile(path)).toBe(false);
   });
 });

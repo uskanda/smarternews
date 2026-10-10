@@ -1,5 +1,5 @@
-// The only place in the web app that talks to the server. Every answer is checked against the shared
-// schema, so a drift between the app and the API fails here and not somewhere in a component.
+// The only code in the web app and the Android app that talks to the server. Every answer is checked against
+// the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
   articleListSchema,
   articleSchema,
@@ -53,13 +53,15 @@ export class ApiError extends Error {
 export type Fetch = (input: string, init?: RequestInit) => Response | Promise<Response>;
 
 export interface ApiOptions {
+  /** Where the server is, such as `http://news.example:8787`. Empty when the page itself comes from the server. */
+  baseUrl?: string;
   fetchImpl?: Fetch;
   getToken: () => string | null;
   /** Called when the server rejects the stored token. */
   onUnauthorized: () => void;
 }
 
-const BASE = "/api/v1";
+const API_PATH = "/api/v1";
 
 function kindOf(status: number): ApiErrorKind {
   if (status === 400) return "invalid";
@@ -71,11 +73,12 @@ function kindOf(status: number): ApiErrorKind {
 
 export function createApi(options: ApiOptions) {
   const fetchImpl: Fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
+  const base = `${(options.baseUrl ?? "").replace(/\/+$/, "")}${API_PATH}`;
 
   async function send(path: string, init: RequestInit, token: string | null): Promise<Response> {
     let response: Response;
     try {
-      response = await fetchImpl(`${BASE}${path}`, {
+      response = await fetchImpl(`${base}${path}`, {
         ...init,
         headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...init.headers },
       });

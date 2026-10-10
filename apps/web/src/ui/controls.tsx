@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 import { useId } from "react";
-import { ApiError } from "../api/client.ts";
+import { fieldError, messageFor as sharedMessageFor } from "@smarternews/client";
 
 type Variant = "primary" | "secondary" | "danger" | "quiet";
 
@@ -82,21 +82,7 @@ export function Checkbox({ label, ...props }: { label: string } & InputHTMLAttri
 
 /** What went wrong, in the app's words. */
 export function messageFor(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.kind === "network") return "サーバーに接続できません。サーバーが動いているかと、ネットワークを確かめてください。";
-    if (error.kind === "not_found") return "見つかりませんでした。削除された可能性があります。";
-    if (error.kind === "invalid") return "入力に誤りがあります。";
-    if (error.kind === "conflict") return "ほかの内容とぶつかるため、実行できませんでした。";
-    if (error.kind === "unauthorized") return "トークンが無効です。";
-    return "サーバーで問題が起きました。しばらくしてからもう一度試してください。";
-  }
-  return "表示できませんでした。ページを読み込み直してください。";
-}
-
-/** The refusal reason for one field of a form, from a 400 answer. */
-export function fieldError(error: unknown, path: string): string | null {
-  if (!(error instanceof ApiError)) return null;
-  return error.fields.find((field) => field.path === path || field.path.startsWith(`${path}.`))?.message ?? null;
+  return sharedMessageFor(error, "表示できませんでした。ページを読み込み直してください。");
 }
 
 export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
@@ -119,3 +105,5 @@ export function Loading() {
 export function PageHeading({ children }: { children: ReactNode }) {
   return <h1 className="type-headline-md">{children}</h1>;
 }
+
+export { fieldError };

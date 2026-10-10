@@ -13,6 +13,8 @@
 | `packages/core` | 型とスキーマ、保存、取得元、タスク、アダプター、実行の処理、RSSの生成 |
 | `apps/server` | HTTPの入口、スケジュール、起動用のコマンド、画面の配信 |
 | `apps/web` | Webの画面。APIだけを使う。テストは実物のAPIに対して動かす |
+| `apps/mobile` | Androidアプリ（Expo）。APIだけを使う。`android` のディレクトリは生成物で、設定は `app.config.ts` に書く |
+| `packages/client` | Webとアプリが共有する処理。APIの呼び出し、日時の整形、通知する記事の選び方。画面の部品とNodeの機能に依存させない |
 | `PRODUCT.md`、`DESIGN.md` | 画面の前提と、配色・書体・間隔の値。色や大きさは先に `DESIGN.md` へ足し、`pnpm run tokens` でCSSに反映する |
 | `scripts/` | `make verify` が呼ぶ検査 |
 | `docs/` | 利用者向けの文書（英語）。APIとプロバイダーの設定 |
@@ -36,3 +38,6 @@ protected: main, develop
 - RSSと記事本文には自前の要約と出典リンクだけを載せ、取得した本文の転載はしない。
 - このリポジトリは公開している。特定の利用者のカテゴリ、読み手情報、地名、ホスト名、IPは、コード、例、テスト、OpenSpecの成果物、コミットメッセージ、PRのどこにも書かない。利用者のデータは設定ファイルとしてリポジトリの外に置く。
 - コミットの作者は、このリポジトリのgit設定にあるnoreplyの宛先のままにする。
+- 依存は平らに置く（`pnpm-workspace.yaml` の `nodeLinker`）。React Nativeは、同じ部品が2つ入ると動かない。Reactの版は、WebとアプリでExpoが指定する版にそろえる。
+- 署名の鍵と合言葉はリポジトリに入れない。`make verify` が鍵の形式のファイルを拒否する。
+- Expoのスキルは `skills-lock.json` だけを置く。中身は `npx skills experimental_install` で入れ直す。

@@ -10,8 +10,8 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/mobile/tsconfig.json",
+    "test": "vitest run --passWithNoTests && pnpm --filter @smarternews/mobile run test",
     "check:private": "node scripts/check-private.ts",
     "start": "node apps/server/src/main.ts serve",
     "build": "pnpm --filter @smarternews/web run build",

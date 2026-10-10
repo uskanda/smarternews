@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- One colour only: Android tints it to match the user's theme. -->
+  <rect x="300" y="352" width="424" height="104" rx="12" fill="#FFFFFF"/>
+  <rect x="332" y="516" width="360" height="32" rx="8" fill="#FFFFFF"/>
+  <rect x="332" y="604" width="232" height="32" rx="8" fill="#FFFFFF"/>
+</svg>
