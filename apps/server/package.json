@@ -1,0 +1,17 @@
+{
+  "name": "@smarternews/server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^2.1.4",
+    "@smarternews/core": "workspace:*",
+    "hono": "^4.13.13",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "fast-xml-parser": "^5.11.2"
+  }
+}

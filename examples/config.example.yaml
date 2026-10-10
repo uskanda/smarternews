@@ -1,0 +1,49 @@
+# Server configuration. Copy to ~/.config/smarternews/config.yaml and edit.
+# Every key is optional: without this file the server listens on 127.0.0.1:8787 and runs every task
+# with the `claude` command (judge and cluster on the "haiku" model, the rest on "sonnet").
+
+# Address to listen on. Keep 127.0.0.1 unless other devices must reach the server; to serve a tailnet,
+# use the Tailscale address of this machine. Never expose the port to the internet.
+listen: 127.0.0.1:8787
+
+# Model providers. Give each a name and refer to that name under `tasks`.
+providers:
+  fast:
+    adapter: claude-cli        # runs the `claude` command once per call
+    model: haiku
+  smart:
+    adapter: claude-cli
+    model: sonnet
+  # An OpenAI-compatible server (Ollama, LM Studio, OpenRouter, ...). It cannot run the search task.
+  # local:
+  #   adapter: openai-compatible
+  #   baseUrl: http://127.0.0.1:11434/v1
+  #   model: your-model-name
+  #   apiKeyEnv: LOCAL_LLM_API_KEY     # name of an environment variable; the key never goes in this file
+  #   structuredOutput: json_schema    # or "prompt" for servers without response_format support
+
+# Which provider runs each task. A task that is not listed uses `default`.
+tasks:
+  default: smart
+  judge: fast
+  cluster: fast
+
+limits:
+  llmCallsPerRun: 40      # a run stops, and is recorded as stopped_by_limit, when it reaches this
+  llmCallsPerDay: 300     # counted from midnight in the configured time zone
+  judgeBatchSize: 30      # candidates judged per model call
+  pagesPerRun: 20         # article pages fetched per run
+
+llm:
+  timeoutMs: 180000
+  searchTimeoutMs: 300000
+
+fetch:
+  userAgent: null         # null = "smarternews/<version> (+https://github.com/uskanda/smarternews)"
+  hostIntervalMs: 1000    # minimum time between two requests to the same host
+  timeoutMs: 15000
+  maxBytes: 2000000
+
+newsSearch:
+  engine: google-news     # or bing-news
+  maxResultsPerQuery: 10  # newest results taken per query

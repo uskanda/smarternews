@@ -1,0 +1,24 @@
+# systemd user unit. Install with:
+#   mkdir -p ~/.config/systemd/user
+#   cp examples/smarternews.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now smarternews
+#   loginctl enable-linger "$USER"     # keep it running after you log out
+# Adjust WorkingDirectory to where you cloned the repository.
+
+[Unit]
+Description=smarternews: AI news crawler, API and feeds
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/smarternews
+ExecStart=/usr/bin/env node apps/server/src/main.ts serve
+Restart=on-failure
+RestartSec=30
+# The default provider runs the `claude` command, so it must be on this PATH.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

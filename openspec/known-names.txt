@@ -1,0 +1,12 @@
+# Names that are real but live outside this repository, or that this change will create.
+# terms-check treats these as existing. Add a name here only after confirming it is real.
+# One name per line.
+robots.txt
+design.md
+proposal.md
+tasks.md
+package.json
+config.yaml
+db.sqlite
+README.md
+README.ja.md
