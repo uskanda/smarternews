@@ -3,9 +3,9 @@
 schema: uskn
 
 context: |
-  Product: 個人用のAIニュース収集システム。登録したカテゴリとウォッチ項目に沿って定期クロールし、
-  同じトピックの情報を1つの記事に集約して、API・RSS・Web・Androidアプリで読ませる。
-  Runs on: 自宅サーバー1台（Linux、systemdのユーザーサービス）。到達経路は自宅LANとTailscaleだけ。
+  Product: 個人用のAIニュース収集システム。登録したカテゴリとトピックに沿って定期クロールし、
+  同じ話題の情報を1つの記事に集約して、API・RSS・Web・Androidアプリで読ませる。
+  Runs on: 自宅サーバー1台（Linux、systemdのユーザー単位のサービス）。到達経路は自宅LANとTailscaleだけ。
   Stack: TypeScript + pnpm workspace、Node 24、Hono、SQLite、Vite + React、Expo、Vitest。
   LLM: 呼び出しは定義済みのタスクに限り、プロバイダーはアダプターで差し替える。
   Language: ja
