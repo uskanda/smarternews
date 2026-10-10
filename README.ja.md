@@ -13,15 +13,15 @@ LLMを呼ぶのは、トピックの解釈、Webの検索、候補の判定、�
 
 ## 状態
 
-このリポジトリにあるのはサーバー（クローラー、API、RSS）である。
-APIを使うWebアプリとAndroidアプリは計画中で、まだ含まれていない。それまではRSSを読める任意のアプリで購読できる。
+このリポジトリには、サーバー（クローラー、API、RSS）と、読むことと設定のためのWebの画面がある。
+同じAPIを使うAndroidアプリは計画中で、まだ含まれていない。RSSを読める任意のアプリでも購読できる。
 
 ## 必要なもの
 
 - LinuxまたはmacOS、Node.js 24以降、pnpm。
 - LLMのプロバイダー。既定は [Claude Code](https://claude.com/claude-code) の `claude` コマンドで、サーバーを動かすユーザーで導入とログインを済ませておく。OllamaやLM StudioのようなOpenAI互換のサーバーも使える。設定は [docs/providers.md](docs/providers.md) にある。
 
-サーバーはNodeでTypeScriptを直接実行するので、ビルドの手順はない。
+サーバーはNodeでTypeScriptを直接実行するので、ビルドは要らない。ビルドするのはWebの画面だけで、コマンド1つで済む。
 
 ## 使い始める
 
@@ -29,6 +29,7 @@ APIを使うWebアプリとAndroidアプリは計画中で、まだ含まれて�
 git clone https://github.com/uskanda/smarternews.git
 cd smarternews
 pnpm install
+pnpm build    # Webの画面をビルドする。APIとRSSだけを使うなら省ける
 
 # 例のカテゴリを読み込む。あとで自分の内容に置き換える。
 node apps/server/src/main.ts import examples/settings.example.yaml
@@ -42,7 +43,7 @@ node apps/server/src/main.ts serve
 
 `run` コマンドはサーバーなしで動く。サーバーの起動後は、APIの `POST /api/v1/categories/:id/runs` で実行を始める。こうすると実行はサーバーの待ち行列に入り、1つずつ進む。
 
-サーバーの既定の待ち受けは `127.0.0.1:8787` である。別の端末から次のように確かめる。
+サーバーの既定の待ち受けは `127.0.0.1:8787` である。ブラウザーで `http://127.0.0.1:8787/` を開いてAPIのトークンを貼り付けるか、別の端末から次のようにAPIを呼ぶ。
 
 ```bash
 API=http://127.0.0.1:8787
@@ -53,6 +54,22 @@ curl -s "$API/api/v1/health"
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true"
 curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 ```
+
+## Webの画面
+
+3つのペインで記事を読む。左は項目とカテゴリ、中央は記事の一覧、右は本文である。狭い画面では1ペインずつ表示する。配色は端末の設定に従う。
+
+- 記事を開くと既読になる。「すべて既読にする」は一覧の記事をまとめて既読にし、10秒以内なら取り消せる。
+- 重要度4と5の記事には一覧で印が付き、切り替えでその記事だけに絞れる。
+- 種別がイベントのカテゴリは、開催日ごとの一覧で表示する。
+- 設定の画面で、カテゴリ、トピック、読み手情報、全体設定を編集し、設定ファイルを読み書きできる。
+- 実行履歴で、実行ごとに集めた数、失敗の内容、除外した候補とその理由を確かめられる。
+
+キー操作は次のとおり。`j` と `k` で次と前の記事、`s` でスター、`m` で既読の切り替え、`o` で主な出典を開く。`?` で一覧を出す。
+
+画面の言葉は日本語である。記事は、設定した出力言語で書かれる。新しい版のChromeで確かめてあり、2024年以降のFirefoxとSafariでも動く想定である。
+
+トークンはブラウザーの保存領域に置く。設定の画面の「このブラウザーからトークンを消す」で消せる。画面そのものを開発するときは、サーバーを動かしたまま `pnpm --filter @smarternews/web dev` を実行する。
 
 ## 設定するもの
 
@@ -129,10 +146,10 @@ RSSでは、新しい `guid` と、タイトルの先頭の印を付けて配信
 ## 開発
 
 ```bash
-make verify    # lint、型検査、テスト、個人情報の検査
+make verify    # lint、型検査、テスト、画面のビルド、個人情報の検査
 ```
 
-要件と設計は [openspec/](openspec/) に日本語で書いてある。テストは実際のLLMと外部のサイトを呼ばず、偽のプロバイダーと記録済みの応答で動く。
+要件と設計は [openspec/](openspec/) に日本語で書いてある。画面の前提と見た目の値は [PRODUCT.md](PRODUCT.md) と [DESIGN.md](DESIGN.md) にある。テストは実際のLLMと外部のサイトを呼ばず、偽のプロバイダーと記録済みの応答で動く。
 
 ## ライセンス
 
