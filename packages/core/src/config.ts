@@ -1,0 +1,134 @@
+// The server-side configuration file. It lives outside the repository and is read once at start-up.
+import { parse } from "yaml";
+import { z } from "zod";
+import type { TaskName } from "./api.ts";
+import { TASK_NAMES } from "./llm/tasks.ts";
+
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
+
+const claudeCliSchema = z.strictObject({
+  adapter: z.literal("claude-cli"),
+  model: z.string().min(1),
+  command: z.string().min(1).default("claude"),
+  extraArgs: z.array(z.string()).default([]),
+});
+
+const openAiCompatibleSchema = z.strictObject({
+  adapter: z.literal("openai-compatible"),
+  baseUrl: z.url({ protocol: /^https?$/ }),
+  model: z.string().min(1),
+  /** Name of the environment variable that holds the key. The key itself never goes into the file. */
+  apiKeyEnv: z.string().min(1).optional(),
+  structuredOutput: z.enum(["json_schema", "prompt"]).default("json_schema"),
+});
+
+const providerSchema = z.discriminatedUnion("adapter", [claudeCliSchema, openAiCompatibleSchema]);
+export type ProviderConfig = z.infer<typeof providerSchema>;
+
+const tasksSchema = z.strictObject({
+  default: z.string(),
+  interpret: z.string().optional(),
+  search: z.string().optional(),
+  judge: z.string().optional(),
+  cluster: z.string().optional(),
+  write: z.string().optional(),
+});
+
+const configSchema = z.strictObject({
+  listen: z
+    .string()
+    .regex(/^[^:\s]+:\d{1,5}$|^\[[0-9a-fA-F:]+\]:\d{1,5}$/, "must be host:port")
+    .default("127.0.0.1:8787"),
+  providers: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), providerSchema).optional(),
+  tasks: tasksSchema.optional(),
+  limits: z
+    .strictObject({
+      llmCallsPerRun: z.number().int().min(1).default(40),
+      llmCallsPerDay: z.number().int().min(1).default(300),
+      judgeBatchSize: z.number().int().min(1).max(100).default(30),
+      pagesPerRun: z.number().int().min(0).default(20),
+    })
+    .prefault({}),
+  llm: z
+    .strictObject({
+      timeoutMs: z.number().int().min(1000).default(180_000),
+      searchTimeoutMs: z.number().int().min(1000).default(300_000),
+    })
+    .prefault({}),
+  fetch: z
+    .strictObject({
+      userAgent: z.string().min(1).nullable().default(null),
+      hostIntervalMs: z.number().int().min(0).default(1000),
+      timeoutMs: z.number().int().min(100).default(15_000),
+      maxBytes: z.number().int().min(1024).default(2_000_000),
+    })
+    .prefault({}),
+  newsSearch: z
+    .strictObject({
+      engine: z.enum(["google-news", "bing-news"]).default("google-news"),
+      maxResultsPerQuery: z.number().int().min(1).max(100).default(10),
+    })
+    .prefault({}),
+});
+
+type ParsedConfig = z.infer<typeof configSchema>;
+export interface Config extends Omit<ParsedConfig, "providers" | "tasks"> {
+  providers: Record<string, ProviderConfig>;
+  tasks: z.infer<typeof tasksSchema>;
+}
+
+const SHIPPED_PROVIDERS: Record<string, ProviderConfig> = {
+  fast: { adapter: "claude-cli", model: "haiku", command: "claude", extraArgs: [] },
+  smart: { adapter: "claude-cli", model: "sonnet", command: "claude", extraArgs: [] },
+};
+
+/** Parses the text of config.yaml. `null` means the file does not exist: every default applies. */
+export function parseConfig(text: string | null): Config {
+  let raw: unknown = {};
+  if (text !== null) {
+    try {
+      raw = parse(text) ?? {};
+    } catch (error) {
+      throw new ConfigError(`config.yaml is not valid YAML: ${(error as Error).message}`);
+    }
+  }
+  const parsed = configSchema.safeParse(raw);
+  if (!parsed.success) {
+    // Only paths and messages are reported: the offending value could be a secret.
+    const details = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
+    throw new ConfigError(`config.yaml is invalid:\n  ${details.join("\n  ")}`);
+  }
+  const { providers, tasks, ...rest } = parsed.data;
+  if (providers === undefined) {
+    return { ...rest, providers: SHIPPED_PROVIDERS, tasks: tasks ?? { default: "smart", judge: "fast", cluster: "fast" } };
+  }
+  const names = Object.keys(providers);
+  if (names.length === 0) throw new ConfigError("config.yaml is invalid:\n  providers: list at least one provider");
+  if (tasks === undefined && names.length > 1) {
+    throw new ConfigError("config.yaml is invalid:\n  tasks: name the default provider when several are configured");
+  }
+  return { ...rest, providers, tasks: tasks ?? { default: names[0]! } };
+}
+
+/** Which provider runs each task. Throws when an assignment names a provider that is not configured. */
+export function resolveAssignment(config: Config): Record<TaskName, string> {
+  const assignment = {} as Record<TaskName, string>;
+  const problems: string[] = [];
+  if (!(config.tasks.default in config.providers)) {
+    problems.push(`tasks.default names the provider "${config.tasks.default}", which is not configured`);
+  }
+  for (const task of TASK_NAMES) {
+    const name = config.tasks[task] ?? config.tasks.default;
+    if (config.tasks[task] !== undefined && !(name in config.providers)) {
+      problems.push(`the task "${task}" is assigned to the provider "${name}", which is not configured`);
+    }
+    assignment[task] = name;
+  }
+  if (problems.length > 0) throw new ConfigError(`config.yaml is invalid:\n  ${problems.join("\n  ")}`);
+  return assignment;
+}

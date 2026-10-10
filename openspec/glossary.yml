@@ -1,0 +1,132 @@
+# Project glossary. One entry per term the repository has decided to use.
+#   term:       the spelling to use
+#   definition: one sentence saying what it is, not what it does
+#   aliases:    spellings to avoid; terms-check reports them
+#   en:         the English spelling, when the term is written in Japanese
+version: 1
+terms:
+  - term: "カテゴリ"
+    definition: "トピックをまとめる単位で、RSSの出力と実行時刻の単位でもある。"
+    aliases: ["カテゴリー"]
+    en: "category"
+  - term: "トピック"
+    definition: "利用者が登録する、追いたい話題を表すキーワードまたは文章。"
+    aliases: ["ウォッチ項目", "監視項目"]
+    en: "topic"
+  - term: "種別"
+    definition: "カテゴリが扱う記事の性質で、ニュース、イベント、状況のいずれか。"
+    aliases: ["カテゴリ種別"]
+    en: "kind"
+  - term: "取得元"
+    definition: "候補を集めてくる手段で、フィード、ニュース検索、LLM検索のいずれか。"
+    aliases: ["情報源"]
+    en: "source"
+  - term: "候補"
+    definition: "取得元から得た、記事の材料になりうる1件のWebページの情報。"
+    aliases: ["候補記事"]
+    en: "candidate"
+  - term: "記事"
+    definition: "同じ話題の候補をまとめて要約した、RSSの1項目に当たる単位。"
+    aliases: ["ストーリー"]
+    en: "article"
+  - term: "出典"
+    definition: "記事の根拠になった候補のURL、サイト名、公開日時。"
+    aliases: ["参照元", "引用元"]
+    en: "reference"
+  - term: "重要度"
+    definition: "記事に付ける1から5の整数で、5が最も重要。"
+    aliases: ["優先度"]
+    en: "importance"
+  - term: "読み手情報"
+    definition: "利用者の立場や関心を書いた文章で、関連判定と重要度付けの入力になる。"
+    aliases: ["読者情報", "ペルソナ"]
+    en: "reader profile"
+  - term: "タスク"
+    definition: "LLMに頼む仕事の種類で、入力と出力のJSONスキーマが決まっているもの。"
+    aliases: ["LLMタスク"]
+    en: "task"
+  - term: "プロバイダー"
+    definition: "タスクを実行するLLMの提供元で、設定で名前を付けて登録する。"
+    aliases: ["プロバイダ", "LLMバックエンド"]
+    en: "provider"
+  - term: "アダプター"
+    definition: "プロバイダーの呼び出し方を共通のインターフェースに合わせる実装。"
+    aliases: ["アダプタ", "ドライバー"]
+    en: "adapter"
+  - term: "実行"
+    definition: "1つのカテゴリについて、候補の取得から記事の保存までを1回通すこと。"
+    aliases: ["クロール実行"]
+    en: "run"
+  - term: "設定ファイル"
+    definition: "カテゴリ、トピック、読み手情報を書き出したYAMLファイル。"
+    aliases: ["初期データファイル"]
+    en: "settings file"
+  - term: "最低重要度"
+    definition: "カテゴリごとに決める、記事にする重要度の下限。"
+    aliases: ["重要度のしきい値"]
+    en: "minimum importance"
+  - term: "件数上限"
+    definition: "カテゴリごとに決める、1回の実行で新しく作る記事の数の上限。"
+    aliases: ["記事数上限"]
+    en: "article limit"
+  - term: "対象期間"
+    definition: "候補を採用する時間の範囲で、ニュースは公開日時、イベントは開催日で測る。"
+    aliases: ["取得期間"]
+    en: "window"
+  - term: "一部失敗"
+    definition: "実行の状態の1つで、記事の保存まで進んだが、途中の処理のいくつかが失敗したもの。"
+    aliases: ["部分失敗"]
+    en: "partial failure"
+  # 一般語。terms-checkの一般語リストに無いので、この用語集で使う表記を決める。
+  - term: "ニュース"
+    definition: "最近公開または更新された出来事の報道や発表で、種別の1つでもある。"
+    aliases: []
+    en: "news"
+  - term: "クロール"
+    definition: "取得元を巡回して候補を集める処理。"
+    aliases: ["クローリング"]
+    en: "crawl"
+  - term: "クローラー"
+    definition: "クロールから記事の保存までを受け持つサーバー側の処理のまとまり。"
+    aliases: ["クローラ"]
+    en: "crawler"
+  - term: "フィード"
+    definition: "サイトが配信するRSSまたはAtomの文書。取得元の1つでもある。"
+    aliases: []
+    en: "feed"
+  - term: "サイト"
+    definition: "同じホスト名で公開されているWebページのまとまり。"
+    aliases: ["ウェブサイト"]
+    en: "site"
+  - term: "ページ"
+    definition: "1つのURLで取得できるWebの文書。"
+    aliases: ["ウェブページ"]
+    en: "page"
+  - term: "スター"
+    definition: "利用者が記事に付ける印で、付いた記事は保存期間を過ぎても残る。"
+    aliases: ["お気に入り", "ブックマーク"]
+    en: "star"
+  - term: "スケジュール"
+    definition: "カテゴリごとに決めた、実行を始める時刻の一覧。"
+    aliases: []
+    en: "schedule"
+  - term: "タイムゾーン"
+    definition: "時刻の計算に使う地域の標準時で、IANAの名前で指定する。"
+    aliases: []
+    en: "time zone"
+  - term: "プログラム"
+    definition: "LLMを呼ばずに、決まった手順で動くコード。"
+    aliases: []
+    en: "program"
+  - term: "スキーマ"
+    definition: "データの形を定めた定義で、タスクの入出力とAPIの入出力の検証に使う。"
+    aliases: []
+    en: "schema"
+  - term: "ヘッダー"
+    definition: "HTTPの要求または応答に付く、名前と値の組。"
+    aliases: ["ヘッダ"]
+    en: "header"
+  - term: "パラメーター"
+    definition: "URLの「?」以降に付ける、名前と値の組。"
+    aliases: ["パラメータ", "クエリ"]
+    en: "parameter"

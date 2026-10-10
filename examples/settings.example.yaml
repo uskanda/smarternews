@@ -1,0 +1,50 @@
+# Example settings file. Load it with:
+#   node apps/server/src/main.ts import examples/settings.example.yaml
+# Everything here is sample data: replace the reader, the categories and the topics with your own.
+version: 1
+settings:
+  readerInfo: |
+    A software engineer who maintains web services written in Rust and TypeScript,
+    deploys them with GitHub Actions, and lives in Portland, Oregon.
+  outputLanguage: en
+  timeZone: America/Los_Angeles
+  search: { language: en, region: US }
+categories:
+  - slug: security
+    name: Security
+    kind: news
+    schedule: ["06:00", "18:00"]
+    minImportance: 3
+    maxArticlesPerRun: 5
+    windowHours: 24
+    topics:
+      - text: Vulnerabilities that are being exploited in the wild, and large security incidents
+        sources:
+          feeds: ["https://www.bleepingcomputer.com/feed/"]
+          newsSearch: true
+          llmSearch: false
+  - slug: developer-tools
+    name: Developer tools
+    kind: news
+    schedule: ["06:00"]
+    topics:
+      - text: New features and pricing changes in GitHub
+        sources:
+          feeds: ["https://github.blog/changelog/feed/"]
+          newsSearch: false
+          llmSearch: false
+      - text: Rust releases and notable changes to the language or Cargo
+        sources:
+          feeds: ["https://blog.rust-lang.org/feed.xml"]
+          newsSearch: true
+          llmSearch: false
+  - slug: local-events
+    name: Local events
+    kind: event
+    schedule: ["07:00"]
+    windowDays: 7
+    topics:
+      - text: Maker fairs, technology meetups and cycling events in Portland, Oregon
+        sources:
+          newsSearch: false
+          llmSearch: true
