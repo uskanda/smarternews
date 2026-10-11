@@ -445,6 +445,19 @@ describe("connecting the Android app", () => {
     expect(expected.d.length).toBeGreaterThan(100);
   });
 
+  it("draws the code black on white in the dark scheme too", async () => {
+    const { user } = renderApp({ route: "/settings" });
+    await user.click(within(await screen.findByRole("radiogroup", { name: "配色" })).getByRole("radio", { name: "ダーク" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+
+    await user.click(screen.getByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    // Fixed values, not colour tokens: a token would follow the scheme.
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    expect(code).toHaveClass("bg-[#FFFFFF]");
+    expect(code.querySelector("path")).toHaveAttribute("fill", "#000000");
+  });
+
   it("takes the code away again when the dialog is closed", async () => {
     const { user } = renderApp({ route: "/settings" });
     await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
