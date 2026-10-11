@@ -1,12 +1,13 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { buildNav, listKey, type NavEntry } from "@smarternews/client";
 import { useMemo, useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router";
-import { useCategories, useCounts, useFeeds } from "../api/queries.ts";
+import { Link, NavLink, Outlet, useLocation, useParams } from "react-router";
+import { useArticle, useCategories, useCounts, useFeeds } from "../api/queries.ts";
 import { useCollapsed } from "../lib/collapsed.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { PANES, usePanes } from "../lib/panes.ts";
+import { usePageTitle } from "../lib/title.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
@@ -185,6 +186,9 @@ export function Shell() {
   const [navOpen, setNavOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   useHotkeys({ "?": () => setHelpOpen(true) });
+  // The reader fetches the same article, so this reads it from the cache.
+  const articleId = Number(useParams().articleId);
+  usePageTitle(useCounts().data?.unread, useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data?.title);
 
   return (
     <div className="flex h-full">

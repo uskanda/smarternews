@@ -233,6 +233,16 @@ describe("keyboard", () => {
     expect(pane.scrollTop).toBe(0);
   });
 
+  it("names the tab after the unread count and the open article", async () => {
+    const { server, newer } = seeded();
+    const { user } = renderApp({ server, route: "/all" });
+    await waitFor(() => expect(document.title).toBe("SmarterNews(2)"));
+
+    await user.click(await screen.findByRole("link", { name: /Newer story/ }));
+    await waitFor(() => expect(document.title).toBe("SmarterNews(1)-Newer story"));
+    expect(newer).toBeGreaterThan(0);
+  });
+
   it("selects the first article with j when none is selected", async () => {
     const { server } = seeded();
     const { user } = renderApp({ server, route: "/all" });
