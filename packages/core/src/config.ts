@@ -37,6 +37,7 @@ const tasksSchema = z.strictObject({
   judge: z.string().optional(),
   cluster: z.string().optional(),
   write: z.string().optional(),
+  summarize: z.string().optional(),
 });
 
 const configSchema = z.strictObject({
@@ -50,6 +51,8 @@ const configSchema = z.strictObject({
     .strictObject({
       llmCallsPerRun: z.number().int().min(1).default(40),
       llmCallsPerDay: z.number().int().min(1).default(300),
+      /** Summaries of feed articles, counted apart from the calls of runs. */
+      summariesPerDay: z.number().int().min(1).default(100),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
     })
@@ -116,6 +119,12 @@ export function parseConfig(text: string | null): Config {
   return { ...rest, providers, tasks: tasks ?? { default: names[0]! } };
 }
 
+/**
+ * Summaries are many and simple. Left unassigned they go to the provider of this name, when there is one,
+ * rather than to the default, which is usually the expensive one.
+ */
+const SUMMARIZE_PROVIDER = "fast";
+
 /** Which provider runs each task. Throws when an assignment names a provider that is not configured. */
 export function resolveAssignment(config: Config): Record<TaskName, string> {
   const assignment = {} as Record<TaskName, string>;
@@ -124,7 +133,8 @@ export function resolveAssignment(config: Config): Record<TaskName, string> {
     problems.push(`tasks.default names the provider "${config.tasks.default}", which is not configured`);
   }
   for (const task of TASK_NAMES) {
-    const name = config.tasks[task] ?? config.tasks.default;
+    const fallback = task === "summarize" && SUMMARIZE_PROVIDER in config.providers ? SUMMARIZE_PROVIDER : config.tasks.default;
+    const name = config.tasks[task] ?? fallback;
     if (config.tasks[task] !== undefined && !(name in config.providers)) {
       problems.push(`the task "${task}" is assigned to the provider "${name}", which is not configured`);
     }

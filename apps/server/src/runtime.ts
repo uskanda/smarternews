@@ -14,6 +14,7 @@ import {
   resolvePaths,
   RunQueue,
   Scheduler,
+  SummaryWorker,
   systemClock,
   TaskRunner,
   type Clock,
@@ -33,9 +34,13 @@ export interface Runtime {
   scheduler: Scheduler;
   /** Fetches the subscribed feeds that are due. Started together with the scheduler. */
   poller: FeedPoller;
+  /** Summarises the feed articles that wait, apart from the fetching of feeds. */
+  summarizer: SummaryWorker;
   app: Hono;
   /** Token files this call created, to be announced once. */
   newTokenFiles: string[];
+  /** Starts the scheduler, the fetching of feeds and the summaries. */
+  start(): void;
   close(): void;
 }
 
@@ -63,7 +68,11 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     clock,
     providers,
     assignment,
-    limits: { llmCallsPerRun: config.limits.llmCallsPerRun, llmCallsPerDay: config.limits.llmCallsPerDay },
+    limits: {
+      llmCallsPerRun: config.limits.llmCallsPerRun,
+      llmCallsPerDay: config.limits.llmCallsPerDay,
+      summariesPerDay: config.limits.summariesPerDay,
+    },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,
   });
@@ -81,6 +90,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
   });
   const scheduler = new Scheduler({ db, clock, queue });
   const poller = new FeedPoller({ db, clock, fetcher });
+  const summarizer = new SummaryWorker({ db, clock, fetcher, runner });
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
@@ -103,11 +113,18 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     queue,
     scheduler,
     poller,
+    summarizer,
     app,
     newTokenFiles: [...(api.created ? [paths.apiTokenFile] : []), ...(feed.created ? [paths.feedTokenFile] : [])],
+    start() {
+      scheduler.start();
+      poller.start();
+      summarizer.start();
+    },
     close() {
       scheduler.stop();
       poller.stop();
+      summarizer.stop();
       db.close();
     },
   };

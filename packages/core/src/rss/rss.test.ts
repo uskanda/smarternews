@@ -25,6 +25,8 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   event: null,
   body: "The **vendor** shipped a fix.",
   bodyHtml: "<p>The <strong>vendor</strong> shipped a fix.</p>",
+  autoSummary: null,
+  autoSummaryPending: false,
   snippetOnly: false,
   previousArticleId: null,
   refs: [

@@ -257,3 +257,35 @@ describe("the migration to an order of categories and feeds", () => {
     expect(db.prepare("SELECT advance_after_mark_all FROM settings").get()).toEqual({ advance_after_mark_all: 0 });
   });
 });
+
+describe("the migration to summaries of feed articles", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the feeds that exist without summaries, and gives every article the time it was stored", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of ["001_init.sql", "002_feeds.sql", "003_order.sql"]) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at)
+       VALUES (1, 'feed', 5, 'k', 'news', 't', 's', 'b', ?, ?)`,
+    ).run("2025-12-30T00:00:00.000Z", "2025-12-31T00:00:00.000Z");
+
+    copyFileSync(join(SHIPPED, "004_auto_summary.sql"), join(dir, "004_auto_summary.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT auto_summarize, auto_summarize_since FROM feeds").get()).toEqual({ auto_summarize: 0, auto_summarize_since: null });
+    expect(
+      db.prepare("SELECT created_at, auto_summary, auto_summary_source, auto_summary_at, auto_summary_attempts, auto_summary_skipped FROM articles").get(),
+    ).toEqual({
+      created_at: "2025-12-31T00:00:00.000Z",
+      auto_summary: null,
+      auto_summary_source: null,
+      auto_summary_at: null,
+      auto_summary_attempts: 0,
+      auto_summary_skipped: 0,
+    });
+  });
+});

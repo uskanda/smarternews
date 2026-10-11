@@ -1,4 +1,4 @@
-import { insertFeed, setArticleFlags } from "@smarternews/core";
+import { insertFeed, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -351,5 +351,106 @@ describe("a heading in the content of a feed article", () => {
     renderApp({ server, route: `/c/tools/${id}` });
     expect(await within(await opened()).findByRole("heading", { level: 2, name: "Inside" })).toBeInTheDocument();
     expect(within(article()).queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+  });
+});
+
+describe("the summary of a feed article", () => {
+  const NOTE = "元のページを読めなかったため、配信された内容だけをもとにしています。";
+  const WAITING = "AIによる要約を作っています。";
+  const summaryOf = (pane: HTMLElement) => within(pane).queryByRole("region", { name: "AIによる要約" });
+
+  it("stands under its own heading before the content, after the way to the page", async () => {
+    const { server, blog, newPost } = seeded();
+    saveAutoSummary(server.db, newPost, { text: "The post in three lines.", source: "page", now: at(70) });
+    renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    const content = await within(pane).findByText("New words.");
+
+    const summary = summaryOf(pane)!;
+    expect(within(summary).getByRole("heading", { level: 3, name: "AIによる要約" })).toBeInTheDocument();
+    expect(summary).toHaveTextContent("The post in three lines.");
+    expect(summary).not.toHaveTextContent(NOTE);
+    expect(within(pane).getByRole("link", { name: "元のページを開く" }).compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(summary.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is not there for an article without one, and the content follows the way to the page as before", async () => {
+    const { server, blog, newPost } = seeded();
+    renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByText("New words.");
+    expect(summaryOf(pane)).toBeNull();
+    expect(pane).not.toHaveTextContent(WAITING);
+    expect(within(pane).getByRole("link", { name: "元のページを開く" }).parentElement!.nextElementSibling).toHaveClass("article-body");
+  });
+
+  it("says that the page could not be read when it was written from what the feed delivered", async () => {
+    const { server, blog, newPost } = seeded();
+    saveAutoSummary(server.db, newPost, { text: "Only the excerpt.", source: "feed", now: at(70) });
+    renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByText("New words.");
+    expect(summaryOf(pane)).toHaveTextContent(NOTE);
+  });
+
+  it("shows tags in it as the characters they are, and loads no image from it", async () => {
+    const { server, blog, newPost } = seeded();
+    const text = 'Before <script>window.hacked = true</script> <img src="https://img.example.org/x.png"> ![alt](https://img.example.org/y.png) after';
+    saveAutoSummary(server.db, newPost, { text, source: "page", now: at(70) });
+    renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByText("New words.");
+
+    const summary = summaryOf(pane)!;
+    expect(summary).toHaveTextContent("<script>window.hacked = true</script>");
+    expect(summary.querySelector("script, img")).toBeNull();
+    expect((window as unknown as { hacked?: boolean }).hacked).toBeUndefined();
+  });
+
+  it("says before the content that the summary is being made while the article waits for it", async () => {
+    const { server, blog } = seeded();
+    server.clock.advance(60_000);
+    updateFeed(server.db, blog.id, { autoSummarize: true }, server.clock);
+    server.clock.advance(60_000);
+    const fresh = seedFeedArticle(server.db, blog.id, { title: "Fresh post", at: server.clock().toISOString(), body: "Fresh words." });
+    renderApp({ server, route: `/f/${blog.id}/${fresh}` });
+    const pane = await opened();
+    const content = await within(pane).findByText("Fresh words.");
+
+    const note = within(pane).getByRole("status");
+    expect(note).toHaveTextContent(WAITING);
+    expect(note.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(summaryOf(pane)).toBeNull();
+  });
+
+  it("shows the summary on the article that stays open, once it has arrived", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { server, blog } = seeded();
+      server.clock.advance(60_000);
+      updateFeed(server.db, blog.id, { autoSummarize: true }, server.clock);
+      server.clock.advance(60_000);
+      const fresh = seedFeedArticle(server.db, blog.id, { title: "Fresh post", at: server.clock().toISOString(), body: "Fresh words." });
+      renderApp({ server, route: `/f/${blog.id}/${fresh}` });
+      const pane = await opened();
+      expect(await within(pane).findByRole("status")).toHaveTextContent(WAITING);
+
+      saveAutoSummary(server.db, fresh, { text: "It has arrived.", source: "page", now: server.clock().toISOString() });
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      await waitFor(() => expect(summaryOf(pane)).toHaveTextContent("It has arrived."));
+      expect(within(pane).queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is not there for a generated article", async () => {
+    const { server, tools, generated } = seeded();
+    renderApp({ server, route: `/c/${tools.slug}/${generated}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "Generated" });
+    expect(summaryOf(pane)).toBeNull();
+    expect(within(pane).queryByRole("status")).toBeNull();
   });
 });

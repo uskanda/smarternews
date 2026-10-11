@@ -152,6 +152,9 @@ export type ArticleEvent = z.infer<typeof articleEventSchema>;
 export const originSchema = z.enum(["generated", "feed"]);
 export type Origin = z.infer<typeof originSchema>;
 
+export const autoSummarySourceSchema = z.enum(["page", "feed"]);
+export type AutoSummarySource = z.infer<typeof autoSummarySourceSchema>;
+
 export const articleSummarySchema = z.object({
   id: z.number().int(),
   /** Null for an article of a feed that belongs to no category. */
@@ -180,6 +183,17 @@ export type ArticleSummary = z.infer<typeof articleSummarySchema>;
 export const articleSchema = articleSummarySchema.extend({
   body: z.string(),
   bodyHtml: z.string(),
+  /** The summary a model wrote of a feed article. Null when there is none, and for a generated article. */
+  autoSummary: z
+    .object({
+      text: z.string(),
+      /** Written from the article's page, or only from what the feed delivered because the page could not be read. */
+      source: autoSummarySourceSchema,
+      createdAt: z.string(),
+    })
+    .nullable(),
+  /** True while a feed article waits for its summary. */
+  autoSummaryPending: z.boolean(),
   snippetOnly: z.boolean(),
   previousArticleId: z.number().int().nullable(),
   refs: z.array(articleRefSchema),
@@ -261,6 +275,8 @@ export const feedSchema = z.object({
   /** Null means the base interval of the settings. */
   intervalMinutes: z.number().int().nullable(),
   enabled: z.boolean(),
+  /** Whether the articles this feed delivers from now on are summarised by a model. */
+  autoSummarize: z.boolean(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -279,6 +295,7 @@ export const feedCreateSchema = z.object({
   categoryId: z.number().int().nullable().optional(),
   intervalMinutes: intervalMinutesSchema.nullable().optional(),
   enabled: z.boolean().optional(),
+  autoSummarize: z.boolean().optional(),
 });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
@@ -389,7 +406,7 @@ export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write"]);
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize"]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
 export const providerStatusSchema = z.object({
@@ -397,8 +414,10 @@ export const providerStatusSchema = z.object({
     z.object({ name: z.string(), adapter: z.string(), model: z.string(), webSearch: z.boolean() }),
   ),
   tasks: z.record(taskNameSchema, z.string()),
+  /** Calls made today for runs. Summaries of feed articles are counted apart. */
   llmCallsToday: z.number().int(),
-  limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int() }),
+  summariesToday: z.number().int(),
+  limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int(), summariesPerDay: z.number().int() }),
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
 
@@ -417,6 +436,8 @@ const settingsFileSubscriptionSchema = z.object({
   title: feedTitleSchema.optional(),
   intervalMinutes: intervalMinutesSchema.optional(),
   enabled: z.boolean().optional(),
+  /** Left out, a new feed has no summaries and a known one keeps what it has. */
+  autoSummarize: z.boolean().optional(),
 });
 export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
 

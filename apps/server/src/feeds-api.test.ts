@@ -325,3 +325,94 @@ describe("OPML", () => {
     expect(await (await s.get("/api/v1/feeds")).json()).toEqual([]);
   });
 });
+
+describe("summaries of a subscribed feed", () => {
+  it("are off for a feed registered without saying so, and can be switched on and off by a change", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const created = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    expect(created.autoSummarize).toBe(false);
+
+    const changed = await s.patch(`/api/v1/feeds/${created.id}`, { autoSummarize: true });
+    expect(changed.status).toBe(200);
+    expect((await changed.json()).autoSummarize).toBe(true);
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([expect.objectContaining({ id: created.id, autoSummarize: true })]);
+
+    await s.patch(`/api/v1/feeds/${created.id}`, { autoSummarize: false });
+    expect((await (await s.get(`/api/v1/feeds/${created.id}`)).json()).autoSummarize).toBe(false);
+  });
+
+  it("can be switched on at registration", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const created = await s.post("/api/v1/feeds", { url: FEED, autoSummarize: true });
+    expect(created.status).toBe(201);
+    expect((await created.json()).autoSummarize).toBe(true);
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([expect.objectContaining({ autoSummarize: true })]);
+  });
+
+  it("refuses a value that is not true or false with 400", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const created = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    expect((await s.patch(`/api/v1/feeds/${created.id}`, { autoSummarize: "yes" })).status).toBe(400);
+  });
+});
+
+describe("the summary of an article", () => {
+  const LONG = "A sentence of the page that the summary is written from. ".repeat(8);
+  const page = () => new Response(`<html><head><title>a</title></head><body><article><h1>a</h1><p>${LONG}</p><p>${LONG}</p></article></body></html>`, { headers: { "content-type": "text/html" } });
+
+  /** A feed that summarises, and one article it delivered afterwards. */
+  async function delivered(s: ReturnType<typeof testServer>) {
+    s.site.set(FEED, rss("Example Blog", []));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED, autoSummarize: true })).json();
+    s.clock.advance(HOUR);
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    await s.post(`/api/v1/feeds/${feed.id}/fetch`);
+    const list = await (await s.get(`/api/v1/articles?feed=${feed.id}`)).json();
+    return { feed, id: list.items[0].id as number };
+  }
+
+  it("is absent and waited for on a feed article that was just delivered", async () => {
+    const s = testServer();
+    const { id } = await delivered(s);
+    expect(await (await s.get(`/api/v1/articles/${id}`)).json()).toMatchObject({ autoSummary: null, autoSummaryPending: true });
+  });
+
+  it("comes with what it was written from and when, once it is made", async () => {
+    const s = testServer(undefined, { summarize: () => ({ summary: "What the page says." }) });
+    s.site.set("https://blog.example.org/a", page);
+    const { id } = await delivered(s);
+    s.clock.advance(HOUR);
+    s.summarizer.tick();
+    await s.summarizer.idle();
+
+    const article = await (await s.get(`/api/v1/articles/${id}`)).json();
+    expect(article.autoSummary).toEqual({ text: "What the page says.", source: "page", createdAt: s.clock().toISOString() });
+    expect(article.autoSummaryPending).toBe(false);
+    // The content stays what the feed delivered.
+    expect(article.body).toContain("About a.");
+    expect(article.body).not.toContain("A sentence of the page");
+  });
+
+  it("is absent and not waited for on a feed article of a feed without summaries, and on a generated article", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const list = await (await s.get(`/api/v1/articles?feed=${feed.id}`)).json();
+    expect(await (await s.get(`/api/v1/articles/${list.items[0].id}`)).json()).toMatchObject({ autoSummary: null, autoSummaryPending: false });
+
+    const generated = s.article(s.category().id);
+    expect(await (await s.get(`/api/v1/articles/${generated}`)).json()).toMatchObject({ autoSummary: null, autoSummaryPending: false });
+  });
+
+  it("is no longer waited for once the article is read", async () => {
+    const s = testServer();
+    const { id } = await delivered(s);
+    expect((await (await s.patch(`/api/v1/articles/${id}`, { isRead: true })).json()).autoSummaryPending).toBe(false);
+    s.summarizer.tick();
+    await s.summarizer.idle();
+    expect(s.llmRequests.summarize).toEqual([]);
+  });
+});

@@ -22,7 +22,7 @@ export interface RenderOptions {
 }
 
 /** A server with the settings every test assumes: UTC, so that expected times can be read off the fixtures. */
-export function makeServer(start?: string, options: { webSearch?: boolean } = {}): TestServer {
+export function makeServer(start?: string, options: Parameters<typeof testServer>[1] = {}): TestServer {
   const server = testServer(start, options);
   updateSettings(server.db, { timeZone: "UTC", outputLanguage: "ja" });
   return server;

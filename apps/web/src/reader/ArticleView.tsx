@@ -140,6 +140,20 @@ export function ArticleView({
             </a>
           </p>
         ) : null}
+        {article.autoSummary ? (
+          // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
+          <section aria-label="AIによる要約" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
+            <h3 className="type-label-sm text-on-surface-muted">AIによる要約</h3>
+            <p className="break-words whitespace-pre-line type-body-md">{article.autoSummary.text}</p>
+            {article.autoSummary.source === "feed" ? (
+              <p className="type-label-sm text-on-surface-muted">元のページを読めなかったため、配信された内容だけをもとにしています。</p>
+            ) : null}
+          </section>
+        ) : article.autoSummaryPending ? (
+          <p role="status" className="type-label-sm text-on-surface-muted">
+            AIによる要約を作っています。
+          </p>
+        ) : null}
         <div className="article-body type-body-lg">
           <Markdown text={article.body} images={delivered} />
         </div>

@@ -42,12 +42,23 @@ export interface CallBudget {
   calls: number;
 }
 
+/** Summaries of feed articles a day, unless the configuration says otherwise. */
+const SUMMARIES_PER_DAY = 100;
+
+export interface TaskLimits {
+  llmCallsPerRun: number;
+  /** Calls for runs. Summaries of feed articles are not counted here. */
+  llmCallsPerDay: number;
+  /** Calls that summarise feed articles. The calls of runs are not counted here. */
+  summariesPerDay: number;
+}
+
 export interface TaskRunnerOptions {
   db: Database;
   clock: Clock;
   providers: Map<string, Provider>;
   assignment: Record<TaskName, string>;
-  limits: { llmCallsPerRun: number; llmCallsPerDay: number };
+  limits: Omit<TaskLimits, "summariesPerDay"> & { summariesPerDay?: number };
   timeouts: { defaultMs: number; searchMs: number };
   timeZone: () => string;
 }
@@ -59,8 +70,8 @@ export class TaskRunner {
     this.#options = options;
   }
 
-  get limits(): { llmCallsPerRun: number; llmCallsPerDay: number } {
-    return this.#options.limits;
+  get limits(): TaskLimits {
+    return { summariesPerDay: SUMMARIES_PER_DAY, ...this.#options.limits };
   }
 
   providerFor(task: TaskName): Provider {
@@ -84,11 +95,28 @@ export class TaskRunner {
     return this.providerFor("search").adapter.capabilities.webSearch;
   }
 
-  /** Model calls made since the start of the current day in the configured time zone. */
+  /**
+   * Model calls made for runs since the start of the current day in the configured time zone. Summaries of
+   * feed articles have an allowance of their own, so that neither uses up the other's.
+   */
   callsToday(): number {
+    return this.#countToday("task <> 'summarize'");
+  }
+
+  /** Calls that summarised a feed article since the start of the current day. */
+  summariesToday(): number {
+    return this.#countToday("task = 'summarize'");
+  }
+
+  /** False once the day has used its allowance of summaries. */
+  canSummarize(): boolean {
+    return this.summariesToday() < this.limits.summariesPerDay;
+  }
+
+  #countToday(condition: string): number {
     const { db, clock, timeZone } = this.#options;
     const since = startOfLocalDay(clock(), timeZone()).toISOString();
-    return num(db.prepare("SELECT count(*) AS n FROM llm_calls WHERE created_at >= ?").get(since)!.n);
+    return num(db.prepare(`SELECT count(*) AS n FROM llm_calls WHERE ${condition} AND created_at >= ?`).get(since)!.n);
   }
 
   async run<N extends TaskName>(name: N, input: TaskIo[N]["input"], budget: CallBudget): Promise<TaskIo[N]["output"]> {
@@ -101,7 +129,7 @@ export class TaskRunner {
 
     let problem = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      this.#spend(budget);
+      this.#spend(name, budget);
       const started = Date.now();
       let raw: unknown;
       try {
@@ -121,7 +149,12 @@ export class TaskRunner {
     throw new TaskFailedError(name, `the output did not match the schema twice (${problem})`);
   }
 
-  #spend(budget: CallBudget): void {
+  #spend(task: TaskName, budget: CallBudget): void {
+    if (task === "summarize") {
+      if (!this.canSummarize()) throw new LlmLimitError("day");
+      budget.calls += 1;
+      return;
+    }
     if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
     if (this.callsToday() >= this.#options.limits.llmCallsPerDay) throw new LlmLimitError("day");
     budget.calls += 1;

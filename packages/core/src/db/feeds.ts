@@ -1,5 +1,5 @@
 import type { Feed, FeedMove, FeedUpdate } from "../api.ts";
-import type { Clock } from "../clock.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
 import { findCategory } from "./categories.ts";
@@ -42,6 +42,7 @@ function toFeed(row: Row, baseMinutes: number): Feed {
     categoryId: numOrNull(row.category_id),
     intervalMinutes: numOrNull(row.interval_minutes),
     enabled,
+    autoSummarize: bool(row.auto_summarize),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
@@ -163,6 +164,8 @@ export interface NewFeed {
   categoryId?: number | null;
   intervalMinutes?: number | null;
   enabled?: boolean;
+  /** Summarise the articles this feed delivers from now on. */
+  autoSummarize?: boolean;
 }
 
 /** Stores a feed without fetching it. Refuses a URL that is already subscribed. */
@@ -172,10 +175,13 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   }
   checkFeedCategory(db, input.categoryId);
+  const now = clock().toISOString();
   const result = db
     .prepare(
-      `INSERT INTO feeds (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO feeds
+         (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
+          auto_summarize, auto_summarize_since)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -185,19 +191,32 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.categoryId ?? null,
       input.intervalMinutes ?? null,
       (input.enabled ?? true) ? 1 : 0,
-      clock().toISOString(),
+      now,
       lastPosition(db, input.categoryId ?? null) + 1,
+      input.autoSummarize ? 1 : 0,
+      input.autoSummarize ? now : null,
     );
   return getFeed(db, num(result.lastInsertRowid));
 }
 
-export function updateFeed(db: Database, id: number, patch: FeedUpdate): Feed {
+/**
+ * Changes a feed. Switching summaries on records the time: only articles stored after it are summarised.
+ * Switching them on again when they are on keeps the earlier time.
+ */
+export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
   transaction(db, () => {
     if (patch.title !== undefined) db.prepare("UPDATE feeds SET title = ?, title_set_by_user = 1 WHERE id = ?").run(patch.title, id);
     if (patch.intervalMinutes !== undefined) db.prepare("UPDATE feeds SET interval_minutes = ? WHERE id = ?").run(patch.intervalMinutes, id);
     if (patch.enabled !== undefined) db.prepare("UPDATE feeds SET enabled = ? WHERE id = ?").run(patch.enabled ? 1 : 0, id);
+    if (patch.autoSummarize !== undefined && patch.autoSummarize !== current.autoSummarize) {
+      db.prepare("UPDATE feeds SET auto_summarize = ?, auto_summarize_since = ? WHERE id = ?").run(
+        patch.autoSummarize ? 1 : 0,
+        patch.autoSummarize ? clock().toISOString() : null,
+        id,
+      );
+    }
     if (patch.categoryId !== undefined && patch.categoryId !== current.categoryId) {
       // It goes last among the feeds it joins.
       db.prepare("UPDATE feeds SET position = ? WHERE id = ?").run(lastPosition(db, patch.categoryId) + 1, id);

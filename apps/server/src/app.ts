@@ -236,7 +236,7 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
-  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)))));
+  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
     return c.json(listFeeds(db));
@@ -284,7 +284,7 @@ export function createApp(deps: AppDeps): Hono {
 
   // providers
   api.get("/providers", (c) => {
-    const status: ProviderStatus = { ...runner.describe(), llmCallsToday: runner.callsToday(), limits: runner.limits };
+    const status: ProviderStatus = { ...runner.describe(), llmCallsToday: runner.callsToday(), summariesToday: runner.summariesToday(), limits: runner.limits };
     return c.json(status);
   });
 

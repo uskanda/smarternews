@@ -150,6 +150,27 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           </Txt>
         </Pressable>
       ) : null}
+      {article.autoSummary ? (
+        // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
+        <View
+          testID="auto-summary"
+          style={{ gap: theme.spacing.xs, paddingLeft: theme.spacing.md, borderLeftWidth: theme.spacing.xs, borderLeftColor: theme.colors["outline-strong"] }}
+        >
+          <Txt variant="label-sm" color="on-surface-muted" heading>
+            AIによる要約
+          </Txt>
+          <Txt variant="body-md">{article.autoSummary.text}</Txt>
+          {article.autoSummary.source === "feed" ? (
+            <Txt variant="label-sm" color="on-surface-muted">
+              元のページを読めなかったため、配信された内容だけをもとにしています。
+            </Txt>
+          ) : null}
+        </View>
+      ) : article.autoSummaryPending ? (
+        <Txt variant="label-sm" color="on-surface-muted" accessibilityLiveRegion="polite">
+          AIによる要約を作っています。
+        </Txt>
+      ) : null}
       <Markdown text={article.body} images={delivered} />
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
