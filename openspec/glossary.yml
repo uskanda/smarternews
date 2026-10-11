@@ -262,6 +262,10 @@ terms:
     definition: "マウスのボタンを押したまま動かして、画面の部品を動かす操作。"
     aliases: []
     en: "drag"
+  - term: "クリック"
+    definition: "マウスのボタンを1回押す操作。"
+    aliases: []
+    en: "click"
   - term: "ダブルクリック"
     definition: "マウスのボタンを続けて2回押す操作。"
     aliases: []

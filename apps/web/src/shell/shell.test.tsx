@@ -1,7 +1,7 @@
 import { setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -190,6 +190,47 @@ describe("keyboard", () => {
 
     await user.keyboard("k");
     expect(await screen.findByRole("heading", { level: 2, name: "Newer story" })).toBeInTheDocument();
+  });
+
+  /** jsdom lays nothing out: the list is 100px tall and every row is 60px. */
+  function layOut(): HTMLElement {
+    const pane = screen.getByRole("region", { name: "記事の一覧" }).querySelector<HTMLElement>("[data-list-scroll]")!;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const row = this.closest("li");
+      const index = row?.parentElement ? [...row.parentElement.children].indexOf(row) : -1;
+      const top = index === -1 ? 0 : index * 60 - pane.scrollTop;
+      const height = index === -1 ? 100 : 60;
+      return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) };
+    });
+    onTestFinished(() => spy.mockRestore());
+    return pane;
+  }
+
+  it("moves the list by a screen when j and k leave the rows in view", async () => {
+    const { server, newer } = seeded();
+    const { user } = renderApp({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut();
+
+    await user.keyboard("j");
+    await screen.findByRole("heading", { level: 2, name: "Older story" });
+    await waitFor(() => expect(pane.scrollTop).toBe(60));
+
+    await user.keyboard("k");
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    await waitFor(() => expect(pane.scrollTop).toBe(0));
+  });
+
+  it("leaves the list alone when an article is chosen with a click", async () => {
+    const { server, newer } = seeded();
+    const { user } = renderApp({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut();
+
+    await user.click(screen.getByRole("link", { name: /Older story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Older story" });
+
+    expect(pane.scrollTop).toBe(0);
   });
 
   it("selects the first article with j when none is selected", async () => {

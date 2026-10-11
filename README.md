@@ -62,7 +62,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - The settings pages edit categories, topics, subscribed feeds, stop words, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, and `?` lists the keys.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 

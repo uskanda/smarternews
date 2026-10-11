@@ -24,7 +24,7 @@ export function EventList({
       <header className="border-b border-outline px-lg py-md">
         <h1 className="type-headline-md">{title}</h1>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {groups.length === 0 ? (
           <p className="p-lg type-body-md text-on-surface-muted">これから開催されるイベントはありません。</p>
         ) : null}
