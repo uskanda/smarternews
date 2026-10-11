@@ -6,7 +6,9 @@ import { useCategories, useCounts, useFeeds } from "../api/queries.ts";
 import { useCollapsed } from "../lib/collapsed.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
+import { PANES, usePanes } from "../lib/panes.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
+import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
 
 const KEYS: Array<[string, string]> = [
@@ -179,6 +181,7 @@ function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: b
 /** The frame around every page: the navigation pane, or a button that opens it on narrower screens. */
 export function Shell() {
   const layout = useLayout();
+  const panes = usePanes(layout);
   const [navOpen, setNavOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   useHotkeys({ "?": () => setHelpOpen(true) });
@@ -196,8 +199,16 @@ export function Shell() {
         内容へ移動
       </a>
       {layout === "wide" ? (
-        <aside className="w-nav shrink-0 border-r border-outline">
+        <aside className="relative shrink-0 border-r border-outline" style={{ width: panes.shown.nav }}>
           <Nav />
+          <PaneResizer
+            label="項目の一覧の幅"
+            width={panes.shown.nav}
+            min={PANES.nav.min}
+            max={panes.widest("nav")}
+            onResize={(width) => panes.set("nav", width)}
+            onReset={() => panes.reset("nav")}
+          />
         </aside>
       ) : null}
       <div className="flex min-w-0 flex-1 flex-col">

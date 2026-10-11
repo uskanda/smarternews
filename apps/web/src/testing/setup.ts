@@ -1,16 +1,21 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { resetPaneState } from "../lib/panes.ts";
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  resetPaneState();
 });
 
 // jsdom has no layout, so it has no media queries either. Tests choose the width through `setViewport`.
 let width = 1280;
+Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
 export function setViewport(next: number): void {
   width = next;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: next });
+  window.dispatchEvent(new Event("resize"));
   for (const listener of listeners) listener();
 }
 const listeners = new Set<() => void>();
@@ -39,6 +44,7 @@ window.matchMedia = ((query: string) => {
 
 afterEach(() => {
   width = 1280;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
   listeners.clear();
 });
 

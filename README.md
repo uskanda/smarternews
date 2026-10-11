@@ -53,7 +53,7 @@ curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 
 ## Web app
 
-The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. It follows the light or dark setting of the device.
+The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. It follows the light or dark setting of the device. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
 
 - Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.

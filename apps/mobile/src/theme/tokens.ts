@@ -43,8 +43,13 @@ export const spacing = {
   xl: 24,
   "2xl": 32,
   nav: 200,
+  "nav-min": 160,
+  "nav-max": 400,
   "nav-indent": 16,
   list: 380,
+  "list-min": 280,
+  "list-max": 640,
+  "article-min": 360,
   touch: 44,
   "touch-android": 48,
 } as const;

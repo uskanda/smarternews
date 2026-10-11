@@ -26,8 +26,13 @@
   --spacing-xl: 24px;
   --spacing-2xl: 32px;
   --spacing-nav: 200px;
+  --spacing-nav-min: 160px;
+  --spacing-nav-max: 400px;
   --spacing-nav-indent: 16px;
   --spacing-list: 380px;
+  --spacing-list-min: 280px;
+  --spacing-list-max: 640px;
+  --spacing-article-min: 360px;
   --spacing-measure: 36em;
   --spacing-measure-article: 52em;
   --spacing-touch: 44px;

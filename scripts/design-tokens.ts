@@ -139,8 +139,29 @@ export function renderNativeTokens(designMd: string): string {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * The pixel lengths of the spacing scale as numbers, for the code of the web app that computes with them:
+ * the widths a pane may take cannot be worked out in CSS alone.
+ */
+export function renderWebSizes(designMd: string): string {
+  const tokens = frontMatter(designMd);
+  const lines = [
+    "// Generated from DESIGN.md by scripts/design-tokens.ts. Do not edit: change DESIGN.md and run `pnpm run tokens`.",
+    "",
+    "/** Lengths of the spacing scale, in pixels. */",
+    "export const spacing = {",
+    ...Object.entries(tokens.spacing ?? {})
+      .map(([name, value]) => [name, pixels(value)] as const)
+      .filter(([, value]) => value !== null)
+      .map(([name, value]) => `  ${key(name)}: ${value},`),
+    "} as const;",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 const OUTPUTS = [
   { path: "apps/web/src/styles/tokens.css", render: renderTokens },
+  { path: "apps/web/src/styles/sizes.ts", render: renderWebSizes },
   { path: "apps/mobile/src/theme/tokens.ts", render: renderNativeTokens },
 ];
 
