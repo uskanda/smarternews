@@ -56,7 +56,7 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
               <Markdown text={segment.translated!} images />
             </div>
             <div className="segment-original" lang={lang}>
-              <Markdown text={segment.original} images />
+              <Markdown text={segment.original} images plainHeadings />
             </div>
           </div>
         ) : (

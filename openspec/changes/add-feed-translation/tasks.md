@@ -55,6 +55,6 @@
 ## 8. 全体の確認
 
 - [x] 8.1 `apps/server` について、差し替えた翻訳のアダプターで、取得から本文の翻訳までを通すテストを足す。文字数の計数と、上限でのLLMへの切り替えを確かめる
-- [ ] 8.2 `apps/web` について、実際のブラウザーで、訳のある記事を幅1280pxと390px、明るい配色と暗い配色で確かめる。訳と原文の読み分けやすさを画像で見る
-- [ ] 8.3 `apps/web` について `/impeccable audit` を行い、指摘を直すか、報告に書く
-- [ ] 8.4 `make verify` を通し、`openspec validate add-feed-translation --strict` が通ることを確かめる
+- [x] 8.2 `apps/web` について、実際のブラウザーで、訳のある記事を幅1280pxと390px、明るい配色と暗い配色で確かめる。訳と原文の読み分けやすさを画像で見る
+- [x] 8.3 `apps/web` について `/impeccable audit` を行い、指摘を直すか、報告に書く
+- [x] 8.4 `make verify` を通し、`openspec validate add-feed-translation --strict` が通ることを確かめる

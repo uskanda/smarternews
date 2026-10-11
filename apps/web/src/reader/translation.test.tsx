@@ -161,6 +161,15 @@ describe("the segments of a translated article", () => {
     expect(pane.querySelector(".segment-original")).toHaveTextContent("An original.");
   });
 
+  it("keep the original of a heading out of the outline: only the translation is a heading", async () => {
+    const { server, route } = stored([{ original: "## A section", translated: "## ある節" }]);
+    renderApp({ server, route });
+    const pane = await opened();
+    await within(pane).findByText("ある節");
+    expect(within(pane).getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["訳したタイトル", "ある節"]);
+    expect(pane.querySelector(".segment-original")).toHaveTextContent("A section");
+  });
+
   it("show a segment once when its translation is the same text as its original", async () => {
     const { server, route } = stored([
       { original: "Same in both.", translated: "Same in both." },
