@@ -37,6 +37,10 @@ import {
   listRuns,
   listTopics,
   markArticlesRead,
+  moveCategory,
+  moveFeed,
+  categoryMoveSchema,
+  feedMoveSchema,
   markArticlesUnread,
   markReadSchema,
   markUnreadSchema,
@@ -182,6 +186,9 @@ export function createApp(deps: AppDeps): Hono {
   api.patch("/categories/:id", async (c) =>
     c.json(updateCategory(db, idParam(c, "category"), parse(categoryUpdateSchema, await jsonBody(c)))),
   );
+  api.post("/categories/:id/move", async (c) =>
+    c.json(moveCategory(db, idParam(c, "category"), parse(categoryMoveSchema, await jsonBody(c)).before)),
+  );
   api.delete("/categories/:id", (c) => {
     deleteCategory(db, idParam(c, "category"));
     return c.body(null, 204);
@@ -230,6 +237,10 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
   api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)))));
+  api.post("/feeds/:id/move", async (c) => {
+    moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
+    return c.json(listFeeds(db));
+  });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
     return c.body(null, 204);

@@ -28,6 +28,8 @@ export const settingsSchema = z.object({
   search: searchLocaleSchema,
   /** The base fetch interval of subscribed feeds. */
   feedIntervalMinutes: intervalMinutesSchema,
+  /** Whether a reader opens the next list with unread articles after marking a list as read. */
+  advanceAfterMarkAll: z.boolean(),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -282,6 +284,14 @@ export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
 export const feedUpdateSchema = feedCreateSchema.omit({ url: true });
 export type FeedUpdate = z.infer<typeof feedUpdateSchema>;
+
+/** Where a category goes: before another one, or last. */
+export const categoryMoveSchema = z.object({ before: z.number().int().nullable() });
+export type CategoryMove = z.infer<typeof categoryMoveSchema>;
+
+/** Where a feed goes: into a category or none, before another feed there, or last. */
+export const feedMoveSchema = z.object({ categoryId: z.number().int().nullable(), before: z.number().int().nullable() });
+export type FeedMove = z.infer<typeof feedMoveSchema>;
 
 export const feedDiscoverSchema = z.object({ url: feedUrlSchema });
 export const feedDiscoveryResultSchema = z.object({ feeds: z.array(z.object({ url: z.string(), title: z.string() })) });

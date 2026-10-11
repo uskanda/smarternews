@@ -162,3 +162,20 @@ describe("the API client", () => {
     await expect(api.createStopWord({ text: " " })).rejects.toMatchObject({ kind: "invalid" });
   });
 });
+
+describe("moving categories and feeds", () => {
+  it("moves a category and a feed, and reads the move-on setting", async () => {
+    const { server, api } = setup();
+    const a = server.category("A");
+    const b = server.category("B");
+    expect((await api.moveCategory(b.id, a.id)).map((category) => category.name)).toEqual(["B", "A"]);
+
+    server.site.set("https://blog.example.org/feed.xml", `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title></channel></rss>`);
+    const feed = await api.createFeed({ url: "https://blog.example.org/feed.xml", categoryId: a.id });
+    const moved = await api.moveFeed(feed.id, { categoryId: b.id, before: null });
+    expect(moved.map((entry) => entry.categoryId)).toEqual([b.id]);
+
+    expect((await api.settings()).advanceAfterMarkAll).toBe(false);
+    expect((await api.updateSettings({ advanceAfterMarkAll: true })).advanceAfterMarkAll).toBe(true);
+  });
+});

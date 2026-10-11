@@ -1,14 +1,15 @@
 import { buildNav, GENERATED_LABEL, listKey, type NavEntry } from "@smarternews/client";
 import { useGlobalSearchParams, useRouter } from "expo-router";
 import { useDrawerStatus } from "expo-router/drawer";
-import { useMemo } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCategories, useCounts, useFeeds } from "../api/queries";
 import { useTheme } from "../theme/theme";
 import { Icon } from "../ui/Icon";
 import { Txt } from "../ui/Txt";
-import { useCollapsed } from "./collapsed";
+import { unfold, useCollapsed } from "./collapsed";
+import { DragRow, useDrawerDrag, useNavMoves, type DrawerGeometry } from "./order";
 
 function Item({
   label,
@@ -85,9 +86,52 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
   };
   const rule = <View style={{ height: 1, marginVertical: theme.spacing.sm, backgroundColor: theme.colors.outline }} />;
 
+  const scroll = useRef<ScrollView>(null);
+  const geometry = useRef<DrawerGeometry>({ rows: new Map(), top: 0, height: 0, offset: 0, contentHeight: 0 });
+  const { drag, handlers } = useDrawerDrag({ scroll, geometry, model, onMove: useNavMoves(), unfold });
+  // Rows that left the drawer, by a fold or a move, must not be measured as if they were still there.
+  const shown = new Set(model.groups.flatMap((group) => [group.entry, ...(collapsed.isCollapsed(listKey(group.entry.target)) ? [] : group.children)]).map((entry) => listKey(entry.target)));
+  for (const key of geometry.current.rows.keys()) if (!shown.has(key)) geometry.current.rows.delete(key);
+  /** One row of a category or of what is below it. A long press picks it up when it may move. */
+  const row = (key: string, content: ReactNode, style: object = {}) => (
+    <DragRow key={key} dragKey={key} handlers={handlers}>
+      <View
+        testID={`nav-row-${key}`}
+        collapsable={false}
+        onLayout={(event) => geometry.current.rows.set(key, { y: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height })}
+        style={{
+          flexDirection: "row",
+          opacity: drag?.key === key ? 0.4 : 1,
+          // The category a held feed may go into is framed like a focused control.
+          borderRadius: theme.rounded.md,
+          ...(drag?.armed === key ? { outlineWidth: 2, outlineColor: theme.colors.primary, outlineOffset: -2 } : {}),
+          ...style,
+        }}
+      >
+        {content}
+      </View>
+    </DragRow>
+  );
+  const dragged = drag ? [...model.groups.map((group) => group.entry), ...model.groups.flatMap((group) => group.children)].find((entry) => listKey(entry.target) === drag.key) : undefined;
+
   return (
     <ScrollView
+      ref={scroll}
       accessibilityLabel="項目"
+      // The drawer stays put while an entry is held: the finger moves the entry, not the list.
+      scrollEnabled={drag === null}
+      scrollEventThrottle={16}
+      onScroll={(event) => {
+        geometry.current.offset = event.nativeEvent.contentOffset.y;
+      }}
+      onLayout={(event) => {
+        // The drawer fills the window from its top edge, so its own place is its place on screen.
+        geometry.current.top = event.nativeEvent.layout.y;
+        geometry.current.height = event.nativeEvent.layout.height;
+      }}
+      onContentSizeChange={(_width, height) => {
+        geometry.current.contentHeight = height;
+      }}
       // A closed drawer is off the screen: a screen reader must not walk into it.
       importantForAccessibility={open ? "auto" : "no-hide-descendants"}
       accessibilityElementsHidden={!open}
@@ -99,12 +143,13 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
         </View>
       ))}
       {rule}
-      {model.groups.map((group) => {
+      {model.groups.flatMap((group) => {
         const key = listKey(group.entry.target);
         const folded = collapsed.isCollapsed(key);
-        return (
-          <View key={key}>
-            <View style={{ flexDirection: "row" }}>
+        return [
+          row(
+            key,
+            <>
               {item(group.entry)}
               {group.children.length > 0 ? (
                 <Pressable
@@ -118,21 +163,23 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
                   <Icon name={folded ? "expand" : "collapse"} color={theme.colors["on-surface-muted"]} />
                 </Pressable>
               ) : null}
-            </View>
-            {folded
-              ? null
-              : group.children.map((child) => (
+            </>,
+          ),
+          ...(folded
+            ? []
+            : group.children.map((child) =>
+                row(
+                  listKey(child.target),
+                  item(child, {
+                    indent: theme.spacing["nav-indent"],
+                    // "AI生成" appears once per category and once at the top: said with its category.
+                    spoken: child.label === GENERATED_LABEL ? `${group.entry.label}の${GENERATED_LABEL}` : undefined,
+                  }),
                   // The fold button's column stays empty here, so that the counts of the entries line up with the category's.
-                  <View key={listKey(child.target)} style={{ flexDirection: "row", paddingRight: theme.spacing["touch-android"] }}>
-                    {item(child, {
-                      indent: theme.spacing["nav-indent"],
-                      // "AI生成" appears once per category and once at the top: said with its category.
-                      spoken: child.label === GENERATED_LABEL ? `${group.entry.label}の${GENERATED_LABEL}` : undefined,
-                    })}
-                  </View>
-                ))}
-          </View>
-        );
+                  { paddingRight: theme.spacing["touch-android"] },
+                ),
+              )),
+        ];
       })}
       {rule}
       <View style={{ flexDirection: "row" }}>
@@ -145,6 +192,37 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
           }}
         />
       </View>
+      {drag && drag.lineY !== null ? (
+        <View
+          testID="nav-drop-line"
+          pointerEvents="none"
+          style={{ position: "absolute", left: theme.spacing.sm, right: theme.spacing.sm, top: drag.lineY - 1, height: 2, backgroundColor: theme.colors.primary }}
+        />
+      ) : null}
+      {drag && dragged ? (
+        // The entry under the finger, lifted off the list.
+        <View
+          testID="nav-dragged"
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: theme.spacing.sm,
+            right: theme.spacing.sm,
+            top: drag.y - theme.spacing["touch-android"] / 2,
+            minHeight: theme.spacing["touch-android"],
+            justifyContent: "center",
+            paddingHorizontal: theme.spacing.lg,
+            borderWidth: 1,
+            borderColor: theme.colors["outline-strong"],
+            borderRadius: theme.rounded.md,
+            backgroundColor: theme.colors.surface,
+          }}
+        >
+          <Txt variant="label-md" numberOfLines={1}>
+            {dragged.label}
+          </Txt>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }

@@ -2,12 +2,24 @@ import type { Article, ArticleListQuery, ArticleSummary, Category, Feed } from "
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { useArticle, useArticleFlags, useArticleList, useCategories, useFeeds, useTimeZone } from "../api/queries.ts";
+import { useArticle, useArticleFlags, useArticleList, useCategories, useFeeds, useSettings, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { unfold } from "../lib/collapsed.ts";
 import { followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
-import { GENERATED_LABEL, hasReadToggle, mergeKept, targetFilter, targetScope, UNCATEGORIZED_LABEL, type ListTarget } from "@smarternews/client";
+import {
+  buildNav,
+  GENERATED_LABEL,
+  hasReadToggle,
+  listKey as keyOf,
+  mergeKept,
+  nextTarget,
+  targetFilter,
+  targetScope,
+  UNCATEGORIZED_LABEL,
+  type ListTarget,
+} from "@smarternews/client";
 import { PANES, usePanes } from "../lib/panes.ts";
 import { listPathOf } from "../lib/paths.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
@@ -70,6 +82,7 @@ export function ReaderPage({ view }: { view: View }) {
   const client = useQueryClient();
   const toast = useToast();
   const timeZone = useTimeZone();
+  const settings = useSettings();
   const flags = useArticleFlags();
 
   const categories = useCategories();
@@ -156,6 +169,29 @@ export function ReaderPage({ view }: { view: View }) {
     void client.invalidateQueries({ queryKey: ["counts"] });
   }
 
+  /**
+   * Opens the next list below this one that still has unread articles, by counts fetched after the marking.
+   * Returns the name of the list it opened, or null when there is none.
+   */
+  async function openNext(from: ListTarget): Promise<string | null> {
+    const counts = await client.fetchQuery({ queryKey: ["counts"], queryFn: () => api.counts(), staleTime: 0 });
+    const model = buildNav({ categories: categories.data ?? [], feeds: feeds.data ?? [], counts });
+    const next = nextTarget(model, from);
+    const path = next ? listPathOf(next, (id) => categories.data?.find((entry) => entry.id === id)?.slug) : null;
+    if (!next || !path) return null;
+    // The entry may sit below a folded category.
+    const group = next.type === "feed" ? feeds.data?.find((feed) => feed.id === next.feedId)?.categoryId : next.type === "category" ? next.categoryId : undefined;
+    if (next.type === "feed" || (next.type === "category" && next.generatedOnly)) {
+      unfold(group == null ? keyOf({ type: "uncategorized" }) : keyOf({ type: "category", categoryId: group, generatedOnly: false }));
+    }
+    void navigate(path);
+    // The button that was pressed is gone with the old list: the keyboard continues in the new one.
+    document.getElementById("content")?.focus();
+    const entry = model.groups.flatMap((candidate) => [candidate.entry, ...candidate.children]).find((candidate) => keyOf(candidate.target) === keyOf(next));
+    const parent = next.type === "category" && next.generatedOnly ? categories.data?.find((category) => category.id === next.categoryId)?.name : undefined;
+    return entry ? (parent ? `${parent}の${entry.label}` : entry.label) : null;
+  }
+
   async function markAllRead() {
     const newest = fetched.reduce<string | null>((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null);
     if (newest === null) return;
@@ -164,8 +200,10 @@ export function ReaderPage({ view }: { view: View }) {
     try {
       const result = await api.markRead({ before, ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
       refresh();
+      // Moving on is an extra: when it fails, the marking has still happened and can still be undone.
+      const opened = target && settings.data?.advanceAfterMarkAll ? await openNext(target).catch(() => null) : null;
       toast({
-        message: `${result.updated}件を既読にしました`,
+        message: opened ? `${result.updated}件を既読にしました。「${opened}」を開きました` : `${result.updated}件を既読にしました`,
         durationMs: 10_000,
         action: {
           label: "取り消す",

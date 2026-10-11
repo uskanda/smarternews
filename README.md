@@ -59,10 +59,12 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
 - An event category is shown as a list of upcoming events grouped by day.
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
+- Categories and feeds can be reordered by dragging them in the left pane. A feed held over another category for half a second can be dropped into it. A right click on a category or a feed opens a menu that moves it up or down; for a feed the menu also unsubscribes. The menu key or `Shift+F10` opens the same menu from the keyboard. The order is kept on the server, so the Android app, the settings file and OPML follow it.
+- With "「すべて既読にする」のあと、未読のある次の項目へ移る" switched on in the global settings, marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed.
 - The settings pages edit categories, topics, subscribed feeds, stop words, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
@@ -71,6 +73,8 @@ The token is stored in the browser's local storage. "このブラウザーから
 ## Android app
 
 The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
+
+In the drawer, a long press on a category or a feed picks it up; drag it to reorder, or hold a feed over another category for half a second to move it there.
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 

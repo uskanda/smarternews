@@ -63,6 +63,7 @@ Settings fields:
 | `timeZone` | An IANA name |
 | `search` | `{"language":"en","region":"US"}`, the default market for news search |
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
+| `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `false` by default |
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and stop words by their text. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
@@ -74,6 +75,7 @@ Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`
 | `POST /api/v1/categories` | Create one (status 201) |
 | `GET /api/v1/categories/:id` | Read one |
 | `PATCH /api/v1/categories/:id` | Change `name`, `schedule`, `minImportance`, `maxArticlesPerRun`, `windowHours`, `windowDays`, `enabled` |
+| `POST /api/v1/categories/:id/move` | Put it before another category, or last. Returns all categories in their new order |
 | `DELETE /api/v1/categories/:id` | Delete it with its topics, generated articles, candidates and runs (status 204). Its subscribed feeds stay, without a category |
 
 ```bash
@@ -203,6 +205,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/discover` | Find the feeds a page points to, without subscribing |
 | `GET /api/v1/feeds/:id` | Read one |
 | `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled` |
+| `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
 | `GET /api/v1/feeds/opml` | Download every subscribed feed as OPML |
@@ -227,6 +230,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$AP
 Subscribing fetches the URL once and answers when that is done. Status 400 means that the URL does not return RSS or Atom, or that it is a destination the crawler does not fetch (see the README). A 409 answer says that the URL is already subscribed; URLs that differ only in tracking parameters count as the same. Every item the feed delivers at that moment becomes an unread article, except items published more than 90 days ago.
 
 `categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays.
+
+`move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
 `discover` returns `feeds`, a list of `url` and `title`. When the URL is itself a feed, the list holds that one feed. For a page it holds the feeds the page names with `<link rel="alternate">`, and it is empty when there are none.
 

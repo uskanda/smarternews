@@ -68,6 +68,26 @@
     }
   }
 
+  /* A category or feed that is being dragged, the category a feed may go into, and the line at its place. */
+  .nav-row[data-dragging] {
+    color: var(--color-on-surface-muted);
+  }
+
+  .nav-row[data-drop-armed] {
+    border-radius: var(--radius-md);
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+  }
+
+  .nav-drop-line {
+    position: absolute;
+    inset-inline: var(--spacing-sm);
+    height: 2px;
+    margin-top: -1px;
+    background: var(--color-primary);
+    pointer-events: none;
+  }
+
   /* The handle on the right border of a pane. It straddles the rule; its own line shows on hover and focus. */
   .pane-resizer {
     position: absolute;

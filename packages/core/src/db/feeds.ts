@@ -1,4 +1,4 @@
-import type { Feed, FeedUpdate } from "../api.ts";
+import type { Feed, FeedMove, FeedUpdate } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
@@ -56,7 +56,11 @@ function toFeed(row: Row, baseMinutes: number): Feed {
 export function listFeeds(db: Database): Feed[] {
   const base = getSettings(db).feedIntervalMinutes;
   return db
-    .prepare(`SELECT ${FEED_COLUMNS} FROM feeds f ORDER BY f.id`)
+    // In the order of the lists: by category, then within it; the feeds of no category come last.
+    .prepare(
+      `SELECT ${FEED_COLUMNS} FROM feeds f LEFT JOIN categories c ON c.id = f.category_id
+        ORDER BY c.id IS NULL, c.position, c.id, f.position, f.id`,
+    )
     .all()
     .map((row) => toFeed(row, base));
 }
@@ -104,6 +108,52 @@ export function checkFeedCategory(db: Database, categoryId: number | null | unde
   }
 }
 
+function lastPosition(db: Database, categoryId: number | null): number {
+  return num(db.prepare("SELECT coalesce(max(position), 0) AS last FROM feeds WHERE category_id IS ?").get(categoryId)!.last);
+}
+
+function setFeedCategory(db: Database, id: number, categoryId: number | null): void {
+  db.prepare("UPDATE feeds SET category_id = ? WHERE id = ?").run(categoryId, id);
+  // Articles carry their feed's category, so that lists and counts by category need no join.
+  db.prepare("UPDATE articles SET category_id = ? WHERE feed_id = ?").run(categoryId, id);
+}
+
+/** The ids of the feeds of one category, or of none, in their order. */
+function feedIdsOf(db: Database, categoryId: number | null): number[] {
+  return db
+    .prepare("SELECT id FROM feeds WHERE category_id IS ? ORDER BY position, id")
+    .all(categoryId)
+    .map((row) => num(row.id));
+}
+
+/** Stores the order of the feeds of one category: the given ones first, in that order, then the rest as they were. */
+export function orderFeeds(db: Database, categoryId: number | null, ids: number[]): void {
+  const first = new Set(ids);
+  const all = [...ids, ...feedIdsOf(db, categoryId).filter((id) => !first.has(id))];
+  const set = db.prepare("UPDATE feeds SET position = ? WHERE id = ? AND category_id IS ?");
+  transaction(db, () => all.forEach((id, index) => set.run(index + 1, id, categoryId)));
+}
+
+/**
+ * Puts a feed into a category, or into none, before another feed there or last. Membership and order change
+ * together, and the other feeds keep their order.
+ */
+export function moveFeed(db: Database, id: number, to: FeedMove): Feed {
+  const current = getFeed(db, id);
+  checkFeedCategory(db, to.categoryId);
+  const others = feedIdsOf(db, to.categoryId).filter((other) => other !== id);
+  if (to.before !== null && to.before !== id && !others.includes(to.before)) {
+    throw new DomainError("invalid", `feed ${to.before} is not in that category`, [{ path: "before", message: "not a feed of the target category" }]);
+  }
+  if (to.before === id && to.categoryId === current.categoryId) return current;
+  const at = to.before === null || to.before === id ? others.length : others.indexOf(to.before);
+  transaction(db, () => {
+    if (to.categoryId !== current.categoryId) setFeedCategory(db, id, to.categoryId);
+    orderFeeds(db, to.categoryId, [...others.slice(0, at), id, ...others.slice(at)]);
+  });
+  return getFeed(db, id);
+}
+
 export interface NewFeed {
   url: string;
   title: string;
@@ -124,8 +174,8 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
   checkFeedCategory(db, input.categoryId);
   const result = db
     .prepare(
-      `INSERT INTO feeds (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO feeds (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -136,6 +186,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.intervalMinutes ?? null,
       (input.enabled ?? true) ? 1 : 0,
       clock().toISOString(),
+      lastPosition(db, input.categoryId ?? null) + 1,
     );
   return getFeed(db, num(result.lastInsertRowid));
 }
@@ -148,9 +199,9 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate): Feed {
     if (patch.intervalMinutes !== undefined) db.prepare("UPDATE feeds SET interval_minutes = ? WHERE id = ?").run(patch.intervalMinutes, id);
     if (patch.enabled !== undefined) db.prepare("UPDATE feeds SET enabled = ? WHERE id = ?").run(patch.enabled ? 1 : 0, id);
     if (patch.categoryId !== undefined && patch.categoryId !== current.categoryId) {
-      db.prepare("UPDATE feeds SET category_id = ? WHERE id = ?").run(patch.categoryId, id);
-      // Articles carry their feed's category, so that lists and counts by category need no join.
-      db.prepare("UPDATE articles SET category_id = ? WHERE feed_id = ?").run(patch.categoryId, id);
+      // It goes last among the feeds it joins.
+      db.prepare("UPDATE feeds SET position = ? WHERE id = ?").run(lastPosition(db, patch.categoryId) + 1, id);
+      setFeedCategory(db, id, patch.categoryId);
     }
   });
   return getFeed(db, id);

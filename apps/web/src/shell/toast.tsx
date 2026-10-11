@@ -30,7 +30,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext value={value}>
       {children}
-      <div className="pointer-events-none fixed inset-x-0 bottom-lg z-50 flex justify-center px-lg">
+      {/* The region is always there, so that a dialog opened later does not hide it from a screen reader. */}
+      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-lg z-50 flex justify-center px-lg">
         {toast ? (
           <div
             role="status"

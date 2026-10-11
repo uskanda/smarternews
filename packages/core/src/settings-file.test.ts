@@ -1,7 +1,7 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
-import { createCategory, findCategoryBySlug, listCategories } from "./db/categories.ts";
-import { insertFeed, listFeeds } from "./db/feeds.ts";
+import { createCategory, findCategoryBySlug, listCategories, moveCategory } from "./db/categories.ts";
+import { insertFeed, listFeeds, moveFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createStopWord, listStopWords } from "./db/stop-words.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
@@ -38,6 +38,7 @@ describe("exportSettings", () => {
       timeZone: "Europe/Berlin",
       search: { language: "ja", region: "JP" },
       feedIntervalMinutes: 30,
+      advanceAfterMarkAll: false,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -80,7 +81,8 @@ categories:
     const cars = createCategory(db, { name: "Cars", kind: "news" }, clock);
     createTopic(db, cars.id, { text: "New models" }, clock);
     importSettings(db, "version: 1\ncategories:\n  - slug: security\n    name: Security\n    kind: news\n", clock);
-    expect(listCategories(db).map((c) => c.slug)).toEqual(["cars", "security"]);
+    // the listed category comes first, and the one the file does not mention follows
+    expect(listCategories(db).map((c) => c.slug)).toEqual(["security", "cars"]);
     expect(listTopics(db, cars.id)).toHaveLength(1);
   });
 
@@ -254,6 +256,57 @@ categories:
     const text = "version: 1\nsubscriptions:\n  - url: https://a.example.org/feed.xml\n    intervalMinutes: 2\n";
     expect(() => importSettings(db, text, clock)).toThrow(expect.objectContaining({ code: "invalid" }));
     expect(listFeeds(db)).toEqual([]);
+  });
+});
+
+describe("order and the move-on setting in the settings file", () => {
+  const file = (slugs: string[], extra = "") =>
+    `version: 1\n${extra}categories:\n${slugs.map((slug) => `  - slug: ${slug}\n    name: ${slug.toUpperCase()}\n    kind: news\n`).join("")}`;
+  const slugs = (db: ReturnType<typeof createTestDb>) => listCategories(db).map((category) => category.slug);
+
+  it("writes categories and feeds in their order, and an empty server takes that order over", () => {
+    const db = createTestDb();
+    importSettings(db, file(["a", "b"]), clock);
+    const [a, b] = listCategories(db);
+    insertFeed(db, { url: "https://x.example.org/feed.xml", title: "X", categoryId: a!.id }, clock);
+    const y = insertFeed(db, { url: "https://y.example.org/feed.xml", title: "Y", categoryId: a!.id }, clock);
+    moveCategory(db, b!.id, a!.id);
+    moveFeed(db, y.id, { categoryId: a!.id, before: null });
+    moveFeed(db, listFeeds(db).find((feed) => feed.title === "X")!.id, { categoryId: a!.id, before: null });
+
+    const exported = exportSettings(db);
+    const written = parse(exported);
+    expect(written.categories.map((category: { slug: string }) => category.slug)).toEqual(["b", "a"]);
+    expect(written.categories[1].subscriptions.map((entry: { title: string }) => entry.title)).toEqual(["Y", "X"]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(slugs(target)).toEqual(["b", "a"]);
+    expect(listFeeds(target).map((feed) => feed.title)).toEqual(["Y", "X"]);
+  });
+
+  it("puts what the file lists first, in the file's order, and the rest after it", () => {
+    const db = createTestDb();
+    importSettings(db, file(["a", "b", "c"]), clock);
+    importSettings(db, file(["c", "a"]), clock);
+    expect(slugs(db)).toEqual(["c", "a", "b"]);
+  });
+
+  it("orders the feeds of a category the same way", () => {
+    const db = createTestDb();
+    for (const title of ["X", "Y", "Z"]) insertFeed(db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title }, clock);
+    importSettings(db, "version: 1\nsubscriptions:\n  - url: https://z.example.org/feed.xml\n  - url: https://x.example.org/feed.xml\n", clock);
+    expect(listFeeds(db).map((feed) => feed.title)).toEqual(["Z", "X", "Y"]);
+  });
+
+  it("writes the move-on setting, and a file without it leaves the stored value alone", () => {
+    const db = createTestDb();
+    updateSettings(db, { advanceAfterMarkAll: true });
+    expect(parse(exportSettings(db)).settings.advanceAfterMarkAll).toBe(true);
+    importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
+    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
+    importSettings(db, "version: 1\nsettings:\n  advanceAfterMarkAll: false\n", clock);
+    expect(getSettings(db).advanceAfterMarkAll).toBe(false);
   });
 });
 

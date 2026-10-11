@@ -352,6 +352,21 @@ describe("reader information and global settings", () => {
   });
 });
 
+describe("moving on after marking all as read", () => {
+  it("is a switch in the global settings that is saved with them", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const box = within(global).getByRole("checkbox", { name: "「すべて既読にする」のあと、未読のある次の項目へ移る" });
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+
+    await waitFor(() => expect(getSettings(server.db).advanceAfterMarkAll).toBe(true));
+  });
+});
+
 describe("the settings file", () => {
   it("hands the settings file to the browser for saving", async () => {
     const server = makeServer();
@@ -405,6 +420,7 @@ describe("the settings file", () => {
     renderApp({ route: "/settings" });
     const settingsFile = await section("設定ファイル");
     expect(settingsFile).toHaveTextContent("ファイルに書かれていないカテゴリとトピックは消えません");
+    expect(settingsFile).toHaveTextContent("カテゴリと購読フィードは、ファイルに書かれた順に並びます");
   });
 });
 

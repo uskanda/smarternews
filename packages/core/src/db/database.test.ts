@@ -223,3 +223,37 @@ describe("the shipped schema", () => {
     expect(tableNames(db)).toEqual(before);
   });
 });
+
+describe("the migration to an order of categories and feeds", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the rows in the order they were registered in, and leaves moving on switched off", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of ["001_init.sql", "002_feeds.sql"]) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    for (const [id, slug] of [[3, "c"], [7, "a"]] as const) {
+      db.prepare(
+        `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+         VALUES (?, ?, ?, 'news', '["05:00"]', 3, 5, 24, ?)`,
+      ).run(id, slug, slug, now);
+    }
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (9, 'https://example.org/9', 'nine', 3, ?)").run(now);
+    db.prepare("INSERT INTO settings (id, reader_info, output_language, time_zone, search_language, search_region) VALUES (1, '', 'ja', 'UTC', 'ja', 'JP')").run();
+
+    copyFileSync(join(SHIPPED, "003_order.sql"), join(dir, "003_order.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT slug, position FROM categories ORDER BY position").all()).toEqual([
+      { slug: "c", position: 3 },
+      { slug: "a", position: 7 },
+    ]);
+    expect(db.prepare("SELECT title, position FROM feeds ORDER BY position").all()).toEqual([
+      { title: "five", position: 5 },
+      { title: "nine", position: 9 },
+    ]);
+    expect(db.prepare("SELECT advance_after_mark_all FROM settings").get()).toEqual({ advance_after_mark_all: 0 });
+  });
+});

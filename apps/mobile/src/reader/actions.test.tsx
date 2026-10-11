@@ -257,3 +257,61 @@ describe("events", () => {
     expect(screen.queryByRole("button", { name: "すべて既読にする" })).toBeNull();
   });
 });
+
+describe("moving on after marking all as read", () => {
+  /** A holds an article and the feeds X and Y; B has nothing unread; C holds an article. */
+  async function seeded(advance: boolean) {
+    const server = await makeServer();
+    await server.core("updateSettings", { advanceAfterMarkAll: advance });
+    const a = await server.category("A");
+    await server.category("B");
+    const c = await server.category("C");
+    await server.article(a.id, { title: "About A" });
+    await server.article(c.id, { title: "About C" });
+    const x = await server.feed("X", a.id);
+    const y = await server.feed("Y", a.id);
+    await server.feedArticle(x.id, { title: "From X" });
+    await server.feedArticle(y.id, { title: "From Y" });
+    return { server, a, c, x, y };
+  }
+
+  it("opens the next category below that has unread articles", async () => {
+    const { server, a } = await seeded(true);
+    await renderApp({ server, url: `/list/category-${a.id}` });
+    await screen.findByText("From X");
+
+    await press("すべて既読にする");
+
+    expect(await screen.findByRole("header", { name: "C" })).toBeOnTheScreen();
+    expect(await screen.findByText("About C")).toBeOnTheScreen();
+  });
+
+  it("opens the next feed below, and can still be undone", async () => {
+    const { server, x } = await seeded(true);
+    await renderApp({ server, url: `/list/feed-${x.id}` });
+    await screen.findByText("From X");
+
+    await press("すべて既読にする");
+    expect(await screen.findByRole("header", { name: "Y" })).toBeOnTheScreen();
+
+    await press("取り消す");
+    await eventually(async () => expect((await server.core<{ unread: number }>("getCounts", server.now().toISOString())).unread).toBe(4));
+  });
+
+  it("stays when the setting is off, and on the views at the top", async () => {
+    const off = await seeded(false);
+    const first = await renderApp({ server: off.server, url: `/list/category-${off.a.id}` });
+    await screen.findByText("From X");
+    await press("すべて既読にする");
+    expect(await screen.findByText("3件を既読にしました")).toBeOnTheScreen();
+    expect(screen.getByRole("header", { name: "A" })).toBeOnTheScreen();
+    first.unmount();
+
+    const on = await seeded(true);
+    await renderApp({ server: on.server });
+    await screen.findByText("From X");
+    await press("すべて既読にする");
+    expect(await screen.findByText("4件を既読にしました")).toBeOnTheScreen();
+    expect(screen.getByRole("header", { name: "未読" })).toBeOnTheScreen();
+  });
+});
