@@ -35,7 +35,7 @@ describe("the setting", () => {
     await renderApp({ server, url: "/settings" });
 
     await waitFor(() => expect(radio("重要度5だけ")).toBeChecked());
-    expect(radio("新着すべて")).not.toBeChecked();
+    expect(radio("AI生成のすべての新着")).not.toBeChecked();
     expect(notifications().asked).toBe(1);
   });
 
@@ -44,12 +44,12 @@ describe("the setting", () => {
     const first = await renderApp({ server, url: "/settings" });
     await waitFor(() => expect(radio("重要度5だけ")).toBeChecked());
 
-    await userEvent.setup().press(radio("新着すべて"));
-    await waitFor(() => expect(radio("新着すべて")).toBeChecked());
+    await userEvent.setup().press(radio("AI生成のすべての新着"));
+    await waitFor(() => expect(radio("AI生成のすべての新着")).toBeChecked());
     await first.unmount();
     await renderApp({ server, url: "/settings" });
 
-    await waitFor(() => expect(radio("新着すべて")).toBeChecked());
+    await waitFor(() => expect(radio("AI生成のすべての新着")).toBeChecked());
     expect(notifications().asked).toBe(1);
   });
 
@@ -69,7 +69,7 @@ describe("the setting", () => {
 
     await user.press(radio("出さない"));
     await waitFor(() => expect(registered().has(CHECK_TASK)).toBe(false));
-    await user.press(radio("新着すべて"));
+    await user.press(radio("AI生成のすべての新着"));
 
     await waitFor(() => expect(registered().has(CHECK_TASK)).toBe(true));
   });
@@ -138,6 +138,43 @@ describe("the periodic check", () => {
     await runCheck();
 
     expect(notifications().shown.map((entry) => entry.content.title).sort()).toEqual(["Routine", "Zero-day"]);
+  });
+
+  it("never notifies an article of a subscribed feed, even when set to everything", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    const feed = await server.feed("Blog", category.id);
+    const device = await watching(server, "all");
+    await server.advance(MINUTE);
+    const now = server.now().toISOString();
+    for (let index = 0; index < 20; index += 1) await server.feedArticle(feed.id, { title: `Post ${index}`, at: now });
+    await server.article(category.id, { title: "Written", importance: 2 });
+
+    expect(await runCheck()).toBe("notified");
+
+    expect(notifications().shown.map((entry) => entry.content.title)).toEqual(["Written"]);
+    // The device does not even ask for feed articles.
+    expect(device.requests.filter((request) => request.includes("/articles")).every((request) => request.includes("origin=generated"))).toBe(true);
+  });
+
+  it("still notifies a generated article after the user looked at a list of newer feed articles", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    const feed = await server.feed("Blog");
+    await watching(server, "all");
+    await server.advance(MINUTE);
+    await server.article(category.id, { title: "Written" });
+    await server.advance(MINUTE);
+    await server.feedArticle(feed.id, { title: "Later post", at: server.now().toISOString() });
+    // The user allowed notifications earlier; without this the app would turn them off when it starts.
+    notifications().asked = 1;
+    const app = await renderApp({ server, url: `/list/feed-${feed.id}` });
+    await screen.findByText("Later post");
+    await app.unmount();
+
+    await runCheck();
+
+    expect(notifications().shown.map((entry) => entry.content.title)).toEqual(["Written"]);
   });
 
   it("does not notify an article that was read elsewhere before the check", async () => {
@@ -262,12 +299,15 @@ describe("the periodic check", () => {
     await watching(server, "all");
     await server.advance(MINUTE);
     await server.article(category.id, { title: "Seen in the app" });
+    // The user allowed notifications earlier; without this the app would turn them off when it starts, and
+    // the check below would show nothing for that reason alone.
+    notifications().asked = 1;
     const app = await renderApp({ server });
     await waitFor(() => expect(rowTitles()).toEqual(["Seen in the app"]));
     await eventually(async () => expect(await loadCheckedAt()).not.toBe(BEGINNING));
     await app.unmount();
 
-    await runCheck();
+    expect(await runCheck()).toBe("nothing");
 
     expect(notifications().shown).toEqual([]);
   });

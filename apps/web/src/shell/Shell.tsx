@@ -1,9 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { buildNav, listKey, type NavEntry } from "@smarternews/client";
+import { useMemo, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
-import { useCategories, useCounts } from "../api/queries.ts";
+import { useCategories, useCounts, useFeeds } from "../api/queries.ts";
+import { useCollapsed } from "../lib/collapsed.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
+import { isOnList, listPathOf } from "../lib/paths.ts";
 import { Button } from "../ui/controls.tsx";
 
 const KEYS: Array<[string, string]> = [
@@ -15,45 +18,126 @@ const KEYS: Array<[string, string]> = [
   ["?", "この一覧を開く"],
 ];
 
+const ITEM = "tap flex min-w-0 flex-1 items-center justify-between gap-sm rounded-md px-sm py-xs type-body-md";
+
 function NavItem({ to, label, count, onNavigate }: { to: string; label: string; count?: number; onNavigate?: () => void }) {
   return (
-    <NavLink
-      to={to}
-      onClick={onNavigate}
-      className={({ isActive }) =>
-        `tap flex items-center justify-between gap-sm rounded-md px-sm py-xs type-body-md ${isActive ? "bg-selected font-semibold" : ""}`
-      }
-    >
+    <NavLink to={to} onClick={onNavigate} className={({ isActive }) => `${ITEM} ${isActive ? "bg-selected font-semibold" : ""}`}>
       <span className="min-w-0 truncate">{label}</span>
       {count ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
     </NavLink>
   );
 }
 
-/** The views, the enabled categories with their unread counts, and the two management pages. */
+/** An entry that opens a list of articles. It is current on that list and on an article opened from it. */
+function ListItem({
+  entry,
+  to,
+  count = entry.unread,
+  holdsCurrent = false,
+  onNavigate,
+}: {
+  entry: NavEntry;
+  to: string;
+  count?: number;
+  /** True for a folded category whose hidden entry is the one that is open: the row shows where the reader is. */
+  holdsCurrent?: boolean;
+  onNavigate?: () => void;
+}) {
+  const current = isOnList(to, useLocation().pathname);
+  return (
+    <Link
+      to={to}
+      onClick={onNavigate}
+      aria-current={current ? "page" : undefined}
+      title={entry.label}
+      className={`${ITEM} ${current || holdsCurrent ? "bg-selected font-semibold" : ""}`}
+    >
+      <span className="min-w-0 truncate">{entry.label}</span>
+      {count > 0 ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
+    </Link>
+  );
+}
+
+/**
+ * The views, the enabled categories with what is below them, the feeds without a category, and the two
+ * management pages. A category that has subscribed feeds can be folded.
+ */
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const counts = useCounts().data;
-  const categories = useCategories().data ?? [];
-  const unreadOf = (categoryId: number) => counts?.categories.find((entry) => entry.categoryId === categoryId)?.unread;
+  const categories = useCategories().data;
+  const feeds = useFeeds().data;
+  const collapsed = useCollapsed();
+  const { pathname } = useLocation();
+  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
+  const slugOf = (categoryId: number) => categories?.find((category) => category.id === categoryId)?.slug;
+  const pathOf = (entry: NavEntry) => listPathOf(entry.target, slugOf) ?? "/unread";
+  // The fold buttons take a column of their own. It exists only once something can be folded.
+  const foldable = model.groups.some((group) => group.children.length > 0);
   return (
     <nav aria-label="項目" className="flex h-full flex-col gap-lg overflow-y-auto bg-background p-sm">
-      <div className="flex flex-col gap-px">
-        <NavItem to="/unread" label="未読" count={counts?.unread} onNavigate={onNavigate} />
-        <NavItem to="/all" label="すべて" onNavigate={onNavigate} />
-        <NavItem to="/starred" label="スター" count={counts?.starred} onNavigate={onNavigate} />
-      </div>
+      <ul className="flex flex-col gap-px">
+        {model.views.map((entry) => (
+          <li key={listKey(entry.target)} className="flex">
+            {/* Beside "スター" stands the number of starred articles, not of unread ones. */}
+            <ListItem entry={entry} to={pathOf(entry)} count={entry.target.type === "starred" ? model.starred : entry.unread} onNavigate={onNavigate} />
+          </li>
+        ))}
+      </ul>
       <div className="flex flex-col gap-px">
         <h2 className="px-sm pb-xs type-label-sm text-on-surface-muted">カテゴリ</h2>
-        {categories
-          .filter((category) => category.enabled)
-          .map((category) => (
-            <NavItem key={category.id} to={`/c/${category.slug}`} label={category.name} count={unreadOf(category.id)} onNavigate={onNavigate} />
-          ))}
+        <ul className="flex flex-col gap-px">
+          {model.groups.map((group) => {
+            const key = listKey(group.entry.target);
+            const folded = collapsed.isCollapsed(key);
+            const childIsCurrent = group.children.some((child) => isOnList(pathOf(child), pathname));
+            return (
+              <li key={key} className="flex flex-col gap-px">
+                <div className="flex items-center">
+                  {group.children.length > 0 ? (
+                    <button
+                      type="button"
+                      aria-expanded={!folded}
+                      aria-controls={`nav-group-${key}`}
+                      aria-label={`${group.entry.label}の下の項目`}
+                      onClick={() => collapsed.toggle(key)}
+                      className="nav-fold flex shrink-0 items-center justify-center self-stretch rounded-sm text-on-surface-muted"
+                    >
+                      <span aria-hidden="true" className={`inline-block type-label-sm ${folded ? "-rotate-90" : ""}`}>
+                        ▾
+                      </span>
+                    </button>
+                  ) : foldable ? (
+                    <span aria-hidden="true" className="nav-fold shrink-0" />
+                  ) : null}
+                  <ListItem entry={group.entry} to={pathOf(group.entry)} holdsCurrent={folded && childIsCurrent} onNavigate={onNavigate} />
+                </div>
+                {group.children.length > 0 ? (
+                  <ul id={`nav-group-${key}`} hidden={folded} className={folded ? "" : "flex flex-col gap-px"}>
+                    {folded
+                      ? null
+                      : group.children.map((child) => (
+                          <li key={listKey(child.target)} className="nav-child flex">
+                            <ListItem entry={child} to={pathOf(child)} onNavigate={onNavigate} />
+                          </li>
+                        ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
       </div>
       <div className="flex flex-col gap-px">
         <h2 className="px-sm pb-xs type-label-sm text-on-surface-muted">管理</h2>
-        <NavItem to="/settings" label="設定" onNavigate={onNavigate} />
-        <NavItem to="/runs" label="実行履歴" onNavigate={onNavigate} />
+        <ul className="flex flex-col gap-px">
+          <li className="flex">
+            <NavItem to="/settings" label="設定" onNavigate={onNavigate} />
+          </li>
+          <li className="flex">
+            <NavItem to="/runs" label="実行履歴" onNavigate={onNavigate} />
+          </li>
+        </ul>
       </div>
     </nav>
   );

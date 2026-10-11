@@ -218,7 +218,7 @@ describe("events", () => {
 
   it("groups the events that have not ended by day, soonest first, and leaves out the ones that have ended", async () => {
     const server = await setup();
-    await renderApp({ server, url: "/list/c-local-events" });
+    await renderApp({ server, url: "/list/category-1" });
 
     await screen.findByText("Tomorrow morning");
     const order = screen.getAllByRole("button", { name: /Tomorrow|In three days|Ended/ }).map((node) => String(node.props.accessibilityLabel).split("。")[0]);
@@ -230,7 +230,7 @@ describe("events", () => {
 
   it("shows the time, the venue, the fee and whether to sign up on a row", async () => {
     const server = await setup();
-    await renderApp({ server, url: "/list/c-local-events" });
+    await renderApp({ server, url: "/list/category-1" });
 
     expect(await screen.findByRole("button", { name: "Tomorrow morning。09:00 から 11:00。Town hall。500円。要申込。未読" })).toBeOnTheScreen();
     expect(screen.getByRole("button", { name: "Tomorrow evening。18:00 から 20:00。未読" })).toBeOnTheScreen();
@@ -238,7 +238,7 @@ describe("events", () => {
 
   it("opens an event like any article, with its date and venue above the body", async () => {
     const server = await setup();
-    await renderApp({ server, url: "/list/c-local-events" });
+    await renderApp({ server, url: "/list/category-1" });
 
     await press(/^Tomorrow morning/);
 
@@ -250,7 +250,7 @@ describe("events", () => {
 
   it("offers neither the filters nor marking everything as read on the event list", async () => {
     const server = await setup();
-    await renderApp({ server, url: "/list/c-local-events" });
+    await renderApp({ server, url: "/list/category-1" });
     await screen.findByText("Tomorrow morning");
 
     expect(screen.queryByRole("switch", { name: "重要度4以上だけ" })).toBeNull();

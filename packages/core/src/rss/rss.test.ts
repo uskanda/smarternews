@@ -6,6 +6,9 @@ import { renderRss } from "./rss.ts";
 const article = (overrides: Partial<Article> = {}): Article => ({
   id: 7,
   categoryId: 1,
+  origin: "generated",
+  feedId: null,
+  author: null,
   kind: "news",
   title: "Vendor ships fix",
   summary: "A patch is out.",

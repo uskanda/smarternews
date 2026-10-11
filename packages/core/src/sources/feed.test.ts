@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Fetcher } from "../fetch/http.ts";
 import { fakeFetch, xml } from "../testing/http.ts";
-import { collectFeed, parseFeed } from "./feed.ts";
+import { collectFeed, parseFeed, parseSubscription } from "./feed.ts";
 
 const RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -89,6 +89,93 @@ describe("parseFeed", () => {
 
   it("refuses a document that is not a feed", () => {
     expect(() => parseFeed("<html><body>hello</body></html>")).toThrow(/not a feed/);
+  });
+});
+
+const RSS_FULL = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+  <title>Example Releases</title>
+  <link>https://example.org/releases/</link>
+  <item>
+    <title>Version 3</title>
+    <link>https://example.org/releases/3?utm_source=rss</link>
+    <guid isPermaLink="false">release-3</guid>
+    <dc:creator>Alex Writer</dc:creator>
+    <description>Short note.</description>
+    <content:encoded><![CDATA[<p>Version 3 is <b>out</b>.</p><p>Second paragraph.</p>]]></content:encoded>
+    <pubDate>Sun, 01 Mar 2026 09:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>Version 2</title>
+    <link>https://example.org/releases/2</link>
+    <author>editor@example.org (Sam Editor)</author>
+    <description>&lt;p&gt;Only a description.&lt;/p&gt;</description>
+  </item>
+</channel></rss>`;
+
+const ATOM_FULL = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Notes</title>
+  <link rel="self" href="https://example.net/atom.xml"/>
+  <link rel="alternate" href="https://example.net/"/>
+  <entry>
+    <id>tag:example.net,2026:1</id>
+    <title>First note</title>
+    <link rel="alternate" href="https://example.net/notes/1"/>
+    <author><name>Kim Author</name></author>
+    <content type="html">&lt;p&gt;Escaped &lt;em&gt;markup&lt;/em&gt;.&lt;/p&gt;</content>
+    <updated>2026-03-01T10:30:00Z</updated>
+  </entry>
+  <entry>
+    <id>tag:example.net,2026:2</id>
+    <title>Second note</title>
+    <link href="https://example.net/notes/2"/>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Inline <a href="https://example.net/x">link</a> here.</p></div></content>
+    <updated>2026-03-01T11:00:00Z</updated>
+  </entry>
+  <entry>
+    <id>tag:example.net,2026:3</id>
+    <title>Third note</title>
+    <link href="https://example.net/notes/3"/>
+    <summary>Only a summary.</summary>
+    <updated>2026-03-01T12:00:00Z</updated>
+  </entry>
+</feed>`;
+
+describe("parseSubscription", () => {
+  it("reads the identifier, the author and the full content of RSS 2.0 items", () => {
+    const feed = parseSubscription(RSS_FULL);
+    expect(feed.title).toBe("Example Releases");
+    expect(feed.siteUrl).toBe("https://example.org/releases/");
+    expect(feed.items[0]).toEqual({
+      title: "Version 3",
+      url: "https://example.org/releases/3?utm_source=rss",
+      snippet: "Short note.",
+      publishedAt: new Date("2026-03-01T09:00:00Z"),
+      key: "release-3",
+      author: "Alex Writer",
+      contentHtml: "<p>Version 3 is <b>out</b>.</p><p>Second paragraph.</p>",
+    });
+    expect(feed.items[1]).toMatchObject({ key: null, author: "Sam Editor", contentHtml: "<p>Only a description.</p>", publishedAt: null });
+  });
+
+  it("reads the identifier of RSS 1.0 items from rdf:about", () => {
+    const [item] = parseSubscription(RDF).items;
+    expect(item).toMatchObject({ key: "https://example.com/advisory/7", author: null, contentHtml: "Details of advisory 7." });
+  });
+
+  it("reads the id, the author and the content of Atom entries", () => {
+    const feed = parseSubscription(ATOM_FULL);
+    expect(feed.siteUrl).toBe("https://example.net/");
+    expect(feed.items.map((item) => item.key)).toEqual(["tag:example.net,2026:1", "tag:example.net,2026:2", "tag:example.net,2026:3"]);
+    expect(feed.items[0]).toMatchObject({ author: "Kim Author", contentHtml: "<p>Escaped <em>markup</em>.</p>" });
+    expect(feed.items[2]).toMatchObject({ author: null, contentHtml: "Only a summary." });
+  });
+
+  it("keeps the order of text and elements in XHTML content", () => {
+    const item = parseSubscription(ATOM_FULL).items[1]!;
+    expect(item.contentHtml).toContain('<p>Inline <a href="https://example.net/x">link</a> here.</p>');
   });
 });
 

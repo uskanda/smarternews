@@ -10,6 +10,7 @@ describe("getSettings", () => {
       outputLanguage: "ja",
       timeZone: "Europe/Berlin",
       search: { language: "ja", region: "JP" },
+      feedIntervalMinutes: 30,
     });
   });
 });

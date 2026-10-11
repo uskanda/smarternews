@@ -168,7 +168,7 @@ describe("settings file", () => {
       "version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n    topics:\n      - text: New models\n",
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ categoriesCreated: 1, categoriesUpdated: 0, topicsCreated: 1, topicsUpdated: 0 });
+    expect(await response.json()).toEqual({ categoriesCreated: 1, categoriesUpdated: 0, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, stopWordsCreated: 0 });
     expect((await (await s.get("/api/v1/categories")).json())[0].slug).toBe("cars");
   });
 

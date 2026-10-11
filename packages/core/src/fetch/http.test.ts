@@ -84,6 +84,20 @@ describe("Fetcher", () => {
     await expect(fetcher.get("https://example.org/missing")).resolves.toMatchObject({ status: 404 });
   });
 
+  it("hands back the response headers, with their names in lower case", async () => {
+    const { fetcher } = setup({ "https://example.org/feed": () => new Response("x", { headers: { ETag: '"v1"', "Last-Modified": "Sun, 01 Mar 2026 09:00:00 GMT" } }) });
+    const response = await fetcher.get("https://example.org/feed");
+    expect(response.headers.etag).toBe('"v1"');
+    expect(response.headers["last-modified"]).toBe("Sun, 01 Mar 2026 09:00:00 GMT");
+  });
+
+  it("hands back a not-modified answer with an empty body, and sends the condition it was given", async () => {
+    const { fetcher, requests } = setup({ "https://example.org/feed": () => new Response(null, { status: 304 }) });
+    const response = await fetcher.get("https://example.org/feed", { headers: { "if-none-match": '"v1"' } });
+    expect(response).toMatchObject({ status: 304, text: "" });
+    expect(requests[0]!.headers["if-none-match"]).toBe('"v1"');
+  });
+
   it("decodes a body in the character set the response declares", async () => {
     const shiftJis = new Uint8Array([0x93, 0xfa, 0x96, 0x7b]); // 日本
     const { fetcher } = setup({

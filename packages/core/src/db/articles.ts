@@ -8,12 +8,22 @@ import type {
   ArticleUpdate,
   Counts,
   Kind,
+  Origin,
   Registration,
 } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
+
+/**
+ * The condition every query must carry that is about generated articles only: follow-ups, event matching,
+ * the RSS output and the 180-day purge. Feed articles share the table and must never take part in these.
+ */
+const GENERATED = "origin = 'generated'";
+
+/** A feed article that a stop word hides. A star keeps it visible. */
+const HIDDEN = "(stop_word_id IS NOT NULL AND starred = 0)";
 
 const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
@@ -35,12 +45,15 @@ function toEvent(row: Row): ArticleEvent | null {
 function toSummary(row: Row): ArticleSummary {
   return {
     id: num(row.id),
-    categoryId: num(row.category_id),
+    categoryId: numOrNull(row.category_id),
+    origin: str(row.origin) as Origin,
+    feedId: numOrNull(row.feed_id),
+    author: strOrNull(row.author),
     kind: str(row.kind) as Kind,
     title: str(row.title),
     summary: str(row.summary),
     impact: strOrNull(row.impact),
-    importance: num(row.importance),
+    importance: numOrNull(row.importance),
     unconfirmed: bool(row.unconfirmed),
     firstPublishedAt: str(row.first_published_at),
     updatedAt: str(row.updated_at),
@@ -71,7 +84,7 @@ function toArticle(db: Database, row: Row): Article {
   return {
     ...toSummary(row),
     body,
-    bodyHtml: renderMarkdown(body),
+    bodyHtml: renderMarkdown(body, { images: str(row.origin) === "feed" }),
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
     refs: refsOf(db, id),
@@ -241,7 +254,7 @@ function toDigest(row: Row): ArticleDigest {
 /** News articles of the category touched since the given time: what a new page could be a follow-up to. */
 export function recentNewsArticles(db: Database, categoryId: number, since: string): ArticleDigest[] {
   return db
-    .prepare("SELECT * FROM articles WHERE category_id = ? AND kind = 'news' AND updated_at >= ? ORDER BY id")
+    .prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'news' AND updated_at >= ? ORDER BY id`)
     .all(categoryId, since)
     .map(toDigest);
 }
@@ -249,13 +262,13 @@ export function recentNewsArticles(db: Database, categoryId: number, since: stri
 /** Event articles of the category whose event has not ended. */
 export function openEventArticles(db: Database, categoryId: number, now: string): ArticleDigest[] {
   return db
-    .prepare("SELECT * FROM articles WHERE category_id = ? AND kind = 'event' AND event_ends_at >= ? ORDER BY id")
+    .prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'event' AND event_ends_at >= ? ORDER BY id`)
     .all(categoryId, now)
     .map(toDigest);
 }
 
 export function findEventByKey(db: Database, categoryId: number, key: string): ArticleDigest | null {
-  const row = db.prepare("SELECT * FROM articles WHERE category_id = ? AND event_key = ? ORDER BY id LIMIT 1").get(categoryId, key);
+  const row = db.prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND event_key = ? ORDER BY id LIMIT 1`).get(categoryId, key);
   return row ? toDigest(row) : null;
 }
 
@@ -284,11 +297,21 @@ function decodeCursor(cursor: string): CursorValue {
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   const limit = query.limit ?? 50;
   const byEventStart = query.kind === "event";
-  const where: string[] = [];
   const params: Array<string | number> = [];
+  // A feed article that a stop word hides is in no list.
+  const where: string[] = ["NOT (a.stop_word_id IS NOT NULL AND a.starred = 0)"];
   if (query.category !== undefined) {
     where.push("a.category_id = ?");
     params.push(query.category);
+  }
+  if (query.uncategorized === "true") where.push("a.origin = 'feed' AND a.category_id IS NULL");
+  if (query.origin !== undefined) {
+    where.push("a.origin = ?");
+    params.push(query.origin);
+  }
+  if (query.feed !== undefined) {
+    where.push("a.feed_id = ?");
+    params.push(query.feed);
   }
   if (query.kind !== undefined) {
     where.push("a.kind = ?");
@@ -297,6 +320,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   if (query.unread !== undefined) where.push(`a.is_read = ${query.unread === "true" ? 0 : 1}`);
   if (query.starred !== undefined) where.push(`a.starred = ${query.starred === "true" ? 1 : 0}`);
   if (query.minImportance !== undefined) {
+    // Feed articles have no importance, so a lower bound leaves them out.
     where.push("a.importance >= ?");
     params.push(query.minImportance);
   }
@@ -316,7 +340,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const order = byEventStart ? "a.event_starts_at ASC, a.id ASC" : "a.updated_at DESC, a.id DESC";
   const rows = db
     .prepare(
-      `SELECT ${SUMMARY_COLUMNS} FROM articles a ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+      `SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")}
        ORDER BY ${order} LIMIT ?`,
     )
     .all(...params, limit + 1);
@@ -337,12 +361,25 @@ export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate):
 }
 
 /** Marks as read the unread articles last updated before the given time, and returns which ones changed. */
-export function markArticlesRead(db: Database, filter: { categoryId?: number; minImportance?: number; before: string }): number[] {
-  const where = ["is_read = 0", "updated_at < ?"];
+export function markArticlesRead(
+  db: Database,
+  filter: { categoryId?: number; uncategorized?: boolean; origin?: Origin; feedId?: number; minImportance?: number; before: string },
+): number[] {
+  // What a stop word hides is in no list, so it is not marked either: it comes back unread when the word goes.
+  const where = ["is_read = 0", "updated_at < ?", `NOT ${HIDDEN}`];
   const params: Array<string | number> = [new Date(filter.before).toISOString()];
   if (filter.categoryId !== undefined) {
     where.push("category_id = ?");
     params.push(filter.categoryId);
+  }
+  if (filter.uncategorized) where.push("origin = 'feed' AND category_id IS NULL");
+  if (filter.origin !== undefined) {
+    where.push("origin = ?");
+    params.push(filter.origin);
+  }
+  if (filter.feedId !== undefined) {
+    where.push("feed_id = ?");
+    params.push(filter.feedId);
   }
   if (filter.minImportance !== undefined) {
     where.push("importance >= ?");
@@ -363,23 +400,58 @@ export function markArticlesUnread(db: Database, ids: number[]): number {
   return changed;
 }
 
-/** Unread and starred totals, and per category the unread count and the number of articles. */
+/**
+ * Unread and starred totals, and per category the unread count and the number of articles. Feed articles
+ * count towards their category; the generated ones are also counted on their own, and so is every feed.
+ */
 export function getCounts(db: Database, now: string): Counts {
-  const open = "(kind <> 'event' OR event_ends_at >= ?)";
-  const totals = db
-    .prepare(`SELECT coalesce(sum(is_read = 0 AND ${open}), 0) AS unread, coalesce(sum(starred), 0) AS starred FROM articles`)
-    .get(now)!;
-  const categories = db
+  // One pass over the narrow index `articles_counts`; the totals are added up here.
+  const groups = db
     .prepare(
-      `SELECT c.id AS category_id,
-              coalesce(sum(a.is_read = 0 AND (a.kind <> 'event' OR a.event_ends_at >= ?)), 0) AS unread,
-              count(a.id) AS total
-         FROM categories c LEFT JOIN articles a ON a.category_id = c.id
-        GROUP BY c.id ORDER BY c.id`,
+      `SELECT category_id, feed_id, origin,
+              count(*) AS total,
+              sum(starred) AS starred,
+              sum(is_read = 0 AND (kind <> 'event' OR event_ends_at >= ?)) AS unread
+         FROM articles WHERE NOT ${HIDDEN}
+        GROUP BY category_id, feed_id, origin`,
     )
-    .all(now)
-    .map((row) => ({ categoryId: num(row.category_id), unread: num(row.unread), total: num(row.total) }));
-  return { unread: num(totals.unread), starred: num(totals.starred), categories };
+    .all(now);
+  const categories = new Map(
+    db
+      .prepare("SELECT id FROM categories ORDER BY id")
+      .all()
+      .map((row): [number, Counts["categories"][number]] => [num(row.id), { categoryId: num(row.id), unread: 0, total: 0, generatedUnread: 0, generatedTotal: 0 }]),
+  );
+  const feeds = new Map(
+    db
+      .prepare("SELECT id FROM feeds ORDER BY id")
+      .all()
+      .map((row): [number, Counts["feeds"][number]] => [num(row.id), { feedId: num(row.id), unread: 0 }]),
+  );
+  const counts: Counts = { unread: 0, starred: 0, generatedUnread: 0, uncategorizedUnread: 0, categories: [], feeds: [] };
+  for (const row of groups) {
+    const unread = num(row.unread);
+    const generated = str(row.origin) === "generated";
+    counts.unread += unread;
+    counts.starred += num(row.starred);
+    if (generated) counts.generatedUnread += unread;
+    const category = row.category_id === null ? undefined : categories.get(num(row.category_id));
+    if (category) {
+      category.unread += unread;
+      category.total += num(row.total);
+      if (generated) {
+        category.generatedUnread += unread;
+        category.generatedTotal += num(row.total);
+      }
+    } else if (!generated) {
+      counts.uncategorizedUnread += unread;
+    }
+    const feed = row.feed_id === null ? undefined : feeds.get(num(row.feed_id));
+    if (feed) feed.unread += unread;
+  }
+  counts.categories = [...categories.values()];
+  counts.feeds = [...feeds.values()];
+  return counts;
 }
 
 /** The newest articles for a feed, events that have ended left out. `categoryId` null means every enabled category. */
@@ -392,14 +464,19 @@ export function listFeedArticles(db: Database, filter: { categoryId: number | nu
   return db
     .prepare(
       `SELECT ${SUMMARY_COLUMNS} FROM articles a
-        WHERE ${scope} AND (a.kind <> 'event' OR a.event_ends_at >= ?)
+        WHERE a.${GENERATED} AND ${scope} AND (a.kind <> 'event' OR a.event_ends_at >= ?)
         ORDER BY a.updated_at DESC, a.id DESC LIMIT ?`,
     )
     .all(...params, filter.now, filter.limit)
     .map((row) => toArticle(db, row));
 }
 
-/** Removes articles without a star that were last updated before the given time. */
+/** Removes generated articles without a star that were last updated before the given time. */
 export function deleteUnstarredArticlesBefore(db: Database, before: string): number {
-  return num(db.prepare("DELETE FROM articles WHERE starred = 0 AND updated_at < ?").run(before).changes);
+  return num(db.prepare(`DELETE FROM articles WHERE ${GENERATED} AND starred = 0 AND updated_at < ?`).run(before).changes);
+}
+
+/** Removes feed articles without a star whose sort time lies before the given time. */
+export function deleteUnstarredFeedArticlesBefore(db: Database, before: string): number {
+  return num(db.prepare("DELETE FROM articles WHERE origin = 'feed' AND starred = 0 AND updated_at < ?").run(before).changes);
 }

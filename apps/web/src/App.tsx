@@ -8,7 +8,9 @@ import { ReaderPage } from "./reader/ReaderPage.tsx";
 import { RunPage } from "./runs/RunPage.tsx";
 import { RunsPage } from "./runs/RunsPage.tsx";
 import { CategoryPage } from "./settings/CategoryPage.tsx";
+import { FeedsPage } from "./settings/FeedsPage.tsx";
 import { SettingsPage } from "./settings/SettingsPage.tsx";
+import { StopWordsPage } from "./settings/StopWordsPage.tsx";
 import { NotFound, Shell } from "./shell/Shell.tsx";
 import { ToastProvider } from "./shell/toast.tsx";
 import { TokenScreen } from "./shell/TokenScreen.tsx";
@@ -31,9 +33,15 @@ const routes: RouteObject[] = [
       { path: "unread/:articleId?", element: <ReaderPage view="unread" /> },
       { path: "all/:articleId?", element: <ReaderPage view="all" /> },
       { path: "starred/:articleId?", element: <ReaderPage view="starred" /> },
+      { path: "generated/:articleId?", element: <ReaderPage view="generated" /> },
+      { path: "uncategorized/:articleId?", element: <ReaderPage view="uncategorized" /> },
+      { path: "c/:slug/generated/:articleId?", element: <ReaderPage view="category-generated" /> },
       { path: "c/:slug/:articleId?", element: <ReaderPage view="category" /> },
+      { path: "f/:feedId/:articleId?", element: <ReaderPage view="feed" /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
+      { path: "settings/feeds", element: <FeedsPage /> },
+      { path: "settings/stop-words", element: <StopWordsPage /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId", element: <RunPage /> },
       { path: "*", element: <NotFound /> },

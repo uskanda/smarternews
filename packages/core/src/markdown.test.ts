@@ -20,10 +20,19 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain("javascript:");
     expect(html).toContain('<a href="https://example.org/a"');
   });
+
+  it("shows an image only when asked to, and only one served over HTTPS", () => {
+    const markdown = "![A chart](https://img.example.org/a.png) ![Plain](http://img.example.org/b.png)";
+    expect(renderMarkdown(markdown)).toBe("<p>A chart Plain</p>");
+    expect(renderMarkdown(markdown, { images: true })).toBe(
+      '<p><img src="https://img.example.org/a.png" alt="A chart" loading="lazy" referrerpolicy="no-referrer"> Plain</p>',
+    );
+  });
 });
 
 describe("escapeHtml", () => {
   it("escapes the characters that are special in markup", () => {
     expect(escapeHtml(`<a href="x">&'`)).toBe("&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
   });
+
 });

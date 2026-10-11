@@ -21,6 +21,8 @@ export interface HttpResponse {
   /** The URL after redirects. */
   url: string;
   contentType: string;
+  /** The response headers, with their names in lower case. */
+  headers: Record<string, string>;
   text: string;
 }
 
@@ -127,7 +129,8 @@ export class Fetcher {
     }
     const bytes = await this.#readBody(response, current, maxBytes);
     const contentType = response.headers.get("content-type") ?? "";
-    return { status: response.status, url: current, contentType, text: decode(bytes, contentType) };
+    const responseHeaders = Object.fromEntries(response.headers.entries());
+    return { status: response.status, url: current, contentType, headers: responseHeaders, text: decode(bytes, contentType) };
   }
 
   async #waitForHost(host: string): Promise<void> {
