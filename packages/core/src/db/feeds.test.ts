@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestDb, fakeClock, seedFeedArticle } from "../testing/db.ts";
 import { createCategory, deleteCategory } from "./categories.ts";
-import { deleteFeed, dueFeeds, getFeed, insertFeed, listFeeds, MAX_FEEDS, nextFetchAt, recordFetchFailure, recordFetchSuccess, updateFeed } from "./feeds.ts";
+import { deleteFeed, dueFeeds, getFeed, insertFeed, listFeeds, nextFetchAt, recordFetchFailure, recordFetchSuccess, updateFeed } from "./feeds.ts";
 import { updateSettings } from "./settings.ts";
 
 const START = "2026-03-01T12:00:00.000Z";
@@ -48,11 +48,6 @@ describe("insertFeed", () => {
     expect(listFeeds(db)).toEqual([]);
   });
 
-  it("refuses the feed after the limit", () => {
-    const { db, clock } = setup();
-    for (let index = 0; index < MAX_FEEDS; index += 1) insertFeed(db, { url: `https://example.org/${index}.xml`, title: `F${index}` }, clock);
-    expect(() => insertFeed(db, { url: "https://example.org/one-more.xml", title: "More" }, clock)).toThrow(/at most/);
-  });
 });
 
 describe("updateFeed", () => {

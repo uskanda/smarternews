@@ -13,9 +13,6 @@ const MAX_WAIT_MS = 24 * 60 * MINUTE;
 /** Feed articles without a star are kept this long, counted from the time they sort by. */
 export const FEED_RETENTION_DAYS = 90;
 
-/** A bound against a mistaken import, not a setting. */
-export const MAX_FEEDS = 500;
-
 const FEED_COLUMNS = `f.*,
   (SELECT count(*) FROM articles a WHERE a.feed_id = f.id) AS article_count,
   (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND a.starred = 1) AS starred_count`;
@@ -125,9 +122,6 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   }
   checkFeedCategory(db, input.categoryId);
-  if (num(db.prepare("SELECT count(*) AS n FROM feeds").get()!.n) >= MAX_FEEDS) {
-    throw new DomainError("conflict", `at most ${MAX_FEEDS} feeds can be subscribed`);
-  }
   const result = db
     .prepare(
       `INSERT INTO feeds (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at)

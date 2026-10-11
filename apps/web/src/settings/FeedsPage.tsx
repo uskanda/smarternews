@@ -2,7 +2,7 @@ import type { Category, Feed, Settings } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { ApiError, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
+import { ApiError, conflictLabel, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -62,7 +62,7 @@ function AddFeed({ categories }: { categories: Category[] }) {
   }, [found]);
 
   function explain(error: unknown): string {
-    if (error instanceof ApiError && error.kind === "conflict") return "このフィードはすでに購読しています。";
+    if (error instanceof ApiError && error.kind === "conflict") return conflictLabel(error.message);
     const reason = fieldError(error, "url");
     if (reason) return `このURLを取得できませんでした。URLを確かめてください（${reason}）`;
     return messageFor(error);
@@ -496,7 +496,11 @@ function Opml() {
       </p>
       {error ? (
         <p role="alert" className="max-w-measure rounded-md border border-error px-lg py-sm type-body-md text-error">
-          {error instanceof ApiError && error.kind === "invalid" ? "OPMLとして読めなかったため、何も変更していません。" : messageFor(error)}
+          {error instanceof ApiError && error.kind === "invalid"
+            ? "OPMLとして読めなかったため、何も変更していません。"
+            : error instanceof ApiError && error.kind === "conflict"
+              ? `${conflictLabel(error.message)}何も変更していません。`
+              : messageFor(error)}
         </p>
       ) : null}
     </section>
