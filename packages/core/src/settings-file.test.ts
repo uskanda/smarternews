@@ -1,7 +1,8 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { createCategory, findCategoryBySlug, listCategories, moveCategory } from "./db/categories.ts";
-import { insertFeed, listFeeds, moveFeed } from "./db/feeds.ts";
+import { nextArticleToSummarize } from "./db/articles.ts";
+import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createStopWord, listStopWords } from "./db/stop-words.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
@@ -332,5 +333,57 @@ describe("the example settings file", () => {
       [tools.id, 360],
       [null, null],
     ]);
+  });
+});
+
+describe("summaries of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the setting for the feeds that summarise only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", autoSummarize: true }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.autoSummarize)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.autoSummarize])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without the setting as not summarising, and leaves a known feed as it is", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { autoSummarize: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(true);
+    importSettings(db, file("    autoSummarize: false\n"), clock);
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(false);
+  });
+
+  it("summarises none of the articles a feed already has when the file switches summaries on", () => {
+    const local = fakeClock("2026-03-01T00:00:00.000Z");
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: A, title: "A" }, local);
+    seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    local.advance(60_000);
+
+    importSettings(db, file("    autoSummarize: true\n"), local);
+
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(true);
+    expect(nextArticleToSummarize(db)).toBeNull();
+    local.advance(60_000);
+    const later = seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    expect(nextArticleToSummarize(db)?.id).toBe(later);
+  });
+
+  it("refuses a setting that is not true or false", () => {
+    expect(() => importSettings(createTestDb(), file("    autoSummarize: sometimes\n"), clock)).toThrow(/expected format/);
   });
 });
