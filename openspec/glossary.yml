@@ -6,7 +6,7 @@
 version: 1
 terms:
   - term: "カテゴリ"
-    definition: "トピックをまとめる単位で、RSSの出力と実行時刻の単位でもある。"
+    definition: "トピックと購読フィードをまとめる単位で、RSSの出力と実行時刻の単位でもある。"
     aliases: ["カテゴリー"]
     en: "category"
   - term: "トピック"
@@ -26,9 +26,37 @@ terms:
     aliases: ["候補記事"]
     en: "candidate"
   - term: "記事"
-    definition: "同じ話題の候補をまとめて要約した、RSSの1項目に当たる単位。"
+    definition: "一覧と本文で読む1件の単位で、生成記事と配信記事の2種類がある。"
     aliases: ["ストーリー"]
     en: "article"
+  - term: "生成記事"
+    definition: "同じ話題の候補をまとめてLLMが要約した記事で、画面では「AI生成」と表示する。"
+    aliases: ["AI記事", "要約記事"]
+    en: "generated article"
+  - term: "AI生成"
+    definition: "画面の項目の名前で、生成記事だけを集めた一覧を指す。"
+    aliases: []
+    en: "AI-generated"
+  - term: "配信記事"
+    definition: "購読フィードが配信した1項目を、要約せずにそのまま保存した記事。"
+    aliases: ["フィード記事", "RSS記事"]
+    en: "feed article"
+  - term: "購読フィード"
+    definition: "利用者が登録し、配信記事を読むために定期的に取得するフィード。"
+    aliases: ["サブスクリプション", "登録フィード"]
+    en: "subscription"
+  - term: "取得周期"
+    definition: "購読フィードを取得し直す間隔で、全体の基本の値とフィードごとの値がある。"
+    aliases: ["クロール間隔", "ポーリング間隔"]
+    en: "fetch interval"
+  - term: "ストップワード"
+    definition: "タイトルまたは内容に含む配信記事を、一覧から隠すために登録する語。"
+    aliases: ["NGワード", "ミュート語"]
+    en: "stop word"
+  - term: "フォルダー"
+    definition: "OPMLの中でフィードをまとめる入れ物で、読み込みと書き出しではカテゴリに対応させる。"
+    aliases: ["フォルダ"]
+    en: "folder"
   - term: "出典"
     definition: "記事の根拠になった候補のURL、サイト名、公開日時。"
     aliases: ["参照元", "引用元"]
@@ -99,7 +127,7 @@ terms:
     aliases: ["クローラ"]
     en: "crawler"
   - term: "フィード"
-    definition: "サイトが配信するRSSまたはAtomの文書。取得元の1つでもある。"
+    definition: "サイトが配信するRSSまたはAtomの文書。取得元の1つでもあり、購読フィードとして直接読むこともできる。"
     aliases: []
     en: "feed"
   - term: "サイト"
@@ -226,3 +254,7 @@ terms:
     definition: "プログラムが動く間に使う、機器の作業用の記憶の領域。"
     aliases: []
     en: "memory"
+  - term: "データベース"
+    definition: "設定、記事、候補、実行履歴を保存する、サーバーの中の1つのファイル。"
+    aliases: ["DB"]
+    en: "database"
