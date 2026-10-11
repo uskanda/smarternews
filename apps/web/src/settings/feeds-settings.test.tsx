@@ -168,7 +168,7 @@ describe("adding a feed", () => {
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
 
-    expect(await within(form).findByText("このフィードはすでに購読しています。")).toBeInTheDocument();
+    expect(await within(form).findByText(`このフィードはすでに購読しています（${FEED}）。`)).toBeInTheDocument();
   });
 
   it("says that the URL could not be fetched, with the reason", async () => {

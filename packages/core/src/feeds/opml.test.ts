@@ -107,12 +107,10 @@ describe("importOpml", () => {
     expect(listFeeds(db)).toEqual([]);
   });
 
-  it("changes nothing when one entry cannot be stored", () => {
+  it("takes a file of any length", () => {
     const db = createTestDb();
-    const many = Array.from({ length: 501 }, (_unused, index) => feed(`f${index}`)).join("");
-    expect(() => importOpml(db, opml(`<outline text="新しい">${many}</outline>`), clock)).toThrow(/at most/);
-    expect(listFeeds(db)).toEqual([]);
-    expect(listCategories(db)).toEqual([]);
+    const many = Array.from({ length: 1200 }, (_unused, index) => feed(`f${index}`)).join("");
+    expect(importOpml(db, opml(`<outline text="新しい">${many}</outline>`), clock)).toEqual({ feedsCreated: 1200, feedsSkipped: 0, categoriesCreated: 1 });
   });
 
   it("leaves out entries whose address is not a web address", () => {
