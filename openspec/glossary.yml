@@ -258,3 +258,15 @@ terms:
     definition: "設定、記事、候補、実行履歴を保存する、サーバーの中の1つのファイル。"
     aliases: ["DB"]
     en: "database"
+  - term: "ドラッグ"
+    definition: "マウスのボタンを押したまま動かして、画面の部品を動かす操作。"
+    aliases: []
+    en: "drag"
+  - term: "ダブルクリック"
+    definition: "マウスのボタンを続けて2回押す操作。"
+    aliases: []
+    en: "double click"
+  - term: "マウス"
+    definition: "画面の上の位置を指して操作する入力装置。"
+    aliases: []
+    en: "mouse"
