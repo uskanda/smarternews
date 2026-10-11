@@ -7,7 +7,9 @@ import { useApp } from "../app/context.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { GENERATED_LABEL, hasReadToggle, mergeKept, targetFilter, targetScope, UNCATEGORIZED_LABEL, type ListTarget } from "@smarternews/client";
+import { PANES, usePanes } from "../lib/panes.ts";
 import { listPathOf } from "../lib/paths.ts";
+import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
@@ -63,6 +65,7 @@ export function ReaderPage({ view }: { view: View }) {
   const [search, setSearch] = useSearchParams();
   const navigate = useNavigate();
   const layout = useLayout();
+  const panes = usePanes(layout);
   const client = useQueryClient();
   const toast = useToast();
   const timeZone = useTimeZone();
@@ -271,7 +274,21 @@ export function ReaderPage({ view }: { view: View }) {
   return (
     <div className="flex h-full min-h-0">
       {showList ? (
-        <div className={layout === "narrow" ? "min-w-0 flex-1" : "w-list shrink-0 border-r border-outline"}>{listPane}</div>
+        layout === "narrow" ? (
+          <div className="min-w-0 flex-1">{listPane}</div>
+        ) : (
+          <div data-pane="list" className="relative shrink-0 border-r border-outline" style={{ width: panes.shown.list }}>
+            {listPane}
+            <PaneResizer
+              label="記事の一覧の幅"
+              width={panes.shown.list}
+              min={PANES.list.min}
+              max={panes.widest("list")}
+              onResize={(width) => panes.set("list", width)}
+              onReset={() => panes.reset("list")}
+            />
+          </div>
+        )
       ) : null}
       {showArticle ? (
         <div className="min-w-0 flex-1 overflow-y-auto bg-surface">

@@ -68,6 +68,36 @@
     }
   }
 
+  /* The handle on the right border of a pane. It straddles the rule; its own line shows on hover and focus. */
+  .pane-resizer {
+    position: absolute;
+    inset-block: 0;
+    right: calc(var(--spacing-sm) / -2);
+    z-index: 10;
+    width: var(--spacing-sm);
+    cursor: col-resize;
+    touch-action: none;
+  }
+
+  .pane-resizer::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: calc(50% - 1px);
+    width: 2px;
+    background: transparent;
+  }
+
+  .pane-resizer:hover::after,
+  .pane-resizer:active::after,
+  .pane-resizer:focus-visible::after {
+    background: var(--color-primary);
+  }
+
+  .pane-resizer:focus-visible {
+    outline: none;
+  }
+
   /* Importance five: the headline is marked like a highlighter stroke over its lower half. */
   .headline-mark {
     background: linear-gradient(transparent 52%, var(--color-mark-fill) 52%);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderNativeTokens, renderTokens } from "./design-tokens.ts";
+import { renderNativeTokens, renderTokens, renderWebSizes } from "./design-tokens.ts";
 
 const DESIGN = `---
 version: alpha
@@ -99,5 +99,18 @@ describe("renderNativeTokens", () => {
 
   it("refuses a weight that has no bundled font file", () => {
     expect(() => renderNativeTokens(DESIGN.replace("fontWeight: 500", "fontWeight: 450"))).toThrow(/fontWeight 450/);
+  });
+});
+
+describe("renderWebSizes", () => {
+  it("gives the pixel lengths of the spacing scale as numbers, and says that the file is generated", () => {
+    const text = renderWebSizes(DESIGN);
+    expect(text).toContain("Generated from DESIGN.md");
+    expect(text).toContain("  sm: 8,");
+    expect(text).toContain("  nav: 200,");
+  });
+
+  it("leaves out lengths that are not in pixels", () => {
+    expect(renderWebSizes(DESIGN.replace("  nav: 200px", "  nav: 200px\n  measure: 36em"))).not.toContain("measure");
   });
 });
