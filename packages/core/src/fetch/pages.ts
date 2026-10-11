@@ -14,18 +14,21 @@ const ROBOTS_AGENT = "smarternews";
 
 /**
  * Fetches article pages for one run. It honours robots.txt, stops at the run's page limit, and remembers
- * what it fetched so that a page is requested once.
+ * what it fetched so that a page is requested once. With `remember: false` it keeps no page, for a user
+ * that lives longer than a run and asks for every page once anyway.
  */
 export class PageFetcher {
   readonly #fetcher: Fetcher;
   readonly #pagesPerRun: number;
   readonly #robots = new Map<string, Promise<Robots | "deny">>();
   readonly #pages = new Map<string, PageResult>();
+  readonly #remember: boolean;
   #fetched = 0;
 
-  constructor(fetcher: Fetcher, options: { pagesPerRun: number }) {
+  constructor(fetcher: Fetcher, options: { pagesPerRun: number; remember?: boolean }) {
     this.#fetcher = fetcher;
     this.#pagesPerRun = options.pagesPerRun;
+    this.#remember = options.remember ?? true;
   }
 
   async fetchPage(url: string): Promise<PageResult> {
@@ -35,7 +38,7 @@ export class PageFetcher {
     if (this.#fetched >= this.#pagesPerRun) return { ok: false, reason: "limit" };
     this.#fetched += 1;
     const result = await this.#request(url);
-    this.#pages.set(url, result);
+    if (this.#remember) this.#pages.set(url, result);
     return result;
   }
 

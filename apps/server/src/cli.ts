@@ -66,8 +66,7 @@ async function serveCommand(io: CliIo): Promise<number> {
   if (interrupted > 0) io.stdout(`closed ${interrupted} run(s) that an earlier stop interrupted\n`);
   const listen = parseListen(runtime.config.listen);
   const server = await startServer(runtime, listen);
-  runtime.scheduler.start();
-  runtime.poller.start();
+  runtime.start();
   io.stdout(`listening on http://${runtime.config.listen} (API token: ${runtime.paths.apiTokenFile})\n`);
   return new Promise((resolve) => {
     const stop = () => {
