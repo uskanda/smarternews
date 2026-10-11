@@ -211,6 +211,20 @@ describe("narrowing and paging", () => {
 });
 
 describe("reading an article", () => {
+  it("sets the article in one column of up to 52 characters, in the middle of its pane", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Wide screen", impact: "What it means.", body: "Body text." });
+    renderApp({ server, route: `/unread/${id}` });
+
+    const article = await screen.findByRole("article", { name: "記事" });
+    await within(article).findByRole("heading", { name: "Wide screen" });
+    const column = article.firstElementChild!;
+    // The limit is counted in characters of the body text, so the column carries the body's type.
+    expect(column).toHaveClass("mx-auto", "w-full", "max-w-measure-article", "type-body-lg");
+    // Nothing inside is held to the narrower limit that forms use: every block is as wide as the column.
+    expect(column.querySelector(".max-w-measure")).toBeNull();
+  });
+
   it("shows the headline, the category, the time, the importance, the body and every source", async () => {
     const server = makeServer("2026-03-01T09:30:00.000Z");
     const category = server.category("Security");

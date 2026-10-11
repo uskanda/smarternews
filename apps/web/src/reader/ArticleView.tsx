@@ -11,7 +11,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
   const registration = registrationLabel(event.registration);
   const day = formatDay(event.startsAt, timeZone);
   return (
-    <dl className="grid max-w-measure grid-cols-[auto_1fr] gap-x-lg gap-y-xs type-body-md">
+    <dl className="grid grid-cols-[auto_1fr] gap-x-lg gap-y-xs type-body-md">
       <dt className="text-on-surface-muted">日時</dt>
       <dd>
         {day.date} {day.weekday} {eventTime(event, timeZone)}
@@ -92,63 +92,66 @@ export function ArticleView({
   if (!article) return <Loading />;
 
   return (
-    <article aria-label="記事" className="flex min-w-0 flex-col gap-lg px-lg py-xl md:px-2xl">
-      {back}
-      <div className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
-        <span>{categoryName(article.categoryId)}</span>
-        <span>{formatFull(article.updatedAt, timeZone)} に更新</span>
-        <span>重要度 {article.importance}</span>
-        {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
-        {article.starred ? <span>スター</span> : null}
-      </div>
-      <h2 ref={heading} tabIndex={-1} className="max-w-measure text-balance type-headline-lg focus:outline-none">
-        {article.title}
-      </h2>
-      {article.unconfirmed ? (
-        <p className="flex max-w-measure items-baseline gap-sm type-body-md">
-          <Badge tone="warning">未確認</Badge>
-          <span>噂や非公式の情報に基づいています。</span>
-        </p>
-      ) : null}
-      {article.impact ? (
-        <section aria-label="読み手への影響" className="max-w-measure border-l-4 border-mark pl-md">
-          <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
-          <p className="type-body-md">{article.impact}</p>
-        </section>
-      ) : null}
-      {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
-      <div className="article-body max-w-measure type-body-lg">
-        <Markdown text={article.body} />
-      </div>
-      {previous ? (
-        <p className="type-body-md">
-          <span className="text-on-surface-muted">この話題の前の記事 </span>
-          <Link to={articlePath(previous.id)} className="text-primary underline underline-offset-4">
-            {previous.title}
-          </Link>
-        </p>
-      ) : null}
-      <section aria-label="出典" className="flex max-w-measure flex-col gap-xs">
-        <h3 className="type-label-sm text-on-surface-muted">出典</h3>
-        {article.snippetOnly ? (
-          <p className="type-label-sm text-on-surface-muted">出典のページを読めなかったため、抜粋から書いています。</p>
+    <article aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
+      {/* One column, at most `measure-article` wide in characters of the body text, in the middle of the pane. */}
+      <div className="mx-auto flex w-full max-w-measure-article flex-col gap-lg type-body-lg">
+        {back}
+        <div className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
+          <span>{categoryName(article.categoryId)}</span>
+          <span>{formatFull(article.updatedAt, timeZone)} に更新</span>
+          <span>重要度 {article.importance}</span>
+          {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
+          {article.starred ? <span>スター</span> : null}
+        </div>
+        <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
+          {article.title}
+        </h2>
+        {article.unconfirmed ? (
+          <p className="flex items-baseline gap-sm type-body-md">
+            <Badge tone="warning">未確認</Badge>
+            <span>噂や非公式の情報に基づいています。</span>
+          </p>
         ) : null}
-        <ul className="flex flex-col gap-xs type-body-md">
-          {article.refs.map((ref) => (
-            <li key={ref.url} className="min-w-0">
-              <a href={ref.url} target="_blank" rel="noopener noreferrer" className="tap break-words text-primary underline underline-offset-4">
-                {ref.title || ref.url}
-              </a>
-              {ref.siteName ? <span className="pl-sm text-on-surface-muted">{ref.siteName}</span> : null}
-            </li>
-          ))}
-        </ul>
-      </section>
-      <div className="flex flex-wrap gap-sm">
-        <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
-          {article.starred ? "スターを外す" : "スターを付ける"}
-        </Button>
-        <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
+        {article.impact ? (
+          <section aria-label="読み手への影響" className="border-l-4 border-mark pl-md">
+            <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
+            <p className="type-body-md">{article.impact}</p>
+          </section>
+        ) : null}
+        {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
+        <div className="article-body type-body-lg">
+          <Markdown text={article.body} />
+        </div>
+        {previous ? (
+          <p className="type-body-md">
+            <span className="text-on-surface-muted">この話題の前の記事 </span>
+            <Link to={articlePath(previous.id)} className="text-primary underline underline-offset-4">
+              {previous.title}
+            </Link>
+          </p>
+        ) : null}
+        <section aria-label="出典" className="flex flex-col gap-xs">
+          <h3 className="type-label-sm text-on-surface-muted">出典</h3>
+          {article.snippetOnly ? (
+            <p className="type-label-sm text-on-surface-muted">出典のページを読めなかったため、抜粋から書いています。</p>
+          ) : null}
+          <ul className="flex flex-col gap-xs type-body-md">
+            {article.refs.map((ref) => (
+              <li key={ref.url} className="min-w-0">
+                <a href={ref.url} target="_blank" rel="noopener noreferrer" className="tap break-words text-primary underline underline-offset-4">
+                  {ref.title || ref.url}
+                </a>
+                {ref.siteName ? <span className="pl-sm text-on-surface-muted">{ref.siteName}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+        <div className="flex flex-wrap gap-sm">
+          <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
+            {article.starred ? "スターを外す" : "スターを付ける"}
+          </Button>
+          <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
+        </div>
       </div>
     </article>
   );
