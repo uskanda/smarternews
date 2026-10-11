@@ -1,9 +1,10 @@
 import type { Article, ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useArticle, useArticleFlags, useArticleList, useCategories, useFeeds, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { GENERATED_LABEL, hasReadToggle, mergeKept, targetFilter, targetScope, UNCATEGORIZED_LABEL, type ListTarget } from "@smarternews/client";
@@ -184,10 +185,27 @@ export function ReaderPage({ view }: { view: View }) {
   }
 
   const index = items.findIndex((item) => item.id === articleId);
+  // A move with a key takes the list along; a click leaves it where the reader put it.
+  const root = useRef<HTMLDivElement>(null);
+  const keyStep = useRef(0);
   const move = (step: number) => {
     const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
-    if (target) void navigate(articlePath(target.id));
+    if (!target) return;
+    keyStep.current = step;
+    void navigate(articlePath(target.id));
   };
+  useLayoutEffect(() => {
+    const step = keyStep.current;
+    keyStep.current = 0;
+    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
+    const row = pane?.querySelector('[aria-current="true"]')?.closest("li");
+    if (step === 0 || !pane || !row) return;
+    const view = pane.getBoundingClientRect();
+    const box = row.getBoundingClientRect();
+    const rowTop = box.top - view.top + pane.scrollTop;
+    const to = followScroll({ top: pane.scrollTop, height: pane.clientHeight || view.height, rowTop, rowBottom: rowTop + box.height, step });
+    if (to !== null) pane.scrollTop = to;
+  }, [articleId]);
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = opened ?? items[index];
   useHotkeys({
     j: () => move(1),
@@ -241,7 +259,7 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
         {list.isPending && !list.isError ? <Loading /> : null}
         {list.isSuccess && items.length === 0 ? (
@@ -272,7 +290,7 @@ export function ReaderPage({ view }: { view: View }) {
   );
 
   return (
-    <div className="flex h-full min-h-0">
+    <div ref={root} className="flex h-full min-h-0">
       {showList ? (
         layout === "narrow" ? (
           <div className="min-w-0 flex-1">{listPane}</div>
