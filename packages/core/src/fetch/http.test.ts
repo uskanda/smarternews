@@ -125,6 +125,18 @@ describe("Fetcher redirects", () => {
     expect(requests.map((request) => request.url)).toEqual(["https://example.org/old", "https://example.net/new"]);
   });
 
+  it("keeps the caller's headers on the same site and drops them on a redirect to another one", async () => {
+    const { fetcher, requests } = setup({
+      "https://example.org/a": redirect("/b"),
+      "https://example.org/b": redirect("https://example.net/c"),
+      "https://example.net/c": "moved",
+    });
+    await fetcher.get("https://example.org/a", { headers: { "x-goog-api-key": "secret", "if-none-match": '"v1"' } });
+    expect(requests.map((request) => request.headers["x-goog-api-key"])).toEqual(["secret", "secret", undefined]);
+    expect(requests[2]!.headers["if-none-match"]).toBeUndefined();
+    expect(requests[2]!.headers["user-agent"]).toBeDefined();
+  });
+
   it("resolves a relative redirect against the URL that answered", async () => {
     const { fetcher } = setup({ "https://example.org/a/old": redirect("../new"), "https://example.org/new": "moved" });
     await expect(fetcher.get("https://example.org/a/old")).resolves.toMatchObject({ url: "https://example.org/new" });

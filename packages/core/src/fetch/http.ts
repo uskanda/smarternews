@@ -116,11 +116,14 @@ export class Fetcher {
       if (location === null) break;
       await response.body?.cancel();
       if (followed >= MAX_REDIRECTS) throw new FetchError(`more than ${MAX_REDIRECTS} redirects: ${url}`);
+      const from = new URL(current).origin;
       try {
         current = new URL(location, current).toString();
       } catch {
         throw new FetchError(`redirect to something that is not a URL: ${url}`);
       }
+      // What the caller sent was meant for the site it asked: a key or a validator does not follow to another one.
+      if (new URL(current).origin !== from) headers = { "user-agent": userAgent, accept: "*/*" };
       if (response.status !== 307 && response.status !== 308 && method !== "GET") {
         method = "GET";
         body = undefined;
