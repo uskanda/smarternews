@@ -4,9 +4,9 @@
 
 ## 1. 色の値
 
-- [ ] 1.1 `DESIGN.md` の暗い配色の値を `-darkblue` に改名し、「ダーク」の値を `-dark` として足す。3つの配色の使い分けを本文に書く。`designmd lint DESIGN.md` が誤りなしで通ることを確かめる
-- [ ] 1.2 `scripts/design-tokens.ts` を、3つの配色を書き出すように変える。WebのCSSが `data-theme` の属性ごとの値を持つこと、アプリの値が3つの配色を持つことを、`scripts/design-tokens.test.ts` で確かめる
-- [ ] 1.3 `pnpm run tokens` で生成物を更新し、`pnpm run check:tokens` が通ることを確かめる
+- [x] 1.1 `DESIGN.md` の暗い配色の値を `-darkblue` に改名し、「ダーク」の値を `-dark` として足す。3つの配色の使い分けを本文に書く。`designmd lint DESIGN.md` が誤りなしで通ることを確かめる
+- [x] 1.2 `scripts/design-tokens.ts` を、3つの配色を書き出すように変える。WebのCSSが `data-theme` の属性ごとの値を持つこと、アプリの値が3つの配色を持つことを、`scripts/design-tokens.test.ts` で確かめる
+- [x] 1.3 `pnpm run tokens` で生成物を更新し、`pnpm run check:tokens` が通ることを確かめる
 
 ## 2. Web
 

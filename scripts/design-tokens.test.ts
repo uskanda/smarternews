@@ -7,8 +7,12 @@ name: sample
 colors:
   primary: "#24418F"
   surface: "#FFFFFF"
-  primary-dark: "#9CB6FF"
-  surface-dark: "#171D25"
+  mark: "#FFD84A"
+  primary-darkblue: "#9CB6FF"
+  surface-darkblue: "#171D25"
+  mark-darkblue: "#E9C13A"
+  primary-dark: "#A9BEFF"
+  surface-dark: "#1B1B1B"
 typography:
   body-lg:
     fontFamily: "'Shippori Mincho', 'Yu Mincho', serif"
@@ -34,12 +38,47 @@ describe("renderTokens", () => {
     expect(css).toContain("--color-surface: #FFFFFF;");
   });
 
-  it("keeps the dark values out of the theme and swaps them in for a dark colour scheme", () => {
+  /** The declarations of the first rule with this selector. */
+  const rule = (selector: string) => {
+    const start = css.indexOf(`${selector} {`);
+    expect(start, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(start, css.indexOf("}", start));
+  };
+
+  it("keeps the dark values out of the theme", () => {
     expect(css).not.toContain("--color-primary-dark");
-    const dark = css.slice(css.indexOf("@media (prefers-color-scheme: dark)"));
-    expect(dark).toContain("--color-primary: #9CB6FF;");
-    expect(dark).toContain("--color-surface: #171D25;");
+    expect(css.slice(0, css.indexOf("}"))).not.toContain("#9CB6FF");
+  });
+
+  it("swaps in dark blue for a dark device, unless the user chose a colour scheme", () => {
+    const media = css.slice(css.indexOf("@media (prefers-color-scheme: dark)"));
+    const block = media.slice(0, media.indexOf("}"));
+    expect(block).toContain(":root:not([data-theme]) {");
+    expect(block).toContain("color-scheme: dark;");
+    expect(block).toContain("--color-primary: #9CB6FF;");
+    expect(block).toContain("--color-surface: #171D25;");
+  });
+
+  it("gives each chosen colour scheme its values under the attribute of the root element", () => {
+    const dark = rule(':root[data-theme="dark"]');
     expect(dark).toContain("color-scheme: dark;");
+    expect(dark).toContain("--color-primary: #A9BEFF;");
+    expect(dark).toContain("--color-surface: #1B1B1B;");
+
+    const darkblue = rule(':root[data-theme="darkblue"]');
+    expect(darkblue).toContain("color-scheme: dark;");
+    expect(darkblue).toContain("--color-primary: #9CB6FF;");
+    expect(darkblue).toContain("--color-surface: #171D25;");
+  });
+
+  it("uses the dark blue value for a colour that dark does not define", () => {
+    expect(rule(':root[data-theme="dark"]')).toContain("--color-mark: #E9C13A;");
+  });
+
+  it("keeps the light values for a chosen light scheme and only fixes the scheme of the browser's own controls", () => {
+    const light = rule(':root[data-theme="light"]');
+    expect(light).toContain("color-scheme: light;");
+    expect(light).not.toContain("--color-");
   });
 
   it("writes a font stack as a list of families, not as one quoted string", () => {
@@ -63,8 +102,9 @@ describe("renderTokens", () => {
     expect(css.split("\n")[0]).toContain("Generated from DESIGN.md");
   });
 
-  it("refuses a dark colour without a light counterpart", () => {
+  it("refuses a dark or dark blue colour without a light counterpart", () => {
     expect(() => renderTokens(DESIGN.replace('  surface: "#FFFFFF"\n', ""))).toThrow(/surface-dark/);
+    expect(() => renderTokens(DESIGN.replace('  mark: "#FFD84A"\n', ""))).toThrow(/mark-darkblue/);
   });
 });
 
@@ -75,14 +115,16 @@ describe("renderNativeTokens", () => {
     expect(source.split("\n")[0]).toContain("Generated from DESIGN.md");
   });
 
-  it("gives the light and the dark colours as two sets with the same names", () => {
-    expect(source).toContain('light: {\n    primary: "#24418F",\n    surface: "#FFFFFF",\n  }');
-    expect(source).toContain('dark: {\n    primary: "#9CB6FF",\n    surface: "#171D25",\n  }');
+  it("gives the light, the dark and the dark blue colours as three sets with the same names", () => {
+    expect(source).toContain('light: {\n    primary: "#24418F",\n    surface: "#FFFFFF",\n    mark: "#FFD84A",\n  }');
+    expect(source).toContain('dark: {\n    primary: "#A9BEFF",\n    surface: "#1B1B1B",\n    mark: "#E9C13A",\n  }');
+    expect(source).toContain('darkblue: {\n    primary: "#9CB6FF",\n    surface: "#171D25",\n    mark: "#E9C13A",\n  }');
   });
 
-  it("falls back to the light value for a colour without a dark one", () => {
-    const partial = renderNativeTokens(DESIGN.replace('  surface-dark: "#171D25"\n', ""));
-    expect(partial).toContain('dark: {\n    primary: "#9CB6FF",\n    surface: "#FFFFFF",\n  }');
+  it("falls back to the dark blue value for a colour without a dark one, and to the light value without either", () => {
+    const partial = renderNativeTokens(DESIGN.replace('  surface-dark: "#1B1B1B"\n', "").replace('  mark-darkblue: "#E9C13A"\n', ""));
+    expect(partial).toContain('dark: {\n    primary: "#A9BEFF",\n    surface: "#171D25",\n    mark: "#FFD84A",\n  }');
+    expect(partial).toContain('darkblue: {\n    primary: "#9CB6FF",\n    surface: "#171D25",\n    mark: "#FFD84A",\n  }');
   });
 
   it("writes lengths in pixels as plain numbers and leaves out lengths in other units", () => {
