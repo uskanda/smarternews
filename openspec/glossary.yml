@@ -222,3 +222,7 @@ terms:
     definition: "アプリを開いていないときに、端末が画面の上部や待ち受けの画面に出す知らせ。"
     aliases: []
     en: "notification"
+  - term: "メモリー"
+    definition: "プログラムが動く間に使う、機器の作業用の記憶の領域。"
+    aliases: []
+    en: "memory"
