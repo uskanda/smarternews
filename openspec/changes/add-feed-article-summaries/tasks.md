@@ -48,5 +48,5 @@
 
 - [x] 8.1 `apps/server` について、差し替えたLLMと取得元で、取得から要約の保存までを通すテストを足す。LLMの呼び出しの記録に要約の行が残ることを確かめる
 - [x] 8.2 `apps/web` について、実際のブラウザーで、要約のある記事を幅1280pxと390px、明るい配色と暗い配色で確かめる
-- [ ] 8.3 `apps/web` について `/impeccable audit` を行い、指摘を直すか、報告に書く
-- [ ] 8.4 `make verify` を通し、`openspec validate add-feed-article-summaries --strict` が通ることを確かめる
+- [x] 8.3 `apps/web` について `/impeccable audit` を行い、指摘を直すか、報告に書く
+- [x] 8.4 `make verify` を通し、`openspec validate add-feed-article-summaries --strict` が通ることを確かめる
