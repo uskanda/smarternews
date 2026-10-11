@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { feedErrorLabel } from "./labels.ts";
+import { conflictLabel, feedErrorLabel } from "./labels.ts";
+
+describe("conflictLabel", () => {
+  it("says what a refused change ran into", () => {
+    expect(conflictLabel("already subscribed: https://example.org/feed.xml")).toBe("このフィードはすでに購読しています（https://example.org/feed.xml）。");
+    expect(conflictLabel('the stop word "PR" is already registered')).toBe("この語はすでに登録しています。");
+  });
+
+  it("shows what the server said when it is something else", () => {
+    expect(conflictLabel("run 4 of this category is already running")).toBe("ほかの内容とぶつかるため、実行できませんでした（run 4 of this category is already running）。");
+  });
+});
 
 describe("feedErrorLabel", () => {
   it("says the kinds of failure the server records in the app's language", () => {
