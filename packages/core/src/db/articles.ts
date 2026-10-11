@@ -16,6 +16,7 @@ import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
+import { findArticleTranslation } from "./translations.ts";
 
 /**
  * The condition every query must carry that is about generated articles only: follow-ups, event matching,
@@ -63,6 +64,7 @@ function toSummary(row: Row): ArticleSummary {
     author: strOrNull(row.author),
     kind: str(row.kind) as Kind,
     title: str(row.title),
+    translatedTitle: strOrNull(row.translated_title),
     summary: str(row.summary),
     impact: strOrNull(row.impact),
     importance: numOrNull(row.importance),
@@ -104,6 +106,8 @@ function toArticle(db: Database, row: Row): Article {
         : { text: autoSummary, source: str(row.auto_summary_source) as AutoSummarySource, createdAt: str(row.auto_summary_at) },
     autoSummaryPending:
       autoSummary === null && db.prepare(`SELECT 1 FROM articles a WHERE a.id = ? AND ${WAITING_FOR_SUMMARY}`).get(id) !== undefined,
+    translatable: db.prepare("SELECT 1 FROM feeds WHERE id = ? AND translate = 1").get(numOrNull(row.feed_id)) !== undefined,
+    translation: findArticleTranslation(db, id, { translatedTitle: strOrNull(row.translated_title), sourceLanguage: strOrNull(row.source_language) }),
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
     refs: refsOf(db, id),

@@ -29,6 +29,7 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     enabled: feed.enabled,
     // Written only when it is on: a file without the line leaves the setting of a known feed as it is.
     ...(feed.autoSummarize ? { autoSummarize: true } : {}),
+    ...(feed.translate ? { translate: true } : {}),
   };
 }
 
@@ -116,6 +117,7 @@ function importSubscriptions(
             ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
             // Switching summaries on here starts them at this moment: the articles the feed already has stay as they are.
             ...(entry.autoSummarize !== undefined ? { autoSummarize: entry.autoSummarize } : {}),
+            ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
           },
           clock,
         );
@@ -132,6 +134,7 @@ function importSubscriptions(
           intervalMinutes: entry.intervalMinutes,
           enabled: entry.enabled,
           autoSummarize: entry.autoSummarize,
+          translate: entry.translate,
         },
         clock,
       );

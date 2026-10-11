@@ -26,6 +26,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   intervalMinutes: null,
   enabled: true,
   autoSummarize: false,
+  translate: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,

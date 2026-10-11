@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FeedPoller, Fetcher, RunQueue } from "@smarternews/core";
+import { FeedPoller, Fetcher, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
@@ -21,12 +21,14 @@ function server(build: "built" | "not-built") {
   const clock = fakeClock("2026-03-01T12:00:00.000Z");
   const queue = new RunQueue({ db, clock, execute: async () => {} });
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1000, fetchImpl: fakeFetch({}).fetchImpl });
+  const runner = fakeLlm(db, clock, {}).runner;
   const app = createApp({
     db,
     clock,
     queue,
-    runner: fakeLlm(db, clock, {}).runner,
+    runner,
     fetcher,
+    translation: new TranslationService({ db, clock, google: null, llm: new LlmTranslator(runner), monthlyChars: 0, maxCharsPerArticle: 20_000 }),
     poller: new FeedPoller({ db, clock, fetcher }),
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",

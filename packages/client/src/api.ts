@@ -3,6 +3,7 @@
 import {
   articleListSchema,
   articleSchema,
+  articleTranslationSchema,
   candidateSchema,
   categorySchema,
   countsSchema,
@@ -18,9 +19,11 @@ import {
   stopWordDeleteResultSchema,
   stopWordSchema,
   topicSchema,
+  translationStatusSchema,
   type Article,
   type ArticleList,
   type ArticleListQuery,
+  type ArticleTranslation,
   type ArticleUpdate,
   type Candidate,
   type Category,
@@ -48,10 +51,11 @@ import {
   type Topic,
   type TopicCreate,
   type TopicUpdate,
+  type TranslationStatus,
 } from "@smarternews/core/api";
 import { z } from "zod";
 
-export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "network" | "server";
+export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "unavailable" | "network" | "server";
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
@@ -85,6 +89,7 @@ function kindOf(status: number): ApiErrorKind {
   if (status === 401) return "unauthorized";
   if (status === 404) return "not_found";
   if (status === 409) return "conflict";
+  if (status === 503) return "unavailable";
   return "server";
 }
 
@@ -182,6 +187,11 @@ export function createApi(options: ApiOptions) {
     article: (id: number): Promise<Article> => json(articleSchema, `/articles/${id}`),
     updateArticle: (id: number, patch: ArticleUpdate): Promise<Article> =>
       json(articleSchema, `/articles/${id}`, body("PATCH", patch)),
+    /**
+     * The translation of a feed article's content. The server makes it when there is none yet, so the first
+     * call for an article takes as long as translating does. Fails as `unavailable` when nothing can translate now.
+     */
+    translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>
       json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),
@@ -212,6 +222,8 @@ export function createApi(options: ApiOptions) {
       json(z.array(candidateSchema), `/runs/${id}/candidates${query({ status })}`),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
+    /** How much the translation API was used this month, and whether it has a key. */
+    translation: (): Promise<TranslationStatus> => json(translationStatusSchema, "/translation"),
   };
 }
 

@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { listArticles, setArticleFlags } from "../db/articles.ts";
+import { getArticle, listArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
+import { updateSettings } from "../db/settings.ts";
 import { createStopWord } from "../db/stop-words.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { purgeExpired } from "../runs/retention.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { fakeFetch, html, xml } from "../testing/http.ts";
+import { fakeLlm } from "../testing/llm.ts";
+import { fakeTranslator } from "../testing/translation.ts";
+import type { Translator } from "../translation/adapter.ts";
+import { LlmTranslator } from "../translation/llm.ts";
+import { TranslationService } from "../translation/service.ts";
 import { fetchFeed, MAX_NEW_ITEMS, subscribe } from "./ingest.ts";
 
 const START = "2026-03-01T12:00:00.000Z";
@@ -330,5 +336,91 @@ describe("a feed registered without fetching", () => {
     await fetchFeed(s.deps, feed.id);
     expect(s.list({ category: category.id })).toHaveLength(1);
     expect(getFeed(s.db, feed.id).title).toBe("Example Feed");
+  });
+});
+
+describe("translating titles when a feed is fetched", () => {
+  function translating(google: (Translator & { calls: Array<{ items: unknown[] }> }) | null = fakeTranslator()) {
+    const s = setup([]);
+    updateSettings(s.db, { outputLanguage: "ja" });
+    const llm = fakeLlm(s.db, s.clock, {});
+    const service = new TranslationService({
+      db: s.db,
+      clock: s.clock,
+      google,
+      llm: new LlmTranslator(llm.runner),
+      monthlyChars: 450_000,
+      maxCharsPerArticle: 20_000,
+      log: () => {},
+    });
+    const llmCalls = () => s.db.prepare("SELECT count(*) AS n FROM llm_calls").get()!.n;
+    return { ...s, deps: { ...s.deps, translation: service }, service, google, llmCalls };
+  }
+  const failing = () =>
+    fakeTranslator(() => {
+      throw new Error("the translation API answered HTTP status 500");
+    });
+
+  it("stores a new article with its translated title next to the original, and sends only what is new", async () => {
+    const s = translating();
+    s.serve([{ title: "Vendor ships a fix", key: "a" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    expect(feed.translate).toBe(true);
+    expect(s.list()).toMatchObject([{ title: "Vendor ships a fix", translatedTitle: "訳:Vendor ships a fix" }]);
+
+    s.serve([{ title: "Another post", key: "b" }, { title: "Vendor ships a fix", key: "a" }]);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 1 });
+    expect(s.list().map((article) => article.translatedTitle)).toEqual(["訳:Another post", "訳:Vendor ships a fix"]);
+    expect(s.google!.calls.map((call) => call.items)).toEqual([[{ text: "Vendor ships a fix", plain: true }], [{ text: "Another post", plain: true }]]);
+    expect(s.llmCalls()).toBe(0);
+  });
+
+  it("stores the article without a translation, and records a success, when the API fails or no key is set", async () => {
+    for (const google of [failing(), null]) {
+      const s = translating(google);
+      s.serve([{ title: "Vendor ships a fix", key: "a" }]);
+      const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+      s.serve([{ title: "Another post", key: "b" }]);
+      expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 1 });
+      expect(s.list().map((article) => article.translatedTitle)).toEqual([null, null]);
+      expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: null, failureCount: 0 });
+      expect(s.llmCalls()).toBe(0);
+    }
+  });
+
+  it("sends nothing for a feed that does not translate", async () => {
+    const s = translating();
+    s.serve([{ title: "Vendor ships a fix", key: "a" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve([{ title: "Another post", key: "b" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(s.google!.calls).toEqual([]);
+    expect(s.list().map((article) => article.translatedTitle)).toEqual([null, null]);
+  });
+
+  it("drops the translations of an item that was rewritten, and translates its title again", async () => {
+    const s = translating();
+    s.serve([{ title: "Old title", key: "a", content: "<p>Old content.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    await s.service.translateArticle(id);
+    expect(getArticle(s.db, id).translation).not.toBeNull();
+
+    s.serve([{ title: "New title", key: "a", content: "<p>New content.</p>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id)).toMatchObject({ title: "New title", translatedTitle: "訳:New title", translation: null });
+    expect((await s.service.translateArticle(id)).segments).toMatchObject([{ original: "New content.", translated: "訳:New content." }]);
+  });
+
+  it("keeps the translation of the body when only the title was rewritten", async () => {
+    const s = translating();
+    s.serve([{ title: "Old title", key: "a", content: "<p>Same content.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    await s.service.translateArticle(id);
+    s.serve([{ title: "New title", key: "a", content: "<p>Same content.</p>" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(getArticle(s.db, id)).toMatchObject({ translatedTitle: "訳:New title", translation: { segments: [{ translated: "訳:Same content." }] } });
   });
 });

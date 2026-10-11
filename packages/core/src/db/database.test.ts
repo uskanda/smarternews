@@ -289,3 +289,42 @@ describe("the migration to summaries of feed articles", () => {
     });
   });
 });
+
+describe("the migration to translations of feed articles", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the feeds that exist without translation, and the articles without a translated title", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of ["001_init.sql", "002_feeds.sql", "003_order.sql", "004_auto_summary.sql"]) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k', 'news', 't', 's', 'b', ?, ?, ?)`,
+    ).run(now, now, now);
+
+    copyFileSync(join(SHIPPED, "005_translation.sql"), join(dir, "005_translation.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT translate FROM feeds").get()).toEqual({ translate: 0 });
+    expect(db.prepare("SELECT translated_title, source_language FROM articles").get()).toEqual({ translated_title: null, source_language: null });
+    expect(tableNames(db)).toEqual(expect.arrayContaining(["article_translations", "translation_usage"]));
+    expect(db.prepare("SELECT count(*) AS n FROM article_translations").get()).toEqual({ n: 0 });
+  });
+
+  it("removes the stored translation together with its article", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k', 'news', 't', 's', 'b', ?, ?, ?)`,
+    ).run(now, now, now);
+    db.prepare("INSERT INTO article_translations (article_id, segments, method, truncated, created_at) VALUES (1, '[]', 'google', 0, ?)").run(now);
+    db.prepare("DELETE FROM feeds WHERE id = 5").run();
+    expect(db.prepare("SELECT count(*) AS n FROM article_translations").get()).toEqual({ n: 0 });
+  });
+});

@@ -4,13 +4,16 @@ import {
   Fetcher,
   insertArticle,
   RunQueue,
+  LlmTranslator,
   startRun,
   SummaryWorker,
+  TranslationService,
   type ArticleContent,
   type Category,
   type Kind,
+  type Translator,
 } from "@smarternews/core";
-import { createTestDb, fakeClock, fakeFetch, fakeLlm, type FakeHandler } from "@smarternews/core/testing";
+import { createTestDb, fakeClock, fakeFetch, fakeLlm, fakeTranslator, type FakeHandler } from "@smarternews/core/testing";
 import { createApp } from "./app.ts";
 
 export const API_TOKEN = "test-api-token-0123456789";
@@ -21,10 +24,37 @@ export const FEED_TOKEN = "test-feed-token-0123456789";
 export type TestResponse = Omit<Response, "json"> & { json(): Promise<any> };
 
 /** The app wired to an in-memory database. Runs are started but never finish, so tests can observe them. */
-export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSearch?: boolean; summarize?: FakeHandler } = {}) {
+export function testServer(
+  start = "2026-03-01T12:00:00.000Z",
+  options: {
+    webSearch?: boolean;
+    summarize?: FakeHandler;
+    /** Answers the translate task. Without it, a call of the task fails the test. */
+    translate?: FakeHandler;
+    /** Stands in for the translation API. Null is a server without a key; left out, every text comes back with a mark in front. */
+    google?: (Translator & { calls: Array<{ items: Array<{ text: string; plain?: boolean }>; target: string }> }) | null;
+    monthlyChars?: number;
+    llmCallsPerDay?: number;
+  } = {},
+) {
   const db = createTestDb();
   const clock = fakeClock(start);
-  const llm = fakeLlm(db, clock, options.summarize ? { summarize: options.summarize } : {}, { webSearch: options.webSearch });
+  const llm = fakeLlm(
+    db,
+    clock,
+    { ...(options.summarize ? { summarize: options.summarize } : {}), ...(options.translate ? { translate: options.translate } : {}) },
+    { webSearch: options.webSearch, ...(options.llmCallsPerDay === undefined ? {} : { limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay } }) },
+  );
+  const google = options.google === undefined ? fakeTranslator() : options.google;
+  const translation = new TranslationService({
+    db,
+    clock,
+    google,
+    llm: new LlmTranslator(llm.runner),
+    monthlyChars: options.monthlyChars ?? 450_000,
+    maxCharsPerArticle: 20_000,
+    log: () => {},
+  });
   const queue = new RunQueue({
     db,
     clock,
@@ -37,7 +67,7 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
   const routes: Record<string, () => Response> = {};
   const site = fakeFetch(routes, clock);
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
-  const poller = new FeedPoller({ db, clock, fetcher });
+  const poller = new FeedPoller({ db, clock, fetcher, translation });
   // Summaries are made when a test tells the worker to look: `summarizer.tick()`, then `summarizer.idle()`.
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner: llm.runner });
   const app = createApp({
@@ -47,6 +77,7 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
     runner: llm.runner,
     fetcher,
     poller,
+    translation,
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
   });
@@ -69,6 +100,8 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
     queue,
     poller,
     summarizer,
+    /** What the stand-in for the translation API was asked. Null on a server without a key. */
+    google,
     llmRequests: llm.requests,
     site: {
       requests: site.requests,

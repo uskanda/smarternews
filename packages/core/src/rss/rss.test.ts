@@ -11,6 +11,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   author: null,
   kind: "news",
   title: "Vendor ships fix",
+  translatedTitle: null,
   summary: "A patch is out.",
   impact: null,
   importance: 4,
@@ -27,6 +28,8 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   bodyHtml: "<p>The <strong>vendor</strong> shipped a fix.</p>",
   autoSummary: null,
   autoSummaryPending: false,
+  translatable: false,
+  translation: null,
   snippetOnly: false,
   previousArticleId: null,
   refs: [

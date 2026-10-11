@@ -222,3 +222,19 @@ describe("summaries of a feed", () => {
     expect(since(db, feed.id)).toBeNull();
   });
 });
+
+describe("translation of a feed", () => {
+  it("is off for a feed that is registered without saying so", () => {
+    const { db, clock } = setup();
+    expect(insertFeed(db, { url: "https://example.org/feed.xml", title: "Example" }, clock).translate).toBe(false);
+  });
+
+  it("is stored at registration and at a change", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", translate: true }, clock);
+    expect(feed.translate).toBe(true);
+    expect(updateFeed(db, feed.id, { title: "Renamed" }, clock).translate).toBe(true);
+    expect(updateFeed(db, feed.id, { translate: false }, clock).translate).toBe(false);
+    expect(listFeeds(db)[0]!.translate).toBe(false);
+  });
+});
