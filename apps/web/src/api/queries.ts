@@ -46,7 +46,14 @@ export function useArticleList(filter: ArticleListQuery, enabled = true) {
 
 export function useArticle(id: number | null) {
   const { api } = useApp();
-  return useQuery({ queryKey: ["article", id], queryFn: () => api.article(id!), enabled: id !== null, retry: false });
+  return useQuery({
+    queryKey: ["article", id],
+    queryFn: () => api.article(id!),
+    enabled: id !== null,
+    retry: false,
+    // An article is fetched once, except while its summary is being made: then it is asked for again until the wait is over.
+    refetchInterval: (query) => (query.state.data?.autoSummaryPending ? REFRESH_MS : false),
+  });
 }
 
 /** Applies a change to one article wherever it is cached: in every list and in its own entry. */

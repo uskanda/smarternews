@@ -190,6 +190,8 @@ The detail adds these:
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
+| `autoSummary` | The summary a model wrote of a feed article: `text`, `source` and `createdAt`. `source` is `page` when it was written from the article's page, and `feed` when that page could not be read and only what the feed delivered was used. `null` when there is no summary, and always for a generated article |
+| `autoSummaryPending` | True while a feed article waits for its summary. It stops waiting when it is read |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
 
 Generated articles without a star are deleted 180 days after their last update, feed articles without a star 90 days after the time they sort by. Starred articles are kept.
@@ -204,7 +206,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds` | Subscribe to a feed (status 201) |
 | `POST /api/v1/feeds/discover` | Find the feeds a page points to, without subscribing |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled` |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize` |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -229,7 +231,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$AP
 
 Subscribing fetches the URL once and answers when that is done. Status 400 means that the URL does not return RSS or Atom, or that it is a destination the crawler does not fetch (see the README). A 409 answer says that the URL is already subscribed; URLs that differ only in tracking parameters count as the same. Every item the feed delivers at that moment becomes an unread article, except items published more than 90 days ago.
 
-`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays.
+`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize` is `false` unless you send `true`, at registration or in a change.
 
 `move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
@@ -243,6 +245,7 @@ Fields of a feed:
 | `categoryId` | The category, or `null` |
 | `intervalMinutes` | The feed's own interval, or `null` for the base interval |
 | `enabled` | False while the feed is paused: it is not fetched, and its articles stay |
+| `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused |
@@ -305,7 +308,7 @@ A run has `trigger` (`schedule` or `manual`), `status`, `queuedAt`, `startedAt`,
 
 ## Providers
 
-`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`), the provider assigned to each task, the model calls made today and the two call limits. It returns no credentials. Providers are changed in `config.yaml`, not through the API.
+`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`), the provider assigned to each task, the model calls made today for runs (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
 
 ## RSS
 

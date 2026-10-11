@@ -1,4 +1,4 @@
-// The five jobs given to a model. Each has an output schema and a function that builds its prompt.
+// The six jobs given to a model. Each has an output schema and a function that builds its prompt.
 // Nothing else in the code base talks to a model.
 import { z } from "zod";
 import { registrationSchema, type Kind, type SearchLocale, type TaskName } from "../api.ts";
@@ -291,9 +291,42 @@ const write: TaskDefinition<WriteInput, WriteOutput> = {
   }),
 };
 
+// ---- summarize ---------------------------------------------------------------------------------
+
+/** The model reads this much of an article, counted from its start. */
+export const SUMMARIZE_INPUT_CHARS = 20_000;
+export const SUMMARY_MAX_CHARS = 400;
+
+export interface SummarizeInput {
+  outputLanguage: string;
+  title: string;
+  /** The text of one feed article: its page, or what the feed delivered. */
+  text: string;
+}
+
+const summarizeOutput = z.object({ summary: z.string().trim().min(1).max(SUMMARY_MAX_CHARS) });
+export type SummarizeOutput = z.infer<typeof summarizeOutput>;
+
+const summarize: TaskDefinition<SummarizeInput, SummarizeOutput> = {
+  output: summarizeOutput,
+  build: (input) => ({
+    system: SYSTEM,
+    prompt: [
+      "Task: summarise one article for a reader who decides from the summary whether to read the article.",
+      `Output language: ${input.outputLanguage}. Write the summary in this language, whatever language the article uses.`,
+      `Headline:\n${material(input.title)}`,
+      `Article:\n${material(input.text.slice(0, SUMMARIZE_INPUT_CHARS))}`,
+      "Rules:",
+      "- State only what the article says. Add no background, no opinion and nothing you know from elsewhere.",
+      "- Use a neutral, plain register (in Japanese, the です・ます style). No greetings and no praise.",
+      `- summary: plain prose in one paragraph, without Markdown, headings, lists or links. Aim for about 300 characters and never exceed ${SUMMARY_MAX_CHARS}.`,
+    ].join("\n"),
+  }),
+};
+
 // ---- registry ----------------------------------------------------------------------------------
 
-export const tasks = { interpret, search, judge, cluster, write };
+export const tasks = { interpret, search, judge, cluster, write, summarize };
 
 export interface TaskIo {
   interpret: { input: InterpretInput; output: InterpretOutput };
@@ -301,6 +334,7 @@ export interface TaskIo {
   judge: { input: JudgeInput; output: JudgeOutput };
   cluster: { input: ClusterInput; output: ClusterOutput };
   write: { input: WriteInput; output: WriteOutput };
+  summarize: { input: SummarizeInput; output: SummarizeOutput };
 }
 
-export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write"];
+export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize"];

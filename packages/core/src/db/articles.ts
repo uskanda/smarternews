@@ -6,6 +6,7 @@ import type {
   ArticleRef,
   ArticleSummary,
   ArticleUpdate,
+  AutoSummarySource,
   Counts,
   Kind,
   Origin,
@@ -24,6 +25,17 @@ const GENERATED = "origin = 'generated'";
 
 /** A feed article that a stop word hides. A star keeps it visible. */
 const HIDDEN = "(stop_word_id IS NOT NULL AND starred = 0)";
+
+/** A summary is tried this many times; after that the article stays without one. */
+export const SUMMARY_ATTEMPTS = 2;
+
+/**
+ * A feed article `a` that waits for a summary: its feed summarises, it was stored after the feed began to,
+ * and it is unread, visible, without a summary and not given up on.
+ */
+const WAITING_FOR_SUMMARY = `a.origin = 'feed' AND a.is_read = 0 AND a.auto_summary IS NULL AND a.auto_summary_skipped = 0
+  AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT (a.stop_word_id IS NOT NULL AND a.starred = 0)
+  AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since)`;
 
 const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
@@ -81,10 +93,17 @@ function refsOf(db: Database, articleId: number): ArticleRef[] {
 function toArticle(db: Database, row: Row): Article {
   const id = num(row.id);
   const body = str(row.body);
+  const autoSummary = strOrNull(row.auto_summary);
   return {
     ...toSummary(row),
     body,
     bodyHtml: renderMarkdown(body, { images: str(row.origin) === "feed" }),
+    autoSummary:
+      autoSummary === null
+        ? null
+        : { text: autoSummary, source: str(row.auto_summary_source) as AutoSummarySource, createdAt: str(row.auto_summary_at) },
+    autoSummaryPending:
+      autoSummary === null && db.prepare(`SELECT 1 FROM articles a WHERE a.id = ? AND ${WAITING_FOR_SUMMARY}`).get(id) !== undefined,
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
     refs: refsOf(db, id),
@@ -163,9 +182,9 @@ export function insertArticle(
     .prepare(
       `INSERT INTO articles
          (category_id, kind, title, summary, body, impact, importance, unconfirmed, snippet_only, first_published_at,
-          updated_at, previous_article_id, event_key, event_starts_at, event_ends_at, event_venue, event_fee,
+          updated_at, created_at, previous_article_id, event_key, event_starts_at, event_ends_at, event_venue, event_fee,
           event_registration)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.categoryId,
@@ -177,6 +196,7 @@ export function insertArticle(
       input.importance,
       input.unconfirmed ? 1 : 0,
       input.snippetOnly ? 1 : 0,
+      input.now,
       input.now,
       input.now,
       input.previousArticleId,
@@ -270,6 +290,49 @@ export function openEventArticles(db: Database, categoryId: number, now: string)
 export function findEventByKey(db: Database, categoryId: number, key: string): ArticleDigest | null {
   const row = db.prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND event_key = ? ORDER BY id LIMIT 1`).get(categoryId, key);
   return row ? toDigest(row) : null;
+}
+
+// ---- summaries of feed articles ----------------------------------------------------------------
+
+export interface ArticleToSummarize {
+  id: number;
+  title: string;
+  /** The article's page, or null when the feed gave none. */
+  url: string | null;
+  /** What the feed delivered, without markup. */
+  contentText: string;
+}
+
+/** The feed article that is summarised next: of those that wait, the newest by the time the lists sort by. */
+export function nextArticleToSummarize(db: Database): ArticleToSummarize | null {
+  const row = db
+    .prepare(
+      `SELECT a.id, a.title, a.content_text,
+              (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
+         FROM articles a WHERE ${WAITING_FOR_SUMMARY}
+        ORDER BY a.updated_at DESC, a.id DESC LIMIT 1`,
+    )
+    .get();
+  return row ? { id: num(row.id), title: str(row.title), url: strOrNull(row.url), contentText: str(row.content_text) } : null;
+}
+
+export function saveAutoSummary(db: Database, id: number, summary: { text: string; source: AutoSummarySource; now: string }): void {
+  db.prepare("UPDATE articles SET auto_summary = ?, auto_summary_source = ?, auto_summary_at = ? WHERE id = ?").run(
+    summary.text,
+    summary.source,
+    summary.now,
+    id,
+  );
+}
+
+/** Counts a failed call. At `SUMMARY_ATTEMPTS` the article no longer waits. */
+export function recordSummaryFailure(db: Database, id: number): void {
+  db.prepare("UPDATE articles SET auto_summary_attempts = auto_summary_attempts + 1 WHERE id = ?").run(id);
+}
+
+/** Marks an article as having too little text to summarise, so that it no longer waits. */
+export function skipAutoSummary(db: Database, id: number): void {
+  db.prepare("UPDATE articles SET auto_summary_skipped = 1 WHERE id = ?").run(id);
 }
 
 // ---- reading for the API and RSS ---------------------------------------------------------------

@@ -38,7 +38,7 @@ function provider(name: string, adapter: LlmAdapter): Provider {
 function setup(options: {
   providers: Provider[];
   assignment?: Partial<Record<TaskName, string>>;
-  limits?: { llmCallsPerRun: number; llmCallsPerDay: number };
+  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number };
   timeoutMs?: number;
   timeZone?: string;
 }) {
@@ -55,6 +55,7 @@ function setup(options: {
       judge: first,
       cluster: first,
       write: first,
+      summarize: first,
       ...options.assignment,
     },
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
@@ -187,5 +188,53 @@ describe("TaskRunner.canSearch", () => {
     expect(
       setup({ providers: [provider("a", plain.adapter), provider("b", searching.adapter)], assignment: { search: "b" } }).runner.canSearch(),
     ).toBe(true);
+  });
+});
+
+describe("the allowance of summaries", () => {
+  const summarizeInput = { outputLanguage: "ja", title: "Headline", text: "The text of the article." };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("does not count summaries towards the day of the runs", async () => {
+    const { adapter } = scripted([{ summary: "One." }, { summary: "Two." }, validInterpretation]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1, summariesPerDay: 2 } });
+
+    await runner.run("summarize", summarizeInput, fresh());
+    await runner.run("summarize", summarizeInput, fresh());
+    expect(runner.canSummarize()).toBe(false);
+    expect(runner.callsToday()).toBe(0);
+    await expect(runner.run("interpret", interpretInput, fresh())).resolves.toBeDefined();
+  });
+
+  it("does not count the calls of runs towards the summaries", async () => {
+    const { adapter } = scripted([validInterpretation, { summary: "One." }]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1, summariesPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    expect(runner.summariesToday()).toBe(0);
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "One." });
+    expect(runner.summariesToday()).toBe(1);
+  });
+
+  it("stops summarising once the day has used its allowance, and starts again the next day", async () => {
+    const { adapter, requests } = scripted([{ summary: "One." }, { summary: "Two." }]);
+    const { runner, clock } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 1 } });
+
+    await runner.run("summarize", summarizeInput, fresh());
+    await expect(runner.run("summarize", summarizeInput, fresh())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+
+    clock.advance(24 * 60 * 60_000);
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "Two." });
+  });
+
+  it("allows 100 summaries a day when no limit is given, and gives the model no tools", async () => {
+    const { adapter, requests } = scripted([{ summary: "One." }]);
+    const { runner, calls } = setup({ providers: [provider("a", adapter)] });
+
+    expect(runner.limits.summariesPerDay).toBe(100);
+    await runner.run("summarize", summarizeInput, fresh());
+    expect(requests[0]!.webSearch).toBe(false);
+    expect(calls()).toEqual([{ task: "summarize", provider: "a", ok: 1, error: null }]);
   });
 });

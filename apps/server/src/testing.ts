@@ -5,11 +5,12 @@ import {
   insertArticle,
   RunQueue,
   startRun,
+  SummaryWorker,
   type ArticleContent,
   type Category,
   type Kind,
 } from "@smarternews/core";
-import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
+import { createTestDb, fakeClock, fakeFetch, fakeLlm, type FakeHandler } from "@smarternews/core/testing";
 import { createApp } from "./app.ts";
 
 export const API_TOKEN = "test-api-token-0123456789";
@@ -20,10 +21,10 @@ export const FEED_TOKEN = "test-feed-token-0123456789";
 export type TestResponse = Omit<Response, "json"> & { json(): Promise<any> };
 
 /** The app wired to an in-memory database. Runs are started but never finish, so tests can observe them. */
-export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSearch?: boolean } = {}) {
+export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSearch?: boolean; summarize?: FakeHandler } = {}) {
   const db = createTestDb();
   const clock = fakeClock(start);
-  const llm = fakeLlm(db, clock, {}, { webSearch: options.webSearch });
+  const llm = fakeLlm(db, clock, options.summarize ? { summarize: options.summarize } : {}, { webSearch: options.webSearch });
   const queue = new RunQueue({
     db,
     clock,
@@ -37,6 +38,8 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
   const site = fakeFetch(routes, clock);
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
   const poller = new FeedPoller({ db, clock, fetcher });
+  // Summaries are made when a test tells the worker to look: `summarizer.tick()`, then `summarizer.idle()`.
+  const summarizer = new SummaryWorker({ db, clock, fetcher, runner: llm.runner });
   const app = createApp({
     db,
     clock,
@@ -65,6 +68,8 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
     clock,
     queue,
     poller,
+    summarizer,
+    llmRequests: llm.requests,
     site: {
       requests: site.requests,
       set(url: string, answer: string | (() => Response)) {

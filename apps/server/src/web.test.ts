@@ -14,6 +14,7 @@ function server(build: "built" | "not-built") {
     writeFileSync(join(dir, "index.html"), "<!doctype html><title>smarternews</title><div id=root></div>");
     writeFileSync(join(dir, "assets", "app-abc123.js"), "console.log('app')");
     writeFileSync(join(dir, "assets", "app-abc123.css"), "body{}");
+    writeFileSync(join(dir, "theme.js"), "document.documentElement.setAttribute('data-theme', 'dark')");
     writeFileSync(join(dir, "..", "secret.txt"), "outside the web directory");
   }
   const db = createTestDb();
@@ -81,6 +82,15 @@ describe("serving the web app", () => {
   it("does not cache the page itself, so a new build is picked up", async () => {
     const response = await server("built").request("/");
     expect(response.headers.get("cache-control")).toBe("no-cache");
+  });
+
+  it("serves the script that sets the colour scheme before the first paint, and lets a new build replace it", async () => {
+    const response = await server("built").request("/theme.js");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("javascript");
+    expect(response.headers.get("cache-control")).toBe("no-cache");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await response.text()).toContain("data-theme");
   });
 
   it("answers 404 for an asset that does not exist instead of the page", async () => {

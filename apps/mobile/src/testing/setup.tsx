@@ -10,6 +10,8 @@ afterEach(() => {
   jest.useRealTimers();
   // The folded groups are one state for the whole app; every test starts with none folded.
   require("../shell/collapsed").resetCollapsedState();
+  // So is the colour scheme; every test starts following the device.
+  require("../theme/store").resetThemeState();
 });
 
 jest.mock("@react-native-async-storage/async-storage", () => require("@react-native-async-storage/async-storage/jest/async-storage-mock"));

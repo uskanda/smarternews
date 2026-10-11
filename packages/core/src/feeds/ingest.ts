@@ -141,15 +141,16 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
 
   const insert = db.prepare(
     `INSERT INTO articles
-       (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at)
-     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?)`,
+       (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at,
+        created_at)
+     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Lists show the highest id first among articles of the same time, so the first item of the document goes in last.
   for (const item of fresh.reverse()) {
     // An item sorts by when it was published; one without a date, or dated in the future, by when it was fetched.
     const at = item.publishedAt && item.publishedAt <= now ? item.publishedAt.toISOString() : nowIso;
     const id = num(
-      insert.run(feed.categoryId, feed.id, item.key, item.title, summaryOf(item.text), item.body, item.text, item.author, at, at).lastInsertRowid,
+      insert.run(feed.categoryId, feed.id, item.key, item.title, summaryOf(item.text), item.body, item.text, item.author, at, at, nowIso).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
     applyStopWords(db, id);
@@ -233,6 +234,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         categoryId: input.categoryId,
         intervalMinutes: input.intervalMinutes,
         enabled: input.enabled,
+        autoSummarize: input.autoSummarize,
       },
       clock,
     );

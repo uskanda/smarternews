@@ -27,6 +27,8 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     title: feed.title,
     ...(feed.intervalMinutes === null ? {} : { intervalMinutes: feed.intervalMinutes }),
     enabled: feed.enabled,
+    // Written only when it is on: a file without the line leaves the setting of a known feed as it is.
+    ...(feed.autoSummarize ? { autoSummarize: true } : {}),
   };
 }
 
@@ -103,13 +105,20 @@ function importSubscriptions(
       const existing = findFeedByUrl(db, entry.url);
       if (existing) {
         listed.push(existing.id);
-        updateFeed(db, existing.id, {
-          categoryId,
-          // The file says what the interval is: without one, the feed follows the base interval.
-          intervalMinutes: entry.intervalMinutes ?? null,
-          ...(entry.title !== undefined && entry.title !== existing.title ? { title: entry.title } : {}),
-          ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
-        });
+        updateFeed(
+          db,
+          existing.id,
+          {
+            categoryId,
+            // The file says what the interval is: without one, the feed follows the base interval.
+            intervalMinutes: entry.intervalMinutes ?? null,
+            ...(entry.title !== undefined && entry.title !== existing.title ? { title: entry.title } : {}),
+            ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+            // Switching summaries on here starts them at this moment: the articles the feed already has stay as they are.
+            ...(entry.autoSummarize !== undefined ? { autoSummarize: entry.autoSummarize } : {}),
+          },
+          clock,
+        );
         result.feedsUpdated += 1;
         return;
       }
@@ -122,6 +131,7 @@ function importSubscriptions(
           categoryId,
           intervalMinutes: entry.intervalMinutes,
           enabled: entry.enabled,
+          autoSummarize: entry.autoSummarize,
         },
         clock,
       );

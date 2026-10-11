@@ -46,6 +46,18 @@ function CategorySelect({ id, value, onChange, categories }: { id: string; value
 
 // ---- adding ------------------------------------------------------------------------------------
 
+/** The switch for summaries. What it costs and which articles it covers is said beside it, before it is chosen. */
+function AutoSummarize({ id, checked, onChange }: { id: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <div className="flex flex-col gap-xs">
+      <Checkbox label="自動で要約する" checked={checked} onChange={(event) => onChange(event.target.checked)} aria-describedby={id} />
+      <p id={id} className="type-label-sm text-on-surface-muted">
+        要約にはLLMを使います。これから届く記事だけを要約します。
+      </p>
+    </div>
+  );
+}
+
 function AddFeed({ categories }: { categories: Category[] }) {
   const { api } = useApp();
   const refresh = useRefresh();
@@ -54,6 +66,7 @@ function AddFeed({ categories }: { categories: Category[] }) {
   const [category, setCategory] = useState(NO_CATEGORY);
   const [found, setFound] = useState<Array<{ url: string; title: string }> | null>(null);
   const [chosen, setChosen] = useState("");
+  const [autoSummarize, setAutoSummarize] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const firstChoice = useRef<HTMLInputElement>(null);
@@ -69,12 +82,13 @@ function AddFeed({ categories }: { categories: Category[] }) {
   }
 
   async function subscribe(feedUrl: string) {
-    const created = await api.createFeed({ url: feedUrl, categoryId: category === NO_CATEGORY ? null : Number(category) });
+    const created = await api.createFeed({ url: feedUrl, categoryId: category === NO_CATEGORY ? null : Number(category), autoSummarize });
     refresh("feeds", "counts", "articles");
     toast({ message: `「${created.title}」を追加しました` });
     setUrl("");
     setFound(null);
     setChosen("");
+    setAutoSummarize(false);
   }
 
   async function run(action: () => Promise<void>) {
@@ -127,6 +141,7 @@ function AddFeed({ categories }: { categories: Category[] }) {
           </label>
           <CategorySelect id="add-feed-category" value={category} onChange={setCategory} categories={categories} />
         </div>
+        <AutoSummarize id="add-feed-summarize-hint" checked={autoSummarize} onChange={setAutoSummarize} />
         {found ? (
           // The legend names the group and says what happened; the focus moves here, so it is read out.
           <fieldset className="flex flex-col gap-sm type-body-md">
@@ -175,6 +190,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [ownInterval, setOwnInterval] = useState(feed.intervalMinutes !== null);
   const [minutes, setMinutes] = useState(feed.intervalMinutes === null ? "" : String(feed.intervalMinutes));
   const [paused, setPaused] = useState(!feed.enabled);
+  const [autoSummarize, setAutoSummarize] = useState(feed.autoSummarize);
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   // The form takes the place of the buttons that opened it, so the focus is carried into it.
@@ -196,6 +212,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
         categoryId: category === NO_CATEGORY ? null : Number(category),
         intervalMinutes,
         enabled: !paused,
+        autoSummarize,
       });
       refresh("feeds", "counts", "articles");
       toast({ message: "購読フィードを保存しました" });
@@ -243,6 +260,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
         />
       ) : null}
       <Checkbox label="取得を一時停止する" checked={paused} onChange={(event) => setPaused(event.target.checked)} />
+      <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
         <Button type="submit" variant="primary" disabled={title.trim().length === 0}>
@@ -261,6 +279,7 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
   return (
     <span className="flex flex-wrap items-baseline gap-x-md gap-y-xs">
       {feed.enabled ? null : <Badge>一時停止中</Badge>}
+      {feed.autoSummarize ? <Badge>自動で要約</Badge> : null}
       {feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
       <span className="tabular-nums">{feed.lastError && !feed.lastSucceededAt ? "まだ成功していません" : lastSuccess}</span>
       {feed.lastError ? (
