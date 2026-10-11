@@ -20,7 +20,8 @@ export function Badge({ children, tone = "plain" }: { children: string; tone?: "
 
 export interface ArticleRowProps {
   article: ArticleSummary;
-  categoryName: string;
+  /** The category of a generated article, the feed of a feed article. */
+  sourceName: string;
   timeZone: string;
   /** The current time in milliseconds, the same for every row of one drawing of the list. */
   now: number;
@@ -35,18 +36,20 @@ export interface ArticleRowProps {
  *
  * Drawn again only when its own article changes: a list redraws for many reasons, and a row holds a gesture.
  */
-export const ArticleRow = memo(function ArticleRow({ article, categoryName, timeZone, now, onOpen, onToggleRead, onLongPress }: ArticleRowProps) {
+export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZone, now, onOpen, onToggleRead, onLongPress }: ArticleRowProps) {
   const theme = useTheme();
   const swipeable = useRef<SwipeableMethods>(null);
-  const marked = article.importance >= 4;
+  // A feed article has no importance, and so no mark; it has its page instead of counted sources.
+  const marked = (article.importance ?? 0) >= 4;
+  const generated = article.origin === "generated";
   const time = formatShort(article.updatedAt, timeZone, new Date(now));
   const spoken = [
     marked ? `重要度${article.importance}` : null,
     article.title,
     article.summary,
-    categoryName,
+    sourceName,
     time,
-    `出典${article.refCount}件`,
+    generated ? `出典${article.refCount}件` : null,
     article.revision > 0 ? "更新" : null,
     article.unconfirmed ? "未確認" : null,
     article.starred ? "スター" : null,
@@ -129,14 +132,16 @@ export const ArticleRow = memo(function ArticleRow({ article, categoryName, time
           </Txt>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: theme.spacing.md, rowGap: theme.spacing.xs }}>
             <Txt variant="label-sm" color="on-surface-muted">
-              {categoryName}
+              {sourceName}
             </Txt>
             <Txt variant="label-sm" color="on-surface-muted" style={{ fontVariant: ["tabular-nums"] }}>
               {time}
             </Txt>
-            <Txt variant="label-sm" color="on-surface-muted">
-              出典{article.refCount}件
-            </Txt>
+            {generated ? (
+              <Txt variant="label-sm" color="on-surface-muted">
+                出典{article.refCount}件
+              </Txt>
+            ) : null}
             {article.revision > 0 ? <Badge>更新</Badge> : null}
             {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
             {article.starred ? (

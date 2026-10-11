@@ -1,6 +1,6 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
-import { baselineFrom, minImportanceFor, planNotifications } from "./notify.ts";
+import { baselineFrom, minImportanceFor, NOTIFY_SETTING_LABEL, planNotifications } from "./notify.ts";
 
 let serial = 0;
 function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
@@ -8,6 +8,9 @@ function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
   return {
     id: serial,
     categoryId: 1,
+    origin: "generated",
+    feedId: null,
+    author: null,
     kind: "news",
     title: `Article ${serial}`,
     summary: "",
@@ -49,6 +52,21 @@ describe("planNotifications", () => {
   it("notifies both when set to all", () => {
     const plan = planNotifications({ setting: "all", articles: [article({ importance: 5 }), article({ importance: 3, categoryId: 2 })], checkedAt: CHECKED, categories });
     expect(plan.notifications.map((entry) => entry.body).sort()).toEqual(["Cars", "Security"]);
+  });
+
+  it("never notifies a feed article, even when set to all", () => {
+    const generated = article({ updatedAt: "2026-03-01T07:00:00.000Z", importance: 2 });
+    const delivered = article({ origin: "feed", feedId: 4, importance: null, updatedAt: "2026-03-01T08:00:00.000Z" });
+
+    const plan = planNotifications({ setting: "all", articles: [generated, delivered], checkedAt: "2026-03-01T06:30:00.000Z", categories: [] });
+
+    expect(plan.notifications).toEqual([{ kind: "article", articleId: generated.id, title: generated.title, body: "" }]);
+    // The feed article was looked at all the same, so the next check starts after it.
+    expect(plan.checkedAt).toBe("2026-03-01T08:00:00.000Z");
+  });
+
+  it("names the setting for every new article after what it covers", () => {
+    expect(NOTIFY_SETTING_LABEL.all).toBe("AI生成のすべての新着");
   });
 
   it("notifies nothing when set to off, and leaves the checked time alone", () => {

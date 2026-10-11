@@ -233,10 +233,13 @@ describe("ended events in lists without a kind", () => {
     expect(counts).toEqual({
       unread: 2,
       starred: 1,
+      generatedUnread: 2,
+      uncategorizedUnread: 0,
       categories: [
-        { categoryId: news.id, unread: 1, total: 2 },
-        { categoryId: events.id, unread: 1, total: 2 },
+        { categoryId: news.id, unread: 1, total: 2, generatedUnread: 1, generatedTotal: 2 },
+        { categoryId: events.id, unread: 1, total: 2, generatedUnread: 1, generatedTotal: 2 },
       ],
+      feeds: [],
     });
   });
 });
@@ -259,11 +262,14 @@ describe("counts", () => {
     expect(counts).toEqual({
       unread: 3,
       starred: 1,
+      generatedUnread: 3,
+      uncategorizedUnread: 0,
       categories: [
-        { categoryId: a.id, unread: 2, total: 3 },
-        { categoryId: b.id, unread: 1, total: 1 },
-        { categoryId: empty.id, unread: 0, total: 0 },
+        { categoryId: a.id, unread: 2, total: 3, generatedUnread: 2, generatedTotal: 3 },
+        { categoryId: b.id, unread: 1, total: 1, generatedUnread: 1, generatedTotal: 1 },
+        { categoryId: empty.id, unread: 0, total: 0, generatedUnread: 0, generatedTotal: 0 },
       ],
+      feeds: [],
     });
   });
 });

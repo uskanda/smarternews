@@ -89,7 +89,7 @@ function contentHtml(article: Article, options: FeedOptions): string {
 function item(article: Article, options: FeedOptions): string {
   const labels = labelsFor(options.language);
   const title = `${article.revision > 0 ? labels.updated : ""}${article.title}`;
-  const category = options.categoryNames.get(article.categoryId);
+  const category = article.categoryId === null ? undefined : options.categoryNames.get(article.categoryId);
   return [
     "<item>",
     `<title>${xmlText(title)}</title>`,

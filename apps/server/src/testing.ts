@@ -1,5 +1,7 @@
 import {
   createCategory,
+  FeedPoller,
+  Fetcher,
   insertArticle,
   RunQueue,
   startRun,
@@ -7,7 +9,7 @@ import {
   type Category,
   type Kind,
 } from "@smarternews/core";
-import { createTestDb, fakeClock, fakeLlm } from "@smarternews/core/testing";
+import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { createApp } from "./app.ts";
 
 export const API_TOKEN = "test-api-token-0123456789";
@@ -30,7 +32,21 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
       await new Promise(() => {});
     },
   });
-  const app = createApp({ db, clock, queue, runner: llm.runner, tokens: { api: API_TOKEN, feed: FEED_TOKEN }, version: "9.9.9" });
+  // Other sites, as the tests define them: `site.set(url, answer)`. Anything else answers 404.
+  const routes: Record<string, () => Response> = {};
+  const site = fakeFetch(routes, clock);
+  const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
+  const poller = new FeedPoller({ db, clock, fetcher });
+  const app = createApp({
+    db,
+    clock,
+    queue,
+    runner: llm.runner,
+    fetcher,
+    poller,
+    tokens: { api: API_TOKEN, feed: FEED_TOKEN },
+    version: "9.9.9",
+  });
 
   const request = (method: string, path: string, body?: unknown, token: string | null = API_TOKEN): Promise<TestResponse> =>
     app.request(path, {
@@ -48,6 +64,13 @@ export function testServer(start = "2026-03-01T12:00:00.000Z", options: { webSea
     db,
     clock,
     queue,
+    poller,
+    site: {
+      requests: site.requests,
+      set(url: string, answer: string | (() => Response)) {
+        routes[url] = typeof answer === "string" ? () => new Response(answer, { headers: { "content-type": "application/xml; charset=utf-8" } }) : answer;
+      },
+    },
     get: (path: string, token?: string | null) => request("GET", path, undefined, token),
     post: (path: string, body?: unknown, token?: string | null) => request("POST", path, body, token),
     patch: (path: string, body: unknown, token?: string | null) => request("PATCH", path, body, token),

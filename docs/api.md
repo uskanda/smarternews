@@ -33,8 +33,8 @@ An error response has this shape:
 |---|---|---|
 | 400 | `invalid_input` | The input does not match the schema. `fields` names each problem |
 | 401 | `unauthorized` | The token is missing or wrong |
-| 404 | `not_found` | The article, category, topic, run or path does not exist |
-| 409 | `conflict` | A slug is taken, or the category already has a run waiting or in progress |
+| 404 | `not_found` | The article, category, topic, feed, stop word, run or path does not exist |
+| 409 | `conflict` | A slug is taken, a feed or a stop word is already registered, or the category already has a run waiting or in progress |
 
 ## Settings
 
@@ -54,9 +54,17 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/settings/export" > settin
 curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @settings.yaml "$API/api/v1/settings/import"
 ```
 
-Settings fields: `readerInfo` (text), `outputLanguage` (a language tag such as `en` or `ja`), `timeZone` (an IANA name), `search` (`{"language":"en","region":"US"}`, the default market for news search).
+Settings fields:
 
-Import matches categories by `slug` and topics by `text`. It updates what matches, creates the rest, and deletes nothing. An invalid file changes nothing. The response counts what was created and updated.
+| Field | Content |
+|---|---|
+| `readerInfo` | Text about who reads the articles |
+| `outputLanguage` | A language tag such as `en` or `ja` |
+| `timeZone` | An IANA name |
+| `search` | `{"language":"en","region":"US"}`, the default market for news search |
+| `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
+
+Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and stop words by their text. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
 ## Categories
 
@@ -66,14 +74,14 @@ Import matches categories by `slug` and topics by `text`. It updates what matche
 | `POST /api/v1/categories` | Create one (status 201) |
 | `GET /api/v1/categories/:id` | Read one |
 | `PATCH /api/v1/categories/:id` | Change `name`, `schedule`, `minImportance`, `maxArticlesPerRun`, `windowHours`, `windowDays`, `enabled` |
-| `DELETE /api/v1/categories/:id` | Delete it with its topics, articles, candidates and runs (status 204) |
+| `DELETE /api/v1/categories/:id` | Delete it with its topics, generated articles, candidates and runs (status 204). Its subscribed feeds stay, without a category |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"Security","kind":"news","schedule":["06:00","18:00"]}' "$API/api/v1/categories"
 ```
 
-`kind` is `news` or `event` and cannot change later. `slug` is derived from the name when omitted. `schedule` lists times of day in the configured time zone. Defaults: `schedule` `["05:00"]`, `minImportance` 3, `maxArticlesPerRun` 5, `windowHours` 24 for news, `windowDays` 7 for events.
+`kind` is `news` or `event` and cannot change later. A category may have no topics and only hold subscribed feeds; its schedule then starts no run. `slug` is derived from the name when omitted. `schedule` lists times of day in the configured time zone. Defaults: `schedule` `["05:00"]`, `minImportance` 3, `maxArticlesPerRun` 5, `windowHours` 24 for news, `windowDays` 7 for events.
 
 ## Topics
 
@@ -103,22 +111,25 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `PATCH /api/v1/articles/:id` | Set `isRead` or `starred` |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
-| `GET /api/v1/counts` | Unread and starred totals, and counts per category |
+| `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
 
 Query parameters of the list:
 
 | Parameter | Effect |
 |---|---|
 | `category` | Category id |
+| `origin` | `generated` for articles the model wrote, `feed` for articles of subscribed feeds |
+| `feed` | Feed id; only the articles of that subscribed feed |
+| `uncategorized` | `true` for the articles of feeds that belong to no category |
 | `kind` | `news` or `event` |
 | `unread` | `true` or `false` |
 | `starred` | `true` or `false` |
-| `minImportance` | 1 to 5; only articles at or above this importance |
+| `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
-Articles come ordered by last update, newest first. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given. Each response has two fields: `items`, the articles of this page, and `nextCursor`, which is `null` on the last page.
+Unless `origin` or `feed` narrows it, a list holds generated articles and feed articles together. Articles come ordered by last update, newest first. A feed article sorts by the time its item was published. When the item has no date, or one in the future, the time it was fetched is used. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given. Each response has two fields: `items`, the articles of this page, and `nextCursor`, which is `null` on the last page.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true&limit=20"
@@ -131,7 +142,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   -d '{"categoryId":1,"before":"2026-03-01T12:00:00Z"}' "$API/api/v1/articles/mark-read"
 ```
 
-`mark-read` marks the unread articles that were last updated before `before`. Pass the time at which you loaded the list, so that articles that arrived afterwards stay unread. `categoryId` and `minImportance` narrow it; omit both to cover everything. The response lists the articles it changed as `ids`, and `mark-unread` takes such a list to undo the change:
+`mark-read` marks the unread articles that were last updated before `before`. Pass the time at which you loaded the list, so that articles that arrived afterwards stay unread. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. The response lists the articles it changed as `ids`, and `mark-unread` takes such a list to undo the change:
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -140,33 +151,123 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
 ```
 
-`counts` returns `unread` and `starred` for all categories together, and `categories` with `categoryId`, `unread` and `total` for each. Unread counts leave out events that have ended.
+`counts` returns these:
+
+| Field | Content |
+|---|---|
+| `unread`, `starred` | Totals over everything |
+| `generatedUnread` | Unread generated articles |
+| `uncategorizedUnread` | Unread articles of feeds without a category |
+| `categories` | Per category: `categoryId`, `unread`, `total`, `generatedUnread`, and `generatedTotal` (its generated articles, read or not) |
+| `feeds` | Per subscribed feed: `feedId` and `unread` |
+
+A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a stop word hides.
 
 Fields of an article in the list:
 
 | Field | Content |
 |---|---|
-| `title`, `summary` | Headline and one or two sentences |
-| `importance` | 1 to 5 |
+| `origin` | `generated` or `feed` |
+| `categoryId` | The category, or `null` for an article of a feed without one |
+| `feedId`, `author` | For feed articles: the subscribed feed, and the author the feed names. Otherwise `null` |
+| `title`, `summary` | Headline and one or two sentences. For a feed article the summary is the start of its content |
+| `importance` | 1 to 5, or `null` for a feed article |
 | `impact` | One sentence for the reader, or `null` |
 | `unconfirmed` | True when the sources are only rumours or unofficial |
 | `firstPublishedAt`, `updatedAt` | When the article was first written and last rewritten |
 | `revision` | How many times a follow-up rewrote it |
 | `isRead`, `starred` | The reader's marks |
-| `primaryUrl` | URL of the main source |
+| `primaryUrl` | URL of the main source. For a feed article, the page of the item |
 | `event` | For events: `startsAt`, `endsAt`, `venue`, `fee`, `registration` |
 
 The detail adds these:
 
 | Field | Content |
 |---|---|
-| `body`, `bodyHtml` | The article as Markdown and as HTML |
+| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered, reduced to paragraphs, headings, lists, quotes, emphasis, code, links and HTTPS images. Only the HTML of a feed article contains images |
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
 
-Articles without a star are deleted 180 days after their last update. Starred articles are kept.
+Generated articles without a star are deleted 180 days after their last update, feed articles without a star 90 days after the time they sort by. Starred articles are kept.
+
+## Subscribed feeds
+
+A subscribed feed is read as it is, like in any feed reader. Its items become feed articles, and no model is called for them. This is separate from the `feeds` of a topic, which are sources the model writes from.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/feeds` | List the subscribed feeds with their fetch state |
+| `POST /api/v1/feeds` | Subscribe to a feed (status 201) |
+| `POST /api/v1/feeds/discover` | Find the feeds a page points to, without subscribing |
+| `GET /api/v1/feeds/:id` | Read one |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled` |
+| `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
+| `POST /api/v1/feeds/:id/fetch` | Fetch it now |
+| `GET /api/v1/feeds/opml` | Download every subscribed feed as OPML |
+| `POST /api/v1/feeds/opml` | Subscribe to the feeds of an OPML document sent as the request body |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://example.org/"}' "$API/api/v1/feeds/discover"
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://example.org/feed.xml","categoryId":1,"intervalMinutes":120}' "$API/api/v1/feeds"
+
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"intervalMinutes":null,"enabled":false}' "$API/api/v1/feeds/1"
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/feeds/1/fetch"
+
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/feeds/opml" > feeds.opml
+curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$API/api/v1/feeds/opml"
+```
+
+Subscribing fetches the URL once and answers when that is done. Status 400 means that the URL does not return RSS or Atom, or that it is a destination the crawler does not fetch (see the README). A 409 answer says that the URL is already subscribed; URLs that differ only in tracking parameters count as the same. Every item the feed delivers at that moment becomes an unread article, except items published more than 90 days ago.
+
+`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays.
+
+`discover` returns `feeds`, a list of `url` and `title`. When the URL is itself a feed, the list holds that one feed. For a page it holds the feeds the page names with `<link rel="alternate">`, and it is empty when there are none.
+
+Fields of a feed:
+
+| Field | Content |
+|---|---|
+| `url`, `title`, `siteUrl` | The feed, its name, and the page it belongs to |
+| `categoryId` | The category, or `null` |
+| `intervalMinutes` | The feed's own interval, or `null` for the base interval |
+| `enabled` | False while the feed is paused: it is not fetched, and its articles stay |
+| `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
+| `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
+| `nextFetchAt` | When it is fetched next, or `null` while it is paused |
+| `articleCount`, `starredCount` | How many articles it has, and how many of them are starred |
+
+A fetch that fails is recorded on the feed and not in the run history. After each failure in a row the wait before the next try doubles, up to one day; a success brings it back to the interval. `fetch` answers with `status` (`updated`, `not_modified` or `failed`), `created` (the number of new articles), `error` when it failed, and `feed`.
+
+An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
+
+The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders.
+
+## Stop words
+
+A stop word hides the feed articles whose title contains it. With the scope `title_and_content` the content counts too. Matching ignores case and the difference between full-width and half-width characters, and treats the word as plain text. Generated articles and starred articles are never hidden.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/stop-words` | List the stop words with the number of articles each hides |
+| `POST /api/v1/stop-words` | Add one (status 201) |
+| `PATCH /api/v1/stop-words/:id` | Change its `scope` |
+| `DELETE /api/v1/stop-words/:id` | Remove it |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"sponsored","scope":"title_and_content"}' "$API/api/v1/stop-words"
+
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" "$API/api/v1/stop-words/1"
+```
+
+`scope` is `title` (the default) or `title_and_content`. A new word applies to the articles already stored. Hidden articles are kept: they are in no list and no count, and they come back, read or unread as they were, when the word is removed. `DELETE` answers with `restored`, the number of articles that came back. `hiddenCount` counts an article that several words match for the oldest of them.
 
 ## Runs
 
@@ -209,4 +310,4 @@ curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 curl -s "$API/rss/security.xml?token=$FEED_TOKEN"
 ```
 
-`/rss/all.xml` covers every enabled category and `/rss/<slug>.xml` covers one. A feed holds the 50 most recently updated articles and leaves out events that have ended. Each item carries the summary as `description` and the full article as `content:encoded`. The full article holds, in this order, a notice when it is unconfirmed, the event details, the sentence for the reader, the body, and links to every source.
+`/rss/all.xml` covers every enabled category and `/rss/<slug>.xml` covers one. A feed holds the 50 most recently updated generated articles and leaves out events that have ended. Articles of subscribed feeds are never in it: the server does not pass on what other sites deliver. Each item carries the summary as `description` and the full article as `content:encoded`. The full article holds, in this order, a notice when it is unconfirmed, the event details, the sentence for the reader, the body, and links to every source.

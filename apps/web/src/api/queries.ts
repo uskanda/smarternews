@@ -21,6 +21,12 @@ export function useCategories() {
   return useQuery({ queryKey: ["categories"], queryFn: () => api.categories() });
 }
 
+/** The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles. */
+export function useFeeds() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
+}
+
 export function useCounts() {
   const { api } = useApp();
   return useQuery({ queryKey: ["counts"], queryFn: () => api.counts(), refetchInterval: REFRESH_MS });

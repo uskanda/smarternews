@@ -6,5 +6,6 @@ export * from "./events.ts";
 export * from "./labels.ts";
 export * from "./merge.ts";
 export * from "./messages.ts";
+export * from "./nav.ts";
 export * from "./notify.ts";
 export * from "./time.ts";

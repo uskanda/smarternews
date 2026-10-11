@@ -116,6 +116,49 @@ describe("the API client", () => {
     server.category("Security");
     const text = await api.exportSettings();
     expect(text).toContain("slug: security");
-    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0 });
+    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, stopWordsCreated: 0 });
+  });
+
+  it("subscribes to a feed, changes it, fetches it now and deletes it", async () => {
+    const { api, server } = setup();
+    const url = "https://blog.example.org/feed.xml";
+    server.site.set(url, `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>One</title><guid>1</guid><link>https://blog.example.org/1</link></item></channel></rss>`);
+    server.site.set("https://blog.example.org/", () =>
+      new Response('<link rel="alternate" type="application/rss+xml" title="Posts" href="/feed.xml">', { headers: { "content-type": "text/html" } }),
+    );
+
+    expect(await api.discoverFeeds("https://blog.example.org/")).toEqual({ feeds: [{ url, title: "Posts" }] });
+    const feed = await api.createFeed({ url });
+    expect(feed).toMatchObject({ title: "Blog", articleCount: 1 });
+    expect(await api.feeds()).toHaveLength(1);
+    expect((await api.updateFeed(feed.id, { title: "Mine", enabled: false })).title).toBe("Mine");
+    expect(await api.fetchFeed(feed.id)).toMatchObject({ status: "updated", created: 0, feed: { id: feed.id } });
+    expect((await api.articles({ feed: feed.id, origin: "feed" })).items.map((item) => item.title)).toEqual(["One"]);
+    expect((await api.counts()).feeds).toEqual([{ feedId: feed.id, unread: 1 }]);
+    expect(await api.markRead({ feedId: feed.id, before: "2099-01-01T00:00:00.000Z" })).toMatchObject({ updated: 1 });
+
+    await api.deleteFeed(feed.id);
+    expect(await api.feeds()).toEqual([]);
+  });
+
+  it("downloads the subscribed feeds as OPML and uploads the document back", async () => {
+    const { api, server, seen } = setup();
+    server.site.set("https://blog.example.org/feed.xml", `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title></channel></rss>`);
+    await api.createFeed({ url: "https://blog.example.org/feed.xml" });
+
+    const text = await api.exportOpml();
+    expect(text).toContain('xmlUrl="https://blog.example.org/feed.xml"');
+    expect(await api.importOpml(text)).toEqual({ feedsCreated: 0, feedsSkipped: 1, categoriesCreated: 0 });
+    expect(seen.at(-1)!.url).toBe("/api/v1/feeds/opml");
+  });
+
+  it("adds a stop word, changes what it covers and removes it", async () => {
+    const { api } = setup();
+    const word = await api.createStopWord({ text: "sponsored" });
+    expect(word).toMatchObject({ text: "sponsored", scope: "title", hiddenCount: 0 });
+    expect((await api.updateStopWord(word.id, { scope: "title_and_content" })).scope).toBe("title_and_content");
+    expect(await api.stopWords()).toHaveLength(1);
+    expect(await api.deleteStopWord(word.id)).toEqual({ restored: 0 });
+    await expect(api.createStopWord({ text: " " })).rejects.toMatchObject({ kind: "invalid" });
   });
 });

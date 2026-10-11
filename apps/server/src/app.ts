@@ -7,21 +7,33 @@ import {
   createCategory,
   createTopic,
   deleteCategory,
+  deleteFeed,
+  deleteStopWord,
   deleteTopic,
+  discoverFeeds,
   DomainError,
+  createStopWord,
+  exportOpml,
   exportSettings,
+  feedCreateSchema,
+  feedDiscoverSchema,
+  feedUpdateSchema,
   findCategoryBySlug,
   getArticle,
   getCategory,
   getCounts,
+  getFeed,
   getRun,
   getSettings,
   getTopic,
+  importOpml,
   importSettings,
   listArticles,
   listCategories,
   listFeedArticles,
+  listFeeds,
   listRunCandidates,
+  listStopWords,
   listRuns,
   listTopics,
   markArticlesRead,
@@ -33,16 +45,24 @@ import {
   requestInterpretation,
   setArticleFlags,
   settingsUpdateSchema,
+  stopWordCreateSchema,
+  stopWordUpdateSchema,
+  subscribe,
   topicCreateSchema,
   topicUpdateSchema,
   updateCategory,
+  updateFeed,
   updateSettings,
+  updateStopWord,
   updateTopic,
   zodFieldErrors,
   type ApiError,
   type Candidate,
   type Clock,
   type Database,
+  type FeedFetchResult,
+  type FeedPoller,
+  type Fetcher,
   type ProviderStatus,
   type RunQueue,
   type TaskRunner,
@@ -56,6 +76,9 @@ export interface AppDeps {
   clock: Clock;
   queue: RunQueue;
   runner: TaskRunner;
+  /** Talks to other sites when a feed is subscribed or looked for. */
+  fetcher: Fetcher;
+  poller: FeedPoller;
   tokens: { api: string; feed: string };
   version: string;
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
@@ -97,7 +120,7 @@ function idParam(c: Context, what: string): number {
 }
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner } = deps;
+  const { db, clock, queue, runner, fetcher, poller } = deps;
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -194,6 +217,37 @@ export function createApp(deps: AppDeps): Hono {
   api.patch("/articles/:id", async (c) =>
     c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)))),
   );
+
+  // subscribed feeds
+  api.get("/feeds", (c) => c.json(listFeeds(db)));
+  // Registering fetches the URL once, so the answer can take as long as that site does.
+  api.post("/feeds", async (c) => {
+    const input = parse(feedCreateSchema, await jsonBody(c));
+    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher }, input)), 201);
+  });
+  api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
+  api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
+  api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
+  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
+  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)))));
+  api.delete("/feeds/:id", (c) => {
+    deleteFeed(db, idParam(c, "feed"));
+    return c.body(null, 204);
+  });
+  api.post("/feeds/:id/fetch", async (c) => {
+    const id = idParam(c, "feed");
+    const outcome = await poller.fetchNow(id);
+    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id) };
+    return c.json(result);
+  });
+
+  // stop words
+  api.get("/stop-words", (c) => c.json(listStopWords(db)));
+  api.post("/stop-words", async (c) => c.json(createStopWord(db, parse(stopWordCreateSchema, await jsonBody(c)), clock), 201));
+  api.patch("/stop-words/:id", async (c) =>
+    c.json(updateStopWord(db, idParam(c, "stop word"), parse(stopWordUpdateSchema, await jsonBody(c)))),
+  );
+  api.delete("/stop-words/:id", (c) => c.json(deleteStopWord(db, idParam(c, "stop word"))));
 
   // runs
   api.post("/categories/:id/runs", (c) => c.json(queue.enqueue(idParam(c, "category"), "manual", null), 202));

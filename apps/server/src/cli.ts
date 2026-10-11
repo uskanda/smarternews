@@ -4,10 +4,12 @@ import { serve } from "@hono/node-server";
 import {
   ConfigError,
   DomainError,
+  exportOpml,
   exportSettings,
   failInterruptedRuns,
   findCategoryBySlug,
   getRun,
+  importOpml,
   importSettings,
   resolvePaths,
   systemClock,
@@ -28,6 +30,8 @@ const USAGE = `Usage: smarternews <command>
   run <category-slug>   run one category now and wait for it to finish
   import <file>         load categories, topics and settings from a settings file
   export [file]         write the settings file to standard output or to a file
+  opml-import <file>    subscribe to the feeds of an OPML file that are not subscribed yet
+  opml-export [file]    write the subscribed feeds as OPML to standard output or to a file
   token [api|feed]      print a token, creating it when there is none
 `;
 
@@ -63,6 +67,7 @@ async function serveCommand(io: CliIo): Promise<number> {
   const listen = parseListen(runtime.config.listen);
   const server = await startServer(runtime, listen);
   runtime.scheduler.start();
+  runtime.poller.start();
   io.stdout(`listening on http://${runtime.config.listen} (API token: ${runtime.paths.apiTokenFile})\n`);
   return new Promise((resolve) => {
     const stop = () => {
@@ -140,6 +145,40 @@ function exportCommand(io: CliIo, file: string | undefined): number {
   }
 }
 
+function opmlImportCommand(io: CliIo, file: string | undefined): number {
+  if (!file) {
+    io.stderr("opml-import: name the OPML file\n");
+    return 2;
+  }
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    io.stderr(`opml-import: cannot read ${file}: ${(error as Error).message}\n`);
+    return 1;
+  }
+  const runtime = createRuntime(io);
+  try {
+    const result = importOpml(runtime.db, text, systemClock);
+    io.stdout(`${result.feedsCreated} feeds registered, ${result.feedsSkipped} skipped; ${result.categoriesCreated} categories created\n`);
+    return 0;
+  } finally {
+    runtime.close();
+  }
+}
+
+function opmlExportCommand(io: CliIo, file: string | undefined): number {
+  const runtime = createRuntime(io);
+  try {
+    const text = exportOpml(runtime.db);
+    if (file) writeFileSync(file, text);
+    else io.stdout(text);
+    return 0;
+  } finally {
+    runtime.close();
+  }
+}
+
 function tokenCommand(io: CliIo, which: string | undefined): number {
   if (which !== undefined && which !== "api" && which !== "feed") {
     io.stderr("token: choose api or feed\n");
@@ -163,6 +202,10 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         return importCommand(io, argument);
       case "export":
         return exportCommand(io, argument);
+      case "opml-import":
+        return opmlImportCommand(io, argument);
+      case "opml-export":
+        return opmlExportCommand(io, argument);
       case "token":
         return tokenCommand(io, argument);
       case "help":

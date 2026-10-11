@@ -17,13 +17,14 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 // Scripts come from this origin only. Styles may also be set through the style attribute, which the dialog
-// library uses for positioning. The page may not be framed, and links to sources carry no referrer.
+// library uses for positioning. Images may also come from other sites over HTTPS: the content of a feed
+// article has them. The page may not be framed, and links and images of other sites carry no referrer.
 const PAGE_HEADERS = {
   "content-security-policy": [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    "img-src 'self' data: https:",
     "font-src 'self'",
     "connect-src 'self'",
     "object-src 'none'",

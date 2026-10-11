@@ -13,6 +13,8 @@ const slugSchema = z
 const languageSchema = z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "must be a language tag such as en or ja");
 const regionSchema = z.string().regex(/^[A-Z]{2}$/, "must be a two-letter region such as US or JP");
 const importanceSchema = z.number().int().min(1).max(5);
+/** How often a subscribed feed is fetched, in minutes: five minutes to one day. */
+const intervalMinutesSchema = z.number().int().min(5, "must be between 5 and 1440 minutes").max(1440, "must be between 5 and 1440 minutes");
 
 export const searchLocaleSchema = z.object({ language: languageSchema, region: regionSchema });
 export type SearchLocale = z.infer<typeof searchLocaleSchema>;
@@ -24,6 +26,8 @@ export const settingsSchema = z.object({
   outputLanguage: languageSchema,
   timeZone: z.string().min(1),
   search: searchLocaleSchema,
+  /** The base fetch interval of subscribed feeds. */
+  feedIntervalMinutes: intervalMinutesSchema,
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -142,14 +146,23 @@ export const articleEventSchema = z.object({
 });
 export type ArticleEvent = z.infer<typeof articleEventSchema>;
 
+/** Where an article comes from: written by the model from candidates, or delivered by a subscribed feed. */
+export const originSchema = z.enum(["generated", "feed"]);
+export type Origin = z.infer<typeof originSchema>;
+
 export const articleSummarySchema = z.object({
   id: z.number().int(),
-  categoryId: z.number().int(),
+  /** Null for an article of a feed that belongs to no category. */
+  categoryId: z.number().int().nullable(),
+  origin: originSchema,
+  feedId: z.number().int().nullable(),
+  author: z.string().nullable(),
   kind: kindSchema,
   title: z.string(),
   summary: z.string(),
   impact: z.string().nullable(),
-  importance: importanceSchema,
+  /** Null for a feed article. */
+  importance: importanceSchema.nullable(),
   unconfirmed: z.boolean(),
   firstPublishedAt: z.string(),
   updatedAt: z.string(),
@@ -174,6 +187,10 @@ export type Article = z.infer<typeof articleSchema>;
 
 export const articleListQuerySchema = z.object({
   category: z.coerce.number().int().optional(),
+  /** Only articles of feeds without a category. */
+  uncategorized: z.enum(["true"]).optional(),
+  origin: originSchema.optional(),
+  feed: z.coerce.number().int().optional(),
   kind: kindSchema.optional(),
   unread: z.enum(["true", "false"]).optional(),
   starred: z.enum(["true", "false"]).optional(),
@@ -195,6 +212,9 @@ export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
 
 export const markReadSchema = z.object({
   categoryId: z.number().int().optional(),
+  uncategorized: z.literal(true).optional(),
+  origin: originSchema.optional(),
+  feedId: z.number().int().optional(),
   minImportance: importanceSchema.optional(),
   before: z.iso.datetime({ offset: true }),
 });
@@ -209,9 +229,105 @@ export type MarkUnread = z.infer<typeof markUnreadSchema>;
 export const countsSchema = z.object({
   unread: z.number().int(),
   starred: z.number().int(),
-  categories: z.array(z.object({ categoryId: z.number().int(), unread: z.number().int(), total: z.number().int() })),
+  generatedUnread: z.number().int(),
+  uncategorizedUnread: z.number().int(),
+  categories: z.array(
+    z.object({
+      categoryId: z.number().int(),
+      unread: z.number().int(),
+      total: z.number().int(),
+      generatedUnread: z.number().int(),
+      /** Generated articles of the category, read or not: what goes when the category is deleted. */
+      generatedTotal: z.number().int(),
+    }),
+  ),
+  feeds: z.array(z.object({ feedId: z.number().int(), unread: z.number().int() })),
 });
 export type Counts = z.infer<typeof countsSchema>;
+
+// ---- subscribed feeds --------------------------------------------------------------------------
+
+const feedUrlSchema = z.url({ protocol: /^https?$/ }).max(2000);
+const feedTitleSchema = z.string().trim().min(1).max(200);
+
+export const feedSchema = z.object({
+  id: z.number().int(),
+  url: z.string(),
+  title: z.string(),
+  siteUrl: z.string().nullable(),
+  categoryId: z.number().int().nullable(),
+  /** Null means the base interval of the settings. */
+  intervalMinutes: z.number().int().nullable(),
+  enabled: z.boolean(),
+  lastFetchedAt: z.string().nullable(),
+  lastSucceededAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  failureCount: z.number().int(),
+  /** When the feed is fetched next. Null while it is disabled. */
+  nextFetchAt: z.string().nullable(),
+  articleCount: z.number().int(),
+  starredCount: z.number().int(),
+  createdAt: z.string(),
+});
+export type Feed = z.infer<typeof feedSchema>;
+
+export const feedCreateSchema = z.object({
+  url: feedUrlSchema,
+  title: feedTitleSchema.optional(),
+  categoryId: z.number().int().nullable().optional(),
+  intervalMinutes: intervalMinutesSchema.nullable().optional(),
+  enabled: z.boolean().optional(),
+});
+export type FeedCreate = z.infer<typeof feedCreateSchema>;
+
+export const feedUpdateSchema = feedCreateSchema.omit({ url: true });
+export type FeedUpdate = z.infer<typeof feedUpdateSchema>;
+
+export const feedDiscoverSchema = z.object({ url: feedUrlSchema });
+export const feedDiscoveryResultSchema = z.object({ feeds: z.array(z.object({ url: z.string(), title: z.string() })) });
+export type FeedDiscoveryResult = z.infer<typeof feedDiscoveryResultSchema>;
+
+/** What one fetch of a feed did, and the feed as it is afterwards. */
+export const feedFetchResultSchema = z.object({
+  status: z.enum(["updated", "not_modified", "failed"]),
+  created: z.number().int(),
+  error: z.string().optional(),
+  feed: feedSchema,
+});
+export type FeedFetchResult = z.infer<typeof feedFetchResultSchema>;
+
+export const opmlImportResultSchema = z.object({
+  feedsCreated: z.number().int(),
+  feedsSkipped: z.number().int(),
+  categoriesCreated: z.number().int(),
+});
+export type OpmlImportResult = z.infer<typeof opmlImportResultSchema>;
+
+// ---- stop words --------------------------------------------------------------------------------
+
+export const stopWordScopeSchema = z.enum(["title", "title_and_content"]);
+export type StopWordScope = z.infer<typeof stopWordScopeSchema>;
+
+const stopWordTextSchema = z.string().trim().min(1).max(100);
+
+export const stopWordSchema = z.object({
+  id: z.number().int(),
+  text: z.string(),
+  scope: stopWordScopeSchema,
+  /** Feed articles this word hides now. An article that matches several words counts for the oldest one. */
+  hiddenCount: z.number().int(),
+  createdAt: z.string(),
+});
+export type StopWord = z.infer<typeof stopWordSchema>;
+
+export const stopWordCreateSchema = z.object({ text: stopWordTextSchema, scope: stopWordScopeSchema.optional() });
+export type StopWordCreate = z.infer<typeof stopWordCreateSchema>;
+
+export const stopWordUpdateSchema = z.object({ scope: stopWordScopeSchema });
+export type StopWordUpdate = z.infer<typeof stopWordUpdateSchema>;
+
+export const stopWordDeleteResultSchema = z.object({ restored: z.number().int() });
+export type StopWordDeleteResult = z.infer<typeof stopWordDeleteResultSchema>;
 
 // ---- runs --------------------------------------------------------------------------------------
 
@@ -286,6 +402,14 @@ const settingsFileTopicSchema = z.object({
   interpretation: z.object({ queries: queriesSchema, criteria: z.string().max(4000) }).optional(),
 });
 
+const settingsFileSubscriptionSchema = z.object({
+  url: feedUrlSchema,
+  title: feedTitleSchema.optional(),
+  intervalMinutes: intervalMinutesSchema.optional(),
+  enabled: z.boolean().optional(),
+});
+export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
+
 const settingsFileCategorySchema = z.object({
   slug: slugSchema,
   name: categoryFields.name,
@@ -297,20 +421,29 @@ const settingsFileCategorySchema = z.object({
   windowDays: categoryFields.windowDays.optional(),
   enabled: categoryFields.enabled.optional(),
   topics: z.array(settingsFileTopicSchema).default([]),
+  subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
 });
 
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema.partial().optional(),
   categories: z.array(settingsFileCategorySchema).default([]),
+  /** Subscribed feeds that belong to no category. */
+  subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
+  stopWords: z.array(z.object({ text: stopWordTextSchema, scope: stopWordScopeSchema.optional() })).default([]),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
+/** The file as it is written: lists that are empty may be left out. */
+export type SettingsFileInput = z.input<typeof settingsFileSchema>;
 
 export const importResultSchema = z.object({
   categoriesCreated: z.number().int(),
   categoriesUpdated: z.number().int(),
   topicsCreated: z.number().int(),
   topicsUpdated: z.number().int(),
+  feedsCreated: z.number().int(),
+  feedsUpdated: z.number().int(),
+  stopWordsCreated: z.number().int(),
 });
 export type ImportResult = z.infer<typeof importResultSchema>;
 

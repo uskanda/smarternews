@@ -1,10 +1,19 @@
 import { parse, stringify } from "yaml";
 import type { z } from "zod";
-import { settingsFileSchema, type ImportResult, type SettingsFile } from "./api.ts";
+import {
+  settingsFileSchema,
+  type Feed,
+  type ImportResult,
+  type SettingsFile,
+  type SettingsFileInput,
+  type SettingsFileSubscription,
+} from "./api.ts";
 import type { Clock } from "./clock.ts";
 import { createCategory, findCategoryBySlug, listCategories, updateCategory } from "./db/categories.ts";
 import { transaction, type Database } from "./db/database.ts";
+import { findFeedByUrl, insertFeed, listFeeds, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
+import { createStopWord, listStopWords, normalizeForMatch } from "./db/stop-words.ts";
 import { createTopic, listTopics, updateTopic, applyInterpretation } from "./db/topics.ts";
 import { DomainError, type FieldError } from "./errors.ts";
 
@@ -12,9 +21,27 @@ export function zodFieldErrors(error: z.ZodError): FieldError[] {
   return error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }));
 }
 
-/** Writes categories, topics, reader information and global settings as YAML. Holds no secrets and no articles. */
+function toSubscription(feed: Feed): SettingsFileSubscription {
+  return {
+    url: feed.url,
+    title: feed.title,
+    ...(feed.intervalMinutes === null ? {} : { intervalMinutes: feed.intervalMinutes }),
+    enabled: feed.enabled,
+  };
+}
+
+/**
+ * Writes categories, topics, subscribed feeds, stop words, reader information and global settings as YAML.
+ * Holds no secrets, no articles and no fetch state.
+ */
 export function exportSettings(db: Database): string {
-  const file: SettingsFile = {
+  const feeds = listFeeds(db);
+  const subscriptionsOf = (categoryId: number | null) => {
+    const list = feeds.filter((feed) => feed.categoryId === categoryId).map(toSubscription);
+    return list.length > 0 ? { subscriptions: list } : {};
+  };
+  const stopWords = listStopWords(db).map((word) => ({ text: word.text, scope: word.scope }));
+  const file: SettingsFileInput = {
     version: 1,
     settings: getSettings(db),
     categories: listCategories(db).map((category) => ({
@@ -35,7 +62,10 @@ export function exportSettings(db: Database): string {
         ...(topic.search ? { search: topic.search } : {}),
         ...(topic.interpreted ? { interpretation: { queries: topic.queries, criteria: topic.criteria } } : {}),
       })),
+      ...subscriptionsOf(category.id),
     })),
+    ...subscriptionsOf(null),
+    ...(stopWords.length > 0 ? { stopWords } : {}),
   };
   return stringify(file, { lineWidth: 0 });
 }
@@ -55,16 +85,71 @@ function parseFile(text: string): SettingsFile {
 }
 
 /**
- * Applies a settings file. Categories are matched by slug and topics by text; whatever the file does not
- * mention stays as it is. Nothing is stored when any part of the file is refused.
+ * Stores the subscriptions a settings file lists for one category, or for none. A feed whose URL is already
+ * subscribed is updated and moved there; the others are registered without being fetched.
+ */
+function importSubscriptions(
+  db: Database,
+  subscriptions: SettingsFileSubscription[],
+  categoryId: number | null,
+  path: string,
+  result: ImportResult,
+  clock: Clock,
+): void {
+  subscriptions.forEach((entry, index) => {
+    try {
+      const existing = findFeedByUrl(db, entry.url);
+      if (existing) {
+        updateFeed(db, existing.id, {
+          categoryId,
+          // The file says what the interval is: without one, the feed follows the base interval.
+          intervalMinutes: entry.intervalMinutes ?? null,
+          ...(entry.title !== undefined && entry.title !== existing.title ? { title: entry.title } : {}),
+          ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+        });
+        result.feedsUpdated += 1;
+        return;
+      }
+      insertFeed(
+        db,
+        {
+          url: entry.url,
+          title: entry.title ?? new URL(entry.url).host,
+          titleSetByUser: entry.title !== undefined,
+          categoryId,
+          intervalMinutes: entry.intervalMinutes,
+          enabled: entry.enabled,
+        },
+        clock,
+      );
+      result.feedsCreated += 1;
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      throw new DomainError("invalid", error.message, [{ path: `${path}.${index}`, message: error.message }]);
+    }
+  });
+}
+
+/**
+ * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL and stop
+ * words by their text; whatever the file does not mention stays as it is. Nothing is stored when any part of
+ * the file is refused.
  */
 export function importSettings(db: Database, text: string, clock: Clock): ImportResult {
   const file = parseFile(text);
-  const result: ImportResult = { categoriesCreated: 0, categoriesUpdated: 0, topicsCreated: 0, topicsUpdated: 0 };
+  const result: ImportResult = {
+    categoriesCreated: 0,
+    categoriesUpdated: 0,
+    topicsCreated: 0,
+    topicsUpdated: 0,
+    feedsCreated: 0,
+    feedsUpdated: 0,
+    stopWordsCreated: 0,
+  };
   transaction(db, () => {
     if (file.settings) updateSettings(db, file.settings);
     file.categories.forEach((entry, index) => {
-      const { topics, slug, kind, ...fields } = entry;
+      const { topics, subscriptions, slug, kind, ...fields } = entry;
       const existing = findCategoryBySlug(db, slug);
       if (existing && existing.kind !== kind) {
         throw new DomainError("invalid", `the category "${slug}" already exists with another kind`, [
@@ -95,7 +180,18 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
         }
         result.topicsUpdated += 1;
       }
+      importSubscriptions(db, subscriptions, category.id, `categories.${index}.subscriptions`, result, clock);
     });
+    importSubscriptions(db, file.subscriptions, null, "subscriptions", result, clock);
+
+    const known = new Set(listStopWords(db).map((word) => normalizeForMatch(word.text)));
+    for (const word of file.stopWords) {
+      const normalized = normalizeForMatch(word.text);
+      if (known.has(normalized)) continue;
+      known.add(normalized);
+      createStopWord(db, word, clock);
+      result.stopWordsCreated += 1;
+    }
   });
   return result;
 }

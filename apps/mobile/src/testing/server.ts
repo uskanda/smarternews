@@ -46,6 +46,12 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
     },
     category: (name = "Security", kind: "news" | "event" = "news") => call<Category>("category", { args: [name, kind] }),
     article: (categoryId: number, overrides: ArticleOverrides = {}) => call<number>("article", { args: [categoryId, overrides] }),
+    /** A subscribed feed, stored without fetching anything. */
+    feed: (title: string, categoryId: number | null = null) =>
+      core<{ id: number; title: string }>("insertFeed", { url: `https://${title.toLowerCase().replace(/\W+/g, "-")}.example.org/feed.xml`, title, categoryId }, "$clock"),
+    /** An article of a subscribed feed. `at` is the time it sorts by; `body` is Markdown, as the server stores it. */
+    feedArticle: (feedId: number, options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string } = {}) =>
+      core<number>("seedFeedArticle", feedId, options),
     core,
     sql: <T = unknown>(query: string, ...args: unknown[]) => call<T>("sql", { query, args }),
   };

@@ -9,6 +9,9 @@ const PATHS = {
   open: "M14 4h6v6M20 4l-9 9M10 6H5v13h13v-5",
   checkAll: "M2 13l4 4 8-9M10 16l1.5 1.5L21 8",
   settings: "M4 7h10M18 7h2M4 12h4M12 12h8M4 17h12M20 17h0M16 5v4M10 10v4M18 15v4",
+  // The entries below a category are shown (pointing down) or folded away (pointing right).
+  collapse: "M6 9l6 6 6-6",
+  expand: "M9 6l6 6-6 6",
   camera: "M4 8h3l2-3h6l2 3h3v11H4zM12 17a3.5 3.5 0 100-7 3.5 3.5 0 000 7z",
 } as const;
 

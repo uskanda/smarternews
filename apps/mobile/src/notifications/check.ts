@@ -10,7 +10,8 @@ export const CHANNEL = "articles";
 
 /** Nothing that exists on the server now is notified later. */
 export async function setBaseline(api: Api): Promise<void> {
-  const newest = await api.articles({ limit: 1, includeEnded: "true" });
+  // Only generated articles are notified, so only they are looked at.
+  const newest = await api.articles({ origin: "generated", limit: 1, includeEnded: "true" });
   await saveCheckedAt(baselineFrom(newest.items));
 }
 
@@ -26,7 +27,7 @@ export async function runCheck(): Promise<CheckResult> {
       await setBaseline(api);
       return "nothing";
     }
-    const [list, categories] = await Promise.all([api.articles({ unread: "true", minImportance: minImportanceFor(setting), limit: 50 }), api.categories()]);
+    const [list, categories] = await Promise.all([api.articles({ origin: "generated", unread: "true", minImportance: minImportanceFor(setting), limit: 50 }), api.categories()]);
     const plan = planNotifications({ setting, articles: list.items, checkedAt, categories });
     for (const entry of plan.notifications) {
       await Notifications.scheduleNotificationAsync({

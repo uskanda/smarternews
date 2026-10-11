@@ -67,12 +67,12 @@ export function ArticleScreen() {
     const { ref: list, router: to } = latest.current;
     to.push({ pathname: "/article/[id]", params: { id: String(id), list: list.key, ...listParams(list) } });
   }, []);
-  const categoryName = reader.categoryName;
+  const sourceName = reader.sourceName;
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
       <ScreenHeader
-        title={current ? reader.categoryName(current.categoryId) : ""}
+        title={current ? sourceName(current) : ""}
         left={<IconButton label="一覧へ戻る" icon="back" onPress={back} />}
         right={
           ids.length > 1 ? (
@@ -122,7 +122,7 @@ export function ArticleScreen() {
               id={id}
               active={at === position && !reader.list.isPending}
               width={width}
-              categoryName={categoryName(reader.items.find((item) => item.id === id)?.categoryId ?? -1)}
+              sourceName={sourceName(reader.items.find((item) => item.id === id) ?? { origin: "generated", feedId: null, categoryId: null })}
               onRead={onRead}
               onOpenArticle={openArticle}
             />

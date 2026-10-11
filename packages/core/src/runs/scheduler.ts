@@ -3,6 +3,7 @@ import { listCategories } from "../db/categories.ts";
 import type { Database } from "../db/database.ts";
 import { hasRunForSlot } from "../db/runs.ts";
 import { getSettings } from "../db/settings.ts";
+import { listTopics } from "../db/topics.ts";
 import { addDays, localParts, zonedToUtc } from "../time.ts";
 import type { RunQueue } from "./queue.ts";
 import { purgeExpired } from "./retention.ts";
@@ -59,6 +60,8 @@ export class Scheduler {
     for (const category of listCategories(this.#db)) {
       if (!category.enabled) continue;
       const due = latestSlot(category.schedule, timeZone, since, now);
+      // A category without an enabled topic has nothing to collect: it only holds subscribed feeds.
+      if (due && !listTopics(this.#db, category.id).some((topic) => topic.enabled)) continue;
       // A time that passed before the category existed was never missed, so it is not made up for.
       if (due && due.at > new Date(category.createdAt) && !hasRunForSlot(this.#db, category.id, due.slot)) {
         this.#queue.enqueue(category.id, "schedule", due.slot);
