@@ -42,6 +42,18 @@ describe("GoogleTranslator", () => {
     });
   });
 
+  it("keeps the number of an item of a numbered list", async () => {
+    const s = setup();
+    const output = await s.translator.translate([{ text: "1. one" }, { text: "2. two" }, { text: "10. ten\n   more" }], "ja");
+    expect(s.sent()[0]!.q[1]).toBe('<ol start="2">\n<li>two</li>\n</ol>');
+    expect(output.texts.map((text) => /^\d+\. /.exec(text)?.[0])).toEqual(["1. ", "2. ", "10. "]);
+    expect(output.texts[1]).toBe("2. 訳:two");
+
+    // The answer may come back without the attribute that carried the number.
+    const bare = setup((sent) => Response.json({ data: { translations: sent.q.map(() => ({ translatedText: "<ol><li>訳</li></ol>" })) } }));
+    expect((await bare.translator.translate([{ text: "3. three" }], "ja")).texts).toEqual(["3. 訳"]);
+  });
+
   it("sends a title as text, and reads the answer as text", async () => {
     const s = setup((sent) => Response.json({ data: { translations: sent.q.map(() => ({ translatedText: "A &amp; B の &lt;b&gt; と *星*" })) } }));
     const output = await s.translator.translate([{ text: "A & B <b> and *stars*", plain: true }], "ja");

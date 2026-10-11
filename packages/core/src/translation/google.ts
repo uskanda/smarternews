@@ -41,6 +41,22 @@ function batches(html: string[]): string[][] {
   return result;
 }
 
+const NUMBERED = /^(\d+)\. /;
+
+/**
+ * The item of a numbered list with the number its original has. A segment is one item, and the conversion
+ * counts the items of every list from one.
+ */
+function renumbered(text: string, original: string): string {
+  const number = NUMBERED.exec(original)?.[1];
+  const counted = NUMBERED.exec(text)?.[1];
+  if (number === undefined || counted === undefined || number === counted) return text;
+  const [first, ...rest] = text.slice(counted.length).split("\n");
+  // The lines that follow are indented by the width of the marker.
+  const indent = (line: string) => (line.startsWith(" ".repeat(counted.length + 2)) ? " ".repeat(number.length + 2) + line.slice(counted.length + 2) : line);
+  return [`${number}${first}`, ...rest.map(indent)].join("\n");
+}
+
 interface Answer {
   data?: { translations?: Array<{ translatedText?: unknown; detectedSourceLanguage?: unknown }> };
   error?: { message?: unknown };
@@ -68,7 +84,8 @@ export class GoogleTranslator implements Translator {
     }
     const texts = translated.map((html, index) => {
       const converted = convertContent(html, BASE_URL);
-      const text = items[index]!.plain ? converted.text : converted.markdown;
+      const item = items[index]!;
+      const text = item.plain ? converted.text : renumbered(converted.markdown, item.text);
       if (text.length === 0) throw new Error("the translation API answered with an empty translation");
       return text;
     });
