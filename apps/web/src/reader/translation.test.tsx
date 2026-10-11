@@ -74,6 +74,25 @@ describe("the title of a translated feed article", () => {
   });
 });
 
+describe("a feed article that a model translated", () => {
+  it("has no language on its original title and on its original segments, since the language is not known", async () => {
+    const { server, id, route } = seeded();
+    saveTranslatedTitle(server.db, id, { original: "Original title", title: "訳したタイトル", sourceLanguage: null });
+    saveArticleTranslation(server.db, id, { segments: [{ original: "An original.", translated: "訳。" }], method: "llm", truncated: false, now: AT });
+    renderApp({ server, route });
+    const pane = await opened();
+    await within(pane).findByText("訳。");
+
+    const title = within(pane).getByRole("heading", { level: 2 }).nextElementSibling!;
+    expect(title).toHaveTextContent("Original title");
+    expect(title).not.toHaveAttribute("lang");
+    const original = pane.querySelector(".segment-original")!;
+    expect(original).toHaveTextContent("An original.");
+    expect(original).not.toHaveAttribute("lang");
+    expect(original.querySelector("[lang]")).toBeNull();
+  });
+});
+
 describe("opening an article of a feed that translates", () => {
   it("asks for the translation, shows the original while it waits, then each translation with its original under it", async () => {
     const api = gated();
