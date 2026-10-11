@@ -62,13 +62,14 @@ function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSum
 /**
  * The translation of a feed article's content. It is asked for when an article of a feed that translates is
  * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
- * put into the article and into the lists, which show the translated title.
+ * put into the article and into the lists, which show the translated title. `active` is false for a page
+ * drawn beside the one in view: that article is not open yet, and nothing is asked for it.
  */
-export function useArticleTranslation(article: Article | undefined) {
+export function useArticleTranslation(article: Article | undefined, active: boolean) {
   const { api } = useApp();
   const client = useQueryClient();
   const id = article?.id ?? null;
-  const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  const wanted = active && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
     queryKey: ["article-translation", id],
     queryFn: async () => {

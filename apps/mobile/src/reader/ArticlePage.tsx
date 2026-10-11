@@ -71,7 +71,7 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
 
 export interface ArticlePageProps {
   id: number;
-  /** True for the page the user is looking at. Only that page marks its article as read. */
+  /** True for the page the user is looking at. Only that page marks its article as read and asks for its translation. */
   active: boolean;
   width: number;
   /** The name of the article's category or feed when the list knows it; the page looks it up itself otherwise. */
@@ -89,7 +89,8 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
-  const translating = useArticleTranslation(article);
+  // The pager draws the neighbours of the page in view too: an article is translated once the user is on it.
+  const translating = useArticleTranslation(article, active);
 
   // Looking at an unread article marks it as read, once: putting it back to unread must hold while it is open.
   const marked = useRef(false);

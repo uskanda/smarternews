@@ -1,5 +1,6 @@
-import { screen, userEvent, waitFor } from "@testing-library/react-native";
+import { fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
 import { renderApp } from "../testing/app";
+import { eventually } from "../testing/queries";
 import { makeServer } from "../testing/server";
 
 const WAITING = "翻訳しています。";
@@ -140,5 +141,35 @@ describe("opening an article of a feed that translates", () => {
     expect(await screen.findByText("First words.")).toBeOnTheScreen();
     expect(screen.queryByText(WAITING)).toBeNull();
     expect(screen.queryByText(FAILED)).toBeNull();
+  });
+});
+
+describe("the articles beside the one that is open", () => {
+  const WIDTH = 750; // the window of the test device
+
+  it("are translated when the user comes to them, not before", async () => {
+    const server = await makeServer();
+    const blog = await server.feed("Blog");
+    await server.core("updateFeed", blog.id, { translate: true }, "$clock");
+    const ids: number[] = [];
+    for (const [title, at] of [["Newest", "11"], ["Middle", "10"], ["Oldest", "09"]] as const)
+      ids.push(await server.feedArticle(blog.id, { title, body: `${title} words.`, at: `2026-03-01T${at}:00:00.000Z` }));
+    const translated = async () => (await server.sql<Array<{ id: number }>>("SELECT article_id AS id FROM article_translations ORDER BY article_id")).map((row) => row.id);
+    await renderApp({ server, url: `/list/feed-${blog.id}` });
+    await press(/^Newest/);
+
+    // The pager draws the next article beside the open one, and that one waits.
+    expect(await screen.findByText("訳:Newest words.")).toBeOnTheScreen();
+    expect(await screen.findByText("Middle words.")).toBeOnTheScreen();
+    await waitFor(() => expect(screen.queryByText(WAITING)).toBeNull());
+    expect(await translated()).toEqual([ids[0]]);
+
+    const pager = screen.getByTestId("article-pager");
+    const nativeEvent = { contentOffset: { x: WIDTH, y: 0 }, contentSize: { width: WIDTH * 3, height: 1334 }, layoutMeasurement: { width: WIDTH, height: 1334 } };
+    await fireEvent.scroll(pager, { nativeEvent });
+    await fireEvent(pager, "momentumScrollEnd", { nativeEvent });
+
+    expect(await screen.findByText("訳:Middle words.")).toBeOnTheScreen();
+    await eventually(async () => expect(await translated()).toEqual([ids[0], ids[1]]));
   });
 });
