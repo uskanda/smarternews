@@ -1,6 +1,6 @@
 # Model providers
 
-smarternews calls a language model for five tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
+smarternews calls a language model for six tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
 
 | Task | What the model does | When it runs |
 |---|---|---|
@@ -9,6 +9,7 @@ smarternews calls a language model for five tasks. A provider is a model you con
 | `judge` | Decides which candidates are relevant, and how important | Once per 30 new candidates |
 | `cluster` | Groups candidates that report the same story | Once per run that has relevant candidates |
 | `write` | Writes the article for one story | Once per story |
+| `summarize` | Summarises one article of a subscribed feed | Once per article of a feed that has summaries switched on |
 
 Providers and assignments live in `~/.config/smarternews/config.yaml`. The server reads the file at start-up and refuses to start when an assignment names a provider that is not configured. [examples/config.example.yaml](../examples/config.example.yaml) lists every key.
 
@@ -79,6 +80,20 @@ tasks:
   search: smart
 ```
 
+## Summaries of feed articles
+
+`summarize` runs only for the subscribed feeds you switched "自動で要約する" on for, once for each article such a feed delivers afterwards. It reads the article's page, or what the feed delivered when the page cannot be read, and writes up to 400 characters in the output language. It uses no tools.
+
+A task that is not listed under `tasks` uses `default`, with this one exception: `summarize` uses the provider named `fast` when there is one. Summaries are many and simple, and `default` is usually the expensive model. Without a provider of that name, `summarize` uses `default` like the others. To choose yourself, assign it:
+
+```yaml
+tasks:
+  default: smart
+  summarize: fast
+```
+
+Summaries have their own allowance, `limits.summariesPerDay` (100 by default), and are not counted towards `limits.llmCallsPerDay`. With the `claude-cli` adapter both draw on the same subscription, so the most a day can use is the sum of the two.
+
 ## Mixing providers
 
 Assignments are per task, so a cheap model can do the high-volume work. `judge` reads up to 30 short candidates per call and `cluster` reads headlines, while `write` produces the text you read. The default configuration therefore runs `judge` and `cluster` on `haiku` and the other tasks on `sonnet`.
@@ -87,7 +102,7 @@ Assignments are per task, so a cheap model can do the high-volume work. `judge` 
 
 The server validates every answer against the task's schema. An answer that does not match is requested once more with the same input. A second mismatch fails the task: nothing is stored, and the run history records the failure.
 
-A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls; see the README.
+A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, and `limits.summariesPerDay` those of summaries; see the README.
 
 ## Text from the web is data
 

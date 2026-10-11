@@ -51,6 +51,7 @@ categories:
       - url: https://www.typescriptlang.org/feed.xml
         title: TypeScript blog
         intervalMinutes: 360
+        autoSummarize: true   # a model summarises the articles this feed delivers from now on
   - slug: local-events
     name: Local events
     kind: event
