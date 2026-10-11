@@ -1,11 +1,11 @@
 import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
-import type { Article } from "@smarternews/core/api";
+import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { memo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useArticle, useCategories, useFeeds, useTimeZone } from "../api/queries";
+import { useArticle, useArticleTranslation, useCategories, useFeeds, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
-import { ErrorNotice, Loading } from "../ui/controls";
+import { Button, ErrorNotice, Loading } from "../ui/controls";
 import { Txt } from "../ui/Txt";
 import { Badge } from "./ArticleRow";
 import { Markdown } from "./Markdown";
@@ -38,6 +38,37 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
   );
 }
 
+/**
+ * The content of a translated feed article: segment by segment, the translation as the text to read and the
+ * original right under it, smaller and quieter. The pairs come from the server as they are shown. A segment
+ * without a translation, and one whose translation is the same text, is shown once as content.
+ */
+function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
+  const theme = useTheme();
+  const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
+  return (
+    <View style={{ gap: theme.spacing.lg }}>
+      {translation.segments.map((segment, index) => (
+        <View key={index} style={{ gap: theme.spacing.lg }}>
+          {segment.translated !== null && segment.translated.trim() !== segment.original.trim() ? (
+            <View style={{ gap: theme.spacing.xs }}>
+              <Markdown text={segment.translated} images />
+              <Markdown text={segment.original} images quiet />
+            </View>
+          ) : (
+            <Markdown text={segment.original} images />
+          )}
+          {translation.truncated && index === lastTranslated ? (
+            <Txt variant="label-sm" color="on-surface-muted">
+              長い記事のため、ここから先は翻訳していません。
+            </Txt>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export interface ArticlePageProps {
   id: number;
   /** True for the page the user is looking at. Only that page marks its article as read. */
@@ -58,6 +89,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
+  const translating = useArticleTranslation(article);
 
   // Looking at an unread article marks it as read, once: putting it back to unread must hold while it is open.
   const marked = useRef(false);
@@ -119,9 +151,17 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           </Txt>
         ))}
       </View>
-      <Txt variant="headline-lg" heading>
-        {article.title}
-      </Txt>
+      <View style={{ gap: theme.spacing.xs }}>
+        <Txt variant="headline-lg" heading>
+          {article.translatedTitle ?? article.title}
+        </Txt>
+        {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
+          // The title as the site wrote it, read out in its own language where the system can.
+          <Txt testID="original-title" variant="body-md" color="on-surface-muted" accessibilityLanguage={article.sourceLanguage ?? undefined}>
+            {article.title}
+          </Txt>
+        ) : null}
+      </View>
       {article.unconfirmed ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
           <Badge tone="warning">未確認</Badge>
@@ -171,7 +211,19 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           AIによる要約を作っています。
         </Txt>
       ) : null}
-      <Markdown text={article.body} images={delivered} />
+      {translating.isFetching ? (
+        <Txt variant="label-sm" color="on-surface-muted" accessibilityLiveRegion="polite">
+          翻訳しています。
+        </Txt>
+      ) : translating.isError ? (
+        <View style={{ gap: theme.spacing.sm, alignItems: "flex-start" }}>
+          <Txt variant="body-md" accessibilityLiveRegion="polite">
+            翻訳できませんでした。原文を表示しています。
+          </Txt>
+          <Button label="翻訳をやり直す" onPress={() => void translating.refetch()} />
+        </View>
+      ) : null}
+      {article.translation ? <TranslatedBody translation={article.translation} /> : <Markdown text={article.body} images={delivered} />}
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">

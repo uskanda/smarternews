@@ -28,7 +28,7 @@ export interface ArticleOverrides {
 export type TestServer = Awaited<ReturnType<typeof makeServer>>;
 
 /** A server set to UTC, so that expected times can be read off the fixtures. */
-export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { webSearch?: boolean } = {}) {
+export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { webSearch?: boolean; translation?: "none" | "gated" } = {}) {
   const { id, url, apiToken } = await control<{ id: string; url: string; apiToken: string }>({ op: "create", start, ...options });
   let now = new Date(start).getTime();
   const call = <T>(op: string, extra: Record<string, unknown> = {}) => control<T>({ op, id, ...extra });
@@ -53,6 +53,8 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
     feedArticle: (feedId: number, options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string } = {}) =>
       core<number>("seedFeedArticle", feedId, options),
     core,
+    /** Lets the translation API of a server made with `translation: "gated"` answer. */
+    releaseTranslation: () => call<null>("releaseTranslation"),
     sql: <T = unknown>(query: string, ...args: unknown[]) => call<T>("sql", { query, args }),
   };
 }

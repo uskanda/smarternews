@@ -107,6 +107,7 @@ function toArticle(db: Database, row: Row): Article {
     autoSummaryPending:
       autoSummary === null && db.prepare(`SELECT 1 FROM articles a WHERE a.id = ? AND ${WAITING_FOR_SUMMARY}`).get(id) !== undefined,
     translatable: db.prepare("SELECT 1 FROM feeds WHERE id = ? AND translate = 1").get(numOrNull(row.feed_id)) !== undefined,
+    sourceLanguage: strOrNull(row.source_language),
     translation: findArticleTranslation(db, id, { translatedTitle: strOrNull(row.translated_title), sourceLanguage: strOrNull(row.source_language) }),
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),

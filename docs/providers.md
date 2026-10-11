@@ -10,6 +10,7 @@ smarternews calls a language model for six tasks. A provider is a model you conf
 | `cluster` | Groups candidates that report the same story | Once per run that has relevant candidates |
 | `write` | Writes the article for one story | Once per story |
 | `summarize` | Summarises one article of a subscribed feed | Once per article of a feed that has summaries switched on |
+| `translate` | Translates the title and the content of one article of a subscribed feed | When an article of a feed that translates is opened and the translation API cannot be used; once per 8,000 characters |
 
 Providers and assignments live in `~/.config/smarternews/config.yaml`. The server reads the file at start-up and refuses to start when an assignment names a provider that is not configured. [examples/config.example.yaml](../examples/config.example.yaml) lists every key.
 
@@ -93,6 +94,24 @@ tasks:
 ```
 
 Summaries have their own allowance, `limits.summariesPerDay` (100 by default), and are not counted towards `limits.llmCallsPerDay`. With the `claude-cli` adapter both draw on the same subscription, so the most a day can use is the sum of the two.
+
+## Translation of feed articles
+
+A subscribed feed with "翻訳する" switched on has its articles translated into the output language: the titles when the articles are stored, the content when an article is first opened. Two services can do this, and both receive the title and the content of those articles, and nothing else.
+
+Google's Cloud Translation API (the basic edition, v2) is used while a key is set and the month has room. Create a key for the API in a Google Cloud project, put it into an environment variable of the server, and name that variable in `config.yaml`. The key itself is written into no file of smarternews, is not stored in the database, and is in no log line and no API answer.
+
+```yaml
+translation:
+  google:
+    apiKeyEnv: GOOGLE_TRANSLATE_API_KEY   # the name of the variable, not the key
+  monthlyChars: 450000                    # no more than this is sent to Google in one month
+  maxCharsPerArticle: 20000               # of one article's content, this much is translated
+```
+
+The server counts every character it sends, tags included, per month in the configured time zone, and counts before it sends. A request that would pass `monthlyChars` is not sent. The default of 450,000 lies below the 500,000 characters a month that Google does not bill at the time of writing; check the current terms before you raise it. Google does not tell how much of the allowance is left, so the server's own count is what keeps the bill at zero. `GET /api/v1/translation` and the page of the subscribed feeds show the count.
+
+The `translate` task takes over when no key is set, when the month has reached its limit, and when the API fails. It runs only when a reader opens an article, never while feeds are fetched, so without a key the titles in the lists stay in the original language until an article is opened. Like `summarize`, it uses the provider named `fast` when there is one and `tasks` does not assign it. Its calls count towards `limits.llmCallsPerDay`. It receives numbered passages and must answer with the same numbers and the same count; an answer that does not, or that adds a link the passage does not have, is discarded and nothing is stored.
 
 ## Mixing providers
 

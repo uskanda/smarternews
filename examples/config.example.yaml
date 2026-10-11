@@ -22,12 +22,20 @@ providers:
   #   apiKeyEnv: LOCAL_LLM_API_KEY     # name of an environment variable; the key never goes in this file
   #   structuredOutput: json_schema    # or "prompt" for servers without response_format support
 
-# Which provider runs each task. A task that is not listed uses `default`; `summarize` uses `fast` when it is not listed.
+# Which provider runs each task. A task that is not listed uses `default`; `summarize` and `translate` use `fast` when they are not listed.
 tasks:
   default: smart
   judge: fast
   cluster: fast
   summarize: fast         # summaries of the subscribed feeds that have them switched on
+  translate: fast         # translation of feed articles when the translation API cannot be used
+
+# Translation of the subscribed feeds that have it switched on. Without `google`, the model translates.
+translation:
+  google:
+    apiKeyEnv: GOOGLE_TRANSLATE_API_KEY   # name of the environment variable that holds the key; never the key itself
+  monthlyChars: 450000    # characters sent to Google per month; beyond it the model translates
+  maxCharsPerArticle: 20000   # of one article's content, this much is translated
 
 limits:
   llmCallsPerRun: 40      # a run stops, and is recorded as stopped_by_limit, when it reaches this

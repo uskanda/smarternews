@@ -29,6 +29,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   autoSummary: null,
   autoSummaryPending: false,
   translatable: false,
+  sourceLanguage: null,
   translation: null,
   snippetOnly: false,
   previousArticleId: null,

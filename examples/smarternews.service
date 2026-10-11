@@ -19,6 +19,10 @@ Restart=on-failure
 RestartSec=30
 # The default provider runs the `claude` command, so it must be on this PATH.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Optional: the key of the translation API, when config.yaml names GOOGLE_TRANSLATE_API_KEY under
+# translation.google.apiKeyEnv. Keep the key out of this unit: put the line GOOGLE_TRANSLATE_API_KEY=<key>
+# into a file only you can read (chmod 600). The "-" lets the service start without the file.
+EnvironmentFile=-%h/.config/smarternews/env
 
 [Install]
 WantedBy=default.target

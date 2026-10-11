@@ -224,6 +224,8 @@ export const articleSchema = articleSummarySchema.extend({
   autoSummaryPending: z.boolean(),
   /** True for an article of a feed that translates. Only such an article can be translated. */
   translatable: z.boolean(),
+  /** The language of the original as the translation API found it. Null when it is not known. */
+  sourceLanguage: z.string().nullable(),
   /** The stored translation of the content. Null until the article is translated. */
   translation: articleTranslationSchema.nullable(),
   snippetOnly: z.boolean(),

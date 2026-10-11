@@ -59,6 +59,30 @@ function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSum
   client.setQueryData<Article>(["article", id], (article) => (article ? { ...article, ...patch } : article));
 }
 
+/**
+ * The translation of a feed article's content. It is asked for when an article of a feed that translates is
+ * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
+ * put into the article and into the lists, which show the translated title.
+ */
+export function useArticleTranslation(article: Article | undefined) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const id = article?.id ?? null;
+  const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  return useQuery({
+    queryKey: ["article-translation", id],
+    queryFn: async () => {
+      const translation = await api.translateArticle(id!);
+      patchArticle(client, id!, { translatedTitle: translation.translatedTitle });
+      client.setQueryData<Article>(["article", id], (current) => (current ? { ...current, translation, sourceLanguage: translation.sourceLanguage } : current));
+      return translation;
+    },
+    enabled: wanted,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
 /** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */
 export function useArticleFlags() {
   const { api } = useApp();

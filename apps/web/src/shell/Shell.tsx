@@ -280,7 +280,8 @@ export function Shell() {
   useHotkeys({ "?": () => setHelpOpen(true) });
   // The reader fetches the same article, so this reads it from the cache.
   const articleId = Number(useParams().articleId);
-  usePageTitle(useCounts().data?.unread, useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data?.title);
+  const openArticle = useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data;
+  usePageTitle(useCounts().data?.unread, openArticle?.translatedTitle ?? openArticle?.title);
 
   return (
     <div className="flex h-full">
