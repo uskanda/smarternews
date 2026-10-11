@@ -2,7 +2,7 @@ import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@
 import type { Article } from "@smarternews/core/api";
 import { memo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useArticle, useCategories, useTimeZone } from "../api/queries";
+import { useArticle, useCategories, useFeeds, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
 import { ErrorNotice, Loading } from "../ui/controls";
@@ -43,17 +43,18 @@ export interface ArticlePageProps {
   /** True for the page the user is looking at. Only that page marks its article as read. */
   active: boolean;
   width: number;
-  /** The name of the article's category when the list knows it; the page looks it up itself otherwise. */
-  categoryName: string;
+  /** The name of the article's category or feed when the list knows it; the page looks it up itself otherwise. */
+  sourceName: string;
   onRead: (article: Article) => void;
   onOpenArticle: (id: number) => void;
 }
 
 /** One article: what the story is, what it means for the reader, the text, and where it came from. */
-export const ArticlePage = memo(function ArticlePage({ id, active, width, categoryName, onRead, onOpenArticle }: ArticlePageProps) {
+export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle }: ArticlePageProps) {
   const theme = useTheme();
   const timeZone = useTimeZone();
   const categories = useCategories();
+  const feeds = useFeeds();
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
@@ -89,13 +90,24 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, catego
     );
   }
 
-  const meta = [
-    categoryName || (categories.data?.find((entry) => entry.id === article.categoryId)?.name ?? ""),
-    `${formatFull(article.updatedAt, timeZone)} に更新`,
-    `重要度 ${article.importance}`,
-    article.revision > 0 ? `更新 ${article.revision}回` : null,
-    article.starred ? "スター" : null,
-  ].filter((part): part is string => Boolean(part));
+  // A feed article is what another site delivered: no importance, no sources; the way to its page instead.
+  const delivered = article.origin === "feed";
+  const meta = (
+    delivered
+      ? [
+          sourceName || (feeds.data?.find((entry) => entry.id === article.feedId)?.title ?? ""),
+          article.author,
+          `${formatFull(article.updatedAt, timeZone)} に公開`,
+          article.starred ? "スター" : null,
+        ]
+      : [
+          sourceName || (categories.data?.find((entry) => entry.id === article.categoryId)?.name ?? ""),
+          `${formatFull(article.updatedAt, timeZone)} に更新`,
+          `重要度 ${article.importance}`,
+          article.revision > 0 ? `更新 ${article.revision}回` : null,
+          article.starred ? "スター" : null,
+        ]
+  ).filter((part): part is string => Boolean(part));
 
   return (
     <ScrollView accessibilityLabel="記事" style={{ width }} contentContainerStyle={{ gap: theme.spacing.lg, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.xl }}>
@@ -127,7 +139,18 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, catego
         </View>
       ) : null}
       {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
-      <Markdown text={article.body} />
+      {delivered && article.primaryUrl ? (
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => void openSource(article.primaryUrl!)}
+          style={{ minHeight: theme.spacing["touch-android"], justifyContent: "center", alignSelf: "flex-start" }}
+        >
+          <Txt variant="body-md" color="primary" style={{ textDecorationLine: "underline" }}>
+            元のページを開く
+          </Txt>
+        </Pressable>
+      ) : null}
+      <Markdown text={article.body} images={delivered} />
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">
@@ -140,6 +163,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, catego
           </Pressable>
         </View>
       ) : null}
+      {delivered ? null : (
       <View style={{ gap: theme.spacing.xs }}>
         <Txt variant="label-sm" color="on-surface-muted">
           出典
@@ -168,6 +192,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, catego
           </Pressable>
         ))}
       </View>
+      )}
     </ScrollView>
   );
 });

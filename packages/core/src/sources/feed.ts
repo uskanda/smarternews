@@ -84,6 +84,120 @@ export function parseFeed(xml: string): ParsedFeed {
   throw new Error("the document is not a feed");
 }
 
+// ---- subscribed feeds: the same documents, read in full -----------------------------------------------
+
+export interface SubscriptionItem extends FeedItem {
+  /** What the feed says identifies the item: an RSS guid, an Atom id, an rdf:about. Null when it has none. */
+  key: string | null;
+  author: string | null;
+  /** The content as the feed delivers it. Untrusted HTML: convert it before storing or showing it. */
+  contentHtml: string;
+}
+
+export interface ParsedSubscription {
+  title: string;
+  /** The page the feed belongs to. */
+  siteUrl: string | null;
+  items: SubscriptionItem[];
+}
+
+// Atom content of type "xhtml" holds elements, whose order among text the object form above loses. A second
+// parser leaves these elements unparsed, so their source text is available.
+const rawContentParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "@_",
+  textNodeName: "#text",
+  parseTagValue: false,
+  processEntities: false,
+  stopNodes: ["feed.entry.content", "feed.entry.summary"],
+  isArray: (name) => name === "entry",
+});
+
+function orNull(text: string): string | null {
+  const trimmed = text.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** "editor@example.org (Sam Editor)" names Sam Editor; anything else is taken as it is. */
+function rssAuthor(item: Node): string | null {
+  const creator = orNull(plainText(textOf(item["dc:creator"]), 200));
+  if (creator) return creator;
+  const author = plainText(textOf(item.author), 200);
+  return orNull(/\(([^)]+)\)\s*$/.exec(author)?.[1] ?? author);
+}
+
+function atomAuthor(entry: Node): string | null {
+  const first = Array.isArray(entry.author) ? entry.author[0] : entry.author;
+  if (!first || typeof first !== "object") return orNull(plainText(textOf(first), 200));
+  return orNull(plainText(textOf((first as Node).name), 200));
+}
+
+function rssSubscriptionItem(item: Node): SubscriptionItem {
+  return {
+    ...rssItem(item),
+    key: orNull(textOf(item.guid)) ?? orNull(String(item["@_rdf:about"] ?? "")),
+    author: rssAuthor(item),
+    contentHtml: (textOf(item["content:encoded"]) || textOf(item.description)).trim(),
+  };
+}
+
+function isXhtml(node: unknown): boolean {
+  return !!node && typeof node === "object" && (node as Node)["@_type"] === "xhtml";
+}
+
+function atomContent(entry: Node, raw: Node | undefined): string {
+  for (const name of ["content", "summary"] as const) {
+    if (isXhtml(entry[name])) return textOf(raw?.[name]).trim();
+    const text = textOf(entry[name]).trim();
+    if (text.length > 0) return text;
+  }
+  return "";
+}
+
+function siteLink(link: unknown, parse: (link: unknown) => string): string | null {
+  const url = parse(link);
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/** Reads RSS 2.0, RSS 1.0 (RDF) and Atom with everything a reader shows: identifier, author and content. */
+export function parseSubscription(xml: string): ParsedSubscription {
+  const root = parseXml(xml);
+  const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
+  if (rss) {
+    return {
+      title: plainText(textOf(rss.title), 200),
+      siteUrl: siteLink(rss.link, rssLink),
+      items: ((rss.item as Node[] | undefined) ?? []).map(rssSubscriptionItem),
+    };
+  }
+  const rdf = root["rdf:RDF"] as Node | undefined;
+  if (rdf) {
+    const channel = rdf.channel as Node | undefined;
+    return {
+      title: plainText(textOf(channel?.title), 200),
+      siteUrl: siteLink(channel?.link, rssLink),
+      items: ((rdf.item as Node[] | undefined) ?? []).map(rssSubscriptionItem),
+    };
+  }
+  const atom = root.feed as Node | undefined;
+  if (atom) {
+    const entries = (atom.entry as Node[] | undefined) ?? [];
+    const needsRaw = entries.some((entry) => isXhtml(entry.content) || isXhtml(entry.summary));
+    const rawEntries = needsRaw ? ((((rawContentParser.parse(xml) as Node).feed as Node | undefined)?.entry as Node[] | undefined) ?? []) : [];
+    return {
+      title: plainText(textOf(atom.title), 200),
+      siteUrl: siteLink(atom.link, atomLink),
+      items: entries.map((entry, index) => ({
+        ...atomEntry(entry),
+        key: orNull(textOf(entry.id)),
+        author: atomAuthor(entry),
+        contentHtml: atomContent(entry, rawEntries[index]),
+      })),
+    };
+  }
+  throw new Error("the document is not a feed");
+}
+
 export async function fetchXml(fetcher: Fetcher, url: string): Promise<string> {
   const response = await fetcher.get(url, { headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" } });
   if (response.status < 200 || response.status >= 300) throw new Error(`HTTP status ${response.status}: ${url}`);

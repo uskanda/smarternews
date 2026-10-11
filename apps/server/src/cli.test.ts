@@ -36,6 +36,52 @@ describe("smarternews token", () => {
   });
 });
 
+describe("smarternews opml-import and opml-export", () => {
+  const OPML = `<?xml version="1.0"?><opml version="2.0"><body>
+    <outline text="Tools"><outline type="rss" text="A" xmlUrl="https://a.example.org/feed.xml"/></outline>
+    <outline type="rss" text="B" xmlUrl="https://b.example.org/feed.xml"/>
+  </body></opml>`;
+
+  it("loads a document, then prints the subscribed feeds as OPML", async () => {
+    const { run, root: dir } = sandbox();
+    const file = join(dir, "feeds.opml");
+    writeFileSync(file, OPML);
+
+    const imported = await run("opml-import", file);
+    expect(imported.code).toBe(0);
+    expect(imported.out).toBe("2 feeds registered, 0 skipped; 1 categories created\n");
+
+    const exported = await run("opml-export");
+    expect(exported.code).toBe(0);
+    expect(exported.out).toContain('<opml version="2.0">');
+    expect(exported.out).toContain('xmlUrl="https://b.example.org/feed.xml"');
+  });
+
+  it("writes the document to a file when given a path", async () => {
+    const { run, root: dir } = sandbox();
+    const source = join(dir, "feeds.opml");
+    writeFileSync(source, OPML);
+    await run("opml-import", source);
+    const target = join(dir, "out.opml");
+    expect((await run("opml-export", target)).code).toBe(0);
+    expect(readFileSync(target, "utf8")).toContain("a.example.org");
+  });
+
+  it("fails without changing anything when the file is not OPML", async () => {
+    const { run, root: dir } = sandbox();
+    const file = join(dir, "bad.opml");
+    writeFileSync(file, "<html></html>");
+    const result = await run("opml-import", file);
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/not OPML/);
+  });
+
+  it("asks for the file name", async () => {
+    const { run } = sandbox();
+    expect((await run("opml-import")).code).toBe(2);
+  });
+});
+
 describe("smarternews import and export", () => {
   it("loads a settings file and writes the same categories back", async () => {
     const { run } = sandbox();

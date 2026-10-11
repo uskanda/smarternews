@@ -22,6 +22,22 @@ const STAGE_LABEL: Record<string, string> = {
   run: "実行全体",
 };
 
+/**
+ * Why a fetch of a subscribed feed failed, in the app's language. The server records the reason in English;
+ * the kinds it produces are known, and anything else is shown as it is.
+ */
+export function feedErrorLabel(error: string): string {
+  const status = /HTTP status (\d{3})/.exec(error)?.[1];
+  if (status) return `サイトがエラーを返しました（HTTP ${status}）`;
+  if (/timed out/.test(error)) return "時間内に応答がありませんでした";
+  if (/not a feed/.test(error)) return "フィードとして読めない内容が返りました";
+  if (/destination not allowed/.test(error)) return "取得先の制限に当たるため、取得していません";
+  if (/larger than/.test(error)) return "応答が大きすぎました";
+  if (/redirect/.test(error)) return "転送が繰り返されました";
+  if (/request failed/.test(error)) return "サイトに接続できませんでした";
+  return error;
+}
+
 export function stageLabel(stage: string): string {
   return STAGE_LABEL[stage] ?? stage;
 }

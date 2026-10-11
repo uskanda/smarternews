@@ -54,14 +54,14 @@ describe("choosing a view", () => {
 
   it("shows the unread articles of the category that is chosen", async () => {
     const { server } = await setup();
-    await renderApp({ server, url: "/list/c-category-a" });
+    await renderApp({ server, url: "/list/category-1" });
 
     await waitFor(() => expect(rowTitles()).toEqual(["A unread"]));
   });
 
   it("adds the read articles when asked to", async () => {
     const { server } = await setup();
-    await renderApp({ server, url: "/list/c-category-a" });
+    await renderApp({ server, url: "/list/category-1" });
     await screen.findByText("A unread");
 
     await userEvent.setup().press(screen.getByRole("switch", { name: "既読も表示" }));
@@ -79,7 +79,7 @@ describe("choosing a view", () => {
 
   it("says so when the category does not exist", async () => {
     const { server } = await setup();
-    await renderApp({ server, url: "/list/c-gone" });
+    await renderApp({ server, url: "/list/category-999" });
 
     expect(await screen.findByText("このカテゴリはありません。")).toBeOnTheScreen();
   });

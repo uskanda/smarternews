@@ -9,6 +9,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as core from "@smarternews/core";
+import * as coreTesting from "@smarternews/core/testing";
 import { API_TOKEN, FEED_TOKEN, testServer } from "./testing.ts";
 
 type Instance = ReturnType<typeof testServer>;
@@ -60,8 +61,10 @@ async function run(command: Command): Promise<unknown> {
       server.clock.advance(args[0] as number);
       return server.clock().toISOString();
     case "core": {
-      // Any function of the core package that takes the database first. "$clock" stands for the server's clock.
-      const fn = (core as unknown as Record<string, unknown>)[command.name ?? ""];
+      // Any function of the core package, or of its test helpers, that takes the database first. "$clock"
+      // stands for the server's clock.
+      const name = command.name ?? "";
+      const fn = (core as unknown as Record<string, unknown>)[name] ?? (coreTesting as unknown as Record<string, unknown>)[name];
       if (typeof fn !== "function") throw new Error(`the core package has no function ${command.name}`);
       return (fn as (...all: unknown[]) => unknown)(server.db, ...args.map((arg) => (arg === "$clock" ? server.clock : arg))) ?? null;
     }

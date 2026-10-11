@@ -11,18 +11,20 @@ export function ArticleRow({
   article,
   to,
   selected,
-  categoryName,
+  sourceName,
   timeZone,
   now,
 }: {
   article: ArticleSummary;
   to: string;
   selected: boolean;
-  categoryName: string;
+  /** The category of a generated article, the feed of a feed article. */
+  sourceName: string;
   timeZone: string;
   now: Date;
 }) {
-  const marked = article.importance >= 4;
+  // A feed article has no importance, and so no mark.
+  const marked = (article.importance ?? 0) >= 4;
   return (
     <li
       data-read={article.isRead}
@@ -44,9 +46,9 @@ export function ArticleRow({
         </span>
         <span className="line-clamp-1 type-body-md text-on-surface-muted">{article.summary}</span>
         <span className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
-          <span>{categoryName}</span>
+          <span>{sourceName}</span>
           <span className="tabular-nums">{formatShort(article.updatedAt, timeZone, now)}</span>
-          <span>出典{article.refCount}件</span>
+          {article.origin === "generated" ? <span>出典{article.refCount}件</span> : null}
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
           {article.starred ? <span>スター</span> : null}

@@ -1,7 +1,8 @@
 import type { Category, CategoryCreate, CategoryUpdate } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
-import type { Database } from "./database.ts";
+import { transaction, type Database } from "./database.ts";
+import { releaseFeedsOfCategory } from "./feeds.ts";
 import { bool, json, num, numOrNull, str, type Row } from "./rows.ts";
 
 const DEFAULTS = {
@@ -123,8 +124,14 @@ export function updateCategory(db: Database, id: number, patch: CategoryUpdate):
   return getCategory(db, id);
 }
 
-/** Deletes the category. Its topics, articles, candidates and runs go with it (ON DELETE CASCADE). */
+/**
+ * Deletes the category. Its topics, generated articles, candidates and runs go with it (ON DELETE CASCADE).
+ * Its subscribed feeds stay, with their articles, and belong to no category afterwards.
+ */
 export function deleteCategory(db: Database, id: number): void {
   getCategory(db, id);
-  db.prepare("DELETE FROM categories WHERE id = ?").run(id);
+  transaction(db, () => {
+    releaseFeedsOfCategory(db, id);
+    db.prepare("DELETE FROM categories WHERE id = ?").run(id);
+  });
 }

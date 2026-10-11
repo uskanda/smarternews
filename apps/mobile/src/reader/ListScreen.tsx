@@ -18,13 +18,13 @@ import { ArticleRow } from "./ArticleRow";
 import { EventRow } from "./EventRow";
 import { listParams, useReaderList, type View as ListView } from "./useReaderList";
 
-function emptyText(view: ListView, hasCategories: boolean, isEvents: boolean): string {
-  if (!hasCategories) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
+function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): string {
+  if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
   if (isEvents) return "これから開催されるイベントはありません。";
   if (view === "unread") return "未読の記事はありません。";
   if (view === "starred") return "スターを付けた記事はありません。";
-  if (view === "category") return "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
-  return "記事はまだありません。カテゴリを実行すると、ここに並びます。";
+  if (view === "all") return "記事はまだありません。カテゴリを実行すると、ここに並びます。";
+  return "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
 }
 
 /** A list of articles for one view. Opening a row goes to the article; the drawer changes the view. */
@@ -93,7 +93,7 @@ export function ListScreen() {
     // "Before" is just after the newest article on screen, so one that arrives later stays unread.
     const before = new Date(new Date(newest).getTime() + 1).toISOString();
     try {
-      const result = await api.markRead({ before, categoryId: reader.category?.id, ...(ref.importantOnly ? { minImportance: 4 } : {}) });
+      const result = await api.markRead({ before, ...reader.scope, ...(reader.importantOnly ? { minImportance: 4 } : {}) });
       await reader.refresh();
       toast({
         message: `${result.updated}件を既読にしました`,
@@ -105,7 +105,7 @@ export function ListScreen() {
     }
   }
 
-  const canMarkAll = (view === "unread" || view === "category") && !isEvents && fetched.some((item) => !item.isRead);
+  const canMarkAll = (view === "unread" || reader.readToggle) && fetched.some((item) => !item.isRead);
   const header = (
     <ScreenHeader
       title={reader.title}
@@ -119,7 +119,7 @@ export function ListScreen() {
       <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
         {header}
         <Txt variant="body-md" style={{ padding: theme.spacing.lg }}>
-          このカテゴリはありません。
+          {reader.missingText}
         </Txt>
       </View>
     );
@@ -131,7 +131,7 @@ export function ListScreen() {
       {list.isPending && !list.isError ? <Loading /> : null}
       {list.isSuccess && items.length === 0 ? (
         <Txt variant="body-md" color="on-surface-muted" style={{ padding: theme.spacing.lg }}>
-          {emptyText(view, reader.categories.length > 0, isEvents)}
+          {emptyText(view, reader.hasSources, isEvents)}
         </Txt>
       ) : null}
     </View>
@@ -185,7 +185,7 @@ export function ListScreen() {
           renderItem={({ item }) => (
             <ArticleRow
               article={item}
-              categoryName={reader.categoryName(item.categoryId)}
+              sourceName={reader.sourceName(item)}
               timeZone={timeZone}
               now={minute}
               onOpen={open}
@@ -196,8 +196,8 @@ export function ListScreen() {
           ListHeaderComponent={
             <View>
               <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: theme.spacing.lg, paddingHorizontal: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.outline }}>
-                {view === "category" ? <Toggle label="既読も表示" value={ref.includeRead} onChange={(on) => setFilter("read", "1", on)} /> : null}
-                <Toggle label="重要度4以上だけ" value={ref.importantOnly} onChange={(on) => setFilter("min", "4", on)} />
+                {reader.readToggle ? <Toggle label="既読も表示" value={ref.includeRead} onChange={(on) => setFilter("read", "1", on)} /> : null}
+                {reader.importanceFilter ? <Toggle label="重要度4以上だけ" value={ref.importantOnly} onChange={(on) => setFilter("min", "4", on)} /> : null}
               </View>
               {status}
             </View>
@@ -227,7 +227,7 @@ export function ListScreen() {
             />
             {menuFor.primaryUrl ? (
               <Button
-                label="出典を開く"
+                label={menuFor.origin === "feed" ? "元のページを開く" : "出典を開く"}
                 onPress={() => {
                   void openSource(menuFor.primaryUrl!);
                   setMenuFor(null);

@@ -1,6 +1,10 @@
 # Example settings file. Load it with:
 #   node apps/server/src/main.ts import examples/settings.example.yaml
-# Everything here is sample data: replace the reader, the categories and the topics with your own.
+# Everything here is sample data: replace the reader, the categories, the topics and the feeds with your own.
+#
+# A category holds two different things:
+#   topics         what the model writes articles about; each topic lists the sources it collects from
+#   subscriptions  feeds to read as they are, like in any feed reader; no model is involved
 version: 1
 settings:
   readerInfo: |
@@ -9,6 +13,8 @@ settings:
   outputLanguage: en
   timeZone: America/Los_Angeles
   search: { language: en, region: US }
+  # How often subscribed feeds are fetched, in minutes (5 to 1440). A subscription can set its own.
+  feedIntervalMinutes: 30
 categories:
   - slug: security
     name: Security
@@ -38,6 +44,11 @@ categories:
           feeds: ["https://blog.rust-lang.org/feed.xml"]
           newsSearch: true
           llmSearch: false
+    subscriptions:
+      - url: https://nodejs.org/en/feed/blog.xml
+      - url: https://www.typescriptlang.org/feed.xml
+        title: TypeScript blog
+        intervalMinutes: 360
   - slug: local-events
     name: Local events
     kind: event
@@ -48,3 +59,12 @@ categories:
         sources:
           newsSearch: false
           llmSearch: true
+# Subscribed feeds that belong to no category.
+subscriptions:
+  - url: https://www.rfc-editor.org/rfcrss.xml
+# Feed articles whose title contains one of these words are hidden. With `scope: title_and_content`
+# the content is searched too. Generated articles are never hidden.
+stopWords:
+  - text: sponsored
+  - text: giveaway
+    scope: title_and_content

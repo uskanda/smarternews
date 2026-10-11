@@ -43,6 +43,7 @@ export const spacing = {
   xl: 24,
   "2xl": 32,
   nav: 200,
+  "nav-indent": 16,
   list: 380,
   touch: 44,
   "touch-android": 48,

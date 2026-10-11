@@ -22,3 +22,25 @@ skills-lock.json
 nodeLinker: hoisted
 arm64-v8a
 x86_64
+feeds
+feed_items_seen
+stop_words
+origin
+feed_id
+stop_word_id
+content_text
+subscriptions
+stopWords
+feedIntervalMinutes
+img-src
+referrerpolicy
+PRAGMA foreign_keys
+/api/v1/feeds
+/api/v1/feeds/discover
+/api/v1/feeds/opml
+/api/v1/stop-words
+opml-import
+opml-export
+002_feeds.sql
+feed-subscriptions
+stop-words

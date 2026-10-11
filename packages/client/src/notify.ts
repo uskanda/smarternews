@@ -3,14 +3,14 @@
 // device whose clock is off neither misses an article nor repeats one.
 import type { ArticleSummary } from "@smarternews/core/api";
 
-/** Importance 5 only, every new article, or nothing. */
+/** Importance 5 only, every new generated article, or nothing. Feed articles are never notified. */
 export type NotifySetting = "important" | "all" | "off";
 
 export const DEFAULT_NOTIFY_SETTING: NotifySetting = "important";
 
 export const NOTIFY_SETTING_LABEL: Record<NotifySetting, string> = {
   important: "重要度5だけ",
-  all: "新着すべて",
+  all: "AI生成のすべての新着",
   off: "出さない",
 };
 
@@ -49,17 +49,18 @@ export function planNotifications(input: {
 }): NotifyPlan {
   if (input.setting === "off") return { notifications: [], checkedAt: input.checkedAt };
   const threshold = minImportanceFor(input.setting) ?? 1;
+  const importanceOf = (item: ArticleSummary): number => item.importance ?? 0;
   const fresh = input.articles
-    .filter((item) => !item.isRead && item.importance >= threshold && item.updatedAt > input.checkedAt)
+    .filter((item) => item.origin === "generated" && !item.isRead && importanceOf(item) >= threshold && item.updatedAt > input.checkedAt)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id);
   const checkedAt = baselineFrom([{ updatedAt: input.checkedAt }, ...input.articles]);
   if (fresh.length >= FOLD_FROM) {
-    const top = [...fresh].sort((a, b) => b.importance - a.importance || b.updatedAt.localeCompare(a.updatedAt))[0]!;
+    const top = [...fresh].sort((a, b) => importanceOf(b) - importanceOf(a) || b.updatedAt.localeCompare(a.updatedAt))[0]!;
     return { notifications: [{ kind: "summary", count: fresh.length, title: `新着の記事が${fresh.length}件あります`, body: top.title }], checkedAt };
   }
   const names = new Map(input.categories.map((category) => [category.id, category.name]));
   return {
-    notifications: fresh.map((item) => ({ kind: "article", articleId: item.id, title: item.title, body: names.get(item.categoryId) ?? "" })),
+    notifications: fresh.map((item) => ({ kind: "article", articleId: item.id, title: item.title, body: (item.categoryId === null ? undefined : names.get(item.categoryId)) ?? "" })),
     checkedAt,
   };
 }

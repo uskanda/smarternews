@@ -1,26 +1,33 @@
-import type { Article, ArticleListQuery, ArticleSummary, Category } from "@smarternews/core/api";
+import type { Article, ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { useArticle, useArticleFlags, useArticleList, useCategories, useTimeZone } from "../api/queries.ts";
+import { useArticle, useArticleFlags, useArticleList, useCategories, useFeeds, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
-import { mergeKept } from "@smarternews/client";
+import { GENERATED_LABEL, hasReadToggle, mergeKept, targetFilter, targetScope, UNCATEGORIZED_LABEL, type ListTarget } from "@smarternews/client";
+import { listPathOf } from "../lib/paths.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 
-export type View = "unread" | "all" | "starred" | "category";
+export type View = "unread" | "all" | "starred" | "generated" | "uncategorized" | "category" | "category-generated" | "feed";
 
-const TITLES: Record<Exclude<View, "category">, string> = { unread: "未読", all: "すべて", starred: "スター" };
+const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed">, string> = {
+  unread: "未読",
+  all: "すべて",
+  starred: "スター",
+  generated: GENERATED_LABEL,
+  uncategorized: UNCATEGORIZED_LABEL,
+};
 const EMPTY: ArticleSummary[] = [];
 
-function EmptyList({ view, hasCategories }: { view: View; hasCategories: boolean }) {
+function EmptyList({ view, hasSources }: { view: View; hasSources: boolean }) {
   const link = "text-primary underline underline-offset-4";
-  if (!hasCategories) {
+  if (!hasSources) {
     return (
       <div className="flex flex-col items-start gap-sm p-lg type-body-md">
         <p>カテゴリがまだありません。</p>
@@ -43,9 +50,9 @@ function EmptyList({ view, hasCategories }: { view: View; hasCategories: boolean
   const text =
     view === "starred"
       ? "スターを付けた記事はありません。"
-      : view === "category"
-        ? "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。"
-        : "記事はまだありません。カテゴリを実行すると、ここに並びます。";
+      : view === "all"
+        ? "記事はまだありません。カテゴリを実行すると、ここに並びます。"
+        : "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
   return <p className="p-lg type-body-md text-on-surface-muted">{text}</p>;
 }
 
@@ -62,22 +69,35 @@ export function ReaderPage({ view }: { view: View }) {
   const flags = useArticleFlags();
 
   const categories = useCategories();
-  const category: Category | undefined = view === "category" ? categories.data?.find((entry) => entry.slug === params.slug) : undefined;
-  const isEvents = category?.kind === "event";
+  const feeds = useFeeds();
+  const inCategory = view === "category" || view === "category-generated";
+  const category: Category | undefined = inCategory ? categories.data?.find((entry) => entry.slug === params.slug) : undefined;
+  const feed: Feed | undefined = view === "feed" ? feeds.data?.find((entry) => String(entry.id) === params.feedId) : undefined;
+  // Null until the category or the feed the path names is known.
+  const target = useMemo<ListTarget | null>(() => {
+    if (inCategory) return category ? { type: "category", categoryId: category.id, generatedOnly: view === "category-generated" } : null;
+    if (view === "feed") return feed ? { type: "feed", feedId: feed.id } : null;
+    return { type: view };
+  }, [view, inCategory, category, feed]);
+  const isEvents = view === "category" && category?.kind === "event";
+  const readToggle = target !== null && hasReadToggle(target) && !isEvents;
+  // Feed articles have no importance, so the filter is offered only where generated articles can be.
+  const importanceFilter = view !== "feed" && view !== "uncategorized";
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
   const includeRead = search.get("read") === "1";
-  const importantOnly = search.get("min") === "4";
+  const importantOnly = importanceFilter && search.get("min") === "4";
 
   const filter = useMemo<ArticleListQuery>(() => {
-    const base: ArticleListQuery = importantOnly ? { minImportance: 4 } : {};
-    if (view === "unread") return { ...base, unread: "true" };
-    if (view === "starred") return { ...base, starred: "true" };
-    if (view === "all") return base;
+    if (target === null) return {};
     if (isEvents) return { category: category!.id, kind: "event" };
-    return { ...base, category: category?.id, ...(includeRead ? {} : { unread: "true" }) };
-  }, [view, category, isEvents, includeRead, importantOnly]);
+    return {
+      ...(importantOnly ? { minImportance: 4 } : {}),
+      ...targetFilter(target),
+      ...(readToggle && !includeRead ? { unread: "true" as const } : {}),
+    };
+  }, [target, category, isEvents, readToggle, includeRead, importantOnly]);
   const unreadOnly = filter.unread === "true";
-  const list = useArticleList(filter, view !== "category" || category !== undefined);
+  const list = useArticleList(filter, target !== null);
   const fetched = useMemo(() => list.data?.pages.flatMap((page) => page.items) ?? EMPTY, [list.data]);
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes.
@@ -86,11 +106,14 @@ export function ReaderPage({ view }: { view: View }) {
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : []), [fetched, kept, listKey]);
 
-  const basePath = view === "category" ? `/c/${params.slug}` : `/${view}`;
+  const basePath = (target && listPathOf(target, () => category?.slug)) ?? `/${view}`;
   const query = search.toString() ? `?${search.toString()}` : "";
   const articlePath = (id: number) => `${basePath}/${id}${query}`;
   const listPath = `${basePath}${query}`;
-  const categoryName = (categoryId: number) => categories.data?.find((entry) => entry.id === categoryId)?.name ?? "";
+  const categoryName = (categoryId: number | null) => categories.data?.find((entry) => entry.id === categoryId)?.name ?? "";
+  const feedName = (feedId: number | null) => feeds.data?.find((entry) => entry.id === feedId)?.title ?? "";
+  /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
+  const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
   function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
     const summary = items.find((item) => item.id === target.id);
@@ -135,7 +158,7 @@ export function ReaderPage({ view }: { view: View }) {
     // "Before" is just after the newest article on screen, so one that arrives later stays unread.
     const before = new Date(new Date(newest).getTime() + 1).toISOString();
     try {
-      const result = await api.markRead({ before, categoryId: category?.id, ...(importantOnly ? { minImportance: 4 } : {}) });
+      const result = await api.markRead({ before, ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
       refresh();
       toast({
         message: `${result.updated}件を既読にしました`,
@@ -171,14 +194,26 @@ export function ReaderPage({ view }: { view: View }) {
     o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
   });
 
-  if (view === "category" && categories.data && !category) {
+  if (inCategory && categories.data && !category) {
     return <p className="p-xl type-body-md">このカテゴリはありません。</p>;
+  }
+  if (view === "feed" && feeds.data && !feed) {
+    return <p className="p-xl type-body-md">この購読フィードはありません。</p>;
   }
 
   const showList = layout !== "narrow" || articleId === null;
   const showArticle = layout !== "narrow" || articleId !== null;
-  const title = view === "category" ? (category?.name ?? "") : TITLES[view];
-  const canMarkAll = (view === "unread" || view === "category") && !isEvents && fetched.some((item) => !item.isRead);
+  const title =
+    view === "category"
+      ? (category?.name ?? "")
+      : view === "category-generated"
+        ? category
+          ? `${category.name}の${GENERATED_LABEL}`
+          : ""
+        : view === "feed"
+          ? (feed?.title ?? "")
+          : TITLES[view];
+  const canMarkAll = (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
 
   const listPane = isEvents ? (
     <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
@@ -186,23 +221,29 @@ export function ReaderPage({ view }: { view: View }) {
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
         <div className="flex items-center justify-between gap-sm">
-          <h1 className="type-headline-md">{title}</h1>
-          <div className="flex gap-sm">
+          <h1 className="min-w-0 truncate type-headline-md" title={title}>
+            {title}
+          </h1>
+          <div className="flex shrink-0 gap-sm">
             {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
             <Button onClick={refresh}>更新</Button>
           </div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
-          {view === "category" ? (
+          {readToggle ? (
             <Checkbox label="既読も表示" checked={includeRead} onChange={(event) => toggleParam("read", "1", event.target.checked)} />
           ) : null}
-          <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
+          {importanceFilter ? (
+            <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
+          ) : null}
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
         {list.isPending && !list.isError ? <Loading /> : null}
-        {list.isSuccess && items.length === 0 ? <EmptyList view={view} hasCategories={(categories.data?.length ?? 1) > 0} /> : null}
+        {list.isSuccess && items.length === 0 ? (
+          <EmptyList view={view} hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0} />
+        ) : null}
         <ul>
           {items.map((item) => (
             <ArticleRow
@@ -210,7 +251,7 @@ export function ReaderPage({ view }: { view: View }) {
               article={item}
               to={articlePath(item.id)}
               selected={item.id === articleId}
-              categoryName={categoryName(item.categoryId)}
+              sourceName={sourceName(item)}
               timeZone={timeZone}
               now={now()}
             />
@@ -242,6 +283,7 @@ export function ReaderPage({ view }: { view: View }) {
               key={articleId}
               id={articleId}
               categoryName={categoryName}
+              feedName={feedName}
               timeZone={timeZone}
               backTo={layout === "narrow" ? listPath : null}
               articlePath={articlePath}

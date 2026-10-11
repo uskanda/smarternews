@@ -47,6 +47,27 @@
     }
   }
 
+  /* The fold button of a category in the navigation. Wide enough to hit beside the link; a finger gets more. */
+  .nav-fold {
+    width: var(--spacing-xl);
+  }
+
+  /* An entry below a category starts under the category's name, one step further in. */
+  .nav-child {
+    padding-left: calc(var(--spacing-xl) + var(--spacing-nav-indent));
+  }
+
+  @media (pointer: coarse) {
+    .nav-fold {
+      width: var(--spacing-touch);
+      min-height: var(--spacing-touch);
+    }
+
+    .nav-child {
+      padding-left: calc(var(--spacing-touch) + var(--spacing-nav-indent));
+    }
+  }
+
   /* Importance five: the headline is marked like a highlighter stroke over its lower half. */
   .headline-mark {
     background: linear-gradient(transparent 52%, var(--color-mark-fill) 52%);
@@ -84,6 +105,38 @@
   .article-body code {
     font-size: 0.9em;
     overflow-wrap: anywhere;
+  }
+
+  /* Images come with feed articles only. They never grow wider than the column of text. */
+  .article-body .article-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin-block: var(--spacing-lg);
+    border-radius: var(--radius-md);
+  }
+
+  .article-body .article-image-pending {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: var(--color-background);
+  }
+
+  .article-body .article-image-missing {
+    @apply type-label-sm;
+    color: var(--color-on-surface-muted);
+  }
+
+  .article-body h2,
+  .article-body h3,
+  .article-body h4 {
+    font-weight: 700;
+  }
+
+  .article-body pre {
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.6;
   }
 
   .article-body blockquote {

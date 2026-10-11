@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { migrate, openDatabase } from "./database.ts";
+import { migrate, openDatabase, transaction } from "./database.ts";
 
 function tableNames(db: ReturnType<typeof openDatabase>): string[] {
   return db
@@ -36,6 +36,153 @@ describe("migrate", () => {
 
     expect(() => migrate(db, dir)).toThrow();
     expect(tableNames(db)).toEqual(["schema_migrations"]);
+  });
+});
+
+describe("transaction", () => {
+  it("joins the transaction it is called in, so that the outer one undoes everything", () => {
+    const db = openDatabase(":memory:");
+    db.exec("CREATE TABLE t (a TEXT)");
+    expect(() =>
+      transaction(db, () => {
+        transaction(db, () => db.exec("INSERT INTO t VALUES ('inner')"));
+        throw new Error("outer fails");
+      }),
+    ).toThrow("outer fails");
+    expect(db.prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("a migration that rebuilds a table", () => {
+  const PARENT_AND_CHILD = `
+    CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parent (id) ON DELETE CASCADE);
+    INSERT INTO parent (id, name) VALUES (1, 'a');
+    INSERT INTO child (id, parent_id) VALUES (10, 1);`;
+  const REBUILD = `-- foreign_keys: off
+    CREATE TABLE parent_new (id INTEGER PRIMARY KEY, name TEXT);
+    INSERT INTO parent_new SELECT id, name FROM parent;
+    DROP TABLE parent;
+    ALTER TABLE parent_new RENAME TO parent;`;
+
+  it("keeps the rows that refer to the rebuilt table", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    writeFileSync(join(dir, "001_first.sql"), PARENT_AND_CHILD);
+    writeFileSync(join(dir, "002_rebuild.sql"), REBUILD);
+    const db = openDatabase(":memory:");
+
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT count(*) AS n FROM child").get()).toEqual({ n: 1 });
+    db.prepare("INSERT INTO parent (id, name) VALUES (2, NULL)").run();
+    // Foreign keys are enforced again afterwards.
+    expect(() => db.prepare("INSERT INTO child (id, parent_id) VALUES (11, 99)").run()).toThrow();
+  });
+
+  it("undoes the whole file when it leaves a broken reference", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    writeFileSync(join(dir, "001_first.sql"), PARENT_AND_CHILD);
+    writeFileSync(join(dir, "002_break.sql"), "-- foreign_keys: off\nDELETE FROM parent;");
+    const db = openDatabase(":memory:");
+
+    expect(() => migrate(db, dir)).toThrow(/foreign key/i);
+    expect(db.prepare("SELECT count(*) AS n FROM parent").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT version FROM schema_migrations").all()).toEqual([{ version: 1 }]);
+    expect(() => db.prepare("INSERT INTO child (id, parent_id) VALUES (11, 99)").run()).toThrow();
+  });
+
+  it("copies a database file before rebuilding", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    writeFileSync(join(dir, "001_first.sql"), PARENT_AND_CHILD);
+    const file = join(mkdtempSync(join(tmpdir(), "sn-db-")), "db.sqlite");
+    const db = openDatabase(file);
+    migrate(db, dir);
+    expect(existsSync(`${file}.before-002`)).toBe(false);
+
+    writeFileSync(join(dir, "002_rebuild.sql"), REBUILD);
+    migrate(db, dir);
+
+    const copy = openDatabase(`${file}.before-002`);
+    expect(copy.prepare("SELECT version FROM schema_migrations").all()).toEqual([{ version: 1 }]);
+    expect(copy.prepare("SELECT count(*) AS n FROM child").get()).toEqual({ n: 1 });
+    copy.close();
+    db.close();
+  });
+});
+
+describe("the migration to feeds", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps articles, their references, topics and candidates", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    copyFileSync(join(SHIPPED, "001_init.sql"), join(dir, "001_init.sql"));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO topics (id, category_id, text, created_at) VALUES (1, 1, 'releases', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, is_read, starred)
+       VALUES (1, 1, 'news', 'first', 's', 'b', 4, ?, ?, 1, 1)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, previous_article_id)
+       VALUES (2, 1, 'news', 'second', 's', 'b', 3, ?, ?, 1)`,
+    ).run(now, now);
+    db.prepare("INSERT INTO article_refs (article_id, url, site_name, title, position) VALUES (1, 'https://example.org/a', 'Example', 't', 0)").run();
+    db.prepare("INSERT INTO article_topics (article_id, topic_id) VALUES (1, 1)").run();
+    db.prepare(
+      "INSERT INTO candidates (id, category_id, url, title, source_kind, status, article_id, created_at) VALUES (1, 1, 'https://example.org/a', 't', 'feed', 'accepted', 1, ?)",
+    ).run(now);
+
+    copyFileSync(join(SHIPPED, "002_feeds.sql"), join(dir, "002_feeds.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, origin, feed_id, title, importance, is_read, starred, previous_article_id FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, origin: "generated", feed_id: null, title: "first", importance: 4, is_read: 1, starred: 1, previous_article_id: null },
+      { id: 2, origin: "generated", feed_id: null, title: "second", importance: 3, is_read: 0, starred: 0, previous_article_id: 1 },
+    ]);
+    expect(db.prepare("SELECT count(*) AS n FROM article_refs").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT count(*) AS n FROM article_topics").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT article_id FROM candidates").get()).toEqual({ article_id: 1 });
+    expect(db.prepare("SELECT feed_interval_minutes FROM settings").all()).toEqual([]);
+
+    // The references still follow the rebuilt table.
+    db.prepare("DELETE FROM articles WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM article_refs").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT article_id FROM candidates").get()).toEqual({ article_id: null });
+    expect(db.prepare("SELECT previous_article_id FROM articles WHERE id = 2").get()).toEqual({ previous_article_id: null });
+  });
+
+  it("lets a feed article have no category and no importance, and a generated one neither", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (1, 'https://example.org/feed', 'Example', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at)
+       VALUES ('feed', 1, 'k1', 'news', 't', 's', 'b', ?, ?)`,
+    ).run(now, now);
+    expect(() =>
+      db
+        .prepare("INSERT INTO articles (origin, kind, title, summary, body, first_published_at, updated_at) VALUES ('generated', 'news', 't', 's', 'b', ?, ?)")
+        .run(now, now),
+    ).toThrow();
+    // The same item of the same feed is stored once.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO articles (origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at)
+           VALUES ('feed', 1, 'k1', 'news', 't', 's', 'b', ?, ?)`,
+        )
+        .run(now, now),
+    ).toThrow();
+
+    db.prepare("DELETE FROM feeds WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM articles").get()).toEqual({ n: 0 });
   });
 });
 

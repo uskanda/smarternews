@@ -42,6 +42,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
 export function ArticleView({
   id,
   categoryName,
+  feedName,
   timeZone,
   backTo,
   articlePath,
@@ -49,7 +50,8 @@ export function ArticleView({
   onToggleRead,
 }: {
   id: number;
-  categoryName: (categoryId: number) => string;
+  categoryName: (categoryId: number | null) => string;
+  feedName: (feedId: number | null) => string;
   timeZone: string;
   /** Set on a narrow screen, where the list is on another pane. */
   backTo: string | null;
@@ -90,6 +92,8 @@ export function ArticleView({
     );
   }
   if (!article) return <Loading />;
+  // A feed article is what another site delivered: no importance, no sources; the way to its page instead.
+  const delivered = article.origin === "feed";
 
   return (
     <article aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
@@ -97,9 +101,19 @@ export function ArticleView({
       <div className="mx-auto flex w-full max-w-measure-article flex-col gap-lg type-body-lg">
         {back}
         <div className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
-          <span>{categoryName(article.categoryId)}</span>
-          <span>{formatFull(article.updatedAt, timeZone)} に更新</span>
-          <span>重要度 {article.importance}</span>
+          {delivered ? (
+            <>
+              <span>{feedName(article.feedId)}</span>
+              {article.author ? <span>{article.author}</span> : null}
+              <span>{formatFull(article.updatedAt, timeZone)} に公開</span>
+            </>
+          ) : (
+            <>
+              <span>{categoryName(article.categoryId)}</span>
+              <span>{formatFull(article.updatedAt, timeZone)} に更新</span>
+              <span>重要度 {article.importance}</span>
+            </>
+          )}
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
           {article.starred ? <span>スター</span> : null}
         </div>
@@ -119,8 +133,15 @@ export function ArticleView({
           </section>
         ) : null}
         {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
+        {delivered && article.primaryUrl ? (
+          <p className="type-body-md">
+            <a href={article.primaryUrl} target="_blank" rel="noopener noreferrer" className="tap text-primary underline underline-offset-4">
+              元のページを開く
+            </a>
+          </p>
+        ) : null}
         <div className="article-body type-body-lg">
-          <Markdown text={article.body} />
+          <Markdown text={article.body} images={delivered} />
         </div>
         {previous ? (
           <p className="type-body-md">
@@ -130,6 +151,7 @@ export function ArticleView({
             </Link>
           </p>
         ) : null}
+        {delivered ? null : (
         <section aria-label="出典" className="flex flex-col gap-xs">
           <h3 className="type-label-sm text-on-surface-muted">出典</h3>
           {article.snippetOnly ? (
@@ -146,6 +168,7 @@ export function ArticleView({
             ))}
           </ul>
         </section>
+        )}
         <div className="flex flex-wrap gap-sm">
           <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
             {article.starred ? "スターを外す" : "スターを付ける"}

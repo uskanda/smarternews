@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createCategory, updateCategory } from "../db/categories.ts";
 import { createRun, failInterruptedRuns, getRun, listRuns, startRun } from "../db/runs.ts";
 import { updateSettings } from "../db/settings.ts";
+import { createTopic, updateTopic } from "../db/topics.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { RunQueue } from "./queue.ts";
 import { Scheduler } from "./scheduler.ts";
@@ -13,15 +14,46 @@ function setup(start: string, timeZone = "UTC") {
   const executed: number[] = [];
   const queue = new RunQueue({ db, clock, execute: async (runId) => void executed.push(runId) });
   const scheduler = new Scheduler({ db, clock, queue });
-  const category = (name: string, schedule: string[]) => createCategory(db, { name, kind: "news", schedule }, clock);
+  const withTopic = (created: ReturnType<typeof createCategory>) => {
+    createTopic(db, created.id, { text: "anything new" }, clock);
+    return created;
+  };
+  const category = (name: string, schedule: string[]) => withTopic(createCategory(db, { name, kind: "news", schedule }, clock));
   /** A category that has existed for a week, as on a server that was running before. */
   const oldCategory = (name: string, schedule: string[]) =>
-    createCategory(db, { name, kind: "news", schedule }, () => new Date(clock().getTime() - 7 * 86_400_000));
+    withTopic(createCategory(db, { name, kind: "news", schedule }, () => new Date(clock().getTime() - 7 * 86_400_000)));
   const scheduled = () => listRuns(db).map((run) => `${run.categoryId}@${run.slot}`).sort();
   return { db, clock, queue, scheduler, category, oldCategory, scheduled, executed };
 }
 
 const MINUTE = 60_000;
+
+describe("a category without topics", () => {
+  it("is not run by its schedule: it only holds subscribed feeds", () => {
+    const { db, clock, scheduler } = setup("2026-03-01T04:59:00.000Z");
+    createCategory(db, { name: "Feeds only", kind: "news", schedule: ["05:00"] }, clock);
+    scheduler.begin({ catchUp: false });
+    clock.advance(MINUTE);
+    scheduler.tick();
+    expect(listRuns(db)).toEqual([]);
+  });
+
+  it("is not run when its only topic is disabled", () => {
+    const { db, clock, scheduler } = setup("2026-03-01T04:59:00.000Z");
+    const created = createCategory(db, { name: "Paused", kind: "news", schedule: ["05:00"] }, clock);
+    updateTopic(db, createTopic(db, created.id, { text: "anything" }, clock).id, { enabled: false });
+    scheduler.begin({ catchUp: false });
+    clock.advance(MINUTE);
+    scheduler.tick();
+    expect(listRuns(db)).toEqual([]);
+  });
+
+  it("can still be run by hand", () => {
+    const { db, clock, queue } = setup("2026-03-01T04:59:00.000Z");
+    const created = createCategory(db, { name: "Feeds only", kind: "news", schedule: ["05:00"] }, clock);
+    expect(queue.enqueue(created.id, "manual", null)).toMatchObject({ categoryId: created.id, trigger: "manual" });
+  });
+});
 
 describe("Scheduler.tick", () => {
   it("starts a run when the clock reaches a time of the category's schedule", async () => {

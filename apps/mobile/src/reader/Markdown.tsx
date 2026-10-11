@@ -1,12 +1,72 @@
 import { marked, type Token, type Tokens } from "marked";
-import { Fragment, useMemo, type ReactNode } from "react";
-import { Text, View } from "react-native";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Image, Text, View } from "react-native";
 import { isWebLink, openSource } from "../lib/links";
 import { useTheme, type Theme } from "../theme/theme";
 
-// An article body is Markdown written by a model that read web pages. It is drawn from the parsed tokens with
-// the app's own text components: HTML inside it is shown as the characters it is, never interpreted, and a
-// link opens only when it points to a web page.
+// An article body is Markdown: written by a model that read web pages, or rewritten from what a feed
+// delivered. It is drawn from the parsed tokens with the app's own text components: HTML inside it is shown as
+// the characters it is, never interpreted, and a link opens only when it points to a web page. Images are
+// loaded only for the content of a feed article, and only over HTTPS.
+
+const HTTPS = /^https:\/\//i;
+
+/**
+ * An image of a feed article, as wide as the text. The device asks the other site for it. Its height follows
+ * from its proportions once it has loaded; when it cannot be loaded, its description takes its place.
+ */
+function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
+  const [ratio, setRatio] = useState<number | null>(null);
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return alt ? <Text style={[theme.type["label-sm"], { color: theme.colors["on-surface-muted"] }]}>{alt}</Text> : null;
+  }
+  return (
+    <Image
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={alt}
+      source={{ uri }}
+      resizeMode="contain"
+      onLoad={(event) => {
+        const { width, height } = event.nativeEvent.source;
+        if (width > 0 && height > 0) setRatio(width / height);
+      }}
+      onError={() => setFailed(true)}
+      style={{ width: "100%", aspectRatio: ratio ?? 16 / 9, borderRadius: theme.rounded.md }}
+    />
+  );
+}
+
+/**
+ * The tokens of a paragraph as blocks: an image stands on its own, between the runs of text around it.
+ * Without `images`, everything stays one run and an image is shown as its description.
+ */
+function paragraphBlocks(tokens: Token[] | undefined, theme: Theme, key: string, images: boolean): ReactNode[] {
+  const blocks: ReactNode[] = [];
+  let run: Token[] = [];
+  const flush = () => {
+    if (run.some((token) => token.raw.trim().length > 0)) {
+      blocks.push(
+        <Paragraph key={`${key}.${blocks.length}`} theme={theme}>
+          {inline(run, theme, `${key}.${blocks.length}.`)}
+        </Paragraph>,
+      );
+    }
+    run = [];
+  };
+  for (const token of tokens ?? []) {
+    if (images && token.type === "image" && HTTPS.test((token as Tokens.Image).href)) {
+      flush();
+      const image = token as Tokens.Image;
+      blocks.push(<ArticleImage key={`${key}.${blocks.length}`} uri={image.href} alt={image.text} theme={theme} />);
+    } else {
+      run.push(token);
+    }
+  }
+  flush();
+  return blocks;
+}
 
 function inline(tokens: Token[] | undefined, theme: Theme, prefix: string): ReactNode {
   return (tokens ?? []).map((token, index) => {
@@ -63,7 +123,7 @@ function Paragraph({ children, theme }: { children: ReactNode; theme: Theme }) {
   return <Text style={[theme.type["body-lg"], { color: theme.colors["on-surface"] }]}>{children}</Text>;
 }
 
-function block(token: Token, theme: Theme, key: string): ReactNode {
+function block(token: Token, theme: Theme, key: string, images: boolean): ReactNode {
   switch (token.type) {
     case "space":
     case "hr":
@@ -75,11 +135,7 @@ function block(token: Token, theme: Theme, key: string): ReactNode {
         </Text>
       );
     case "paragraph":
-      return (
-        <Paragraph key={key} theme={theme}>
-          {inline((token as Tokens.Paragraph).tokens, theme, `${key}.`)}
-        </Paragraph>
-      );
+      return <Fragment key={key}>{paragraphBlocks((token as Tokens.Paragraph).tokens, theme, key, images)}</Fragment>;
     case "list": {
       const list = token as Tokens.List;
       return (
@@ -87,7 +143,7 @@ function block(token: Token, theme: Theme, key: string): ReactNode {
           {list.items.map((item, index) => (
             <View key={`${key}.${index}`} style={{ flexDirection: "row", gap: theme.spacing.sm }}>
               <Paragraph theme={theme}>{list.ordered ? `${Number(list.start || 1) + index}.` : "・"}</Paragraph>
-              <View style={{ flex: 1, gap: theme.spacing.xs }}>{item.tokens.map((child, at) => block(child, theme, `${key}.${index}.${at}`))}</View>
+              <View style={{ flex: 1, gap: theme.spacing.xs }}>{item.tokens.map((child, at) => block(child, theme, `${key}.${index}.${at}`, images))}</View>
             </View>
           ))}
         </View>
@@ -96,7 +152,7 @@ function block(token: Token, theme: Theme, key: string): ReactNode {
     case "blockquote":
       return (
         <View key={key} style={{ gap: theme.spacing.sm, paddingLeft: theme.spacing.md, borderLeftWidth: 2, borderLeftColor: theme.colors["outline-strong"] }}>
-          {(token as Tokens.Blockquote).tokens.map((child, at) => block(child, theme, `${key}.${at}`))}
+          {(token as Tokens.Blockquote).tokens.map((child, at) => block(child, theme, `${key}.${at}`, images))}
         </View>
       );
     case "code":
@@ -107,9 +163,10 @@ function block(token: Token, theme: Theme, key: string): ReactNode {
       );
     case "text": {
       const text = token as Tokens.Text;
+      if (text.tokens) return <Fragment key={key}>{paragraphBlocks(text.tokens, theme, key, images)}</Fragment>;
       return (
         <Paragraph key={key} theme={theme}>
-          {text.tokens ? inline(text.tokens, theme, `${key}.`) : unescape(text.text)}
+          {unescape(text.text)}
         </Paragraph>
       );
     }
@@ -123,8 +180,8 @@ function block(token: Token, theme: Theme, key: string): ReactNode {
   }
 }
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, images = false }: { text: string; images?: boolean }) {
   const theme = useTheme();
   const tokens = useMemo(() => marked.lexer(text, { gfm: true }), [text]);
-  return <View style={{ gap: theme.spacing.lg }}>{tokens.map((token, index) => block(token, theme, String(index)))}</View>;
+  return <View style={{ gap: theme.spacing.lg }}>{tokens.map((token, index) => block(token, theme, String(index), images))}</View>;
 }

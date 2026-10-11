@@ -4,6 +4,7 @@ import {
   buildProviders,
   defaultUserAgent,
   executeRun,
+  FeedPoller,
   Fetcher,
   getSettings,
   migrate,
@@ -30,6 +31,8 @@ export interface Runtime {
   db: Database;
   queue: RunQueue;
   scheduler: Scheduler;
+  /** Fetches the subscribed feeds that are due. Started together with the scheduler. */
+  poller: FeedPoller;
   app: Hono;
   /** Token files this call created, to be announced once. */
   newTokenFiles: string[];
@@ -77,6 +80,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     execute: (runId) => executeRun({ db, clock, runner, fetcher, config }, runId),
   });
   const scheduler = new Scheduler({ db, clock, queue });
+  const poller = new FeedPoller({ db, clock, fetcher });
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
@@ -85,6 +89,8 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     clock,
     queue,
     runner,
+    fetcher,
+    poller,
     tokens: { api: api.token, feed: feed.token },
     version,
     webDir: join(import.meta.dirname, "../../web/dist"),
@@ -96,10 +102,12 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     db,
     queue,
     scheduler,
+    poller,
     app,
     newTokenFiles: [...(api.created ? [paths.apiTokenFile] : []), ...(feed.created ? [paths.feedTokenFile] : [])],
     close() {
       scheduler.stop();
+      poller.stop();
       db.close();
     },
   };

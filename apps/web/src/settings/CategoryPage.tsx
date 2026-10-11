@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useBlocker, useNavigate, useParams } from "react-router";
 import { ApiError } from "@smarternews/client";
-import { useCategories, useCounts, useProviders, useRuns, useTopics } from "../api/queries.ts";
+import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
@@ -381,12 +381,15 @@ function DeleteCategory({ category, onLeave }: { category: Category; onLeave: ()
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const topicCount = useTopics(category.id).data?.length;
-  const articleCount = useCounts().data?.categories.find((entry) => entry.categoryId === category.id)?.total;
+  // Only generated articles go with the category; the articles of its feeds stay.
+  const articleCount = useCounts().data?.categories.find((entry) => entry.categoryId === category.id)?.generatedTotal;
+  const feedCount = useFeeds().data?.filter((feed) => feed.categoryId === category.id).length ?? 0;
 
   async function refreshLists() {
     await client.invalidateQueries({ queryKey: ["categories"] });
     void client.invalidateQueries({ queryKey: ["counts"] });
     void client.invalidateQueries({ queryKey: ["articles"] });
+    void client.invalidateQueries({ queryKey: ["feeds"] });
   }
   async function remove() {
     try {
@@ -434,6 +437,7 @@ function DeleteCategory({ category, onLeave }: { category: Category; onLeave: ()
         <p>
           「{category.name}」と、トピック{topicCount ?? "…"}件と記事{articleCount ?? "…"}件が消えます。実行履歴も消え、元に戻せません。
         </p>
+        {feedCount > 0 ? <p>購読フィード{feedCount}件は消えず、「未分類」へ移ります。その配信記事も残ります。</p> : null}
         <p>記事を残したまま収集だけを止めるには、無効にしてください。</p>
       </ConfirmDialog>
     </section>

@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunQueue } from "@smarternews/core";
-import { createTestDb, fakeClock, fakeLlm } from "@smarternews/core/testing";
+import { FeedPoller, Fetcher, RunQueue } from "@smarternews/core";
+import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
 import { API_TOKEN, FEED_TOKEN } from "./testing.ts";
@@ -19,11 +19,14 @@ function server(build: "built" | "not-built") {
   const db = createTestDb();
   const clock = fakeClock("2026-03-01T12:00:00.000Z");
   const queue = new RunQueue({ db, clock, execute: async () => {} });
+  const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1000, fetchImpl: fakeFetch({}).fetchImpl });
   const app = createApp({
     db,
     clock,
     queue,
     runner: fakeLlm(db, clock, {}).runner,
+    fetcher,
+    poller: new FeedPoller({ db, clock, fetcher }),
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
     webDir: dir,
@@ -133,6 +136,17 @@ describe("response headers of the page", () => {
     expect(directives["frame-ancestors"]).toBe("'none'");
     expect(directives["object-src"]).toBe("'none'");
     expect(directives["connect-src"]).toBe("'self'");
+  });
+
+  it("lets the page load images from this origin and over HTTPS, and from nowhere else", async () => {
+    const policy = (await server("built").request("/")).headers.get("content-security-policy") ?? "";
+    const images = policy
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("img-src "));
+    // Feed articles carry images of other sites. Plain HTTP stays forbidden.
+    expect(images).toBe("img-src 'self' data: https:");
+    expect(policy).not.toMatch(/img-src[^;]*http:/);
   });
 
   it("tells the browser not to send the referrer and not to guess content types", async () => {

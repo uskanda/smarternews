@@ -1,10 +1,12 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { createCategory, findCategoryBySlug, listCategories } from "./db/categories.ts";
+import { insertFeed, listFeeds } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
+import { createStopWord, listStopWords } from "./db/stop-words.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
 import { exportSettings, importSettings } from "./settings-file.ts";
-import { createTestDb, fakeClock } from "./testing/db.ts";
+import { createTestDb, fakeClock, seedFeedArticle } from "./testing/db.ts";
 
 const clock = fakeClock("2026-03-01T00:00:00.000Z");
 
@@ -35,6 +37,7 @@ describe("exportSettings", () => {
       outputLanguage: "en",
       timeZone: "Europe/Berlin",
       search: { language: "ja", region: "JP" },
+      feedIntervalMinutes: 30,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -67,7 +70,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, stopWordsCreated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -142,6 +145,118 @@ categories:
   });
 });
 
+describe("subscribed feeds and stop words in the settings file", () => {
+  function withFeeds() {
+    const db = seeded();
+    const security = listCategories(db).find((category) => category.slug === "security")!;
+    insertFeed(db, { url: "https://a.example.org/feed.xml", title: "A", categoryId: security.id, intervalMinutes: 120 }, clock);
+    const loose = insertFeed(db, { url: "https://b.example.org/feed.xml", title: "B", enabled: false }, clock);
+    seedFeedArticle(db, loose.id);
+    updateSettings(db, { feedIntervalMinutes: 45 });
+    createStopWord(db, { text: "広告" }, clock);
+    createStopWord(db, { text: "提供", scope: "title_and_content" }, clock);
+    return db;
+  }
+
+  it("writes the feeds under their category or at the top, the base interval and the stop words", () => {
+    const file = parse(exportSettings(withFeeds()));
+    expect(file.settings.feedIntervalMinutes).toBe(45);
+    expect(file.categories.find((category: { slug: string }) => category.slug === "security").subscriptions).toEqual([
+      { url: "https://a.example.org/feed.xml", title: "A", intervalMinutes: 120, enabled: true },
+    ]);
+    expect(file.subscriptions).toEqual([{ url: "https://b.example.org/feed.xml", title: "B", enabled: false }]);
+    expect(file.stopWords).toEqual([
+      { text: "広告", scope: "title" },
+      { text: "提供", scope: "title_and_content" },
+    ]);
+  });
+
+  it("writes no article and no fetch state", () => {
+    const text = exportSettings(withFeeds());
+    expect(text).not.toMatch(/Feed article|lastFetched|etag|articleCount/);
+  });
+
+  it("reproduces feeds, base interval and stop words on an empty server", () => {
+    const exported = exportSettings(withFeeds());
+    const target = createTestDb();
+    const result = importSettings(target, exported, clock);
+    expect(result).toMatchObject({ feedsCreated: 2, feedsUpdated: 0, stopWordsCreated: 2 });
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("updates a feed with a matching URL, registers the others, and keeps what the file does not mention", () => {
+    const db = createTestDb();
+    const kept = insertFeed(db, { url: "https://kept.example.org/feed.xml", title: "Kept" }, clock);
+    const existing = insertFeed(db, { url: "https://a.example.org/feed.xml", title: "A" }, clock);
+    const article = seedFeedArticle(db, existing.id);
+    const text = `version: 1
+categories:
+  - slug: tools
+    name: Tools
+    kind: news
+    subscriptions:
+      - url: https://a.example.org/feed.xml?utm_source=x
+        intervalMinutes: 120
+      - url: https://new.example.org/feed.xml
+subscriptions:
+  - url: https://loose.example.org/feed.xml
+    title: Loose
+`;
+    const result = importSettings(db, text, clock);
+
+    expect(result).toMatchObject({ feedsCreated: 2, feedsUpdated: 1 });
+    const tools = listCategories(db)[0]!;
+    const feeds = Object.fromEntries(listFeeds(db).map((feed) => [feed.url, feed]));
+    expect(feeds["https://a.example.org/feed.xml"]).toMatchObject({ id: existing.id, title: "A", intervalMinutes: 120, categoryId: tools.id, articleCount: 1 });
+    expect(feeds["https://new.example.org/feed.xml"]).toMatchObject({ title: "new.example.org", categoryId: tools.id, lastFetchedAt: null });
+    expect(feeds["https://loose.example.org/feed.xml"]).toMatchObject({ title: "Loose", categoryId: null });
+    expect(feeds["https://kept.example.org/feed.xml"]).toMatchObject({ id: kept.id });
+    expect(db.prepare("SELECT category_id FROM articles WHERE id = ?").get(article)).toEqual({ category_id: tools.id });
+  });
+
+  it("adds the stop words that are not registered yet, and hides what they match", () => {
+    const db = createTestDb();
+    createStopWord(db, { text: "広告" }, clock);
+    const feed = insertFeed(db, { url: "https://a.example.org/feed.xml", title: "A" }, clock);
+    seedFeedArticle(db, feed.id, { title: "春の特売" });
+
+    const result = importSettings(db, "version: 1\nstopWords:\n  - text: 広告\n  - text: 特売\n", clock);
+
+    expect(result.stopWordsCreated).toBe(1);
+    expect(listStopWords(db).map((word) => [word.text, word.hiddenCount])).toEqual([
+      ["広告", 0],
+      ["特売", 1],
+    ]);
+  });
+
+  it("refuses a feed under an event category, and stores nothing of the file", () => {
+    const db = createTestDb();
+    const text = `version: 1
+categories:
+  - slug: tools
+    name: Tools
+    kind: news
+  - slug: events
+    name: Events
+    kind: event
+    subscriptions:
+      - url: https://a.example.org/feed.xml
+`;
+    expect(() => importSettings(db, text, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "categories.1.subscriptions.0" })] }),
+    );
+    expect(listCategories(db)).toEqual([]);
+    expect(listFeeds(db)).toEqual([]);
+  });
+
+  it("refuses an interval outside five minutes to one day", () => {
+    const db = createTestDb();
+    const text = "version: 1\nsubscriptions:\n  - url: https://a.example.org/feed.xml\n    intervalMinutes: 2\n";
+    expect(() => importSettings(db, text, clock)).toThrow(expect.objectContaining({ code: "invalid" }));
+    expect(listFeeds(db)).toEqual([]);
+  });
+});
+
 describe("the example settings file", () => {
   it("loads into an empty server", async () => {
     const { readFileSync } = await import("node:fs");
@@ -153,7 +268,16 @@ describe("the example settings file", () => {
       categoriesUpdated: 0,
       topicsCreated: 4,
       topicsUpdated: 0,
+      feedsCreated: 3,
+      feedsUpdated: 0,
+      stopWordsCreated: 2,
     });
-    expect(getSettings(db).timeZone).toBe("America/Los_Angeles");
+    expect(getSettings(db)).toMatchObject({ timeZone: "America/Los_Angeles", feedIntervalMinutes: 30 });
+    const tools = listCategories(db).find((category) => category.slug === "developer-tools")!;
+    expect(listFeeds(db).map((feed) => [feed.categoryId, feed.intervalMinutes])).toEqual([
+      [tools.id, null],
+      [tools.id, 360],
+      [null, null],
+    ]);
   });
 });
