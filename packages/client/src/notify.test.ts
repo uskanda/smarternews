@@ -13,6 +13,7 @@ function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
     author: null,
     kind: "news",
     title: `Article ${serial}`,
+    translatedTitle: null,
     summary: "",
     impact: null,
     importance: 5,

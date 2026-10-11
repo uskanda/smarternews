@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, parseConfig, resolveAssignment } from "./config.ts";
+import { ConfigError, parseConfig, resolveAssignment, translationApiKey } from "./config.ts";
 
 describe("parseConfig", () => {
   it("listens on the local host only and uses the claude command when nothing is configured", () => {
@@ -16,6 +16,7 @@ describe("parseConfig", () => {
       cluster: "fast",
       write: "smart",
       summarize: "fast",
+      translate: "fast",
     });
   });
 
@@ -26,7 +27,7 @@ providers:
   b: { adapter: openai-compatible, baseUrl: "http://127.0.0.1:1/v1", model: m }
 tasks: { default: a, judge: b }
 `);
-    expect(resolveAssignment(config)).toEqual({ interpret: "a", search: "a", judge: "b", cluster: "a", write: "a", summarize: "a" });
+    expect(resolveAssignment(config)).toEqual({ interpret: "a", search: "a", judge: "b", cluster: "a", write: "a", summarize: "a", translate: "a" });
   });
 
   it("assigns every task to the only provider when no tasks are given", () => {
@@ -112,5 +113,37 @@ describe("the summarize task and its limit", () => {
     expect(parseConfig(null).limits.summariesPerDay).toBe(100);
     expect(parseConfig("limits:\n  summariesPerDay: 20\n").limits.summariesPerDay).toBe(20);
     expect(() => parseConfig("limits:\n  summariesPerDay: 0\n")).toThrow(/limits\.summariesPerDay/);
+  });
+});
+
+describe("the translation settings", () => {
+  it("allow 450,000 characters a month and 20,000 an article, without a key, when nothing is configured", () => {
+    const config = parseConfig(null);
+    expect(config.translation).toEqual({ monthlyChars: 450_000, maxCharsPerArticle: 20_000 });
+    expect(translationApiKey(config, { GOOGLE_TRANSLATE_API_KEY: "set-but-not-named" })).toBeNull();
+  });
+
+  it("read the key from the environment variable the file names", () => {
+    const config = parseConfig("translation:\n  google:\n    apiKeyEnv: MY_KEY\n  monthlyChars: 1000\n");
+    expect(config.translation.monthlyChars).toBe(1000);
+    expect(translationApiKey(config, { MY_KEY: "the-key" })).toBe("the-key");
+  });
+
+  it("treat a variable that is missing or empty as no key", () => {
+    const config = parseConfig("translation:\n  google:\n    apiKeyEnv: MY_KEY\n");
+    expect(translationApiKey(config, {})).toBeNull();
+    expect(translationApiKey(config, { MY_KEY: "" })).toBeNull();
+    expect(translationApiKey(config, { MY_KEY: "  " })).toBeNull();
+  });
+
+  it("refuse a key written into the file", () => {
+    expect(() => parseConfig("translation:\n  google:\n    apiKey: secret\n")).toThrow(ConfigError);
+  });
+
+  it("give the translate task to the provider named fast, unless the file assigns it", () => {
+    const providers = (names: string[]) => `providers:\n${names.map((name) => `  ${name}: { adapter: claude-cli, model: m }\n`).join("")}`;
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`)).translate).toBe("fast");
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n  translate: big\n`)).translate).toBe("big");
+    expect(resolveAssignment(parseConfig(providers(["only"]))).translate).toBe("only");
   });
 });

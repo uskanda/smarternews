@@ -180,8 +180,15 @@ function block(token: Token, theme: Theme, key: string, images: boolean): ReactN
   }
 }
 
-export function Markdown({ text, images = false }: { text: string; images?: boolean }) {
-  const theme = useTheme();
+/**
+ * `quiet` draws the text one size smaller and in the muted colour: the original under its translation.
+ */
+export function Markdown({ text, images = false, quiet = false }: { text: string; images?: boolean; quiet?: boolean }) {
+  const base = useTheme();
+  const theme = useMemo<Theme>(
+    () => (quiet ? ({ ...base, type: { ...base.type, "body-lg": base.type["body-md"] }, colors: { ...base.colors, "on-surface": base.colors["on-surface-muted"] } } as unknown as Theme) : base),
+    [base, quiet],
+  );
   const tokens = useMemo(() => marked.lexer(text, { gfm: true }), [text]);
   return <View style={{ gap: theme.spacing.lg }}>{tokens.map((token, index) => block(token, theme, String(index), images))}</View>;
 }

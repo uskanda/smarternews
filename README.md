@@ -6,7 +6,7 @@ smarternews is a self-hosted news crawler for one reader. You describe the topic
 
 It is also a feed reader. Subscribe to RSS and Atom feeds, and their articles appear beside the written ones, as the feeds deliver them.
 
-A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for six tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, and summarising the articles of the subscribed feeds you chose. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
+A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for seven tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, and summarising or translating the articles of the subscribed feeds you chose. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
 
 ## Status
 
@@ -124,13 +124,15 @@ A topic is a keyword or a sentence. The model turns it into search queries and a
 
 ### Subscribed feeds
 
-A subscribed feed is read as it is. The server fetches it on an interval and stores each item as an article with the feed's own title and content. No model is involved in this, so subscribing costs no model calls unless you switch summaries on for the feed (see below). This is separate from the `feeds` of a topic, which are material the model writes from.
+A subscribed feed is read as it is. The server fetches it on an interval and stores each item as an article with the feed's own title and content. No model is involved in this, so subscribing costs no model calls unless you switch summaries or translation on for the feed (see below). This is separate from the `feeds` of a topic, which are material the model writes from.
 
 Add a feed in the web app under "設定" and "購読フィードを設定する". Enter the address of the feed, or of a site: the server then looks for the feeds that the page announces. A feed belongs to one `news` category or to none.
 
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
 - "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.
 - For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. The page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
+- "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and stop words are matched against it.
+- Translation sends the titles and contents of that feed's articles to Google's translation API, or to the model provider you configured, and sends nothing else. Titles are translated when articles arrive, by the API only. The content is translated when you first open an article, and the first 20,000 characters of it. Articles the feed already had are translated when you open them.
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
 - Articles of feeds can be starred and marked read like any other. Without a star they are deleted after 90 days.
@@ -170,6 +172,19 @@ These feeds carry the articles the model wrote. Articles of subscribed feeds are
 
 When later pages add to a story within 72 hours, the server rewrites the article and marks it unread. The feed then delivers it again under a new `guid` with a marker in the title, because many readers ignore changes to an item they have already shown.
 
+### Translation
+
+To use Google's Cloud Translation API, put its key into an environment variable of the server and name the variable in `config.yaml`. The key goes into no file of smarternews.
+
+```yaml
+translation:
+  google:
+    apiKeyEnv: GOOGLE_TRANSLATE_API_KEY
+  monthlyChars: 450000
+```
+
+The server counts the characters it sends per month and sends nothing beyond `monthlyChars`, so the bill stays within what Google does not charge for; the default leaves a margin below 500,000. For the rest of such a month, and whenever no key is set or the API fails, the `translate` task of the model translates, and only the articles you open. The page of the subscribed feeds shows this month's count and the limit. [docs/providers.md](docs/providers.md) has the details, and [examples/smarternews.service](examples/smarternews.service) shows how to hand the key to the service.
+
 ## Running as a service
 
 [examples/smarternews.service](examples/smarternews.service) is a systemd user unit. The comments at its top give the install commands.
@@ -207,6 +222,8 @@ A refused fetch is recorded like any other failed fetch, so the run history show
 A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (300 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
 
 Summaries of feed articles are counted apart. Once the day has made `summariesPerDay` of them (100 by default), no more are made until the next day, which starts with the newest articles that still wait. Summaries do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `summariesPerDay`. The `summarize` task runs on the provider named `fast` unless `tasks` in `config.yaml` assigns another; see [docs/providers.md](docs/providers.md).
+
+Translation by the model counts towards `llmCallsPerDay`. On a day that has reached it, an article that needs the model is shown in the original, with a button to try again.
 
 ## Development
 

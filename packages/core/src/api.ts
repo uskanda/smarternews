@@ -155,6 +155,32 @@ export type Origin = z.infer<typeof originSchema>;
 export const autoSummarySourceSchema = z.enum(["page", "feed"]);
 export type AutoSummarySource = z.infer<typeof autoSummarySourceSchema>;
 
+export const translationMethodSchema = z.enum(["google", "llm"]);
+export type TranslationMethod = z.infer<typeof translationMethodSchema>;
+
+/** The content of a feed article in the output language, as pairs of translation and original. */
+export const articleTranslationSchema = z.object({
+  /** Null only between a rewrite of the title by the feed and its next translation. */
+  translatedTitle: z.string().nullable(),
+  /** The language of the original as the translation API found it. Null when a model translated. */
+  sourceLanguage: z.string().nullable(),
+  segments: z.array(
+    z.object({
+      /** Markdown, as in the content. */
+      original: z.string(),
+      /** Markdown. Null for a segment shown as it is: code, images, and what lies past the translated length. */
+      translated: z.string().nullable(),
+      originalHtml: z.string(),
+      translatedHtml: z.string().nullable(),
+    }),
+  ),
+  method: translationMethodSchema,
+  /** True when the end of the content was left untranslated because of its length. */
+  truncated: z.boolean(),
+  createdAt: z.string(),
+});
+export type ArticleTranslation = z.infer<typeof articleTranslationSchema>;
+
 export const articleSummarySchema = z.object({
   id: z.number().int(),
   /** Null for an article of a feed that belongs to no category. */
@@ -164,6 +190,8 @@ export const articleSummarySchema = z.object({
   author: z.string().nullable(),
   kind: kindSchema,
   title: z.string(),
+  /** The title of a feed article in the output language. Null when there is no translation. */
+  translatedTitle: z.string().nullable(),
   summary: z.string(),
   impact: z.string().nullable(),
   /** Null for a feed article. */
@@ -194,6 +222,12 @@ export const articleSchema = articleSummarySchema.extend({
     .nullable(),
   /** True while a feed article waits for its summary. */
   autoSummaryPending: z.boolean(),
+  /** True for an article of a feed that translates. Only such an article can be translated. */
+  translatable: z.boolean(),
+  /** The language of the original as the translation API found it. Null when it is not known. */
+  sourceLanguage: z.string().nullable(),
+  /** The stored translation of the content. Null until the article is translated. */
+  translation: articleTranslationSchema.nullable(),
   snippetOnly: z.boolean(),
   previousArticleId: z.number().int().nullable(),
   refs: z.array(articleRefSchema),
@@ -277,6 +311,8 @@ export const feedSchema = z.object({
   enabled: z.boolean(),
   /** Whether the articles this feed delivers from now on are summarised by a model. */
   autoSummarize: z.boolean(),
+  /** Whether the titles and contents of this feed's articles are translated into the output language. */
+  translate: z.boolean(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -296,6 +332,7 @@ export const feedCreateSchema = z.object({
   intervalMinutes: intervalMinutesSchema.nullable().optional(),
   enabled: z.boolean().optional(),
   autoSummarize: z.boolean().optional(),
+  translate: z.boolean().optional(),
 });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
@@ -406,7 +443,7 @@ export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize"]);
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate"]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
 export const providerStatusSchema = z.object({
@@ -420,6 +457,20 @@ export const providerStatusSchema = z.object({
   limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int(), summariesPerDay: z.number().int() }),
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
+
+// ---- translation -------------------------------------------------------------------------------
+
+/** How much the translation API was used this month. Holds no key. */
+export const translationStatusSchema = z.object({
+  /** The current month in the configured time zone, as YYYY-MM. */
+  month: z.string(),
+  /** Characters sent to the translation API in that month. */
+  chars: z.number().int(),
+  monthlyChars: z.number().int(),
+  /** False when no key is set: a model translates then, and only what is opened. */
+  apiKeyConfigured: z.boolean(),
+});
+export type TranslationStatus = z.infer<typeof translationStatusSchema>;
 
 // ---- settings file -----------------------------------------------------------------------------
 
@@ -438,6 +489,8 @@ const settingsFileSubscriptionSchema = z.object({
   enabled: z.boolean().optional(),
   /** Left out, a new feed has no summaries and a known one keeps what it has. */
   autoSummarize: z.boolean().optional(),
+  /** Left out, a new feed is not translated and a known one keeps what it has. */
+  translate: z.boolean().optional(),
 });
 export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
 
@@ -482,7 +535,7 @@ export type ImportResult = z.infer<typeof importResultSchema>;
 
 export const apiErrorSchema = z.object({
   error: z.object({
-    code: z.enum(["unauthorized", "invalid_input", "not_found", "conflict", "internal"]),
+    code: z.enum(["unauthorized", "invalid_input", "not_found", "conflict", "unavailable", "internal"]),
     message: z.string(),
     fields: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
   }),

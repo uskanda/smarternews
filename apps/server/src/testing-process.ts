@@ -4,8 +4,8 @@
 // creates one server per test. Each server listens on a port of its own, so a client addresses it exactly like
 // a real one. Everything listens on the loopback address only, and the product never starts this file.
 //
-//   POST /__control   {"op": "create", "start"?, "webSearch"?}    -> {"id", "url", "apiToken", "feedToken"}
-//   POST /__control   {"op": "category" | "article" | "advance" | "core" | "sql" | "dispose", "id", ...}
+//   POST /__control   {"op": "create", "start"?, "webSearch"?, "translation"?}    -> {"id", "url", "apiToken", "feedToken"}
+//   POST /__control   {"op": "category" | "article" | "advance" | "core" | "sql" | "releaseTranslation" | "dispose", "id", ...}
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as core from "@smarternews/core";
@@ -16,6 +16,8 @@ type Instance = ReturnType<typeof testServer>;
 
 const instances = new Map<string, Instance>();
 const listeners = new Map<string, Server>();
+/** Per server whose translation API waits: what lets it answer. */
+const gates = new Map<string, () => void>();
 let serial = 0;
 
 interface Command {
@@ -23,9 +25,25 @@ interface Command {
   id?: string;
   start?: string;
   webSearch?: boolean;
+  /** "none": no key and no model call left, so nothing can translate. "gated": the API answers after "releaseTranslation". */
+  translation?: "none" | "gated";
   name?: string;
   args?: unknown[];
   query?: string;
+}
+
+/** A translation API that answers every text with a mark in front, once the test lets it. */
+function gatedTranslator(id: string) {
+  const gate = new Promise<void>((resolve) => gates.set(id, resolve));
+  const calls: Array<{ items: core.TranslationItem[]; target: string }> = [];
+  return {
+    calls,
+    async translate(items: core.TranslationItem[], target: string) {
+      calls.push({ items, target });
+      await gate;
+      return { texts: items.map((item) => `訳:${item.text}`), sourceLanguage: "en" };
+    },
+  };
 }
 
 function instance(id: string | undefined): Instance {
@@ -39,7 +57,11 @@ async function run(command: Command): Promise<unknown> {
   if (command.op === "create") {
     serial += 1;
     const id = `s${serial}`;
-    const server = testServer(command.start, { webSearch: command.webSearch });
+    const server = testServer(command.start, {
+      webSearch: command.webSearch,
+      ...(command.translation === "none" ? { google: null, llmCallsPerDay: 0 } : {}),
+      ...(command.translation === "gated" ? { google: gatedTranslator(id) } : {}),
+    });
     const listener = createServer((request, response) => serve(server, request, response));
     await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
     instances.set(id, server);
@@ -57,6 +79,9 @@ async function run(command: Command): Promise<unknown> {
       return server.category(...(args as Parameters<Instance["category"]>));
     case "article":
       return server.article(...(args as Parameters<Instance["article"]>));
+    case "releaseTranslation":
+      gates.get(command.id!)?.();
+      return null;
     case "advance":
       server.clock.advance(args[0] as number);
       return server.clock().toISOString();

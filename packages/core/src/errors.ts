@@ -1,4 +1,4 @@
-export type DomainErrorCode = "invalid" | "not_found" | "conflict";
+export type DomainErrorCode = "invalid" | "not_found" | "conflict" | "unavailable";
 
 export interface FieldError {
   path: string;

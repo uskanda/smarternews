@@ -43,6 +43,7 @@ function toFeed(row: Row, baseMinutes: number): Feed {
     intervalMinutes: numOrNull(row.interval_minutes),
     enabled,
     autoSummarize: bool(row.auto_summarize),
+    translate: bool(row.translate),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
@@ -166,6 +167,8 @@ export interface NewFeed {
   enabled?: boolean;
   /** Summarise the articles this feed delivers from now on. */
   autoSummarize?: boolean;
+  /** Translate the titles and contents of the articles this feed delivers. */
+  translate?: boolean;
 }
 
 /** Stores a feed without fetching it. Refuses a URL that is already subscribed. */
@@ -180,8 +183,8 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
-          auto_summarize, auto_summarize_since)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          auto_summarize, auto_summarize_since, translate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -195,6 +198,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       lastPosition(db, input.categoryId ?? null) + 1,
       input.autoSummarize ? 1 : 0,
       input.autoSummarize ? now : null,
+      input.translate ? 1 : 0,
     );
   return getFeed(db, num(result.lastInsertRowid));
 }
@@ -217,6 +221,8 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
         id,
       );
     }
+    // Nothing is translated here: the articles the feed already has are translated when they are opened.
+    if (patch.translate !== undefined) db.prepare("UPDATE feeds SET translate = ? WHERE id = ?").run(patch.translate ? 1 : 0, id);
     if (patch.categoryId !== undefined && patch.categoryId !== current.categoryId) {
       // It goes last among the feeds it joins.
       db.prepare("UPDATE feeds SET position = ? WHERE id = ?").run(lastPosition(db, patch.categoryId) + 1, id);

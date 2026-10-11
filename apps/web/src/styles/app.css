@@ -194,4 +194,17 @@
     padding-left: var(--spacing-md);
     color: var(--color-on-surface-muted);
   }
+
+  /* A translated segment: the translation as the text to read, the original right under it, smaller and quieter. */
+  .article-body .segment,
+  .article-body .segment > div {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+  }
+
+  .article-body .segment-original {
+    @apply type-body-md;
+    color: var(--color-on-surface-muted);
+  }
 }

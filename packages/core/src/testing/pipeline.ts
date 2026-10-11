@@ -80,7 +80,7 @@ interface JudgeCandidate {
  *   [i4]       the judge gives importance 4 (default 3)
  *   {story-a}  the cluster step groups pages, and matches published articles, by this key
  */
-export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize">, FakeHandler> = {
+export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize" | "translate">, FakeHandler> = {
   interpret: () => ({ queries: ["default query"], criteria: "default criteria", suggestedSources: { newsSearch: false, llmSearch: false } }),
   judge: (request): JudgeOutput => ({
     judgments: materialLines<JudgeCandidate>(request.prompt).map((candidate) => ({

@@ -1,4 +1,4 @@
-// The six jobs given to a model. Each has an output schema and a function that builds its prompt.
+// The seven jobs given to a model. Each has an output schema and a function that builds its prompt.
 // Nothing else in the code base talks to a model.
 import { z } from "zod";
 import { registrationSchema, type Kind, type SearchLocale, type TaskName } from "../api.ts";
@@ -324,9 +324,60 @@ const summarize: TaskDefinition<SummarizeInput, SummarizeOutput> = {
   }),
 };
 
+// ---- translate ---------------------------------------------------------------------------------
+
+/** One call carries this many characters of passages; a longer text is split over several calls. */
+export const TRANSLATE_INPUT_CHARS = 8000;
+
+export interface TranslateInput {
+  outputLanguage: string;
+  /** Passages of one feed article, numbered from one: its title as plain text, or a segment of its content as Markdown. */
+  items: Array<{ n: number; text: string }>;
+}
+
+const translateOutput = z.object({ items: z.array(z.object({ n: z.number().int(), text: z.string().trim().min(1).max(40_000) })) });
+export type TranslateOutput = z.infer<typeof translateOutput>;
+
+/** Where the links and images of a Markdown text lead. */
+function linkTargets(text: string): string[] {
+  return [...text.matchAll(/\]\(([^)\s]+)[^)]*\)/g)].map((match) => match[1]!);
+}
+
+const translate: TaskDefinition<TranslateInput, TranslateOutput> = {
+  output: translateOutput,
+  build: (input) => ({
+    system: SYSTEM,
+    prompt: [
+      "Task: translate each numbered passage of one article.",
+      `Output language: ${input.outputLanguage}. Write every translation in this language, whatever language the passage uses.`,
+      "Passages, as one JSON object:",
+      material(JSON.stringify({ items: input.items })),
+      "Rules:",
+      "- Answer with the same number of items as there are passages, in the same order, each under the same n. Never merge, split, drop or add a passage.",
+      "- Say only what the passage says. Add no explanation, no note and nothing you know from elsewhere, and leave nothing out.",
+      "- The passages are Markdown. Keep the markup as it is: emphasis, code spans, line breaks, quote marks, and the brackets of links and images.",
+      "- Keep the target of every link and the address of every image exactly as it is. Translate the words of the link, not its target.",
+      "- Do not translate what stands in a code span.",
+      "- Use a neutral, plain register (in Japanese, the です・ます style for sentences).",
+      "- A passage that is already in the output language is answered unchanged.",
+    ].join("\n"),
+  }),
+  check: (input, output) => {
+    if (output.items.length !== input.items.length) return `${output.items.length} translations for ${input.items.length} passages`;
+    for (const [index, passage] of input.items.entries()) {
+      const item = output.items[index]!;
+      if (item.n !== passage.n) return `the item at position ${index + 1} has the number ${item.n} and not ${passage.n}`;
+      const allowed = new Set(linkTargets(passage.text));
+      const strange = linkTargets(item.text).find((target) => !allowed.has(target));
+      if (strange !== undefined) return `the translation of passage ${passage.n} has a link to ${strange.slice(0, 200)}, which the passage does not have`;
+    }
+    return null;
+  },
+};
+
 // ---- registry ----------------------------------------------------------------------------------
 
-export const tasks = { interpret, search, judge, cluster, write, summarize };
+export const tasks = { interpret, search, judge, cluster, write, summarize, translate };
 
 export interface TaskIo {
   interpret: { input: InterpretInput; output: InterpretOutput };
@@ -335,6 +386,7 @@ export interface TaskIo {
   cluster: { input: ClusterInput; output: ClusterOutput };
   write: { input: WriteInput; output: WriteOutput };
   summarize: { input: SummarizeInput; output: SummarizeOutput };
+  translate: { input: TranslateInput; output: TranslateOutput };
 }
 
-export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize"];
+export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize", "translate"];

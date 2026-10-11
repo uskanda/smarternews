@@ -7,6 +7,8 @@ import {
   FeedPoller,
   Fetcher,
   getSettings,
+  GoogleTranslator,
+  LlmTranslator,
   migrate,
   openDatabase,
   parseConfig,
@@ -17,6 +19,8 @@ import {
   SummaryWorker,
   systemClock,
   TaskRunner,
+  translationApiKey,
+  TranslationService,
   type Clock,
   type Config,
   type Database,
@@ -89,7 +93,17 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     execute: (runId) => executeRun({ db, clock, runner, fetcher, config }, runId),
   });
   const scheduler = new Scheduler({ db, clock, queue });
-  const poller = new FeedPoller({ db, clock, fetcher });
+  // The key comes from the environment and stays in this object: it is in no file, no table and no answer.
+  const apiKey = translationApiKey(config, options.env);
+  const translation = new TranslationService({
+    db,
+    clock,
+    google: apiKey === null ? null : new GoogleTranslator({ fetcher, apiKey }),
+    llm: new LlmTranslator(runner),
+    monthlyChars: config.translation.monthlyChars,
+    maxCharsPerArticle: config.translation.maxCharsPerArticle,
+  });
+  const poller = new FeedPoller({ db, clock, fetcher, translation });
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner });
 
   const api = ensureToken(paths.apiTokenFile);
@@ -101,6 +115,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     runner,
     fetcher,
     poller,
+    translation,
     tokens: { api: api.token, feed: feed.token },
     version,
     webDir: join(import.meta.dirname, "../../web/dist"),

@@ -387,3 +387,42 @@ describe("summaries of feeds in the settings file", () => {
     expect(() => importSettings(createTestDb(), file("    autoSummarize: sometimes\n"), clock)).toThrow(/expected format/);
   });
 });
+
+describe("translation of a feed in the settings file", () => {
+  const clock = fakeClock("2026-03-01T00:00:00.000Z");
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("is written for the feeds that translate only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", translate: true }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.translate)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.translate])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("is off for a new feed without the line, and stays as it is for a known one", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.translate).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { translate: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.translate).toBe(true);
+    importSettings(db, file("    translate: false\n"), clock);
+    expect(listFeeds(db)[0]!.translate).toBe(false);
+  });
+
+  it("writes nothing about the key of the translation API", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", translate: true }, clock);
+    expect(exportSettings(db)).not.toMatch(/key/i);
+  });
+});

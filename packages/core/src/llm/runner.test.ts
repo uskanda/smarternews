@@ -56,6 +56,7 @@ function setup(options: {
       cluster: first,
       write: first,
       summarize: first,
+      translate: first,
       ...options.assignment,
     },
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },

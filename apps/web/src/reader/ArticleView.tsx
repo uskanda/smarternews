@@ -1,8 +1,8 @@
-import type { Article } from "@smarternews/core/api";
+import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
-import { useArticle } from "../api/queries.ts";
+import { useArticle, useArticleTranslation } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -38,6 +38,43 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
   );
 }
 
+/**
+ * The content of a translated feed article: segment by segment, the translation as the text to read and the
+ * original right under it. The pairs come from the server as they are shown; nothing is matched up here.
+ * A segment without a translation, and one whose translation says the same in the same words, is shown once.
+ */
+function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
+  const lang = translation.sourceLanguage ?? undefined;
+  const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
+  return (
+    <div className="article-body type-body-lg">
+      {translation.segments.flatMap((segment, index) => {
+        const paired = segment.translated !== null && segment.translated.trim() !== segment.original.trim();
+        const shown = paired ? (
+          <div key={index} className="segment">
+            <div>
+              <Markdown text={segment.translated!} images />
+            </div>
+            <div className="segment-original" lang={lang}>
+              <Markdown text={segment.original} images plainHeadings />
+            </div>
+          </div>
+        ) : (
+          <Markdown key={index} text={segment.original} images />
+        );
+        return translation.truncated && index === lastTranslated
+          ? [
+              shown,
+              <p key="rest" role="note" className="type-label-sm text-on-surface-muted">
+                長い記事のため、ここから先は翻訳していません。
+              </p>,
+            ]
+          : [shown];
+      })}
+    </div>
+  );
+}
+
 /** The article pane: what the story is, what it means for the reader, the text, and where it came from. */
 export function ArticleView({
   id,
@@ -62,6 +99,7 @@ export function ArticleView({
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
+  const translating = useArticleTranslation(article);
 
   // On a narrow screen the article replaces the list, and the link that was activated is gone:
   // the focus moves to the headline so that keyboard and screen reader users land in the article.
@@ -117,9 +155,17 @@ export function ArticleView({
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
           {article.starred ? <span>スター</span> : null}
         </div>
-        <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
-          {article.title}
-        </h2>
+        <div className="flex flex-col gap-xs">
+          <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
+            {article.translatedTitle ?? article.title}
+          </h2>
+          {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
+            // The title as the site wrote it, marked with its language so that it is read out in that language.
+            <p lang={article.sourceLanguage ?? undefined} className="type-body-md text-on-surface-muted">
+              {article.title}
+            </p>
+          ) : null}
+        </div>
         {article.unconfirmed ? (
           <p className="flex items-baseline gap-sm type-body-md">
             <Badge tone="warning">未確認</Badge>
@@ -154,9 +200,23 @@ export function ArticleView({
             AIによる要約を作っています。
           </p>
         ) : null}
-        <div className="article-body type-body-lg">
-          <Markdown text={article.body} images={delivered} />
-        </div>
+        {translating.isFetching ? (
+          <p role="status" className="type-label-sm text-on-surface-muted">
+            翻訳しています。
+          </p>
+        ) : translating.isError ? (
+          <div className="flex flex-wrap items-center gap-x-md gap-y-xs type-body-md">
+            <p role="alert">翻訳できませんでした。原文を表示しています。</p>
+            <Button onClick={() => void translating.refetch()}>翻訳をやり直す</Button>
+          </div>
+        ) : null}
+        {article.translation ? (
+          <TranslatedBody translation={article.translation} />
+        ) : (
+          <div className="article-body type-body-lg">
+            <Markdown text={article.body} images={delivered} />
+          </div>
+        )}
         {previous ? (
           <p className="type-body-md">
             <span className="text-on-surface-muted">この話題の前の記事 </span>
