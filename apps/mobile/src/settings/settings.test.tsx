@@ -1,5 +1,6 @@
 import { screen, userEvent, waitFor } from "@testing-library/react-native";
 import { Linking } from "react-native";
+import { colors } from "../theme/tokens";
 import { loadConnection } from "../connection/store";
 import { renderApp } from "../testing/app";
 import { nodeFetch } from "../testing/fetch";
@@ -189,5 +190,49 @@ describe("the connection", () => {
 
     expect(await screen.findByRole("header", { name: "設定" })).toBeOnTheScreen();
     expect(await loadConnection()).toEqual({ url: server.url, token: server.token });
+  });
+});
+
+describe("the colour scheme", () => {
+  const radio = (name: string) => screen.findByRole("radio", { name });
+  const flat = (style: unknown): Record<string, unknown> => Object.assign({}, ...[style].flat(5).filter(Boolean)) as Record<string, unknown>;
+  const headingColor = async () => flat((await screen.findAllByRole("header"))[0]!.props.style).color;
+
+  it("offers following the device and the three schemes, read out with their names and which one is chosen", async () => {
+    await renderApp({ url: "/settings" });
+
+    expect(await radio("端末に従う")).toBeChecked();
+    // The group is not a stop of its own for a screen reader: it names what the four rows choose between.
+    expect(screen.getByLabelText("配色").props.accessibilityRole).toBe("radiogroup");
+    for (const name of ["ライト", "ダーク", "ダークブルー"]) expect(await radio(name)).not.toBeChecked();
+  });
+
+  it("draws the settings in the chosen scheme at once, and the list the user goes back to", async () => {
+    await renderApp({ url: "/settings" });
+    expect(await headingColor()).toBe(colors.light["on-surface"]);
+
+    await userEvent.setup().press(await radio("ダーク"));
+
+    await waitFor(async () => expect(await radio("ダーク")).toBeChecked());
+    expect(await radio("端末に従う")).not.toBeChecked();
+    expect(await headingColor()).toBe(colors.dark["on-surface"]);
+
+    await press("一覧へ戻る");
+    await screen.findByTestId("article-list");
+    expect(await headingColor()).toBe(colors.dark["on-surface"]);
+  });
+
+  it("is still chosen after the app was closed and opened again", async () => {
+    const server = await makeServer();
+    const first = await renderApp({ server, url: "/settings" });
+    await userEvent.setup().press(await radio("ダークブルー"));
+    await waitFor(async () => expect(await radio("ダークブルー")).toBeChecked());
+    first.unmount();
+    require("../theme/store").resetThemeState();
+
+    await renderApp({ server, url: "/settings" });
+
+    await waitFor(async () => expect(await radio("ダークブルー")).toBeChecked());
+    expect(await headingColor()).toBe(colors.darkblue["on-surface"]);
   });
 });

@@ -53,7 +53,7 @@ curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 
 ## Web app
 
-The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. It follows the light or dark setting of the device. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
+The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. The settings offer four choices for how it looks: follow the device, light, dark, or dark blue. Following the device is the default: light on a light device, dark blue on a dark one. The choice is kept in the browser. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
 
 - Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
@@ -72,7 +72,7 @@ The token is stored in the browser's local storage. "このブラウザーから
 
 ## Android app
 
-The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
+The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Its settings screen offers the same four choices, kept on the device. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
 
 In the drawer, a long press on a category or a feed picks it up; drag it to reorder, or hold a feed over another category for half a second to move it there.
 

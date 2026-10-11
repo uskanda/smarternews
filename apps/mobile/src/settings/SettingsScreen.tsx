@@ -1,4 +1,4 @@
-import { formatFull, messageFor, NOTIFY_SETTING_LABEL, stageLabel, STATUS_LABEL, type NotifySetting } from "@smarternews/client";
+import { formatFull, messageFor, NOTIFY_SETTING_LABEL, stageLabel, STATUS_LABEL, THEME_CHOICES, THEME_LABEL, type NotifySetting } from "@smarternews/client";
 import type { Category, Run } from "@smarternews/core/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Constants from "expo-constants";
@@ -13,6 +13,7 @@ import { useBack } from "../lib/back";
 import { useNotify } from "../notifications/NotificationsBridge";
 import { stopNotifications } from "../notifications/setup";
 import { clearNotifyState } from "../notifications/store";
+import { chooseTheme, useThemeChoice } from "../theme/store";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, IconButton, Loading, Notice } from "../ui/controls";
 import { ScreenHeader } from "../ui/ScreenHeader";
@@ -112,32 +113,36 @@ function CategoryRun({ category, run, timeZone }: { category: Category; run: Run
   );
 }
 
-function NotifyChoice() {
+/** One of several, as a column of rows. Each row is read out with its name and whether it is the chosen one. */
+function Choice<T extends string>({
+  label,
+  options,
+  labels,
+  value,
+  disabled = false,
+  onChoose,
+}: {
+  label: string;
+  options: readonly T[];
+  labels: Record<T, string>;
+  /** Null while the stored choice is not known yet: no row is chosen, and none can be pressed. */
+  value: T | null;
+  disabled?: boolean;
+  onChoose: (option: T) => void;
+}) {
   const theme = useTheme();
-  const { setting, choose: apply } = useNotify();
-  const [busy, setBusy] = useState(false);
-
-  async function choose(next: NotifySetting) {
-    setBusy(true);
-    try {
-      await apply(next);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <View accessibilityRole="radiogroup" accessibilityLabel="通知">
-      {(Object.keys(NOTIFY_SETTING_LABEL) as NotifySetting[]).map((option) => {
-        const selected = setting === option;
+    <View accessibilityRole="radiogroup" accessibilityLabel={label}>
+      {options.map((option) => {
+        const selected = value === option;
         return (
           <Pressable
             key={option}
             accessibilityRole="radio"
-            accessibilityLabel={NOTIFY_SETTING_LABEL[option]}
-            accessibilityState={{ checked: selected, disabled: busy }}
-            disabled={busy || setting === null}
-            onPress={() => void choose(option)}
+            accessibilityLabel={labels[option]}
+            accessibilityState={{ checked: selected, disabled }}
+            disabled={disabled || value === null}
+            onPress={() => onChoose(option)}
             style={{ minHeight: theme.spacing["touch-android"], flexDirection: "row", alignItems: "center", gap: theme.spacing.md }}
           >
             <View
@@ -153,12 +158,28 @@ function NotifyChoice() {
             >
               {selected ? <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary }} /> : null}
             </View>
-            <Txt variant={selected ? "label-md" : "body-md"}>{NOTIFY_SETTING_LABEL[option]}</Txt>
+            <Txt variant={selected ? "label-md" : "body-md"}>{labels[option]}</Txt>
           </Pressable>
         );
       })}
     </View>
   );
+}
+
+function NotifyChoice() {
+  const { setting, choose: apply } = useNotify();
+  const [busy, setBusy] = useState(false);
+
+  async function choose(next: NotifySetting) {
+    setBusy(true);
+    try {
+      await apply(next);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Choice label="通知" options={Object.keys(NOTIFY_SETTING_LABEL) as NotifySetting[]} labels={NOTIFY_SETTING_LABEL} value={setting} disabled={busy} onChoose={(next) => void choose(next)} />;
 }
 
 /** What the app itself can change: reader information, a run of a category, notifications, and the connection. */
@@ -174,6 +195,7 @@ export function SettingsScreen() {
   const categories = useCategories();
   const runs = useRuns();
   const { refused } = useNotify();
+  const choice = useThemeChoice();
   const [confirming, setConfirming] = useState(false);
 
   // The newest run of each category: the list comes newest first.
@@ -216,6 +238,13 @@ export function SettingsScreen() {
           </Txt>
           <NotifyChoice />
           {refused ? <Notice tone="warning">通知を出すには、端末の許可が必要です。端末の設定でこのアプリの通知を許可してから、もう一度選んでください。</Notice> : null}
+        </Section>
+
+        <Section title="配色">
+          <Choice label="配色" options={THEME_CHOICES} labels={THEME_LABEL} value={choice} onChoose={(next) => void chooseTheme(next)} />
+          <Txt variant="label-sm" color="on-surface-muted">
+            「端末に従う」は、端末が暗い配色のとき「ダークブルー」で表示します。選んだ配色は、この端末だけに保存します。
+          </Txt>
         </Section>
 
         <Section title="接続">

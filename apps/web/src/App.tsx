@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserRouter, createMemoryRouter, Navigate, RouterProvider, type RouteObject } from "react-router";
 import { createApi, type Fetch } from "@smarternews/client";
 import { AppContext, type AppServices } from "./app/context.ts";
+import { applyStoredTheme } from "./lib/theme.ts";
 import { readToken, writeToken } from "./lib/token-store.ts";
 import { ReaderPage } from "./reader/ReaderPage.tsx";
 import { RunPage } from "./runs/RunPage.tsx";
@@ -76,6 +77,8 @@ export function App({ fetchImpl, initialEntries, now, onLocation }: AppProps) {
     () => (initialEntries ? createMemoryRouter(routes, { initialEntries }) : createBrowserRouter(routes)),
     [initialEntries],
   );
+  // The script in the head has done this before the first paint. Where it could not run, the page catches up here.
+  useEffect(applyStoredTheme, []);
   useEffect(() => {
     if (!onLocation) return;
     return router.subscribe((state) => onLocation(`${state.location.pathname}${state.location.search}`));

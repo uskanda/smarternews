@@ -34,6 +34,11 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   {
+    // The browser runs these as they are, before the app: plain scripts, not modules.
+    files: ["apps/web/public/*.js"],
+    languageOptions: { sourceType: "script", globals: { window: "readonly", document: "readonly" } },
+  },
+  {
     files: ["apps/web/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
     rules: {

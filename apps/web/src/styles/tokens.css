@@ -39,9 +39,9 @@
   --spacing-touch-android: 48px;
 }
 
-/* The dark values replace the light ones when the device asks for a dark colour scheme. */
+/* Until the user chooses a colour scheme, the dark blue values replace the light ones on a device that asks for a dark one. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     color-scheme: dark;
     --color-primary: #9CB6FF;
     --color-on-primary: #10151B;
@@ -58,6 +58,47 @@
     --color-error: #FFA08F;
     --color-on-error: #10151B;
   }
+}
+
+/* The colour scheme the user chose is the `data-theme` attribute of the root element. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-primary: #A9BEFF;
+  --color-on-primary: #121212;
+  --color-background: #121212;
+  --color-surface: #1B1B1B;
+  --color-on-surface: #E8E8E8;
+  --color-on-surface-muted: #A6A6A6;
+  --color-outline: #303030;
+  --color-outline-strong: #757575;
+  --color-selected: #2A2A2A;
+  --color-mark: #E9C13A;
+  --color-mark-fill: #5C4B12;
+  --color-warning: #F0B45C;
+  --color-error: #FFA08F;
+  --color-on-error: #121212;
+}
+
+:root[data-theme="darkblue"] {
+  color-scheme: dark;
+  --color-primary: #9CB6FF;
+  --color-on-primary: #10151B;
+  --color-background: #10151B;
+  --color-surface: #171D25;
+  --color-on-surface: #E7EBF0;
+  --color-on-surface-muted: #9DA9B7;
+  --color-outline: #2B3440;
+  --color-outline-strong: #66727F;
+  --color-selected: #212B3A;
+  --color-mark: #E9C13A;
+  --color-mark-fill: #5C4B12;
+  --color-warning: #F0B45C;
+  --color-error: #FFA08F;
+  --color-on-error: #10151B;
 }
 
 @utility type-headline-lg {
