@@ -30,7 +30,7 @@ function toCategory(row: Row): Category {
 }
 
 export function listCategories(db: Database): Category[] {
-  return db.prepare("SELECT * FROM categories ORDER BY id").all().map(toCategory);
+  return db.prepare("SELECT * FROM categories ORDER BY position, id").all().map(toCategory);
 }
 
 export function findCategory(db: Database, id: number): Category | null {
@@ -80,8 +80,8 @@ export function createCategory(db: Database, input: CategoryCreate, clock: Clock
   const result = db
     .prepare(
       `INSERT INTO categories
-         (slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, window_days, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, window_days, enabled, created_at, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(position), 0) + 1 FROM categories))`,
     )
     .run(
       slug,
@@ -122,6 +122,30 @@ export function updateCategory(db: Database, id: number, patch: CategoryUpdate):
     id,
   );
   return getCategory(db, id);
+}
+
+/** Stores the order of all categories: the given ones first, in that order, then the rest as they were. */
+export function orderCategories(db: Database, ids: number[]): void {
+  const first = new Set(ids);
+  const all = [...ids, ...listCategories(db).map((category) => category.id).filter((id) => !first.has(id))];
+  const set = db.prepare("UPDATE categories SET position = ? WHERE id = ?");
+  transaction(db, () => all.forEach((id, index) => set.run(index + 1, id)));
+}
+
+/** Puts one category before another, or last when `before` is null. The others keep their order. */
+export function moveCategory(db: Database, id: number, before: number | null): Category[] {
+  getCategory(db, id);
+  if (before !== null && !findCategory(db, before)) {
+    throw new DomainError("invalid", `category ${before} does not exist`, [{ path: "before", message: "no such category" }]);
+  }
+  if (before !== id) {
+    const others = listCategories(db)
+      .map((category) => category.id)
+      .filter((other) => other !== id);
+    const at = before === null ? others.length : others.indexOf(before);
+    orderCategories(db, [...others.slice(0, at), id, ...others.slice(at)]);
+  }
+  return listCategories(db);
 }
 
 /**

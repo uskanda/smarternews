@@ -8,6 +8,7 @@ export function ConfirmDialog({
   children,
   actions,
   onDismiss,
+  returnFocus,
 }: {
   open: boolean;
   title: string;
@@ -15,6 +16,8 @@ export function ConfirmDialog({
   /** Buttons, safest choice last so that it sits where the dialog is dismissed. */
   actions: ReactNode;
   onDismiss: () => void;
+  /** Where the focus goes when the dialog closes, when what opened it is gone by then: a menu item, a deleted row. */
+  returnFocus?: () => HTMLElement | null | undefined;
 }) {
   // The dialog is opened by a button that is not a Radix trigger, so where the focus was is remembered here.
   const opener = useRef<HTMLElement | null>(null);
@@ -36,9 +39,10 @@ export function ConfirmDialog({
             }
           }}
           onCloseAutoFocus={(event) => {
-            if (opener.current?.isConnected) {
+            const target = returnFocus?.() ?? (opener.current?.isConnected ? opener.current : null);
+            if (target) {
               event.preventDefault();
-              opener.current.focus();
+              target.focus();
             }
           }}
           className="fixed top-1/2 left-1/2 z-50 flex w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md rounded-lg border border-outline bg-surface p-xl"

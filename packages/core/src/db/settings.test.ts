@@ -11,6 +11,7 @@ describe("getSettings", () => {
       timeZone: "Europe/Berlin",
       search: { language: "ja", region: "JP" },
       feedIntervalMinutes: 30,
+      advanceAfterMarkAll: false,
     });
   });
 });

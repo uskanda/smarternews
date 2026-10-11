@@ -1,7 +1,7 @@
 import type { Settings, SettingsUpdate } from "../api.ts";
 import { DomainError } from "../errors.ts";
 import type { Database } from "./database.ts";
-import { num, str } from "./rows.ts";
+import { bool, num, str } from "./rows.ts";
 
 export function isValidTimeZone(timeZone: string): boolean {
   try {
@@ -29,6 +29,7 @@ export function getSettings(db: Database, defaultTimeZone: string = systemTimeZo
     timeZone: str(row.time_zone),
     search: { language: str(row.search_language), region: str(row.search_region) },
     feedIntervalMinutes: num(row.feed_interval_minutes),
+    advanceAfterMarkAll: bool(row.advance_after_mark_all),
   };
 }
 
@@ -41,8 +42,8 @@ export function updateSettings(db: Database, patch: SettingsUpdate): Settings {
   const next = { ...getSettings(db), ...patch };
   db.prepare(
     `UPDATE settings SET reader_info = ?, output_language = ?, time_zone = ?, search_language = ?, search_region = ?,
-            feed_interval_minutes = ?
+            feed_interval_minutes = ?, advance_after_mark_all = ?
       WHERE id = 1`,
-  ).run(next.readerInfo, next.outputLanguage, next.timeZone, next.search.language, next.search.region, next.feedIntervalMinutes);
+  ).run(next.readerInfo, next.outputLanguage, next.timeZone, next.search.language, next.search.region, next.feedIntervalMinutes, next.advanceAfterMarkAll ? 1 : 0);
   return next;
 }

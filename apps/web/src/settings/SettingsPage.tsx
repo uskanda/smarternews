@@ -6,7 +6,7 @@ import { ApiError } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
-import { Badge, Button, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
 import { ConnectCode } from "./ConnectCode.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
@@ -139,6 +139,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
     language: settings.search.language,
     region: settings.search.region,
   });
+  const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
   const [error, setError] = useState<unknown>(null);
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
 
@@ -149,6 +150,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         outputLanguage: form.outputLanguage.trim(),
         timeZone: form.timeZone.trim(),
         search: { language: form.language.trim(), region: form.region.trim() },
+        advanceAfterMarkAll: advance,
       });
       client.setQueryData(["settings"], saved);
       setError(null);
@@ -184,6 +186,13 @@ function GlobalSettings({ settings }: { settings: Settings }) {
           error={refusal(error, "search.region")}
           hint="JP や US のように、大文字2文字で書きます。"
         />
+        <div className="sm:col-span-2">
+          <Checkbox
+            label="「すべて既読にする」のあと、未読のある次の項目へ移る"
+            checked={advance}
+            onChange={(event) => setAdvance(event.target.checked)}
+          />
+        </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
           <Button type="submit" variant="primary">
@@ -252,7 +261,7 @@ function SettingsFile() {
           />
         </label>
         <p className="type-label-sm text-on-surface-muted">
-          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとストップワードも消えません。
+          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとストップワードも消えません。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
         </p>
         <div>
           <Button type="submit" disabled={!file}>

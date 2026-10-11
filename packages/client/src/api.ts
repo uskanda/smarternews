@@ -31,6 +31,7 @@ import {
   type FeedCreate,
   type FeedDiscoveryResult,
   type FeedFetchResult,
+  type FeedMove,
   type FeedUpdate,
   type ImportResult,
   type MarkRead,
@@ -165,6 +166,9 @@ export function createApi(options: ApiOptions) {
     createCategory: (input: CategoryCreate): Promise<Category> => json(categorySchema, "/categories", body("POST", input)),
     updateCategory: (id: number, patch: CategoryUpdate): Promise<Category> =>
       json(categorySchema, `/categories/${id}`, body("PATCH", patch)),
+    /** Puts the category before another one, or last. Answers with all categories in their order. */
+    moveCategory: (id: number, before: number | null): Promise<Category[]> =>
+      json(z.array(categorySchema), `/categories/${id}/move`, body("POST", { before })),
     deleteCategory: async (id: number): Promise<void> => void (await request(`/categories/${id}`, { method: "DELETE" })),
 
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
@@ -188,6 +192,8 @@ export function createApi(options: ApiOptions) {
     createFeed: (input: FeedCreate): Promise<Feed> => json(feedSchema, "/feeds", body("POST", input)),
     discoverFeeds: (url: string): Promise<FeedDiscoveryResult> => json(feedDiscoveryResultSchema, "/feeds/discover", body("POST", { url })),
     updateFeed: (id: number, patch: FeedUpdate): Promise<Feed> => json(feedSchema, `/feeds/${id}`, body("PATCH", patch)),
+    /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
+    moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),
     deleteFeed: async (id: number): Promise<void> => void (await request(`/feeds/${id}`, { method: "DELETE" })),
     fetchFeed: (id: number): Promise<FeedFetchResult> => json(feedFetchResultSchema, `/feeds/${id}/fetch`, { method: "POST" }),
     exportOpml: async (): Promise<string> => (await request("/feeds/opml")).text(),

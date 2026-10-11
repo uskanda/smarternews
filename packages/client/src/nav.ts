@@ -21,6 +21,8 @@ export interface NavGroup {
   entry: NavEntry;
   /** Empty for a category without subscribed feeds: it then looks as it did before feeds existed. */
   children: NavEntry[];
+  /** False for an event category, which lists events by day and holds no feeds. */
+  acceptsFeeds: boolean;
 }
 
 export interface NavModel {
@@ -46,6 +48,7 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
       const count = ofCategory.get(category.id);
       return {
         entry: { target: { type: "category", categoryId: category.id, generatedOnly: false }, label: category.name, unread: count?.unread ?? 0 },
+        acceptsFeeds: category.kind === "news",
         children:
           own.length === 0
             ? []
@@ -59,6 +62,7 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
   if (loose.length > 0) {
     groups.push({
       entry: { target: { type: "uncategorized" }, label: UNCATEGORIZED_LABEL, unread: counts?.uncategorizedUnread ?? 0 },
+      acceptsFeeds: true,
       children: loose.map(feedEntry),
     });
   }

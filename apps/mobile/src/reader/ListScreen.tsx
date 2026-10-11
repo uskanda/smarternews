@@ -1,13 +1,15 @@
-import { groupEvents } from "@smarternews/client";
+import { buildNav, groupEvents, listKey, nextTarget, parseListKey } from "@smarternews/client";
 import type { ArticleSummary } from "@smarternews/core/api";
 import { DrawerActions } from "@react-navigation/native";
+import { useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { BackHandler, FlatList, RefreshControl, SectionList, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../api/AppProvider";
-import { useTimeZone } from "../api/queries";
+import { useCategories, useFeeds, useSettings, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
+import { unfold } from "../shell/collapsed";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, IconButton, Loading, Toggle } from "../ui/controls";
 import { ScreenHeader } from "../ui/ScreenHeader";
@@ -36,6 +38,10 @@ export function ListScreen() {
   const { api, now } = useApp();
   const toast = useToast();
   const timeZone = useTimeZone();
+  const settings = useSettings();
+  const categories = useCategories();
+  const feeds = useFeeds();
+  const client = useQueryClient();
   const params = useLocalSearchParams<{ key: string; read?: string; min?: string }>();
   const ref = { key: params.key ?? "unread", includeRead: params.read === "1", importantOnly: params.min === "4" };
   const reader = useReaderList(ref);
@@ -87,6 +93,21 @@ export function ListScreen() {
     }
   }
 
+  /** Opens the next list below this one that still has unread articles, by counts fetched after the marking. */
+  async function openNext() {
+    const from = parseListKey(key);
+    if (!from) return;
+    const counts = await client.fetchQuery({ queryKey: ["counts"], queryFn: () => api.counts(), staleTime: 0 });
+    const next = nextTarget(buildNav({ categories: categories.data ?? [], feeds: feeds.data ?? [], counts }), from);
+    if (!next) return;
+    // The entry may sit below a folded category.
+    const group = next.type === "feed" ? feeds.data?.find((feed) => feed.id === next.feedId)?.categoryId : next.type === "category" ? next.categoryId : undefined;
+    if (next.type === "feed" || (next.type === "category" && next.generatedOnly)) {
+      unfold(group == null ? listKey({ type: "uncategorized" }) : listKey({ type: "category", categoryId: group, generatedOnly: false }));
+    }
+    router.navigate({ pathname: "/list/[key]", params: { key: listKey(next) } });
+  }
+
   async function markAllRead() {
     const newest = fetched.reduce<string | null>((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null);
     if (newest === null) return;
@@ -95,6 +116,7 @@ export function ListScreen() {
     try {
       const result = await api.markRead({ before, ...reader.scope, ...(reader.importantOnly ? { minImportance: 4 } : {}) });
       await reader.refresh();
+      if (settings.data?.advanceAfterMarkAll) await openNext();
       toast({
         message: `${result.updated}件を既読にしました`,
         durationMs: 10_000,
