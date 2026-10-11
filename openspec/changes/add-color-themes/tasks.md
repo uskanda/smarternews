@@ -28,7 +28,7 @@
 
 ## 5. 全体の確認
 
-- [ ] 5.1 `apps/web` について、実際のブラウザーで、3つの配色の主な画面（記事の一覧、本文、設定、実行履歴）の画像を撮り、読めない箇所がないことを確かめる
-- [ ] 5.2 `apps/mobile` について、エミュレーターで、3つの配色の一覧、本文、設定の画面を確かめる
-- [ ] 5.3 `apps/web` について `/impeccable audit` を行い、指摘を直すか、報告に書く
-- [ ] 5.4 `make verify` を通し、`openspec validate add-color-themes --strict` が通ることを確かめる
+- [x] 5.1 `apps/web` について、実際のブラウザーで、3つの配色の主な画面（記事の一覧、本文、設定、実行履歴）の画像を撮り、読めない箇所がないことを確かめる
+- [x] 5.2 `apps/mobile` について、エミュレーターで、3つの配色の一覧、本文、設定の画面を確かめる
+- [x] 5.3 `apps/web` について `/impeccable audit` を行い、指摘を直すか、報告に書く
+- [x] 5.4 `make verify` を通し、`openspec validate add-color-themes --strict` が通ることを確かめる
