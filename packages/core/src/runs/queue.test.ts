@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createCategory, deleteCategory } from "../db/categories.ts";
-import { createRun, finishRun, getRun, startRun, type RunOutcome } from "../db/runs.ts";
+import { createRun, finishRun, getRun, listRuns, startRun, type RunOutcome } from "../db/runs.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { RunQueue } from "./queue.ts";
 
@@ -221,5 +221,25 @@ describe("what the queue plans when a run has failed", () => {
     const run = queue.enqueue(category.id, "schedule", "2026-03-01T05:00");
     await queue.idle();
     expect(getRun(db, run.id)).toMatchObject({ status, retryAt: null, retrySkipped: null });
+  });
+});
+
+describe("RunQueue.resume", () => {
+  it("carries out runs that already exist, in the order given, without recording new ones", async () => {
+    const { db, queue, events, release, a, b } = setup();
+    const clock = fakeClock("2026-03-01T11:00:00.000Z");
+    const first = createRun(db, { categoryId: a.id, trigger: "schedule", slot: "2026-03-01T05:00" }, clock);
+    const second = createRun(db, { categoryId: b.id, trigger: "manual", slot: null }, clock);
+
+    queue.resume(first.id);
+    queue.resume(second.id);
+    await tick();
+    expect(events).toEqual([`start ${first.id}`]);
+    await release(first.id);
+    await tick();
+
+    expect(events).toEqual([`start ${first.id}`, `end ${first.id}`, `start ${second.id}`]);
+    expect(listRuns(db).map((run) => run.id)).toEqual([second.id, first.id]);
+    expect(getRun(db, first.id)).toMatchObject({ status: "succeeded", queuedAt: "2026-03-01T11:00:00.000Z", attempt: 0 });
   });
 });

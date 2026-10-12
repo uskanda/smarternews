@@ -2,7 +2,7 @@ import type { Candidate } from "@smarternews/core/api";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { ApiError, formatFull, stageLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
+import { ApiError, formatFull, RETRY_SKIPPED_LABEL, retryLabel, stageLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
 import { useCategories, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
@@ -88,12 +88,31 @@ export function RunPage() {
           <dd className="type-label-md">{STATUS_LABEL[data.status]}</dd>
           <dt className="text-on-surface-muted">契機</dt>
           <dd>{TRIGGER_LABEL[data.trigger]}</dd>
+          {data.attempt > 0 ? (
+            <>
+              <dt className="text-on-surface-muted">やり直し</dt>
+              <dd className="flex flex-wrap gap-x-md">
+                <span>{retryLabel(data.attempt)}</span>
+                {data.retryOf !== null ? (
+                  <Link to={`/runs/${data.retryOf}`} className={LINK}>
+                    元の実行
+                  </Link>
+                ) : null}
+              </dd>
+            </>
+          ) : null}
           <dt className="text-on-surface-muted">開始</dt>
           <dd className="tabular-nums">{formatFull(data.startedAt ?? data.queuedAt, timeZone)}</dd>
           {data.finishedAt ? (
             <>
               <dt className="text-on-surface-muted">終了</dt>
               <dd className="tabular-nums">{formatFull(data.finishedAt, timeZone)}</dd>
+            </>
+          ) : null}
+          {data.status === "failed" && data.retryAt ? (
+            <>
+              <dt className="text-on-surface-muted">やり直しの予定</dt>
+              <dd className="tabular-nums">{formatFull(data.retryAt, timeZone)}</dd>
             </>
           ) : null}
           <dt className="text-on-surface-muted">集めた候補</dt>
@@ -112,6 +131,7 @@ export function RunPage() {
             LLMの呼び出し回数の上限に達したため、途中で止まりました。完成した記事は保存済みで、残りは次の実行が続けます。上限はサーバーの設定で変えられます。
           </p>
         ) : null}
+        {data.status === "failed" && data.retrySkipped ? <p className="max-w-measure type-body-md">{RETRY_SKIPPED_LABEL[data.retrySkipped]}</p> : null}
         {category ? (
           <Link to={`/settings/categories/${category.id}`} className={`type-body-md ${LINK}`}>
             このカテゴリの設定とトピック

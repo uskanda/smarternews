@@ -41,6 +41,11 @@ export class RunQueue {
     return run;
   }
 
+  /** Puts a run that is already recorded as waiting back in line, as after a restart. No new run is recorded. */
+  resume(runId: number): void {
+    this.#tail = this.#tail.then(() => this.#carryOut(runId));
+  }
+
   /** Resolves when every queued run has ended. */
   idle(): Promise<void> {
     return this.#tail;

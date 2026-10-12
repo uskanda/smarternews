@@ -133,21 +133,49 @@ export function planRetry(db: Database, run: Run, retries: number, at: Date): vo
   else setRetry(db, run.id, { at: at.toISOString() });
 }
 
-/** Runs left waiting or in progress by a server that stopped are closed as failed. Returns how many. */
-export function failInterruptedRuns(db: Database, clock: Clock): number {
-  const rows = db.prepare("SELECT id, failures FROM runs WHERE status IN ('queued', 'running')").all();
-  for (const row of rows) {
-    const failures = [
-      ...json<RunFailure[]>(row.failures),
-      { stage: "run", target: null, message: "interrupted: the server stopped before the run finished" },
-    ];
-    db.prepare("UPDATE runs SET status = 'failed', finished_at = ?, failures = ? WHERE id = ?").run(
-      clock().toISOString(),
-      JSON.stringify(failures),
-      num(row.id),
-    );
+/** Failed runs whose retry is due at `now`, the one due first at the head. */
+export function listDueRetries(db: Database, now: string): Run[] {
+  return db.prepare("SELECT * FROM runs WHERE retry_at IS NOT NULL AND retry_at <= ? ORDER BY retry_at, id").all(now).map(toRun);
+}
+
+/** Whether the category has a run of a scheduled time that was recorded after the run `afterId`. */
+export function hasLaterScheduledRun(db: Database, categoryId: number, afterId: number): boolean {
+  return db.prepare("SELECT 1 FROM runs WHERE category_id = ? AND slot IS NOT NULL AND id > ?").get(categoryId, afterId) !== undefined;
+}
+
+function closeInterrupted(db: Database, row: Row, finishedAt: string, message: string): void {
+  const failures = [...json<RunFailure[]>(row.failures), { stage: "run", target: null, message }];
+  db.prepare("UPDATE runs SET status = 'failed', finished_at = ?, failures = ? WHERE id = ?").run(finishedAt, JSON.stringify(failures), num(row.id));
+}
+
+/**
+ * Settles the runs a server that stopped left behind. A run that was in progress is closed as failed; it
+ * counts as an attempt, and its retry, when one is left, is due at once. A run that was still waiting stays
+ * as it is and is handed back, in the order it was queued, to be queued again. One that has waited longer
+ * than `staleAfterMs` is closed instead: its scheduled time is too far in the past to be made up for.
+ */
+export function recoverInterruptedRuns(
+  db: Database,
+  clock: Clock,
+  options: { retries: number; staleAfterMs: number },
+): { closed: number; waiting: number[] } {
+  const now = clock();
+  const staleBefore = new Date(now.getTime() - options.staleAfterMs).toISOString();
+  const waiting: number[] = [];
+  let closed = 0;
+  for (const row of db.prepare("SELECT * FROM runs WHERE status IN ('queued', 'running') ORDER BY id").all()) {
+    if (str(row.status) === "running") {
+      closeInterrupted(db, row, now.toISOString(), "interrupted: the server stopped before the run finished");
+      planRetry(db, toRun(row), options.retries, now);
+      closed += 1;
+    } else if (str(row.queued_at) < staleBefore) {
+      closeInterrupted(db, row, now.toISOString(), "interrupted: the server stopped before the run started, and it waited too long to start now");
+      closed += 1;
+    } else {
+      waiting.push(num(row.id));
+    }
   }
-  return rows.length;
+  return { closed, waiting };
 }
 
 export function deleteRunsBefore(db: Database, before: string): number {
