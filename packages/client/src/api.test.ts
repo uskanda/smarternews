@@ -175,8 +175,8 @@ describe("moving categories and feeds", () => {
     const moved = await api.moveFeed(feed.id, { categoryId: b.id, before: null });
     expect(moved.map((entry) => entry.categoryId)).toEqual([b.id]);
 
-    expect((await api.settings()).advanceAfterMarkAll).toBe(false);
-    expect((await api.updateSettings({ advanceAfterMarkAll: true })).advanceAfterMarkAll).toBe(true);
+    expect((await api.settings()).advanceAfterMarkAll).toBe(true);
+    expect((await api.updateSettings({ advanceAfterMarkAll: false })).advanceAfterMarkAll).toBe(false);
   });
 
   describe("translation", () => {

@@ -64,7 +64,7 @@ Settings fields:
 | `timeZone` | An IANA name |
 | `search` | `{"language":"en","region":"US"}`, the default market for news search |
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
-| `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `false` by default |
+| `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `true` by default |
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and stop words by their text. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 

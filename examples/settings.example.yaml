@@ -16,7 +16,7 @@ settings:
   # How often subscribed feeds are fetched, in minutes (5 to 1440). A subscription can set its own.
   feedIntervalMinutes: 30
   # After "mark all as read", open the next list that has unread articles.
-  advanceAfterMarkAll: false
+  advanceAfterMarkAll: true
 categories:
   - slug: security
     name: Security

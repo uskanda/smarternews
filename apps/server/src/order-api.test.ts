@@ -47,10 +47,10 @@ describe("moving categories and feeds", () => {
 });
 
 describe("the setting to move on after marking all as read", () => {
-  it("is off at first and is returned once changed", async () => {
+  it("is on at first and is returned once changed", async () => {
     const { s } = seeded();
-    expect(((await (await s.get("/api/v1/settings")).json()) as { advanceAfterMarkAll: boolean }).advanceAfterMarkAll).toBe(false);
-    await s.patch("/api/v1/settings", { advanceAfterMarkAll: true });
     expect(((await (await s.get("/api/v1/settings")).json()) as { advanceAfterMarkAll: boolean }).advanceAfterMarkAll).toBe(true);
+    await s.patch("/api/v1/settings", { advanceAfterMarkAll: false });
+    expect(((await (await s.get("/api/v1/settings")).json()) as { advanceAfterMarkAll: boolean }).advanceAfterMarkAll).toBe(false);
   });
 });
