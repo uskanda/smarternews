@@ -35,6 +35,7 @@ export function testServer(
     google?: (Translator & { calls: Array<{ items: Array<{ text: string; plain?: boolean }>; target: string }> }) | null;
     monthlyChars?: number;
     llmCallsPerDay?: number;
+    summariesPerDay?: number;
   } = {},
 ) {
   const db = createTestDb();
@@ -43,7 +44,12 @@ export function testServer(
     db,
     clock,
     { ...(options.summarize ? { summarize: options.summarize } : {}), ...(options.translate ? { translate: options.translate } : {}) },
-    { webSearch: options.webSearch, ...(options.llmCallsPerDay === undefined ? {} : { limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay } }) },
+    {
+      webSearch: options.webSearch,
+      ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined
+        ? {}
+        : { limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay ?? 300, ...(options.summariesPerDay === undefined ? {} : { summariesPerDay: options.summariesPerDay }) } }),
+    },
   );
   const google = options.google === undefined ? fakeTranslator() : options.google;
   const translation = new TranslationService({
@@ -78,6 +84,7 @@ export function testServer(
     fetcher,
     poller,
     translation,
+    summarizer,
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
   });

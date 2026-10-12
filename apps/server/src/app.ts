@@ -46,6 +46,7 @@ import {
   markUnreadSchema,
   notFound,
   renderRss,
+  requestAutoSummary,
   requestInterpretation,
   setArticleFlags,
   settingsUpdateSchema,
@@ -69,6 +70,7 @@ import {
   type Fetcher,
   type ProviderStatus,
   type RunQueue,
+  type SummaryWorker,
   type TaskRunner,
   type TranslationService,
 } from "@smarternews/core";
@@ -86,6 +88,8 @@ export interface AppDeps {
   poller: FeedPoller;
   /** Translates the articles of the feeds that ask for it. */
   translation: TranslationService;
+  /** Writes the summaries of feed articles. Woken when a reader opens an article that waits for one. */
+  summarizer: SummaryWorker;
   tokens: { api: string; feed: string };
   version: string;
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
@@ -127,7 +131,7 @@ function idParam(c: Context, what: string): number {
 }
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer } = deps;
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -235,6 +239,13 @@ export function createApp(deps: AppDeps): Hono {
     c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)))),
   );
   // Translates the content when it has no translation yet, so the answer can take as long as that does.
+  api.post("/articles/:id/summary", (c) => {
+    if (!requestAutoSummary(db, idParam(c, "article"), clock().toISOString())) return c.json({ status: "none" });
+    if (!runner.canSummarize()) return c.json({ status: "limit" });
+    // The reader is looking at the article now: the summary does not wait for the next look.
+    summarizer.tick();
+    return c.json({ status: "queued" });
+  });
   api.post("/articles/:id/translation", async (c) => c.json(await translation.translateArticle(idParam(c, "article"))));
   api.get("/translation", (c) => c.json(translation.status()));
 

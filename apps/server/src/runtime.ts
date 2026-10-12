@@ -116,6 +116,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     fetcher,
     poller,
     translation,
+    summarizer,
     tokens: { api: api.token, feed: feed.token },
     version,
     webDir: join(import.meta.dirname, "../../web/dist"),

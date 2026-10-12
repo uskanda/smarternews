@@ -4,6 +4,7 @@ import {
   articleListSchema,
   articleSchema,
   articleTranslationSchema,
+  summaryRequestResultSchema,
   candidateSchema,
   categorySchema,
   countsSchema,
@@ -24,6 +25,7 @@ import {
   type ArticleList,
   type ArticleListQuery,
   type ArticleTranslation,
+  type SummaryRequestResult,
   type ArticleUpdate,
   type Candidate,
   type Category,
@@ -191,6 +193,8 @@ export function createApi(options: ApiOptions) {
      * The translation of a feed article's content. The server makes it when there is none yet, so the first
      * call for an article takes as long as translating does. Fails as `unavailable` when nothing can translate now.
      */
+    /** Says that the article is open and its summary is wanted now. The answer tells whether one is on its way. */
+    requestSummary: (id: number): Promise<SummaryRequestResult> => json(summaryRequestResultSchema, `/articles/${id}/summary`, { method: "POST" }),
     translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>

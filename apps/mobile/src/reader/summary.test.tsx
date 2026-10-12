@@ -1,6 +1,6 @@
 import { screen, userEvent, within } from "@testing-library/react-native";
 import { renderApp } from "../testing/app";
-import { MINUTE } from "../testing/queries";
+import { eventually, MINUTE } from "../testing/queries";
 import { makeServer } from "../testing/server";
 
 const NOTE = "元のページを読めなかったため、配信された内容だけをもとにしています。";
@@ -86,5 +86,28 @@ describe("the summary of a feed article", () => {
     expect(position(WAITING)).toBeGreaterThanOrEqual(0);
     expect(position(WAITING)).toBeLessThan(position("Fresh words."));
     expect(screen.queryByTestId("auto-summary")).toBeNull();
+  });
+
+  it("asks for the summary of the article it opens, and shows it once it is written although the article is read by then", async () => {
+    const { server, blog } = await oneArticle();
+    await server.advance(MINUTE);
+    await server.core("updateFeed", blog.id, { autoSummarize: true }, "$clock");
+    await server.advance(MINUTE);
+    // Long enough to be worth a summary: a shorter one is passed over, and then nothing waits.
+    const id = await server.feedArticle(blog.id, { title: "Fresh post", body: "Fresh words. ".repeat(30), at: server.now().toISOString() });
+    await renderApp({ server, url: `/list/feed-${blog.id}` });
+    await press(/^Fresh post/);
+    expect(await screen.findByText(WAITING)).toBeOnTheScreen();
+
+    await eventually(async () => {
+      const [row] = await server.sql<Array<{ is_read: number; asked: number }>>("SELECT is_read, auto_summary_requested_at IS NOT NULL AS asked FROM articles WHERE id = ?", id);
+      expect(row).toEqual({ is_read: 1, asked: 1 });
+    });
+    // The article is read by now, and still counts as waiting: the server keeps it in line.
+    expect((await server.core<{ autoSummaryPending: boolean }>("getArticle", id)).autoSummaryPending).toBe(true);
+
+    await server.core("saveAutoSummary", id, { text: "It has arrived.", source: "page", now: server.now().toISOString() });
+    await eventually(() => expect(within(screen.getByTestId("auto-summary")).getByText("It has arrived.")).toBeOnTheScreen());
+    expect(screen.queryByText(WAITING)).toBeNull();
   });
 });

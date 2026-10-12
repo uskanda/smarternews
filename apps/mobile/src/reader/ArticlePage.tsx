@@ -2,7 +2,7 @@ import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { memo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useArticle, useArticleTranslation, useCategories, useFeeds, useTimeZone } from "../api/queries";
+import { useArticle, useArticleTranslation, useCategories, useFeeds, useSummaryRequest, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, Loading } from "../ui/controls";
@@ -81,6 +81,13 @@ export interface ArticlePageProps {
 }
 
 /** One article: what the story is, what it means for the reader, the text, and where it came from. */
+/** What stands in the place of the summary while there is none yet. */
+const SUMMARY_NOTES = {
+  waiting: "AIによる要約を作っています。",
+  limit: "今日の要約の上限に達しました。この記事の要約は、明日以降に作ります。",
+  late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
+} as const;
+
 export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle }: ArticlePageProps) {
   const theme = useTheme();
   const timeZone = useTimeZone();
@@ -91,6 +98,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
   const previous = useArticle(article?.previousArticleId ?? null).data;
   // The pager draws the neighbours of the page in view too: an article is translated once the user is on it.
   const translating = useArticleTranslation(article, active);
+  const summaryState = useSummaryRequest(article, active);
 
   // Looking at an unread article marks it as read, once: putting it back to unread must hold while it is open.
   const marked = useRef(false);
@@ -207,9 +215,9 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
             </Txt>
           ) : null}
         </View>
-      ) : article.autoSummaryPending ? (
+      ) : summaryState !== "none" ? (
         <Txt variant="label-sm" color="on-surface-muted" accessibilityLiveRegion="polite">
-          AIによる要約を作っています。
+          {SUMMARY_NOTES[summaryState]}
         </Txt>
       ) : null}
       {translating.isFetching ? (
