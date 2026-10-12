@@ -15,7 +15,9 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/smarternews
 ExecStart=/usr/bin/env node apps/server/src/main.ts serve
-Restart=on-failure
+# Come back after any exit, a clean one included: a signal from another program ends the server with
+# status 0, which "on-failure" would not restart. `systemctl --user stop` still stops it for good.
+Restart=always
 RestartSec=30
 # The default provider runs the `claude` command, so it must be on this PATH.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
