@@ -153,6 +153,13 @@ export const originSchema = z.enum(["generated", "feed"]);
 export type Origin = z.infer<typeof originSchema>;
 
 export const autoSummarySourceSchema = z.enum(["page", "feed"]);
+
+/**
+ * The answer to a reader who asks for the summary of the article they opened: it is on its way, the day has
+ * no summaries left, or this article does not get one.
+ */
+export const summaryRequestResultSchema = z.object({ status: z.enum(["queued", "limit", "none"]) });
+export type SummaryRequestResult = z.infer<typeof summaryRequestResultSchema>;
 export type AutoSummarySource = z.infer<typeof autoSummarySourceSchema>;
 
 export const translationMethodSchema = z.enum(["google", "llm"]);

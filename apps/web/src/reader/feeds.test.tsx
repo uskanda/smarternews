@@ -423,6 +423,44 @@ describe("the summary of a feed article", () => {
     expect(summaryOf(pane)).toBeNull();
   });
 
+  /** A feed that summarises, and an article that arrived after that was switched on. */
+  function waitingArticle(options: Parameters<typeof makeServer>[1] = {}) {
+    const server = makeServer(undefined, options);
+    const blog = feedOf(server, "Blog", null);
+    server.clock.advance(60_000);
+    updateFeed(server.db, blog.id, { autoSummarize: true }, server.clock);
+    server.clock.advance(60_000);
+    const fresh = seedFeedArticle(server.db, blog.id, { title: "Fresh post", at: server.clock().toISOString(), body: "Fresh words. ".repeat(30) });
+    return { server, blog, fresh };
+  }
+
+  it("asks for the summary of the article it opens, and shows it within seconds although the article is read by then", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { server, blog, fresh } = waitingArticle({ summarize: () => ({ summary: "Asked for and written." }) });
+      const { requests } = renderApp({ server, route: `/f/${blog.id}/${fresh}` });
+      const pane = await opened();
+      expect(await within(pane).findByRole("status")).toHaveTextContent(WAITING);
+      await waitFor(() => expect(requests).toContain(`POST /api/v1/articles/${fresh}/summary`));
+      await waitFor(() => expect(server.db.prepare("SELECT is_read FROM articles WHERE id = ?").get(fresh)).toEqual({ is_read: 1 }));
+      await server.summarizer.idle();
+
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(summaryOf(pane)).toHaveTextContent("Asked for and written."));
+      expect(pane).not.toHaveTextContent(WAITING);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says that the day has no summaries left instead of that one is being made", async () => {
+    const { server, blog, fresh } = waitingArticle({ summariesPerDay: 0 });
+    renderApp({ server, route: `/f/${blog.id}/${fresh}` });
+    const pane = await opened();
+    expect(await within(pane).findByText("今日の要約の上限に達しました。この記事の要約は、明日以降に作ります。")).toBeInTheDocument();
+    expect(pane).not.toHaveTextContent(WAITING);
+  });
+
   it("shows the summary on the article that stays open, once it has arrived", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
