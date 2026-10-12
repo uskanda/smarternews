@@ -346,6 +346,26 @@ A run has `trigger` (`schedule` or `manual`), `status`, `queuedAt`, `startedAt`,
 | `failed` | Every source failed, the run crashed, or the server stopped during it |
 | `stopped_by_limit` | A limit on model calls was reached. Finished articles are kept and the next run continues |
 
+A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
+
+| Field | Meaning |
+|---|---|
+| `attempt` | Which retry the run is: 1 for the first retry. 0 for a run that is not a retry |
+| `retryOf` | The id of the scheduled run this run retries, however many retries came between. `null` for a run that is not a retry |
+| `retryAt` | When the retry of this failed run is due. `null` when none is planned, and once the retry has been queued |
+| `retrySkipped` | Why this failed run is not retried, or `null` |
+
+A retry has the `trigger` `schedule`. `retrySkipped` is one of four values:
+
+| `retrySkipped` | Meaning |
+|---|---|
+| `limit` | The retries allowed by `limits.runRetries` are used up |
+| `superseded` | The next scheduled run of the category was queued first |
+| `disabled` | The category is disabled or has no enabled topic |
+| `manual` | The run was started by hand, and manual runs are not retried |
+
+A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been queued, or it failed before retries existed, or the server closed it at start-up because it had waited for more than six hours.
+
 `GET /api/v1/runs/:id/candidates` accepts `status=rejected` (the default), `pending`, `accepted` or `all`. Each candidate has `title`, `url`, `siteName`, `publishedAt`, `sourceKind`, `topics`, `importance` and `reason`. Runs and candidates are deleted after 30 days.
 
 ## Providers

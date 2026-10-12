@@ -1,7 +1,7 @@
 import type { Clock } from "../clock.ts";
-import { listCategories } from "../db/categories.ts";
-import type { Database } from "../db/database.ts";
-import { hasRunForSlot } from "../db/runs.ts";
+import { findCategory, listCategories } from "../db/categories.ts";
+import { transaction, type Database } from "../db/database.ts";
+import { hasLaterScheduledRun, hasRunForSlot, listDueRetries, setRetry } from "../db/runs.ts";
 import { getSettings } from "../db/settings.ts";
 import { listTopics } from "../db/topics.ts";
 import { addDays, localParts, zonedToUtc } from "../time.ts";
@@ -10,7 +10,7 @@ import { purgeExpired } from "./retention.ts";
 
 const HOUR = 3_600_000;
 /** A scheduled time missed while the server was down is made up for when it lies this close in the past. */
-const CATCH_UP_MS = 6 * HOUR;
+export const CATCH_UP_MS = 6 * HOUR;
 const PURGE_INTERVAL_MS = HOUR;
 
 export interface DueSlot {
@@ -68,9 +68,29 @@ export class Scheduler {
       }
     }
     this.#lastCheck = now;
+    // After the schedule, so that a scheduled run queued by this very check calls a retry off.
+    this.#queueDueRetries(now);
     if (now.getTime() - this.#lastPurge >= PURGE_INTERVAL_MS) {
       this.#lastPurge = now.getTime();
       purgeExpired(this.#db, this.#clock);
+    }
+  }
+
+  /** Queues the retries whose time has come, unless something has made them pointless since they were planned. */
+  #queueDueRetries(now: Date): void {
+    for (const run of listDueRetries(this.#db, now.toISOString())) {
+      const original = run.retryOf ?? run.id;
+      const category = findCategory(this.#db, run.categoryId);
+      if (hasLaterScheduledRun(this.#db, run.categoryId, original)) {
+        setRetry(this.#db, run.id, { skipped: "superseded" });
+      } else if (!category?.enabled || !listTopics(this.#db, run.categoryId).some((topic) => topic.enabled)) {
+        setRetry(this.#db, run.id, { skipped: "disabled" });
+      } else {
+        transaction(this.#db, () => {
+          setRetry(this.#db, run.id, null);
+          this.#queue.enqueue(run.categoryId, "schedule", null, { attempt: run.attempt + 1, of: original });
+        });
+      }
     }
   }
 

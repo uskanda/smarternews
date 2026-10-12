@@ -43,6 +43,7 @@ limits:
   summariesPerDay: 100    # summaries of feed articles, counted apart from the calls of runs
   judgeBatchSize: 30      # candidates judged per model call
   pagesPerRun: 20         # article pages fetched per run
+  runRetries: 2           # retries of a scheduled run that failed, 0 to 3; 0 switches them off
 
 llm:
   timeoutMs: 180000

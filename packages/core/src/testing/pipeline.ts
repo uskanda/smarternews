@@ -211,6 +211,10 @@ export function pipelineHarness(options: HarnessOptions = {}) {
       const run = createRun(db, { categoryId: category.id, trigger: "manual", slot: null }, clock);
       return executeRun({ db, clock, runner: llm.runner, fetcher, config }, run.id);
     },
+    /** Carries out a run that is already recorded, as the queue does. */
+    execute(runId: number): Promise<Run> {
+      return executeRun({ db, clock, runner: llm.runner, fetcher, config }, runId);
+    },
     articles(): Article[] {
       return listArticleIds(db, category.id).map((id) => getArticle(db, id));
     },

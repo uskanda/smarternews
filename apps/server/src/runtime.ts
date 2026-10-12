@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildProviders,
+  CATCH_UP_MS,
   defaultUserAgent,
   executeRun,
   FeedPoller,
@@ -12,6 +13,7 @@ import {
   migrate,
   openDatabase,
   parseConfig,
+  recoverInterruptedRuns,
   resolveAssignment,
   resolvePaths,
   RunQueue,
@@ -43,6 +45,11 @@ export interface Runtime {
   app: Hono;
   /** Token files this call created, to be announced once. */
   newTokenFiles: string[];
+  /**
+   * Settles what an earlier stop left behind, before anything is started: a run that was in progress is closed
+   * as failed, and the runs that were waiting are put back in line. Says how many of each there were.
+   */
+  recover(): { closed: number; resumed: number };
   /** Starts the scheduler, the fetching of feeds and the summaries. */
   start(): void;
   close(): void;
@@ -91,6 +98,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     db,
     clock,
     execute: (runId) => executeRun({ db, clock, runner, fetcher, config }, runId),
+    retries: config.limits.runRetries,
   });
   const scheduler = new Scheduler({ db, clock, queue });
   // The key comes from the environment and stays in this object: it is in no file, no table and no answer.
@@ -132,6 +140,12 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     summarizer,
     app,
     newTokenFiles: [...(api.created ? [paths.apiTokenFile] : []), ...(feed.created ? [paths.feedTokenFile] : [])],
+    recover() {
+      // A waiting run older than the time a missed schedule is made up for is not started any more.
+      const { closed, waiting } = recoverInterruptedRuns(db, clock, { retries: config.limits.runRetries, staleAfterMs: CATCH_UP_MS });
+      for (const runId of waiting) queue.resume(runId);
+      return { closed, resumed: waiting.length };
+    },
     start() {
       scheduler.start();
       poller.start();

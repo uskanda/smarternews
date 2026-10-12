@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router";
 import { useCategories, useRuns, useTimeZone } from "../api/queries.ts";
-import { formatFull, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
+import { formatFull, retryLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
 import { ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const NUMBER = "py-sm pr-lg text-right tabular-nums";
@@ -63,7 +63,10 @@ export function RunsPage() {
               {runs.data.map((run) => (
                 <tr key={run.id} className="border-t border-outline">
                   <td className="py-sm pr-lg">{nameOf(run.categoryId)}</td>
-                  <td className="py-sm pr-lg">{TRIGGER_LABEL[run.trigger]}</td>
+                  <td className="py-sm pr-lg whitespace-nowrap">
+                    {TRIGGER_LABEL[run.trigger]}
+                    {run.attempt > 0 ? <span className="block type-label-sm text-on-surface-muted">{retryLabel(run.attempt)}</span> : null}
+                  </td>
                   <td className="py-sm pr-lg whitespace-nowrap">
                     <Link to={`/runs/${run.id}`} className="tap tabular-nums text-primary underline underline-offset-4">
                       {formatFull(run.startedAt ?? run.queuedAt, timeZone)}

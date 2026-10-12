@@ -1,4 +1,4 @@
-import { finishRun, insertCandidate } from "@smarternews/core";
+import { createRun, finishRun, insertCandidate, setRetry, startRun, type RetrySkipped } from "@smarternews/core";
 import { describe, expect, it } from "vitest";
 import { testServer } from "./testing.ts";
 
@@ -108,5 +108,66 @@ describe("runs", () => {
     expect((await s.get("/api/v1/runs/55")).status).toBe(404);
     expect((await s.get("/api/v1/runs/55/candidates")).status).toBe(404);
     expect((await s.post("/api/v1/categories/55/runs")).status).toBe(404);
+  });
+
+  describe("what they say about retries", () => {
+    /** A scheduled run that failed, and optionally the retries that followed it; the last one carries `plan`. */
+    function failedRuns(s: ReturnType<typeof testServer>, retries: number, plan: { at: string } | { skipped: RetrySkipped } | null) {
+      const category = s.category();
+      const ids: number[] = [];
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        const run = createRun(
+          s.db,
+          { categoryId: category.id, trigger: "schedule", slot: attempt === 0 ? "2026-03-01T05:00" : null, retry: attempt === 0 ? undefined : { attempt, of: ids[0]! } },
+          s.clock,
+        );
+        startRun(s.db, run.id, s.clock().toISOString());
+        finishRun(s.db, run.id, {
+          status: "failed",
+          finishedAt: s.clock().toISOString(),
+          collected: 0,
+          rejected: 0,
+          articlesCreated: 0,
+          articlesUpdated: 0,
+          llmCalls: 0,
+          failures: [{ stage: "feed", target: "https://example.org/down.xml", message: "HTTP status 500" }],
+        });
+        ids.push(run.id);
+      }
+      setRetry(s.db, ids.at(-1)!, plan);
+      return ids;
+    }
+
+    it("say that an ordinary run is not a retry", async () => {
+      const s = testServer();
+      const run = await (await s.post(`/api/v1/categories/${s.category().id}/runs`)).json();
+      expect(await (await s.get(`/api/v1/runs/${run.id}`)).json()).toMatchObject({ attempt: 0, retryOf: null, retryAt: null, retrySkipped: null });
+    });
+
+    it("say which retry a run is and which run it retries, in the detail and in the list", async () => {
+      const s = testServer();
+      const [first, retry] = failedRuns(s, 1, null);
+
+      expect(await (await s.get(`/api/v1/runs/${retry}`)).json()).toMatchObject({ attempt: 1, retryOf: first, trigger: "schedule", slot: null });
+      expect(await (await s.get("/api/v1/runs")).json()).toMatchObject([
+        { id: retry, attempt: 1, retryOf: first },
+        { id: first, attempt: 0, retryOf: null },
+      ]);
+    });
+
+    it("say when the retry of a failed run is due", async () => {
+      const s = testServer("2026-03-01T05:03:00.000Z");
+      const [first] = failedRuns(s, 0, { at: "2026-03-01T05:13:00.000Z" });
+
+      expect(await (await s.get(`/api/v1/runs/${first}`)).json()).toMatchObject({ status: "failed", retryAt: "2026-03-01T05:13:00.000Z", retrySkipped: null });
+      expect((await (await s.get("/api/v1/runs")).json())[0]).toMatchObject({ retryAt: "2026-03-01T05:13:00.000Z" });
+    });
+
+    it("say that no retry follows the last one allowed, and that the limit is why", async () => {
+      const s = testServer();
+      const ids = failedRuns(s, 2, { skipped: "limit" });
+
+      expect(await (await s.get(`/api/v1/runs/${ids[2]}`)).json()).toMatchObject({ status: "failed", attempt: 2, retryOf: ids[0], retryAt: null, retrySkipped: "limit" });
+    });
   });
 });

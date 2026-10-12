@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createCategory, deleteCategory } from "../db/categories.ts";
-import { finishRun, getRun, startRun } from "../db/runs.ts";
+import { createRun, finishRun, getRun, listRuns, startRun, type RunOutcome } from "../db/runs.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { RunQueue } from "./queue.ts";
 
@@ -135,5 +135,111 @@ describe("RunQueue", () => {
 
     expect(getRun(db, first.id)).toMatchObject({ status: "failed", failures: [expect.objectContaining({ message: "disk full" })] });
     expect(started).toEqual([first.id, second.id]);
+  });
+});
+
+describe("what the queue plans when a run has failed", () => {
+  type Ending = "throw" | RunOutcome["status"];
+
+  /** A queue whose runs end the way the test says, three minutes after they start. */
+  function failing(retries: number, ending: Ending = "throw") {
+    const db = createTestDb();
+    const clock = fakeClock("2026-03-01T05:00:00.000Z");
+    const queue = new RunQueue({
+      db,
+      clock,
+      retries,
+      execute: async (runId) => {
+        startRun(db, runId, clock().toISOString());
+        clock.advance(3 * 60_000);
+        if (ending === "throw") throw new Error("disk full");
+        finishRun(db, runId, {
+          status: ending,
+          finishedAt: clock().toISOString(),
+          collected: 0,
+          rejected: 0,
+          articlesCreated: 0,
+          articlesUpdated: 0,
+          llmCalls: 0,
+          failures: [],
+        });
+      },
+    });
+    const category = createCategory(db, { name: "A", kind: "news" }, clock);
+    return { db, clock, queue, category };
+  }
+
+  it("plans the first retry of a failed scheduled run ten minutes after the failure", async () => {
+    const { db, queue, category } = failing(2);
+    const run = queue.enqueue(category.id, "schedule", "2026-03-01T05:00");
+    await queue.idle();
+    expect(getRun(db, run.id)).toMatchObject({ status: "failed", finishedAt: "2026-03-01T05:03:00.000Z", retryAt: "2026-03-01T05:13:00.000Z", retrySkipped: null });
+  });
+
+  it("plans a retry as well when the pipeline itself closed the run as failed", async () => {
+    const { db, queue, category } = failing(2, "failed");
+    const run = queue.enqueue(category.id, "schedule", "2026-03-01T05:00");
+    await queue.idle();
+    expect(getRun(db, run.id)).toMatchObject({ retryAt: "2026-03-01T05:13:00.000Z", retrySkipped: null });
+  });
+
+  it.each([
+    { failed: 1, next: "second", retryAt: "2026-03-01T05:33:00.000Z" },
+    { failed: 2, next: "third", retryAt: "2026-03-01T06:33:00.000Z" },
+  ])("plans the $next retry at $retryAt when retry $failed failed at 05:03", async ({ failed, retryAt }) => {
+    const { db, clock, queue, category } = failing(3);
+    const first = createRun(db, { categoryId: category.id, trigger: "schedule", slot: "2026-03-01T05:00" }, clock);
+    const retry = queue.enqueue(category.id, "schedule", null, { attempt: failed, of: first.id });
+    await queue.idle();
+    expect(getRun(db, retry.id)).toMatchObject({ status: "failed", retryAt, retrySkipped: null });
+  });
+
+  it("plans no further retry once the configured number is used up", async () => {
+    const { db, clock, queue, category } = failing(2);
+    const first = createRun(db, { categoryId: category.id, trigger: "schedule", slot: "2026-03-01T05:00" }, clock);
+    const second = queue.enqueue(category.id, "schedule", null, { attempt: 2, of: first.id });
+    await queue.idle();
+    expect(getRun(db, second.id)).toMatchObject({ status: "failed", retryAt: null, retrySkipped: "limit" });
+  });
+
+  it("plans no retry at all when the number of retries is 0", async () => {
+    const { db, queue, category } = failing(0);
+    const run = queue.enqueue(category.id, "schedule", "2026-03-01T05:00");
+    await queue.idle();
+    expect(getRun(db, run.id)).toMatchObject({ status: "failed", retryAt: null, retrySkipped: "limit" });
+  });
+
+  it("does not retry a manual run that failed, and says that this is why", async () => {
+    const { db, queue, category } = failing(2);
+    const run = queue.enqueue(category.id, "manual", null);
+    await queue.idle();
+    expect(getRun(db, run.id)).toMatchObject({ status: "failed", retryAt: null, retrySkipped: "manual" });
+  });
+
+  it.each(["partial", "stopped_by_limit", "succeeded"] as const)("plans nothing for a scheduled run that ended as %s", async (status) => {
+    const { db, queue, category } = failing(2, status);
+    const run = queue.enqueue(category.id, "schedule", "2026-03-01T05:00");
+    await queue.idle();
+    expect(getRun(db, run.id)).toMatchObject({ status, retryAt: null, retrySkipped: null });
+  });
+});
+
+describe("RunQueue.resume", () => {
+  it("carries out runs that already exist, in the order given, without recording new ones", async () => {
+    const { db, queue, events, release, a, b } = setup();
+    const clock = fakeClock("2026-03-01T11:00:00.000Z");
+    const first = createRun(db, { categoryId: a.id, trigger: "schedule", slot: "2026-03-01T05:00" }, clock);
+    const second = createRun(db, { categoryId: b.id, trigger: "manual", slot: null }, clock);
+
+    queue.resume(first.id);
+    queue.resume(second.id);
+    await tick();
+    expect(events).toEqual([`start ${first.id}`]);
+    await release(first.id);
+    await tick();
+
+    expect(events).toEqual([`start ${first.id}`, `end ${first.id}`, `start ${second.id}`]);
+    expect(listRuns(db).map((run) => run.id)).toEqual([second.id, first.id]);
+    expect(getRun(db, first.id)).toMatchObject({ status: "succeeded", queuedAt: "2026-03-01T11:00:00.000Z", attempt: 0 });
   });
 });

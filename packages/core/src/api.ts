@@ -412,6 +412,11 @@ export const runFailureSchema = z.object({
 });
 export type RunFailure = z.infer<typeof runFailureSchema>;
 
+/** Why a failed run is not retried: the retries are used up, a later scheduled run came first, the category
+ * is disabled or has no enabled topic, or the run was started by hand. */
+export const retrySkippedSchema = z.enum(["limit", "superseded", "disabled", "manual"]);
+export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
+
 export const runSchema = z.object({
   id: z.number().int(),
   categoryId: z.number().int(),
@@ -427,6 +432,13 @@ export const runSchema = z.object({
   articlesUpdated: z.number().int(),
   llmCalls: z.number().int(),
   failures: z.array(runFailureSchema),
+  /** Which retry this run is. 0 for a run that is not a retry. */
+  attempt: z.number().int(),
+  /** The scheduled run this one retries. Null for a run that is not a retry, and once that run was deleted. */
+  retryOf: z.number().int().nullable(),
+  /** When the retry of this failed run is due. Null when none is planned, and once the retry was queued. */
+  retryAt: z.string().nullable(),
+  retrySkipped: retrySkippedSchema.nullable(),
 });
 export type Run = z.infer<typeof runSchema>;
 

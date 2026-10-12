@@ -11,6 +11,19 @@ export const STATUS_LABEL: Record<Run["status"], string> = {
 
 export const TRIGGER_LABEL: Record<Run["trigger"], string> = { schedule: "スケジュール", manual: "手動" };
 
+/** Which retry a run is, for a run that is one. */
+export function retryLabel(attempt: number): string {
+  return `${attempt}回目のやり直し`;
+}
+
+/** Why a failed run is not retried. */
+export const RETRY_SKIPPED_LABEL: Record<NonNullable<Run["retrySkipped"]>, string> = {
+  limit: "やり直しの上限に達しました。次の実行は、次のスケジュールの時刻です。",
+  superseded: "次のスケジュールの実行が先に始まったため、やり直しません。",
+  disabled: "カテゴリが無効か、有効なトピックがないため、やり直しません。",
+  manual: "手動の実行は、自動ではやり直しません。",
+};
+
 const STAGE_LABEL: Record<string, string> = {
   interpret: "解釈",
   feed: "フィード",

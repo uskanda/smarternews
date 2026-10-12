@@ -56,6 +56,8 @@ const configSchema = z.strictObject({
       summariesPerDay: z.number().int().min(1).default(100),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
+      /** How often a scheduled run that failed is tried again. 0 switches retries off. */
+      runRetries: z.number().int().min(0).max(3).default(2),
     })
     .prefault({}),
   llm: z
