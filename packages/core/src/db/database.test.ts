@@ -328,3 +328,46 @@ describe("the migration to translations of feed articles", () => {
     expect(db.prepare("SELECT count(*) AS n FROM article_translations").get()).toEqual({ n: 0 });
   });
 });
+
+describe("the migration to retries of runs", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the runs that exist as first attempts with no retry planned", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of ["001_init.sql", "002_feeds.sql", "003_order.sql", "004_auto_summary.sql", "005_translation.sql"]) {
+      copyFileSync(join(SHIPPED, name), join(dir, name));
+    }
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO runs (id, category_id, trigger, slot, status, queued_at) VALUES (1, 1, 'schedule', '2026-01-01T05:00', 'failed', ?)").run(now);
+
+    copyFileSync(join(SHIPPED, "006_run_retries.sql"), join(dir, "006_run_retries.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT status, attempt, retry_of, retry_at, retry_skipped FROM runs").all()).toEqual([
+      { status: "failed", attempt: 0, retry_of: null, retry_at: null, retry_skipped: null },
+    ]);
+  });
+
+  it("keeps a retry when the run it retries is removed, and refuses an unknown reason", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO runs (id, category_id, trigger, slot, status, queued_at) VALUES (1, 1, 'schedule', '2026-01-01T05:00', 'failed', ?)").run(now);
+    db.prepare("INSERT INTO runs (id, category_id, trigger, status, queued_at, attempt, retry_of) VALUES (2, 1, 'schedule', 'succeeded', ?, 1, 1)").run(now);
+
+    db.prepare("DELETE FROM runs WHERE id = 1").run();
+
+    expect(db.prepare("SELECT id, attempt, retry_of FROM runs").all()).toEqual([{ id: 2, attempt: 1, retry_of: null }]);
+    expect(() => db.prepare("UPDATE runs SET retry_skipped = 'bored' WHERE id = 2").run()).toThrow();
+  });
+});

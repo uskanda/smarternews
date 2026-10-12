@@ -61,7 +61,7 @@ providers:
   it("keeps the documented defaults for limits and fetching", () => {
     const config = parseConfig("listen: 0.0.0.0:9000\n");
     expect(config.listen).toBe("0.0.0.0:9000");
-    expect(config.limits).toEqual({ llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100, judgeBatchSize: 30, pagesPerRun: 20 });
+    expect(config.limits).toEqual({ llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100, judgeBatchSize: 30, pagesPerRun: 20, runRetries: 2 });
     expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000, allowPrivateHosts: [] });
   });
 
@@ -145,5 +145,19 @@ describe("the translation settings", () => {
     expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`)).translate).toBe("fast");
     expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n  translate: big\n`)).translate).toBe("big");
     expect(resolveAssignment(parseConfig(providers(["only"]))).translate).toBe("only");
+  });
+});
+
+describe("the number of retries of a failed run", () => {
+  it("is 2 unless the file says otherwise", () => {
+    expect(parseConfig(null).limits.runRetries).toBe(2);
+    expect(parseConfig("limits:\n  runRetries: 0\n").limits.runRetries).toBe(0);
+    expect(parseConfig("limits:\n  runRetries: 3\n").limits.runRetries).toBe(3);
+  });
+
+  it("is refused outside 0 to 3, and when it is not a whole number", () => {
+    expect(() => parseConfig("limits:\n  runRetries: 4\n")).toThrow(/limits\.runRetries/);
+    expect(() => parseConfig("limits:\n  runRetries: -1\n")).toThrow(/limits\.runRetries/);
+    expect(() => parseConfig("limits:\n  runRetries: 1.5\n")).toThrow(/limits\.runRetries/);
   });
 });
