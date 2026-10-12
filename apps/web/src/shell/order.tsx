@@ -67,10 +67,19 @@ export function useNavMoves(): (move: Move) => void {
 export interface DragState {
   /** `listKey` of the entry that is being dragged. */
   key: string;
+  /** Its name, carried along under the pointer. */
+  label: string;
+  /** Where the pointer is in the window. */
+  x: number;
+  y: number;
   /** Where the line that shows the place is, from the top of the scrolled list. Null where the entry cannot go. */
   lineTop: number | null;
-  /** The group a feed may be put into after it stayed over it. */
-  armed: string | null;
+  /**
+   * The category a dragged feed is over, when a feed can go into it. "ready" is its own category, which takes
+   * it at once; "waiting" is another one that it has to stay over first; "flash" is that one once the wait
+   * is over. Null for a dragged category, and over a category that holds no feeds.
+   */
+  over: { key: string; state: "ready" | "waiting" | "flash" } | null;
 }
 
 function measure(nav: HTMLElement): Row[] {
@@ -111,7 +120,12 @@ export function useNavDrag(options: {
     let dragging = false;
     let y = start.y;
     let hovered: string | null = null;
+    /** What the group under the pointer is to the dragged feed: its own, another that takes feeds, or neither. */
+    let hoveredKind: "own" | "other" | null = null;
     let armed: string | null = null;
+    const label = [...latest.current.model.groups.map((group) => group.entry), ...latest.current.model.groups.flatMap((group) => group.children)].find(
+      (entry) => listKey(entry.target) === key,
+    )?.label ?? "";
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     let x = start.x;
@@ -127,8 +141,14 @@ export function useNavDrag(options: {
     const show = () => {
       const now = current();
       if (!now) return;
-      const lineTop = now.drop ? now.drop.lineY - now.nav.getBoundingClientRect().top + now.nav.scrollTop : null;
-      setDrag({ key, lineTop, armed });
+      const box = now.nav.getBoundingClientRect();
+      const lineTop = now.drop ? now.drop.lineY - box.top + now.nav.scrollTop : null;
+      const beside = x >= box.left - SIDE_SLACK_PX && x <= box.right + SIDE_SLACK_PX;
+      const over =
+        hovered !== null && hoveredKind !== null && beside
+          ? { key: hovered, state: hoveredKind === "own" ? ("ready" as const) : armed === hovered ? ("flash" as const) : ("waiting" as const) }
+          : null;
+      setDrag({ key, label, x, y, lineTop, over });
     };
     /** A feed over another category waits there; the category is armed when the wait is over. */
     const watch = () => {
@@ -141,7 +161,8 @@ export function useNavDrag(options: {
       clearTimeout(timer);
       const group = model.groups.find((candidate) => listKey(candidate.entry.target) === over);
       const own = group?.children.some((child) => listKey(child.target) === key) ?? false;
-      if (!group || own || !group.acceptsFeeds) return;
+      hoveredKind = !group || !group.acceptsFeeds ? null : own ? "own" : "other";
+      if (hoveredKind !== "other") return;
       timer = setTimeout(() => {
         armed = over;
         latest.current.unfold(over!);
