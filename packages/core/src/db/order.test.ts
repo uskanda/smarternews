@@ -121,12 +121,12 @@ describe("the order of feeds", () => {
 });
 
 describe("moving on after marking all as read", () => {
-  it("is off by default and is kept once set", () => {
+  it("is on by default, and switching it off is kept", () => {
     const db = createTestDb();
+    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
+    updateSettings(db, { advanceAfterMarkAll: false });
     expect(getSettings(db).advanceAfterMarkAll).toBe(false);
-    updateSettings(db, { advanceAfterMarkAll: true });
-    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
     updateSettings(db, { readerInfo: "x" });
-    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
+    expect(getSettings(db).advanceAfterMarkAll).toBe(false);
   });
 });

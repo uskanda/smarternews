@@ -34,7 +34,8 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
   const call = <T>(op: string, extra: Record<string, unknown> = {}) => control<T>({ op, id, ...extra });
   /** Runs a function of the core package that takes the database first. Pass "$clock" for the clock. */
   const core = <T = unknown>(name: string, ...args: unknown[]) => call<T>("core", { name, args });
-  await core("updateSettings", { timeZone: "UTC", outputLanguage: "ja" });
+  // Tests assume a list that stays open after "mark all as read"; the tests of moving on switch that on.
+  await core("updateSettings", { timeZone: "UTC", outputLanguage: "ja", advanceAfterMarkAll: false });
   return {
     /** What a user types as the server's URL. */
     url,

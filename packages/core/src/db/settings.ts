@@ -19,8 +19,9 @@ export function systemTimeZone(): string {
 /** Reads the settings, creating the row with defaults on first use. */
 export function getSettings(db: Database, defaultTimeZone: string = systemTimeZone()): Settings {
   db.prepare(
-    `INSERT OR IGNORE INTO settings (id, reader_info, output_language, time_zone, search_language, search_region)
-     VALUES (1, '', 'ja', ?, 'ja', 'JP')`,
+    // Moving on after "mark all as read" starts switched on; the column's own default dates from when it did not.
+    `INSERT OR IGNORE INTO settings (id, reader_info, output_language, time_zone, search_language, search_region, advance_after_mark_all)
+     VALUES (1, '', 'ja', ?, 'ja', 'JP', 1)`,
   ).run(defaultTimeZone);
   const row = db.prepare("SELECT * FROM settings WHERE id = 1").get()!;
   return {

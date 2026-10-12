@@ -21,10 +21,13 @@ export interface RenderOptions {
   advanceTimers?: (ms: number) => void | Promise<void>;
 }
 
-/** A server with the settings every test assumes: UTC, so that expected times can be read off the fixtures. */
+/**
+ * A server with the settings every test assumes: UTC, so that expected times can be read off the fixtures, and
+ * a list that stays open after "mark all as read". The tests of moving on switch that on themselves.
+ */
 export function makeServer(start?: string, options: Parameters<typeof testServer>[1] = {}): TestServer {
   const server = testServer(start, options);
-  updateSettings(server.db, { timeZone: "UTC", outputLanguage: "ja" });
+  updateSettings(server.db, { timeZone: "UTC", outputLanguage: "ja", advanceAfterMarkAll: false });
   return server;
 }
 

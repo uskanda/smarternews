@@ -371,3 +371,22 @@ describe("the migration to retries of runs", () => {
     expect(() => db.prepare("UPDATE runs SET retry_skipped = 'bored' WHERE id = 2").run()).toThrow();
   });
 });
+
+describe("the migration that switches moving on after marking all as read on", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("switches it on for a server that has settings already", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    const before = ["001_init.sql", "002_feeds.sql", "003_order.sql", "004_auto_summary.sql", "005_translation.sql", "006_run_retries.sql", "007_summary_requests.sql"];
+    for (const name of before) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    db.prepare("INSERT INTO settings (id, reader_info, output_language, time_zone, search_language, search_region) VALUES (1, '', 'ja', 'UTC', 'ja', 'JP')").run();
+    expect(db.prepare("SELECT advance_after_mark_all FROM settings").get()).toEqual({ advance_after_mark_all: 0 });
+
+    copyFileSync(join(SHIPPED, "008_advance_by_default.sql"), join(dir, "008_advance_by_default.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT advance_after_mark_all FROM settings").get()).toEqual({ advance_after_mark_all: 1 });
+  });
+});

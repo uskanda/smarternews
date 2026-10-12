@@ -39,7 +39,7 @@ describe("exportSettings", () => {
       timeZone: "Europe/Berlin",
       search: { language: "ja", region: "JP" },
       feedIntervalMinutes: 30,
-      advanceAfterMarkAll: false,
+      advanceAfterMarkAll: true,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -302,12 +302,12 @@ describe("order and the move-on setting in the settings file", () => {
 
   it("writes the move-on setting, and a file without it leaves the stored value alone", () => {
     const db = createTestDb();
-    updateSettings(db, { advanceAfterMarkAll: true });
-    expect(parse(exportSettings(db)).settings.advanceAfterMarkAll).toBe(true);
+    updateSettings(db, { advanceAfterMarkAll: false });
+    expect(parse(exportSettings(db)).settings.advanceAfterMarkAll).toBe(false);
     importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
-    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
-    importSettings(db, "version: 1\nsettings:\n  advanceAfterMarkAll: false\n", clock);
     expect(getSettings(db).advanceAfterMarkAll).toBe(false);
+    importSettings(db, "version: 1\nsettings:\n  advanceAfterMarkAll: true\n", clock);
+    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
   });
 });
 
