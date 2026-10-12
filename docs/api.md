@@ -115,6 +115,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
+| `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
 | `POST /api/v1/articles/:id/translation` | The translation of a feed article's content, made and stored when there is none yet |
 | `GET /api/v1/translation` | How much the translation API was used this month |
 

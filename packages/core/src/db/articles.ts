@@ -34,9 +34,13 @@ export const SUMMARY_ATTEMPTS = 2;
  * A feed article `a` that waits for a summary: its feed summarises, it was stored after the feed began to,
  * and it is unread, visible, without a summary and not given up on.
  */
-const WAITING_FOR_SUMMARY = `a.origin = 'feed' AND a.is_read = 0 AND a.auto_summary IS NULL AND a.auto_summary_skipped = 0
+/** Everything that makes a feed article one that gets a summary, apart from whether it has been read. */
+const CAN_BE_SUMMARIZED = `a.origin = 'feed' AND a.auto_summary IS NULL AND a.auto_summary_skipped = 0
   AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT (a.stop_word_id IS NOT NULL AND a.starred = 0)
   AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since)`;
+
+// An article that was read is left out, unless a reader opened it while its summary was waited for.
+const WAITING_FOR_SUMMARY = `${CAN_BE_SUMMARIZED} AND (a.is_read = 0 OR a.auto_summary_requested_at IS NOT NULL)`;
 
 const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
@@ -315,10 +319,19 @@ export function nextArticleToSummarize(db: Database): ArticleToSummarize | null 
       `SELECT a.id, a.title, a.content_text,
               (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
          FROM articles a WHERE ${WAITING_FOR_SUMMARY}
-        ORDER BY a.updated_at DESC, a.id DESC LIMIT 1`,
+        ORDER BY a.auto_summary_requested_at IS NULL, a.auto_summary_requested_at DESC, a.updated_at DESC, a.id DESC LIMIT 1`,
     )
     .get();
   return row ? { id: num(row.id), title: str(row.title), url: strOrNull(row.url), contentText: str(row.content_text) } : null;
+}
+
+/**
+ * Notes that a reader has the article open and wants its summary. The article then goes before the others
+ * and keeps waiting after it is read. False when the article is not one that gets a summary.
+ */
+export function requestAutoSummary(db: Database, id: number, now: string): boolean {
+  getArticle(db, id);
+  return num(db.prepare(`UPDATE articles AS a SET auto_summary_requested_at = ? WHERE a.id = ? AND ${CAN_BE_SUMMARIZED}`).run(now, id).changes) > 0;
 }
 
 export function saveAutoSummary(db: Database, id: number, summary: { text: string; source: AutoSummarySource; now: string }): void {

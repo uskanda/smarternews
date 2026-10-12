@@ -2,7 +2,7 @@ import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
-import { useArticle, useArticleTranslation } from "../api/queries.ts";
+import { useArticle, useArticleTranslation, useSummaryRequest } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -75,6 +75,13 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
   );
 }
 
+/** What stands in the place of the summary while there is none yet. */
+const SUMMARY_NOTES = {
+  waiting: "AIによる要約を作っています。",
+  limit: "今日の要約の上限に達しました。この記事の要約は、明日以降に作ります。",
+  late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
+} as const;
+
 /** The article pane: what the story is, what it means for the reader, the text, and where it came from. */
 export function ArticleView({
   id,
@@ -100,6 +107,7 @@ export function ArticleView({
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
   const translating = useArticleTranslation(article);
+  const summaryState = useSummaryRequest(article);
 
   // On a narrow screen the article replaces the list, and the link that was activated is gone:
   // the focus moves to the headline so that keyboard and screen reader users land in the article.
@@ -195,9 +203,9 @@ export function ArticleView({
               <p className="type-label-sm text-on-surface-muted">元のページを読めなかったため、配信された内容だけをもとにしています。</p>
             ) : null}
           </section>
-        ) : article.autoSummaryPending ? (
+        ) : summaryState !== "none" ? (
           <p role="status" className="type-label-sm text-on-surface-muted">
-            AIによる要約を作っています。
+            {SUMMARY_NOTES[summaryState]}
           </p>
         ) : null}
         {translating.isFetching ? (

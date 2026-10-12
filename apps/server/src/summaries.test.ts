@@ -55,3 +55,76 @@ describe("from the fetch of a feed to the stored summary", () => {
     expect(await (await s.get("/api/v1/providers")).json()).toMatchObject({ llmCallsToday: 0, summariesToday: 2, limits: { summariesPerDay: 100 } });
   });
 });
+
+describe("asking for the summary of an article that is open", () => {
+  async function waiting(keys: string[], options: Parameters<typeof testServer>[1] = {}) {
+    const s = testServer(undefined, { summarize: (request) => ({ summary: `Summary of ${/Post (\w+)/.exec(request.prompt)![1]}.` }), ...options });
+    s.site.set(FEED, rss(["old"]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    await s.patch(`/api/v1/feeds/${feed.id}`, { autoSummarize: true });
+    s.clock.advance(HOUR);
+    s.site.set(FEED, rss([...keys, "old"]));
+    for (const key of keys) s.site.set(`https://blog.example.org/${key}`, page);
+    await s.post(`/api/v1/feeds/${feed.id}/fetch`);
+    const items = (await (await s.get(`/api/v1/articles?feed=${feed.id}`)).json()).items as Array<{ id: number; title: string }>;
+    const id = (key: string) => items.find((item) => item.title === `Post ${key}`)!.id;
+    const detail = async (key: string) => (await (await s.get(`/api/v1/articles/${id(key)}`)).json()) as { autoSummary: { text: string } | null; autoSummaryPending: boolean };
+    return { s, id, detail };
+  }
+
+  it("keeps an article that was read after it was asked for, and summarises it before newer ones", async () => {
+    const { s, id, detail } = await waiting(["c", "b", "a"]);
+
+    const asked = await s.post(`/api/v1/articles/${id("a")}/summary`);
+    expect(asked.status).toBe(200);
+    expect(await asked.json()).toEqual({ status: "queued" });
+    await s.patch(`/api/v1/articles/${id("a")}`, { isRead: true });
+    expect((await detail("a")).autoSummaryPending).toBe(true);
+
+    await s.summarizer.idle();
+    expect((await detail("a")).autoSummary).toMatchObject({ text: "Summary of a." });
+    // The article that was asked for came first, although the others are newer in the feed.
+    expect(s.llmRequests.summarize[0]!.prompt).toContain("Post a");
+  });
+
+  it("starts the summary at once instead of at the next look", async () => {
+    const { s, id, detail } = await waiting(["a"]);
+    await s.post(`/api/v1/articles/${id("a")}/summary`);
+    await s.summarizer.idle();
+    expect((await detail("a")).autoSummary).not.toBeNull();
+  });
+
+  it("still leaves out an article that was read without being asked for", async () => {
+    const { s, id, detail } = await waiting(["a"]);
+    await s.patch(`/api/v1/articles/${id("a")}`, { isRead: true });
+    expect((await detail("a")).autoSummaryPending).toBe(false);
+    s.summarizer.tick();
+    await s.summarizer.idle();
+    expect((await detail("a")).autoSummary).toBeNull();
+  });
+
+  it("accepts the request for an article that is already read, as long as it could still be summarised", async () => {
+    const { s, id, detail } = await waiting(["a"]);
+    await s.patch(`/api/v1/articles/${id("a")}`, { isRead: true });
+    expect(await (await s.post(`/api/v1/articles/${id("a")}/summary`)).json()).toEqual({ status: "queued" });
+    await s.summarizer.idle();
+    expect((await detail("a")).autoSummary).not.toBeNull();
+  });
+
+  it("says so when the day's allowance of summaries is used up, and summarises nothing", async () => {
+    const { s, id, detail } = await waiting(["a"], { summariesPerDay: 0 });
+    expect(await (await s.post(`/api/v1/articles/${id("a")}/summary`)).json()).toEqual({ status: "limit" });
+    await s.summarizer.idle();
+    expect((await detail("a")).autoSummary).toBeNull();
+    expect(s.llmRequests.summarize).toEqual([]);
+  });
+
+  it("answers that there is nothing to wait for when the article is not one that gets a summary", async () => {
+    const { s, id } = await waiting(["a"]);
+    expect(await (await s.post(`/api/v1/articles/${id("old")}/summary`)).json()).toEqual({ status: "none" });
+    await s.post(`/api/v1/articles/${id("a")}/summary`);
+    await s.summarizer.idle();
+    expect(await (await s.post(`/api/v1/articles/${id("a")}/summary`)).json()).toEqual({ status: "none" });
+    expect((await s.post("/api/v1/articles/9999/summary")).status).toBe(404);
+  });
+});
