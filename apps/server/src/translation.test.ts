@@ -67,7 +67,7 @@ describe("from the fetch of a feed to the translated article", () => {
         { original: "Second paragraph.", translated: "訳:Second paragraph." },
       ],
     });
-    expect((await (await s.get("/api/v1/translation")).json()).chars).toBe(18 + "<p>First paragraph.</p>".length + "<p>Second paragraph.</p>".length);
+    expect((await (await s.get("/api/v1/translation")).json()).chars).toBe(18 + "First paragraph.".length + "Second paragraph.".length);
 
     // The second time the stored translation is the answer, and nothing is sent.
     const sent = s.google!.calls.length;
