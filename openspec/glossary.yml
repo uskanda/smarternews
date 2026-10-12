@@ -290,6 +290,10 @@ terms:
     definition: "青みのある暗い地に明るい文字の配色。利用者が選ぶ配色の名前。"
     aliases: []
     en: "dark blue"
+  - term: "ポート"
+    definition: "サーバーが接続を待ち受ける番号。同じホストで動く複数のサーバーを区別する。"
+    aliases: []
+    en: "port"
   - term: "ダブルクリック"
     definition: "マウスのボタンを続けて2回押す操作。"
     aliases: []
