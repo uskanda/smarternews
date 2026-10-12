@@ -217,11 +217,21 @@ fetch:
 
 A refused fetch is recorded like any other failed fetch, so the run history shows the URL and the reason. Calls to model providers are not restricted, because you choose those addresses yourself.
 
+## Failed runs and restarts
+
+A scheduled run that ends as `failed` is tried again: 10 minutes after the failure, and 30 minutes after a second failure. `limits.runRetries` in `config.yaml` sets the number of retries from 0 to 3 (2 by default). With three retries, the third starts 90 minutes after the failure before it, and 0 switches retries off. Runs that end as `partial` or `stopped_by_limit` are not retried, and neither are manual runs.
+
+A retry is a run of its own in the run history, marked with which retry it is and linked to the scheduled run it retries. It skips the pages the failed run already judged and the articles that run already wrote. The server calls a retry off when the next scheduled run of the category has been queued, when the category is disabled, or when it has no enabled topic left. On the page of a failed run you see when the retry is due, or why there is none.
+
+Planned retries are stored, so they survive a restart; a retry that came due while the server was down starts when it is up again. At start-up the server also puts the runs that were waiting back in line, in their order, unless they have waited for more than six hours. A run that was in progress when the server stopped is closed as `failed`. If the schedule started it, that counts as one attempt and its retry starts at once.
+
 ## Limits on model use
 
 A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (300 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
 
 Summaries of feed articles are counted apart. Once the day has made `summariesPerDay` of them (100 by default), no more are made until the next day, which starts with the newest articles that still wait. Summaries do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `summariesPerDay`. The `summarize` task runs on the provider named `fast` unless `tasks` in `config.yaml` assigns another; see [docs/providers.md](docs/providers.md).
+
+Retries obey both limits like any other run. With two retries, a category that keeps failing uses up to three runs' worth of calls for one scheduled time.
 
 Translation by the model counts towards `llmCallsPerDay`. On a day that has reached it, an article that needs the model is shown in the original, with a button to try again.
 

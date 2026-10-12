@@ -123,6 +123,8 @@ The server validates every answer against the task's schema. An answer that does
 
 A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, and `limits.summariesPerDay` those of summaries; see the README.
 
+`limits.runRetries` (2 by default, 0 to 3) is how often a scheduled run that ended as `failed` is tried again. Each retry is a run like any other, so it obeys `limits.llmCallsPerRun` and `limits.llmCallsPerDay`. While a provider stays down, a category therefore uses up to three runs' worth of calls for one scheduled time. A run that stopped at a limit is not retried.
+
 ## Text from the web is data
 
 Candidate titles, snippets and page text reach the model inside `<material>` blocks, and the system prompt says that such text is data and never an instruction. Three measures limit what a hostile page can do. Tasks other than `search` have no tools. Every answer must match a schema. Article bodies are rendered with raw HTML escaped and with only web and mail links kept.

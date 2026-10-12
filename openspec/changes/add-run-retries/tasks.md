@@ -30,8 +30,8 @@
 
 ## 5. 文書
 
-- [ ] 5.1 `docs/api.md`、`docs/providers.md`、`examples/config.example.yaml` に、やり直しの項目と設定を足す。`make verify` の文の検査が通ることを確かめる
-- [ ] 5.2 `README.md` と `README.ja.md` に、失敗した実行のやり直しと、起動のときの再開を足す。`make verify` の文の検査が通ることを確かめる
+- [x] 5.1 `docs/api.md`、`docs/providers.md`、`examples/config.example.yaml` に、やり直しの項目と設定を足す。`make verify` の文の検査が通ることを確かめる
+- [x] 5.2 `README.md` と `README.ja.md` に、失敗した実行のやり直しと、起動のときの再開を足す。`make verify` の文の検査が通ることを確かめる
 
 ## 6. 全体の確認
 
