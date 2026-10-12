@@ -35,5 +35,5 @@
 
 ## 6. 全体の確認
 
-- [ ] 6.1 `apps/web` について、やり直しの行と失敗した実行の詳細を、実際のブラウザーの幅1280pxと390pxで確かめる
-- [ ] 6.2 `make verify` を通し、`openspec validate add-run-retries --strict` が通ることを確かめる
+- [x] 6.1 `apps/web` について、やり直しの行と失敗した実行の詳細を、実際のブラウザーの幅1280pxと390pxで確かめる
+- [x] 6.2 `make verify` を通し、`openspec validate add-run-retries --strict` が通ることを確かめる
