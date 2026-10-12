@@ -11,10 +11,10 @@ interface Sent {
   format: string;
 }
 
-/** The API as recorded: every string comes back wrapped, with the tags it was sent with. */
+/** The API as recorded: every string comes back with the tags it was sent with, each piece of text marked. */
 function setup(answer?: (sent: Sent) => Response) {
   const recorded = (sent: Sent) =>
-    Response.json({ data: { translations: sent.q.map((html) => ({ translatedText: html.replace(/>([^<]+)</g, ">訳:$1<"), detectedSourceLanguage: "en" })) } });
+    Response.json({ data: { translations: sent.q.map((html) => ({ translatedText: html.replace(/(^|>)([^<]+)/g, "$1訳:$2"), detectedSourceLanguage: "en" })) } });
   const fake = fakeFetch({ [GOOGLE_TRANSLATE_URL]: (request) => (answer ?? recorded)(JSON.parse(request.body!) as Sent) });
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, sleep: async () => {} });
   const sent = () => fake.requests.map((request) => JSON.parse(request.body!) as Sent);
@@ -22,36 +22,58 @@ function setup(answer?: (sent: Sent) => Response) {
 }
 
 describe("GoogleTranslator", () => {
-  it("sends each segment as HTML and gives the translations back as Markdown", async () => {
+  it("sends only what is to be translated: no wrapper of the block, and a number in place of every address", async () => {
     const s = setup();
     const output = await s.translator.translate(
-      [{ text: "## A heading" }, { text: "Read **this** and [the notes](https://example.org/notes?a=1&b=2)." }, { text: "- An item" }],
+      [{ text: "## A heading" }, { text: "Read **this** and [the notes](https://example.org/notes?a=1&b=2)." }, { text: "- An item" }, { text: "> Said *once*" }],
       "ja",
     );
 
     expect(s.sent()).toEqual([
       {
-        q: ["<h2>A heading</h2>", '<p>Read <strong>this</strong> and <a href="https://example.org/notes?a=1&amp;b=2" rel="noopener noreferrer">the notes</a>.</p>', "<ul>\n<li>An item</li>\n</ul>"],
+        q: ["A heading", 'Read <strong>this</strong> and <a href="0">the notes</a>.', "An item", "Said <em>once</em>"],
         target: "ja",
         format: "html",
       },
     ]);
     expect(output).toEqual({
-      texts: ["## 訳:A heading", "訳:Read **訳:this**訳: and [訳:the notes](https://example.org/notes?a=1&b=2)訳:.", "- 訳:An item"],
+      texts: ["## 訳:A heading", "訳:Read **訳:this**訳: and [訳:the notes](https://example.org/notes?a=1&b=2)訳:.", "- 訳:An item", "> 訳:Said *訳:once*"],
       sourceLanguage: "en",
     });
   });
 
   it("keeps the number of an item of a numbered list", async () => {
     const s = setup();
-    const output = await s.translator.translate([{ text: "1. one" }, { text: "2. two" }, { text: "10. ten\n   more" }], "ja");
-    expect(s.sent()[0]!.q[1]).toBe('<ol start="2">\n<li>two</li>\n</ol>');
-    expect(output.texts.map((text) => /^\d+\. /.exec(text)?.[0])).toEqual(["1. ", "2. ", "10. "]);
-    expect(output.texts[1]).toBe("2. 訳:two");
+    const output = await s.translator.translate([{ text: "1. one" }, { text: "2. two" }, { text: "10. ten" }], "ja");
+    expect(s.sent()[0]!.q).toEqual(["one", "two", "ten"]);
+    expect(output.texts).toEqual(["1. 訳:one", "2. 訳:two", "10. 訳:ten"]);
+  });
 
-    // The answer may come back without the attribute that carried the number.
-    const bare = setup((sent) => Response.json({ data: { translations: sent.q.map(() => ({ translatedText: "<ol><li>訳</li></ol>" })) } }));
-    expect((await bare.translator.translate([{ text: "3. three" }], "ja")).texts).toEqual(["3. 訳"]);
+  it("puts every address back where its number comes back, also when the order changed", async () => {
+    const text = "See [one](https://a.example.org/1) and [two](https://b.example.org/2) ![pic](https://img.example.org/p.png)";
+    const s = setup((sent) =>
+      Response.json({ data: { translations: sent.q.map(() => ({ translatedText: '<a href="1">二</a>と<a href="0">一</a> <img src="2" alt="図">' })) } }),
+    );
+    const output = await s.translator.translate([{ text }], "ja");
+    expect(s.sent()[0]!.q[0]).toBe('See <a href="0">one</a> and <a href="1">two</a> <img src="2" alt="pic">');
+    expect(output.texts).toEqual(["[二](https://b.example.org/2)と[一](https://a.example.org/1) ![図](https://img.example.org/p.png)"]);
+  });
+
+  it("keeps the words of a link whose number does not come back as one it sent", async () => {
+    const s = setup(() => Response.json({ data: { translations: [{ translatedText: '<a href="7">七</a>と<a href="https://evil.example.org/">外</a>と<a href="0">一</a>' }] } }));
+    const output = await s.translator.translate([{ text: "[one](https://a.example.org/1)" }], "ja");
+    expect(output.texts).toEqual(["七と外と[一](https://a.example.org/1)"]);
+  });
+
+  it("sends a block whole when it holds blocks of its own, with numbers for its addresses all the same", async () => {
+    const s = setup();
+    const text = "- Outer [link](https://example.org/x)\n  - Inner";
+    const output = await s.translator.translate([{ text }, { text: "3. three\n\n   second paragraph" }], "ja");
+    expect(s.sent()[0]!.q[0]).toContain('<a href="0">link</a>');
+    expect(s.sent()[0]!.q[0]).toMatch(/^<ul>/);
+    expect(output.texts[0]).toContain("[訳:link](https://example.org/x)");
+    expect(output.texts[0]).toMatch(/^- /);
+    expect(output.texts[1]).toMatch(/^3\. /);
   });
 
   it("sends a title as text, and reads the answer as text", async () => {
@@ -77,8 +99,9 @@ describe("GoogleTranslator", () => {
     expect(output.texts).toHaveLength(4);
   });
 
-  it("counts the characters of the HTML it would send", () => {
-    expect(googleChars([{ text: "Hello", plain: true }, { text: "**Hi**" }])).toBe("Hello".length + "<p><strong>Hi</strong></p>".length);
+  it("counts the characters it would send, which are those of the text and of the tags inside it", () => {
+    expect(googleChars([{ text: "Hello", plain: true }, { text: "**Hi**" }])).toBe("Hello".length + "<strong>Hi</strong>".length);
+    expect(googleChars([{ text: "[a](https://example.org/a/very/long/address?with=parameters)" }])).toBe('<a href="0">a</a>'.length);
   });
 
   it("sends the key in a header, and keeps it out of the address and out of what a failure says", async () => {
