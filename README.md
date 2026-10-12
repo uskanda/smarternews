@@ -60,7 +60,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - An event category is shown as a list of upcoming events grouped by day.
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
 - Categories and feeds can be reordered by dragging them in the left pane. A feed held over another category for half a second can be dropped into it. A right click on a category or a feed opens a menu that moves it up or down; for a feed the menu also unsubscribes. The menu key or `Shift+F10` opens the same menu from the keyboard. The order is kept on the server, so the Android app, the settings file and OPML follow it.
-- With "「すべて既読にする」のあと、未読のある次の項目へ移る" switched on in the global settings, marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed.
+- Marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed. "「すべて既読にする」のあと、未読のある次の項目へ移る" in the global settings switches this off.
 - The settings pages edit categories, topics, subscribed feeds, stop words, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 
