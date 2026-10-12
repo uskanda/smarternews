@@ -41,7 +41,7 @@ export function ArticleRow({
         <span className={article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
           {marked ? <span className="sr-only">重要度{article.importance}。</span> : null}
           <span data-title className={article.importance === 5 ? "headline-mark" : ""}>
-            {article.title}
+            {article.translatedTitle ?? article.title}
           </span>
         </span>
         <span className="line-clamp-1 type-body-md text-on-surface-muted">{article.summary}</span>

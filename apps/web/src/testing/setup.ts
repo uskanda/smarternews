@@ -1,12 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetPaneState } from "../lib/panes.ts";
+import { resetThemeState } from "../lib/theme.ts";
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
   resetPaneState();
+  resetCollapsedState();
+  resetThemeState();
 });
 
 // jsdom has no layout, so it has no media queries either. Tests choose the width through `setViewport`.

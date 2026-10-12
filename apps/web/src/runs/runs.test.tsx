@@ -1,4 +1,4 @@
-import { createRun, createTopic, finishRun, insertCandidate, startRun, type RunOutcome } from "@smarternews/core";
+import { createRun, createTopic, finishRun, insertCandidate, setRetry, startRun, type RetrySkipped, type RunOutcome } from "@smarternews/core";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -209,6 +209,104 @@ describe("one run", () => {
   it("says that a run does not exist", async () => {
     renderApp({ route: "/runs/4242" });
     expect(await screen.findByText("この実行の記録はありません。30日を過ぎて削除された可能性があります。")).toBeInTheDocument();
+  });
+});
+
+describe("retries", () => {
+  /** A failed run of the schedule or of a retry, at the server's time. A minute passes after it. */
+  function failedRun(
+    server: TestServer,
+    categoryId: number,
+    options: { retry?: { attempt: number; of: number }; manual?: boolean; plan?: { at: string } | { skipped: RetrySkipped } } = {},
+  ) {
+    const run = createRun(
+      server.db,
+      { categoryId, trigger: options.manual ? "manual" : "schedule", slot: options.manual || options.retry ? null : "2026-03-01T05:00", retry: options.retry },
+      server.clock,
+    );
+    startRun(server.db, run.id, server.clock().toISOString());
+    finishRun(server.db, run.id, {
+      status: "failed",
+      finishedAt: server.clock().toISOString(),
+      collected: 0,
+      rejected: 0,
+      articlesCreated: 0,
+      articlesUpdated: 0,
+      llmCalls: 0,
+      failures: [{ stage: "feed", target: "https://example.org/down.xml", message: "HTTP status 500" }],
+    });
+    if (options.plan) setRetry(server.db, run.id, options.plan);
+    server.clock.advance(MINUTE);
+    return run.id;
+  }
+
+  it("marks a retry in the list with which retry it is, and leaves the other rows unmarked", async () => {
+    const server = makeServer("2026-03-01T05:00:00.000Z");
+    const category = server.category("Security");
+    const first = failedRun(server, category.id);
+    failedRun(server, category.id, { retry: { attempt: 1, of: first } });
+    renderApp({ server, route: "/runs" });
+
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(within(rows()[0]!).getAllByRole("cell")[1]).toHaveTextContent("スケジュール1回目のやり直し");
+    expect(within(rows()[1]!).getAllByRole("cell")[1]!.textContent).toBe("スケジュール");
+  });
+
+  it("says in the detail which retry the run is, and leads to the run it retries", async () => {
+    const server = makeServer("2026-03-01T05:00:00.000Z");
+    const category = server.category("Security");
+    const first = failedRun(server, category.id);
+    const second = failedRun(server, category.id, { retry: { attempt: 2, of: first } });
+    const { user, path } = renderApp({ server, route: `/runs/${second}` });
+
+    const result = await screen.findByRole("region", { name: "結果" });
+    expect(within(result).getByText("2回目のやり直し")).toBeInTheDocument();
+    await user.click(within(result).getByRole("link", { name: "元の実行" }));
+
+    await waitFor(() => expect(path()).toBe(`/runs/${first}`));
+    const original = await screen.findByRole("region", { name: "結果" });
+    await waitFor(() => expect(original).toHaveTextContent("2026年3月1日 05:00"));
+    expect(within(original).queryByText(/回目のやり直し/)).toBeNull();
+    expect(within(original).queryByRole("link", { name: "元の実行" })).toBeNull();
+  });
+
+  it("shows when a failed run is retried", async () => {
+    const server = makeServer("2026-03-01T05:00:00.000Z");
+    const id = failedRun(server, server.category().id, { plan: { at: "2026-03-01T05:13:00.000Z" } });
+    renderApp({ server, route: `/runs/${id}` });
+
+    const result = await screen.findByRole("region", { name: "結果" });
+    expect(within(result).getByText("やり直しの予定").nextElementSibling).toHaveTextContent("2026年3月1日 05:13");
+  });
+
+  it.each([
+    { skipped: "limit", manual: false, says: "やり直しの上限に達しました。次の実行は、次のスケジュールの時刻です。" },
+    { skipped: "superseded", manual: false, says: "次のスケジュールの実行が先に始まったため、やり直しません。" },
+    { skipped: "disabled", manual: false, says: "カテゴリが無効か、有効なトピックがないため、やり直しません。" },
+    { skipped: "manual", manual: true, says: "手動の実行は、自動ではやり直しません。" },
+  ] as const)("says why a failed run is not retried: $skipped", async ({ skipped, manual, says }) => {
+    const server = makeServer("2026-03-01T05:00:00.000Z");
+    const id = failedRun(server, server.category().id, { manual, plan: { skipped } });
+    renderApp({ server, route: `/runs/${id}` });
+
+    const result = await screen.findByRole("region", { name: "結果" });
+    expect(within(result).getByText(says)).toBeInTheDocument();
+    expect(within(result).queryByText("やり直しの予定")).toBeNull();
+  });
+
+  it("says nothing about retries for a run that did not fail, and for a failed run from before retries existed", async () => {
+    const server = makeServer("2026-03-01T05:00:00.000Z");
+    const category = server.category();
+    const succeeded = finished(server, category.id, {}, "2026-03-01T05:00");
+    const old = failedRun(server, category.id, { manual: true });
+    const view = renderApp({ server, route: `/runs/${succeeded}` });
+    expect(await screen.findByRole("region", { name: "結果" })).not.toHaveTextContent("やり直");
+    view.unmount();
+
+    renderApp({ server, route: `/runs/${old}` });
+    const result = await screen.findByRole("region", { name: "結果" });
+    expect(result).toHaveTextContent("失敗");
+    expect(result).not.toHaveTextContent("やり直");
   });
 });
 

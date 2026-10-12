@@ -45,7 +45,7 @@ export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZo
   const time = formatShort(article.updatedAt, timeZone, new Date(now));
   const spoken = [
     marked ? `重要度${article.importance}` : null,
-    article.title,
+    article.translatedTitle ?? article.title,
     article.summary,
     sourceName,
     time,
@@ -125,7 +125,7 @@ export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZo
               article.importance === 5 ? { backgroundColor: theme.colors["mark-fill"], alignSelf: "flex-start" } : null,
             ]}
           >
-            {article.title}
+            {article.translatedTitle ?? article.title}
           </Txt>
           <Txt variant="body-md" color="on-surface-muted" numberOfLines={2}>
             {article.summary}

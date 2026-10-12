@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, parseConfig, resolveAssignment } from "./config.ts";
+import { ConfigError, parseConfig, resolveAssignment, translationApiKey } from "./config.ts";
 
 describe("parseConfig", () => {
   it("listens on the local host only and uses the claude command when nothing is configured", () => {
@@ -15,6 +15,8 @@ describe("parseConfig", () => {
       judge: "fast",
       cluster: "fast",
       write: "smart",
+      summarize: "fast",
+      translate: "fast",
     });
   });
 
@@ -25,7 +27,7 @@ providers:
   b: { adapter: openai-compatible, baseUrl: "http://127.0.0.1:1/v1", model: m }
 tasks: { default: a, judge: b }
 `);
-    expect(resolveAssignment(config)).toEqual({ interpret: "a", search: "a", judge: "b", cluster: "a", write: "a" });
+    expect(resolveAssignment(config)).toEqual({ interpret: "a", search: "a", judge: "b", cluster: "a", write: "a", summarize: "a", translate: "a" });
   });
 
   it("assigns every task to the only provider when no tasks are given", () => {
@@ -59,7 +61,7 @@ providers:
   it("keeps the documented defaults for limits and fetching", () => {
     const config = parseConfig("listen: 0.0.0.0:9000\n");
     expect(config.listen).toBe("0.0.0.0:9000");
-    expect(config.limits).toEqual({ llmCallsPerRun: 40, llmCallsPerDay: 300, judgeBatchSize: 30, pagesPerRun: 20 });
+    expect(config.limits).toEqual({ llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100, judgeBatchSize: 30, pagesPerRun: 20, runRetries: 2 });
     expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000, allowPrivateHosts: [] });
   });
 
@@ -81,5 +83,81 @@ describe("the example configuration", () => {
     const config = parseConfig(readFileSync(join(import.meta.dirname, "../../../examples/config.example.yaml"), "utf8"));
     expect(resolveAssignment(config)).toMatchObject({ judge: "fast", write: "smart" });
     expect(config.newsSearch).toEqual({ engine: "google-news", maxResultsPerQuery: 10 });
+  });
+});
+
+describe("the summarize task and its limit", () => {
+  const providers = (names: string[]) => `providers:\n${names.map((name) => `  ${name}: { adapter: claude-cli, model: m }\n`).join("")}`;
+
+  it("goes to the fast provider when nothing is assigned, whatever the default is", () => {
+    expect(resolveAssignment(parseConfig(null))).toMatchObject({ summarize: "fast", write: "smart" });
+    const config = parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`);
+    expect(resolveAssignment(config)).toMatchObject({ summarize: "fast", write: "big" });
+  });
+
+  it("goes to the assigned provider", () => {
+    const config = parseConfig(`${providers(["big", "fast", "local"])}tasks:\n  default: big\n  summarize: local\n`);
+    expect(resolveAssignment(config).summarize).toBe("local");
+  });
+
+  it("goes to the default provider when none is named fast", () => {
+    expect(resolveAssignment(parseConfig(providers(["only"]))).summarize).toBe("only");
+  });
+
+  it("refuses an assignment to a provider that is not configured", () => {
+    const config = parseConfig(`${providers(["big"])}tasks:\n  default: big\n  summarize: missing\n`);
+    expect(() => resolveAssignment(config)).toThrow(/summarize.*missing/);
+  });
+
+  it("allows 100 summaries a day unless the file says otherwise", () => {
+    expect(parseConfig(null).limits.summariesPerDay).toBe(100);
+    expect(parseConfig("limits:\n  summariesPerDay: 20\n").limits.summariesPerDay).toBe(20);
+    expect(() => parseConfig("limits:\n  summariesPerDay: 0\n")).toThrow(/limits\.summariesPerDay/);
+  });
+});
+
+describe("the translation settings", () => {
+  it("allow 450,000 characters a month and 20,000 an article, without a key, when nothing is configured", () => {
+    const config = parseConfig(null);
+    expect(config.translation).toEqual({ monthlyChars: 450_000, maxCharsPerArticle: 20_000 });
+    expect(translationApiKey(config, { GOOGLE_TRANSLATE_API_KEY: "set-but-not-named" })).toBeNull();
+  });
+
+  it("read the key from the environment variable the file names", () => {
+    const config = parseConfig("translation:\n  google:\n    apiKeyEnv: MY_KEY\n  monthlyChars: 1000\n");
+    expect(config.translation.monthlyChars).toBe(1000);
+    expect(translationApiKey(config, { MY_KEY: "the-key" })).toBe("the-key");
+  });
+
+  it("treat a variable that is missing or empty as no key", () => {
+    const config = parseConfig("translation:\n  google:\n    apiKeyEnv: MY_KEY\n");
+    expect(translationApiKey(config, {})).toBeNull();
+    expect(translationApiKey(config, { MY_KEY: "" })).toBeNull();
+    expect(translationApiKey(config, { MY_KEY: "  " })).toBeNull();
+  });
+
+  it("refuse a key written into the file", () => {
+    expect(() => parseConfig("translation:\n  google:\n    apiKey: secret\n")).toThrow(ConfigError);
+  });
+
+  it("give the translate task to the provider named fast, unless the file assigns it", () => {
+    const providers = (names: string[]) => `providers:\n${names.map((name) => `  ${name}: { adapter: claude-cli, model: m }\n`).join("")}`;
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`)).translate).toBe("fast");
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n  translate: big\n`)).translate).toBe("big");
+    expect(resolveAssignment(parseConfig(providers(["only"]))).translate).toBe("only");
+  });
+});
+
+describe("the number of retries of a failed run", () => {
+  it("is 2 unless the file says otherwise", () => {
+    expect(parseConfig(null).limits.runRetries).toBe(2);
+    expect(parseConfig("limits:\n  runRetries: 0\n").limits.runRetries).toBe(0);
+    expect(parseConfig("limits:\n  runRetries: 3\n").limits.runRetries).toBe(3);
+  });
+
+  it("is refused outside 0 to 3, and when it is not a whole number", () => {
+    expect(() => parseConfig("limits:\n  runRetries: 4\n")).toThrow(/limits\.runRetries/);
+    expect(() => parseConfig("limits:\n  runRetries: -1\n")).toThrow(/limits\.runRetries/);
+    expect(() => parseConfig("limits:\n  runRetries: 1.5\n")).toThrow(/limits\.runRetries/);
   });
 });

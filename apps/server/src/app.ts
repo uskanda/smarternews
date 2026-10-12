@@ -37,11 +37,16 @@ import {
   listRuns,
   listTopics,
   markArticlesRead,
+  moveCategory,
+  moveFeed,
+  categoryMoveSchema,
+  feedMoveSchema,
   markArticlesUnread,
   markReadSchema,
   markUnreadSchema,
   notFound,
   renderRss,
+  requestAutoSummary,
   requestInterpretation,
   setArticleFlags,
   settingsUpdateSchema,
@@ -65,7 +70,9 @@ import {
   type Fetcher,
   type ProviderStatus,
   type RunQueue,
+  type SummaryWorker,
   type TaskRunner,
+  type TranslationService,
 } from "@smarternews/core";
 import { Hono, type Context } from "hono";
 import type { z } from "zod";
@@ -79,6 +86,10 @@ export interface AppDeps {
   /** Talks to other sites when a feed is subscribed or looked for. */
   fetcher: Fetcher;
   poller: FeedPoller;
+  /** Translates the articles of the feeds that ask for it. */
+  translation: TranslationService;
+  /** Writes the summaries of feed articles. Woken when a reader opens an article that waits for one. */
+  summarizer: SummaryWorker;
   tokens: { api: string; feed: string };
   version: string;
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
@@ -120,13 +131,20 @@ function idParam(c: Context, what: string): number {
 }
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer } = deps;
   const app = new Hono();
 
   app.onError((error, c) => {
     if (error instanceof DomainError) {
-      const [status, code] =
-        error.code === "invalid" ? ([400, "invalid_input"] as const) : error.code === "not_found" ? ([404, "not_found"] as const) : ([409, "conflict"] as const);
+      const [status, code] = (
+        {
+          invalid: [400, "invalid_input"],
+          not_found: [404, "not_found"],
+          conflict: [409, "conflict"],
+          // Nothing is wrong with the request: what it needs cannot be had now, and may be had later.
+          unavailable: [503, "unavailable"],
+        } as const
+      )[error.code];
       return c.json(errorBody(code, error.message, error.fields), status);
     }
     console.error(error);
@@ -182,6 +200,9 @@ export function createApp(deps: AppDeps): Hono {
   api.patch("/categories/:id", async (c) =>
     c.json(updateCategory(db, idParam(c, "category"), parse(categoryUpdateSchema, await jsonBody(c)))),
   );
+  api.post("/categories/:id/move", async (c) =>
+    c.json(moveCategory(db, idParam(c, "category"), parse(categoryMoveSchema, await jsonBody(c)).before)),
+  );
   api.delete("/categories/:id", (c) => {
     deleteCategory(db, idParam(c, "category"));
     return c.body(null, 204);
@@ -217,19 +238,33 @@ export function createApp(deps: AppDeps): Hono {
   api.patch("/articles/:id", async (c) =>
     c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)))),
   );
+  // Translates the content when it has no translation yet, so the answer can take as long as that does.
+  api.post("/articles/:id/summary", (c) => {
+    if (!requestAutoSummary(db, idParam(c, "article"), clock().toISOString())) return c.json({ status: "none" });
+    if (!runner.canSummarize()) return c.json({ status: "limit" });
+    // The reader is looking at the article now: the summary does not wait for the next look.
+    summarizer.tick();
+    return c.json({ status: "queued" });
+  });
+  api.post("/articles/:id/translation", async (c) => c.json(await translation.translateArticle(idParam(c, "article"))));
+  api.get("/translation", (c) => c.json(translation.status()));
 
   // subscribed feeds
   api.get("/feeds", (c) => c.json(listFeeds(db)));
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
-    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher }, input)), 201);
+    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation }, input)), 201);
   });
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
-  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)))));
+  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
+  api.post("/feeds/:id/move", async (c) => {
+    moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
+    return c.json(listFeeds(db));
+  });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
     return c.body(null, 204);
@@ -273,7 +308,7 @@ export function createApp(deps: AppDeps): Hono {
 
   // providers
   api.get("/providers", (c) => {
-    const status: ProviderStatus = { ...runner.describe(), llmCallsToday: runner.callsToday(), limits: runner.limits };
+    const status: ProviderStatus = { ...runner.describe(), llmCallsToday: runner.callsToday(), summariesToday: runner.summariesToday(), limits: runner.limits };
     return c.json(status);
   });
 

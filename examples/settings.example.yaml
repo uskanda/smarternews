@@ -15,6 +15,8 @@ settings:
   search: { language: en, region: US }
   # How often subscribed feeds are fetched, in minutes (5 to 1440). A subscription can set its own.
   feedIntervalMinutes: 30
+  # After "mark all as read", open the next list that has unread articles.
+  advanceAfterMarkAll: false
 categories:
   - slug: security
     name: Security
@@ -49,6 +51,8 @@ categories:
       - url: https://www.typescriptlang.org/feed.xml
         title: TypeScript blog
         intervalMinutes: 360
+        autoSummarize: true   # a model summarises the articles this feed delivers from now on
+        translate: true       # titles and contents are translated into outputLanguage; they leave this server for that
   - slug: local-events
     name: Local events
     kind: event

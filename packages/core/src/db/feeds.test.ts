@@ -183,3 +183,58 @@ describe("when a feed is due", () => {
     expect(nextFetchAt(db, after).getTime() - new Date(later).getTime()).toBe(30 * MINUTE);
   });
 });
+
+describe("summaries of a feed", () => {
+  const since = (db: ReturnType<typeof createTestDb>, id: number) => db.prepare("SELECT auto_summarize_since AS since FROM feeds WHERE id = ?").get(id)!.since;
+
+  it("are off for a feed that is registered without saying so", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example" }, clock);
+    expect(feed.autoSummarize).toBe(false);
+    expect(since(db, feed.id)).toBeNull();
+  });
+
+  it("record the time they were switched on, at registration and at a change", () => {
+    const { db, clock } = setup();
+    const registered = insertFeed(db, { url: "https://example.org/a.xml", title: "A", autoSummarize: true }, clock);
+    expect(registered.autoSummarize).toBe(true);
+    expect(since(db, registered.id)).toBe(START);
+
+    const changed = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    clock.advance(5 * MINUTE);
+    expect(updateFeed(db, changed.id, { autoSummarize: true }, clock).autoSummarize).toBe(true);
+    expect(since(db, changed.id)).toBe("2026-03-01T12:05:00.000Z");
+    expect(listFeeds(db).map((feed) => feed.autoSummarize)).toEqual([true, true]);
+  });
+
+  it("keep the earlier time when they are switched on again while on", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", autoSummarize: true }, clock);
+    clock.advance(5 * MINUTE);
+    updateFeed(db, feed.id, { autoSummarize: true, title: "Renamed" }, clock);
+    expect(since(db, feed.id)).toBe(START);
+  });
+
+  it("forget the time when they are switched off", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", autoSummarize: true }, clock);
+    expect(updateFeed(db, feed.id, { autoSummarize: false }, clock).autoSummarize).toBe(false);
+    expect(since(db, feed.id)).toBeNull();
+  });
+});
+
+describe("translation of a feed", () => {
+  it("is off for a feed that is registered without saying so", () => {
+    const { db, clock } = setup();
+    expect(insertFeed(db, { url: "https://example.org/feed.xml", title: "Example" }, clock).translate).toBe(false);
+  });
+
+  it("is stored at registration and at a change", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", translate: true }, clock);
+    expect(feed.translate).toBe(true);
+    expect(updateFeed(db, feed.id, { title: "Renamed" }, clock).translate).toBe(true);
+    expect(updateFeed(db, feed.id, { translate: false }, clock).translate).toBe(false);
+    expect(listFeeds(db)[0]!.translate).toBe(false);
+  });
+});

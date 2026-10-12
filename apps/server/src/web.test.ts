@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FeedPoller, Fetcher, RunQueue } from "@smarternews/core";
+import { FeedPoller, SummaryWorker, Fetcher, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
@@ -14,19 +14,23 @@ function server(build: "built" | "not-built") {
     writeFileSync(join(dir, "index.html"), "<!doctype html><title>smarternews</title><div id=root></div>");
     writeFileSync(join(dir, "assets", "app-abc123.js"), "console.log('app')");
     writeFileSync(join(dir, "assets", "app-abc123.css"), "body{}");
+    writeFileSync(join(dir, "theme.js"), "document.documentElement.setAttribute('data-theme', 'dark')");
     writeFileSync(join(dir, "..", "secret.txt"), "outside the web directory");
   }
   const db = createTestDb();
   const clock = fakeClock("2026-03-01T12:00:00.000Z");
   const queue = new RunQueue({ db, clock, execute: async () => {} });
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1000, fetchImpl: fakeFetch({}).fetchImpl });
+  const runner = fakeLlm(db, clock, {}).runner;
   const app = createApp({
     db,
     clock,
     queue,
-    runner: fakeLlm(db, clock, {}).runner,
+    runner,
     fetcher,
+    translation: new TranslationService({ db, clock, google: null, llm: new LlmTranslator(runner), monthlyChars: 0, maxCharsPerArticle: 20_000 }),
     poller: new FeedPoller({ db, clock, fetcher }),
+    summarizer: new SummaryWorker({ db, clock, fetcher, runner }),
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
     webDir: dir,
@@ -81,6 +85,15 @@ describe("serving the web app", () => {
   it("does not cache the page itself, so a new build is picked up", async () => {
     const response = await server("built").request("/");
     expect(response.headers.get("cache-control")).toBe("no-cache");
+  });
+
+  it("serves the script that sets the colour scheme before the first paint, and lets a new build replace it", async () => {
+    const response = await server("built").request("/theme.js");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("javascript");
+    expect(response.headers.get("cache-control")).toBe("no-cache");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await response.text()).toContain("data-theme");
   });
 
   it("answers 404 for an asset that does not exist instead of the page", async () => {

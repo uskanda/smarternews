@@ -3,6 +3,8 @@
 import {
   articleListSchema,
   articleSchema,
+  articleTranslationSchema,
+  summaryRequestResultSchema,
   candidateSchema,
   categorySchema,
   countsSchema,
@@ -18,9 +20,12 @@ import {
   stopWordDeleteResultSchema,
   stopWordSchema,
   topicSchema,
+  translationStatusSchema,
   type Article,
   type ArticleList,
   type ArticleListQuery,
+  type ArticleTranslation,
+  type SummaryRequestResult,
   type ArticleUpdate,
   type Candidate,
   type Category,
@@ -31,6 +36,7 @@ import {
   type FeedCreate,
   type FeedDiscoveryResult,
   type FeedFetchResult,
+  type FeedMove,
   type FeedUpdate,
   type ImportResult,
   type MarkRead,
@@ -47,10 +53,11 @@ import {
   type Topic,
   type TopicCreate,
   type TopicUpdate,
+  type TranslationStatus,
 } from "@smarternews/core/api";
 import { z } from "zod";
 
-export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "network" | "server";
+export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "unavailable" | "network" | "server";
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
@@ -84,6 +91,7 @@ function kindOf(status: number): ApiErrorKind {
   if (status === 401) return "unauthorized";
   if (status === 404) return "not_found";
   if (status === 409) return "conflict";
+  if (status === 503) return "unavailable";
   return "server";
 }
 
@@ -165,6 +173,9 @@ export function createApi(options: ApiOptions) {
     createCategory: (input: CategoryCreate): Promise<Category> => json(categorySchema, "/categories", body("POST", input)),
     updateCategory: (id: number, patch: CategoryUpdate): Promise<Category> =>
       json(categorySchema, `/categories/${id}`, body("PATCH", patch)),
+    /** Puts the category before another one, or last. Answers with all categories in their order. */
+    moveCategory: (id: number, before: number | null): Promise<Category[]> =>
+      json(z.array(categorySchema), `/categories/${id}/move`, body("POST", { before })),
     deleteCategory: async (id: number): Promise<void> => void (await request(`/categories/${id}`, { method: "DELETE" })),
 
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
@@ -178,6 +189,13 @@ export function createApi(options: ApiOptions) {
     article: (id: number): Promise<Article> => json(articleSchema, `/articles/${id}`),
     updateArticle: (id: number, patch: ArticleUpdate): Promise<Article> =>
       json(articleSchema, `/articles/${id}`, body("PATCH", patch)),
+    /**
+     * The translation of a feed article's content. The server makes it when there is none yet, so the first
+     * call for an article takes as long as translating does. Fails as `unavailable` when nothing can translate now.
+     */
+    /** Says that the article is open and its summary is wanted now. The answer tells whether one is on its way. */
+    requestSummary: (id: number): Promise<SummaryRequestResult> => json(summaryRequestResultSchema, `/articles/${id}/summary`, { method: "POST" }),
+    translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>
       json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),
@@ -188,6 +206,8 @@ export function createApi(options: ApiOptions) {
     createFeed: (input: FeedCreate): Promise<Feed> => json(feedSchema, "/feeds", body("POST", input)),
     discoverFeeds: (url: string): Promise<FeedDiscoveryResult> => json(feedDiscoveryResultSchema, "/feeds/discover", body("POST", { url })),
     updateFeed: (id: number, patch: FeedUpdate): Promise<Feed> => json(feedSchema, `/feeds/${id}`, body("PATCH", patch)),
+    /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
+    moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),
     deleteFeed: async (id: number): Promise<void> => void (await request(`/feeds/${id}`, { method: "DELETE" })),
     fetchFeed: (id: number): Promise<FeedFetchResult> => json(feedFetchResultSchema, `/feeds/${id}/fetch`, { method: "POST" }),
     exportOpml: async (): Promise<string> => (await request("/feeds/opml")).text(),
@@ -206,6 +226,8 @@ export function createApi(options: ApiOptions) {
       json(z.array(candidateSchema), `/runs/${id}/candidates${query({ status })}`),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
+    /** How much the translation API was used this month, and whether it has a key. */
+    translation: (): Promise<TranslationStatus> => json(translationStatusSchema, "/translation"),
   };
 }
 

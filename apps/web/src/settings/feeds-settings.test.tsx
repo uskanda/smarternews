@@ -1,4 +1,4 @@
-import { createStopWord, getFeed, getSettings, insertFeed, listFeeds, listStopWords, recordFetchFailure, recordFetchSuccess, updateFeed } from "@smarternews/core";
+import { createStopWord, getFeed, getSettings, insertFeed, listFeeds, listStopWords, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -515,5 +515,134 @@ describe("deleting a category that has feeds", () => {
     const { user } = renderApp({ server, route: `/settings/categories/${tools.id}` });
     await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
     expect(await screen.findByRole("alertdialog")).not.toHaveTextContent("購読フィード");
+  });
+});
+
+describe("summaries of a feed", () => {
+  const HINT = "要約にはLLMを使います。これから届く記事だけを要約します。";
+
+  it("are switched on in the edit form, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).not.toHaveTextContent("自動で要約");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "自動で要約する" });
+    expect(choice).not.toBeChecked();
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).autoSummarize).toBe(true);
+    await waitFor(async () => expect(within(await rowOf("Blog")).getByText("自動で要約")).toBeInTheDocument());
+  });
+
+  it("are switched off again, and the mark goes", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    updateFeed(server.db, feed.id, { autoSummarize: true }, server.clock);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).getByText("自動で要約")).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "自動で要約する" });
+    expect(choice).toBeChecked();
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getFeed(server.db, feed.id).autoSummarize).toBe(false));
+    await waitFor(async () => expect(await rowOf("Blog")).not.toHaveTextContent("自動で要約"));
+  });
+
+  it("say beside the switch that a model is used and that only coming articles are covered", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    expect(within(row).getByRole("checkbox", { name: "自動で要約する" })).toHaveAccessibleDescription(HINT);
+
+    const form = await section("購読フィードの追加");
+    expect(within(form).getByRole("checkbox", { name: "自動で要約する" })).toHaveAccessibleDescription(HINT);
+  });
+
+  it("can be switched on while a feed is added, and are off unless chosen", async () => {
+    const server = makeServer();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const form = await section("購読フィードの追加");
+    const choice = within(form).getByRole("checkbox", { name: "自動で要約する" });
+    expect(choice).not.toBeChecked();
+    await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await user.click(choice);
+    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+
+    expect(within(await rowOf("Example Blog")).getByText("自動で要約")).toBeInTheDocument();
+    expect(listFeeds(server.db)).toMatchObject([{ url: FEED, autoSummarize: true }]);
+    expect(choice).not.toBeChecked();
+  });
+});
+
+describe("translation of a feed", () => {
+  const HINT = "記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
+
+  it("is switched on in the edit form, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).queryByText("翻訳")).toBeNull();
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "翻訳する" });
+    expect(choice).not.toBeChecked();
+    expect(choice).toHaveAccessibleDescription(HINT);
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getFeed(server.db, feed.id).translate).toBe(true));
+    await waitFor(async () => expect(within(await rowOf("Blog")).getByText("翻訳")).toBeInTheDocument());
+    expect(server.google!.calls).toEqual([]);
+  });
+
+  it("can be switched on while a feed is added, with the same words beside the switch, and is off unless chosen", async () => {
+    const server = makeServer();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const form = await section("購読フィードの追加");
+    const choice = within(form).getByRole("checkbox", { name: "翻訳する" });
+    expect(choice).not.toBeChecked();
+    expect(choice).toHaveAccessibleDescription(HINT);
+    await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await user.click(choice);
+    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+
+    expect(within(await rowOf("Example Blog")).getByText("翻訳")).toBeInTheDocument();
+    expect(listFeeds(server.db)).toMatchObject([{ url: FEED, translate: true }]);
+    expect(choice).not.toBeChecked();
+  });
+
+  it("shows how many characters went to the translation API this month, and the limit", async () => {
+    const server = makeServer();
+    reserveTranslationChars(server.db, "2026-03", 12_000, 450_000);
+    renderApp({ server, route: "/settings/feeds" });
+    const usage = await section("翻訳の利用状況");
+    await waitFor(() => expect(usage).toHaveTextContent("12,000文字"));
+    expect(usage).toHaveTextContent("450,000文字");
+    expect(usage).not.toHaveTextContent("LLMだけ");
+  });
+
+  it("says that only the model translates when no key is set", async () => {
+    const server = makeServer(undefined, { google: null });
+    renderApp({ server, route: "/settings/feeds" });
+    const usage = await section("翻訳の利用状況");
+    await waitFor(() => expect(usage).toHaveTextContent("翻訳のAPIキーが設定されていないため、LLMだけで翻訳します。"));
+    expect(usage).not.toHaveTextContent("450,000");
   });
 });

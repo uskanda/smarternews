@@ -1,5 +1,6 @@
 import type { Article, ArticleList, ArticleListQuery, ArticleSummary } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { useApp } from "./AppProvider";
 
 /** How often lists and counts are fetched again while the app is in the foreground. */
@@ -57,6 +58,74 @@ function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSum
       : data,
   );
   client.setQueryData<Article>(["article", id], (article) => (article ? { ...article, ...patch } : article));
+}
+
+/**
+ * The translation of a feed article's content. It is asked for when an article of a feed that translates is
+ * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
+ * put into the article and into the lists, which show the translated title. `active` is false for a page
+ * drawn beside the one in view: that article is not open yet, and nothing is asked for it.
+ */
+export function useArticleTranslation(article: Article | undefined, active: boolean) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const id = article?.id ?? null;
+  const wanted = active && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  return useQuery({
+    queryKey: ["article-translation", id],
+    queryFn: async () => {
+      const translation = await api.translateArticle(id!);
+      patchArticle(client, id!, { translatedTitle: translation.translatedTitle });
+      client.setQueryData<Article>(["article", id], (current) => (current ? { ...current, translation, sourceLanguage: translation.sourceLanguage } : current));
+      return translation;
+    },
+    enabled: wanted,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/** How often an open article is fetched again while its summary is on its way, and for how long. */
+const SUMMARY_POLL_MS = 5_000;
+const SUMMARY_POLL_TRIES = 36;
+
+/**
+ * Asks for the summary of an open article that waits for one, then looks for it every few seconds: the
+ * server writes it right away, ahead of the articles nobody has open. `state` says what to tell the reader.
+ */
+export function useSummaryRequest(article: Article | undefined, active: boolean): "none" | "waiting" | "limit" | "late" {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const id = article?.id ?? null;
+  const wanted = active && article !== undefined && article.autoSummary === null && article.autoSummaryPending;
+  const request = useQuery({
+    queryKey: ["article-summary-request", id],
+    queryFn: () => api.requestSummary(id!),
+    enabled: wanted,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const queued = wanted && request.data?.status === "queued";
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    setLate(false);
+    if (!queued) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (tries > SUMMARY_POLL_TRIES) {
+        clearInterval(timer);
+        setLate(true);
+        return;
+      }
+      void client.invalidateQueries({ queryKey: ["article", id] });
+    }, SUMMARY_POLL_MS);
+    return () => clearInterval(timer);
+  }, [queued, id, client]);
+  if (!wanted) return "none";
+  if (request.data?.status === "limit") return "limit";
+  if (request.data?.status === "none") return "none";
+  return late ? "late" : "waiting";
 }
 
 /** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */

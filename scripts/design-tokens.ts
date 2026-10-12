@@ -23,7 +23,32 @@ interface DesignTokens {
   rounded?: Record<string, string>;
 }
 
-const DARK = /-dark$/;
+type Colors = ReadonlyArray<readonly [name: string, value: string]>;
+
+/**
+ * The three colour schemes, each under the names of the light one. A name ending in `-dark` or `-darkblue`
+ * holds the value of that scheme. Dark takes the dark blue value for a colour it does not define: the colours
+ * that carry a meaning are the same in both.
+ */
+function palettes(tokens: DesignTokens): { light: Colors; dark: Colors; darkblue: Colors } {
+  const suffix = /-(dark|darkblue)$/;
+  const colors = Object.entries(tokens.colors ?? {});
+  const light = colors.filter(([name]) => !suffix.test(name));
+  const values = { dark: new Map<string, string>(), darkblue: new Map<string, string>() };
+  for (const [name, value] of colors) {
+    const scheme = suffix.exec(name)?.[1] as "dark" | "darkblue" | undefined;
+    if (!scheme) continue;
+    const base = name.replace(suffix, "");
+    if (!light.some(([lightName]) => lightName === base)) throw new Error(`colors.${name} has no light counterpart colors.${base}`);
+    values[scheme].set(base, value);
+  }
+  const pick = (...from: Array<Map<string, string>>): Colors =>
+    light.flatMap(([name]) => {
+      const value = from.map((map) => map.get(name)).find((found) => found !== undefined);
+      return value === undefined ? [] : [[name, value] as const];
+    });
+  return { light, dark: pick(values.dark, values.darkblue), darkblue: pick(values.darkblue) };
+}
 
 function frontMatter(text: string): DesignTokens {
   const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
@@ -33,14 +58,8 @@ function frontMatter(text: string): DesignTokens {
 
 export function renderTokens(designMd: string): string {
   const tokens = frontMatter(designMd);
-  const colors = Object.entries(tokens.colors ?? {});
-  const light = colors.filter(([name]) => !DARK.test(name));
-  const dark = colors.filter(([name]) => DARK.test(name)).map(([name, value]) => [name.replace(DARK, ""), value] as const);
-  for (const [name] of dark) {
-    if (!light.some(([lightName]) => lightName === name)) {
-      throw new Error(`colors.${name}-dark has no light counterpart colors.${name}`);
-    }
-  }
+  const { light, dark, darkblue } = palettes(tokens);
+  const declare = (colors: Colors, indent: string) => colors.map(([name, value]) => `${indent}--color-${name}: ${value};`);
 
   const lines = [
     "/* Generated from DESIGN.md by scripts/design-tokens.ts. Do not edit: change DESIGN.md and run `pnpm run tokens`. */",
@@ -52,12 +71,27 @@ export function renderTokens(designMd: string): string {
     ...Object.entries(tokens.spacing ?? {}).map(([name, value]) => `  --spacing-${name}: ${value};`),
     "}",
     "",
-    "/* The dark values replace the light ones when the device asks for a dark colour scheme. */",
+    "/* Until the user chooses a colour scheme, the dark blue values replace the light ones on a device that asks for a dark one. */",
     "@media (prefers-color-scheme: dark) {",
-    "  :root {",
+    "  :root:not([data-theme]) {",
     "    color-scheme: dark;",
-    ...dark.map(([name, value]) => `    --color-${name}: ${value};`),
+    ...declare(darkblue, "    "),
     "  }",
+    "}",
+    "",
+    "/* The colour scheme the user chose is the `data-theme` attribute of the root element. */",
+    ':root[data-theme="light"] {',
+    "  color-scheme: light;",
+    "}",
+    "",
+    ':root[data-theme="dark"] {',
+    "  color-scheme: dark;",
+    ...declare(dark, "  "),
+    "}",
+    "",
+    ':root[data-theme="darkblue"] {',
+    "  color-scheme: dark;",
+    ...declare(darkblue, "  "),
     "}",
   ];
   for (const [name, type] of Object.entries(tokens.typography ?? {})) {
@@ -93,14 +127,17 @@ function nativeFont(role: string, type: Typography): string {
 const key = (name: string): string => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
 
 /**
- * The same tokens for React Native: colours as a light and a dark set, lengths as numbers, and each typography
+ * The same tokens for React Native: colours as a light, a dark and a dark blue set, lengths as numbers, and each typography
  * role with the name of its bundled font file. React Native has no font stacks and takes line heights in pixels.
  */
 export function renderNativeTokens(designMd: string): string {
   const tokens = frontMatter(designMd);
-  const colors = Object.entries(tokens.colors ?? {});
-  const light = colors.filter(([name]) => !DARK.test(name));
-  const darkValues = new Map(colors.filter(([name]) => DARK.test(name)).map(([name, value]) => [name.replace(DARK, ""), value]));
+  const { light, dark, darkblue } = palettes(tokens);
+  // Every set carries every name: a colour a scheme does not define keeps the light value.
+  const full = (colors: Colors) => {
+    const values = new Map(colors);
+    return light.map(([name, value]) => `    ${key(name)}: ${JSON.stringify(values.get(name) ?? value)},`);
+  };
   const lengths = (group: Record<string, string | number> | undefined) =>
     Object.entries(group ?? {})
       .map(([name, value]) => [name, pixels(value)] as const)
@@ -112,10 +149,13 @@ export function renderNativeTokens(designMd: string): string {
     "",
     "export const colors = {",
     "  light: {",
-    ...light.map(([name, value]) => `    ${key(name)}: ${JSON.stringify(value)},`),
+    ...full(light),
     "  },",
     "  dark: {",
-    ...light.map(([name, value]) => `    ${key(name)}: ${JSON.stringify(darkValues.get(name) ?? value)},`),
+    ...full(dark),
+    "  },",
+    "  darkblue: {",
+    ...full(darkblue),
     "  },",
     "} as const;",
     "",

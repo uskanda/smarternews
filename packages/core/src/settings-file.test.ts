@@ -1,7 +1,8 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
-import { createCategory, findCategoryBySlug, listCategories } from "./db/categories.ts";
-import { insertFeed, listFeeds } from "./db/feeds.ts";
+import { createCategory, findCategoryBySlug, listCategories, moveCategory } from "./db/categories.ts";
+import { nextArticleToSummarize } from "./db/articles.ts";
+import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createStopWord, listStopWords } from "./db/stop-words.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
@@ -38,6 +39,7 @@ describe("exportSettings", () => {
       timeZone: "Europe/Berlin",
       search: { language: "ja", region: "JP" },
       feedIntervalMinutes: 30,
+      advanceAfterMarkAll: false,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -80,7 +82,8 @@ categories:
     const cars = createCategory(db, { name: "Cars", kind: "news" }, clock);
     createTopic(db, cars.id, { text: "New models" }, clock);
     importSettings(db, "version: 1\ncategories:\n  - slug: security\n    name: Security\n    kind: news\n", clock);
-    expect(listCategories(db).map((c) => c.slug)).toEqual(["cars", "security"]);
+    // the listed category comes first, and the one the file does not mention follows
+    expect(listCategories(db).map((c) => c.slug)).toEqual(["security", "cars"]);
     expect(listTopics(db, cars.id)).toHaveLength(1);
   });
 
@@ -257,6 +260,57 @@ categories:
   });
 });
 
+describe("order and the move-on setting in the settings file", () => {
+  const file = (slugs: string[], extra = "") =>
+    `version: 1\n${extra}categories:\n${slugs.map((slug) => `  - slug: ${slug}\n    name: ${slug.toUpperCase()}\n    kind: news\n`).join("")}`;
+  const slugs = (db: ReturnType<typeof createTestDb>) => listCategories(db).map((category) => category.slug);
+
+  it("writes categories and feeds in their order, and an empty server takes that order over", () => {
+    const db = createTestDb();
+    importSettings(db, file(["a", "b"]), clock);
+    const [a, b] = listCategories(db);
+    insertFeed(db, { url: "https://x.example.org/feed.xml", title: "X", categoryId: a!.id }, clock);
+    const y = insertFeed(db, { url: "https://y.example.org/feed.xml", title: "Y", categoryId: a!.id }, clock);
+    moveCategory(db, b!.id, a!.id);
+    moveFeed(db, y.id, { categoryId: a!.id, before: null });
+    moveFeed(db, listFeeds(db).find((feed) => feed.title === "X")!.id, { categoryId: a!.id, before: null });
+
+    const exported = exportSettings(db);
+    const written = parse(exported);
+    expect(written.categories.map((category: { slug: string }) => category.slug)).toEqual(["b", "a"]);
+    expect(written.categories[1].subscriptions.map((entry: { title: string }) => entry.title)).toEqual(["Y", "X"]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(slugs(target)).toEqual(["b", "a"]);
+    expect(listFeeds(target).map((feed) => feed.title)).toEqual(["Y", "X"]);
+  });
+
+  it("puts what the file lists first, in the file's order, and the rest after it", () => {
+    const db = createTestDb();
+    importSettings(db, file(["a", "b", "c"]), clock);
+    importSettings(db, file(["c", "a"]), clock);
+    expect(slugs(db)).toEqual(["c", "a", "b"]);
+  });
+
+  it("orders the feeds of a category the same way", () => {
+    const db = createTestDb();
+    for (const title of ["X", "Y", "Z"]) insertFeed(db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title }, clock);
+    importSettings(db, "version: 1\nsubscriptions:\n  - url: https://z.example.org/feed.xml\n  - url: https://x.example.org/feed.xml\n", clock);
+    expect(listFeeds(db).map((feed) => feed.title)).toEqual(["Z", "X", "Y"]);
+  });
+
+  it("writes the move-on setting, and a file without it leaves the stored value alone", () => {
+    const db = createTestDb();
+    updateSettings(db, { advanceAfterMarkAll: true });
+    expect(parse(exportSettings(db)).settings.advanceAfterMarkAll).toBe(true);
+    importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
+    expect(getSettings(db).advanceAfterMarkAll).toBe(true);
+    importSettings(db, "version: 1\nsettings:\n  advanceAfterMarkAll: false\n", clock);
+    expect(getSettings(db).advanceAfterMarkAll).toBe(false);
+  });
+});
+
 describe("the example settings file", () => {
   it("loads into an empty server", async () => {
     const { readFileSync } = await import("node:fs");
@@ -279,5 +333,96 @@ describe("the example settings file", () => {
       [tools.id, 360],
       [null, null],
     ]);
+  });
+});
+
+describe("summaries of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the setting for the feeds that summarise only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", autoSummarize: true }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.autoSummarize)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.autoSummarize])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without the setting as not summarising, and leaves a known feed as it is", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { autoSummarize: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(true);
+    importSettings(db, file("    autoSummarize: false\n"), clock);
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(false);
+  });
+
+  it("summarises none of the articles a feed already has when the file switches summaries on", () => {
+    const local = fakeClock("2026-03-01T00:00:00.000Z");
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: A, title: "A" }, local);
+    seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    local.advance(60_000);
+
+    importSettings(db, file("    autoSummarize: true\n"), local);
+
+    expect(listFeeds(db)[0]!.autoSummarize).toBe(true);
+    expect(nextArticleToSummarize(db)).toBeNull();
+    local.advance(60_000);
+    const later = seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    expect(nextArticleToSummarize(db)?.id).toBe(later);
+  });
+
+  it("refuses a setting that is not true or false", () => {
+    expect(() => importSettings(createTestDb(), file("    autoSummarize: sometimes\n"), clock)).toThrow(/expected format/);
+  });
+});
+
+describe("translation of a feed in the settings file", () => {
+  const clock = fakeClock("2026-03-01T00:00:00.000Z");
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("is written for the feeds that translate only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", translate: true }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.translate)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.translate])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("is off for a new feed without the line, and stays as it is for a known one", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.translate).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { translate: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.translate).toBe(true);
+    importSettings(db, file("    translate: false\n"), clock);
+    expect(listFeeds(db)[0]!.translate).toBe(false);
+  });
+
+  it("writes nothing about the key of the translation API", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", translate: true }, clock);
+    expect(exportSettings(db)).not.toMatch(/key/i);
   });
 });

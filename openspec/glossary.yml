@@ -266,6 +266,34 @@ terms:
     definition: "マウスのボタンを1回押す操作。"
     aliases: []
     en: "click"
+  - term: "メニュー"
+    definition: "項目の上で開き、その項目にできる操作を並べて選ばせる小さな一覧。"
+    aliases: ["コンテキストメニュー"]
+    en: "menu"
+  - term: "ポインター"
+    definition: "マウス、ペン、指など、画面の上の位置を指す入力の総称。"
+    aliases: []
+    en: "pointer"
+  - term: "ジェスチャー"
+    definition: "長押し、ドラッグ、払う動きなど、指の動きで行う操作。"
+    aliases: []
+    en: "gesture"
+  - term: "ライト"
+    definition: "明るい地に暗い文字の配色。利用者が選ぶ配色の名前。"
+    aliases: []
+    en: "light"
+  - term: "ダーク"
+    definition: "青みのない黒と灰の地に明るい文字の配色。利用者が選ぶ配色の名前。"
+    aliases: []
+    en: "dark"
+  - term: "ダークブルー"
+    definition: "青みのある暗い地に明るい文字の配色。利用者が選ぶ配色の名前。"
+    aliases: []
+    en: "dark blue"
+  - term: "ポート"
+    definition: "サーバーが接続を待ち受ける番号。同じホストで動く複数のサーバーを区別する。"
+    aliases: []
+    en: "port"
   - term: "ダブルクリック"
     definition: "マウスのボタンを続けて2回押す操作。"
     aliases: []

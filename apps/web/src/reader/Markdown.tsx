@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
@@ -30,8 +30,15 @@ function ArticleImage({ src, alt }: { src: string; alt: string }) {
  * raw HTML stays text (react-markdown does not parse it), and only web and mail links become links.
  * Images are loaded only when `images` is set, which is for the content of a feed article, and only over
  * HTTPS; everywhere else an image is shown as its description.
+ * With `plainHeadings` a heading is drawn as a line of bold text: the original under a translated heading
+ * must not be a second heading in the outline of the page.
  */
-export function Markdown({ text, images = false }: { text: string; images?: boolean }) {
+export function Markdown({ text, images = false, plainHeadings = false }: { text: string; images?: boolean; plainHeadings?: boolean }) {
+  const plain = ({ children }: { children?: ReactNode }) => (
+    <p>
+      <strong>{children}</strong>
+    </p>
+  );
   return (
     <ReactMarkdown
       urlTransform={(url, key) => ((key === "src" ? SAFE_IMAGE : SAFE_LINK).test(url) ? url : "")}
@@ -46,6 +53,7 @@ export function Markdown({ text, images = false }: { text: string; images?: bool
           ),
         // The headline of the article is the page's own; a heading inside the content never outranks it.
         h1: ({ children }) => <h2>{children}</h2>,
+        ...(plainHeadings ? { h1: plain, h2: plain, h3: plain, h4: plain, h5: plain, h6: plain } : {}),
         img: ({ src, alt }) => (images && typeof src === "string" && src.length > 0 ? <ArticleImage src={src} alt={alt ?? ""} /> : <>{alt}</>),
       }}
     >

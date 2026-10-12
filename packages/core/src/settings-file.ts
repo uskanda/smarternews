@@ -9,9 +9,9 @@ import {
   type SettingsFileSubscription,
 } from "./api.ts";
 import type { Clock } from "./clock.ts";
-import { createCategory, findCategoryBySlug, listCategories, updateCategory } from "./db/categories.ts";
+import { createCategory, findCategoryBySlug, listCategories, orderCategories, updateCategory } from "./db/categories.ts";
 import { transaction, type Database } from "./db/database.ts";
-import { findFeedByUrl, insertFeed, listFeeds, updateFeed } from "./db/feeds.ts";
+import { findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createStopWord, listStopWords, normalizeForMatch } from "./db/stop-words.ts";
 import { createTopic, listTopics, updateTopic, applyInterpretation } from "./db/topics.ts";
@@ -27,6 +27,9 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     title: feed.title,
     ...(feed.intervalMinutes === null ? {} : { intervalMinutes: feed.intervalMinutes }),
     enabled: feed.enabled,
+    // Written only when it is on: a file without the line leaves the setting of a known feed as it is.
+    ...(feed.autoSummarize ? { autoSummarize: true } : {}),
+    ...(feed.translate ? { translate: true } : {}),
   };
 }
 
@@ -96,21 +99,32 @@ function importSubscriptions(
   result: ImportResult,
   clock: Clock,
 ): void {
+  // The file's order becomes the order of the list; feeds the file does not mention follow.
+  const listed: number[] = [];
   subscriptions.forEach((entry, index) => {
     try {
       const existing = findFeedByUrl(db, entry.url);
       if (existing) {
-        updateFeed(db, existing.id, {
-          categoryId,
-          // The file says what the interval is: without one, the feed follows the base interval.
-          intervalMinutes: entry.intervalMinutes ?? null,
-          ...(entry.title !== undefined && entry.title !== existing.title ? { title: entry.title } : {}),
-          ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
-        });
+        listed.push(existing.id);
+        updateFeed(
+          db,
+          existing.id,
+          {
+            categoryId,
+            // The file says what the interval is: without one, the feed follows the base interval.
+            intervalMinutes: entry.intervalMinutes ?? null,
+            ...(entry.title !== undefined && entry.title !== existing.title ? { title: entry.title } : {}),
+            ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+            // Switching summaries on here starts them at this moment: the articles the feed already has stay as they are.
+            ...(entry.autoSummarize !== undefined ? { autoSummarize: entry.autoSummarize } : {}),
+            ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
+          },
+          clock,
+        );
         result.feedsUpdated += 1;
         return;
       }
-      insertFeed(
+      const created = insertFeed(
         db,
         {
           url: entry.url,
@@ -119,15 +133,19 @@ function importSubscriptions(
           categoryId,
           intervalMinutes: entry.intervalMinutes,
           enabled: entry.enabled,
+          autoSummarize: entry.autoSummarize,
+          translate: entry.translate,
         },
         clock,
       );
+      listed.push(created.id);
       result.feedsCreated += 1;
     } catch (error) {
       if (!(error instanceof DomainError)) throw error;
       throw new DomainError("invalid", error.message, [{ path: `${path}.${index}`, message: error.message }]);
     }
   });
+  if (listed.length > 0) orderFeeds(db, categoryId, listed);
 }
 
 /**
@@ -148,6 +166,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
   };
   transaction(db, () => {
     if (file.settings) updateSettings(db, file.settings);
+    const listed: number[] = [];
     file.categories.forEach((entry, index) => {
       const { topics, subscriptions, slug, kind, ...fields } = entry;
       const existing = findCategoryBySlug(db, slug);
@@ -161,6 +180,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
         : createCategory(db, { slug, kind, ...fields }, clock);
       if (existing) result.categoriesUpdated += 1;
       else result.categoriesCreated += 1;
+      listed.push(category.id);
 
       const current = listTopics(db, category.id);
       for (const topic of topics) {
@@ -182,6 +202,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
       }
       importSubscriptions(db, subscriptions, category.id, `categories.${index}.subscriptions`, result, clock);
     });
+    if (listed.length > 0) orderCategories(db, listed);
     importSubscriptions(db, file.subscriptions, null, "subscriptions", result, clock);
 
     const known = new Set(listStopWords(db).map((word) => normalizeForMatch(word.text)));

@@ -1,21 +1,18 @@
-import type { Clock } from "../clock.ts";
-import type { Database } from "../db/database.ts";
 import { dueFeeds, getFeed } from "../db/feeds.ts";
-import type { Fetcher } from "../fetch/http.ts";
-import { fetchFeed, type FetchOutcome } from "./ingest.ts";
+import { fetchFeed, type FeedDeps, type FetchOutcome } from "./ingest.ts";
 
 /**
  * Fetches the subscribed feeds that are due, one at a time. It has its own line, apart from the queue of
  * runs: a run can wait minutes for a model, and a feed must not wait behind it.
  */
 export class FeedPoller {
-  readonly #deps: { db: Database; clock: Clock; fetcher: Fetcher };
+  readonly #deps: FeedDeps;
   /** Everything this poller fetches goes through this chain, so no two fetches overlap. */
   #tail: Promise<void> = Promise.resolve();
   #roundPending = false;
   #timer: NodeJS.Timeout | undefined;
 
-  constructor(deps: { db: Database; clock: Clock; fetcher: Fetcher }) {
+  constructor(deps: FeedDeps) {
     this.#deps = deps;
   }
 

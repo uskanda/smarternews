@@ -6,7 +6,7 @@ smarternews is a self-hosted news crawler for one reader. You describe the topic
 
 It is also a feed reader. Subscribe to RSS and Atom feeds, and their articles appear beside the written ones, as the feeds deliver them.
 
-A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation and everything about subscribed feeds never call a model. The model is called for five tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, and writing an article. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
+A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for seven tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, and summarising or translating the articles of the subscribed feeds you chose. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
 
 ## Status
 
@@ -53,16 +53,18 @@ curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 
 ## Web app
 
-The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. It follows the light or dark setting of the device. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
+The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. The settings offer four choices for how it looks: follow the device, light, dark, or dark blue. Following the device is the default: light on a light device, dark blue on a dark one. The choice is kept in the browser. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
 
 - Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
 - An event category is shown as a list of upcoming events grouped by day.
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
+- Categories and feeds can be reordered by dragging them in the left pane. A feed held over another category for half a second can be dropped into it. A right click on a category or a feed opens a menu that moves it up or down; for a feed the menu also unsubscribes. The menu key or `Shift+F10` opens the same menu from the keyboard. The order is kept on the server, so the Android app, the settings file and OPML follow it.
+- With "「すべて既読にする」のあと、未読のある次の項目へ移る" switched on in the global settings, marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed.
 - The settings pages edit categories, topics, subscribed feeds, stop words, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
@@ -70,7 +72,9 @@ The token is stored in the browser's local storage. "このブラウザーから
 
 ## Android app
 
-The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
+The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Its settings screen offers the same four choices, kept on the device. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
+
+In the drawer, a long press on a category or a feed picks it up; drag it to reorder, or hold a feed over another category for half a second to move it there.
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 
@@ -120,11 +124,15 @@ A topic is a keyword or a sentence. The model turns it into search queries and a
 
 ### Subscribed feeds
 
-A subscribed feed is read as it is. The server fetches it on an interval and stores each item as an article with the feed's own title and content. No model is involved, so subscribing costs no model calls. This is separate from the `feeds` of a topic, which are material the model writes from.
+A subscribed feed is read as it is. The server fetches it on an interval and stores each item as an article with the feed's own title and content. No model is involved in this, so subscribing costs no model calls unless you switch summaries or translation on for the feed (see below). This is separate from the `feeds` of a topic, which are material the model writes from.
 
 Add a feed in the web app under "設定" and "購読フィードを設定する". Enter the address of the feed, or of a site: the server then looks for the feeds that the page announces. A feed belongs to one `news` category or to none.
 
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
+- "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.
+- For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. The page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
+- "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and stop words are matched against it.
+- Translation sends the titles and contents of that feed's articles to Google's translation API, or to the model provider you configured, and sends nothing else. Titles are translated when articles arrive, by the API only. The content is translated when you first open an article, and the first 20,000 characters of it. Articles the feed already had are translated when you open them.
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
 - Articles of feeds can be starred and marked read like any other. Without a star they are deleted after 90 days.
@@ -164,6 +172,19 @@ These feeds carry the articles the model wrote. Articles of subscribed feeds are
 
 When later pages add to a story within 72 hours, the server rewrites the article and marks it unread. The feed then delivers it again under a new `guid` with a marker in the title, because many readers ignore changes to an item they have already shown.
 
+### Translation
+
+To use Google's Cloud Translation API, put its key into an environment variable of the server and name the variable in `config.yaml`. The key goes into no file of smarternews.
+
+```yaml
+translation:
+  google:
+    apiKeyEnv: GOOGLE_TRANSLATE_API_KEY
+  monthlyChars: 450000
+```
+
+The server counts the characters it sends per month and sends nothing beyond `monthlyChars`, so the bill stays within what Google does not charge for; the default leaves a margin below 500,000. For the rest of such a month, and whenever no key is set or the API fails, the `translate` task of the model translates, and only the articles you open. The page of the subscribed feeds shows this month's count and the limit. [docs/providers.md](docs/providers.md) has the details, and [examples/smarternews.service](examples/smarternews.service) shows how to hand the key to the service.
+
 ## Running as a service
 
 [examples/smarternews.service](examples/smarternews.service) is a systemd user unit. The comments at its top give the install commands.
@@ -196,9 +217,23 @@ fetch:
 
 A refused fetch is recorded like any other failed fetch, so the run history shows the URL and the reason. Calls to model providers are not restricted, because you choose those addresses yourself.
 
+## Failed runs and restarts
+
+A scheduled run that ends as `failed` is tried again: 10 minutes after the failure, and 30 minutes after a second failure. `limits.runRetries` in `config.yaml` sets the number of retries from 0 to 3 (2 by default). With three retries, the third starts 90 minutes after the failure before it, and 0 switches retries off. Runs that end as `partial` or `stopped_by_limit` are not retried, and neither are manual runs.
+
+A retry is a run of its own in the run history, marked with which retry it is and linked to the scheduled run it retries. It skips the pages the failed run already judged and the articles that run already wrote. The server calls a retry off when the next scheduled run of the category has been queued, when the category is disabled, or when it has no enabled topic left. On the page of a failed run you see when the retry is due, or why there is none.
+
+Planned retries are stored, so they survive a restart; a retry that came due while the server was down starts when it is up again. At start-up the server also puts the runs that were waiting back in line, in their order, unless they have waited for more than six hours. A run that was in progress when the server stopped is closed as `failed`. If the schedule started it, that counts as one attempt and its retry starts at once.
+
 ## Limits on model use
 
 A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (300 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
+
+Summaries of feed articles are counted apart. Once the day has made `summariesPerDay` of them (100 by default), no more are made until the next day, which starts with the newest articles that still wait. Summaries do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `summariesPerDay`. The `summarize` task runs on the provider named `fast` unless `tasks` in `config.yaml` assigns another; see [docs/providers.md](docs/providers.md).
+
+Retries obey both limits like any other run. With two retries, a category that keeps failing uses up to three runs' worth of calls for one scheduled time.
+
+Translation by the model counts towards `llmCallsPerDay`. On a day that has reached it, an article that needs the model is shown in the original, with a button to try again.
 
 ## Development
 

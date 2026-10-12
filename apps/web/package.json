@@ -12,6 +12,7 @@
   "dependencies": {
     "@fontsource/ibm-plex-sans-jp": "^5.3.0",
     "@fontsource/shippori-mincho": "^5.3.0",
+    "@radix-ui/react-context-menu": "^2.3.8",
     "@radix-ui/react-dialog": "^1.2.0",
     "@smarternews/client": "workspace:*",
     "@smarternews/core": "workspace:*",

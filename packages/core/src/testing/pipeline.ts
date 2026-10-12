@@ -80,7 +80,7 @@ interface JudgeCandidate {
  *   [i4]       the judge gives importance 4 (default 3)
  *   {story-a}  the cluster step groups pages, and matches published articles, by this key
  */
-export const defaultHandlers: Record<Exclude<TaskName, "search">, FakeHandler> = {
+export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize" | "translate">, FakeHandler> = {
   interpret: () => ({ queries: ["default query"], criteria: "default criteria", suggestedSources: { newsSearch: false, llmSearch: false } }),
   judge: (request): JudgeOutput => ({
     judgments: materialLines<JudgeCandidate>(request.prompt).map((candidate) => ({
@@ -210,6 +210,10 @@ export function pipelineHarness(options: HarnessOptions = {}) {
     async run(): Promise<Run> {
       const run = createRun(db, { categoryId: category.id, trigger: "manual", slot: null }, clock);
       return executeRun({ db, clock, runner: llm.runner, fetcher, config }, run.id);
+    },
+    /** Carries out a run that is already recorded, as the queue does. */
+    execute(runId: number): Promise<Run> {
+      return executeRun({ db, clock, runner: llm.runner, fetcher, config }, runId);
     },
     articles(): Article[] {
       return listArticleIds(db, category.id).map((id) => getArticle(db, id));

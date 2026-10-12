@@ -1,5 +1,6 @@
 // Fetching a subscribed feed and storing what it delivers as feed articles. No model is involved anywhere
-// here: the items are stored as they come, with their content rewritten as Markdown.
+// here: the items are stored as they come, with their content rewritten as Markdown. The titles of a feed
+// that translates go to the translation API after they are stored, and to nothing else.
 import type { Feed, FeedCreate } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { transaction, type Database } from "../db/database.ts";
@@ -17,10 +18,12 @@ import {
 import { num, str } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyStopWords } from "../db/stop-words.ts";
+import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
+import type { TranslationService } from "../translation/service.ts";
 import { convertContent } from "./content.ts";
 
 const DAY = 86_400_000;
@@ -35,6 +38,8 @@ export interface FeedDeps {
   db: Database;
   clock: Clock;
   fetcher: Fetcher;
+  /** Translates the titles of what a feed that translates delivers. Without it nothing is translated. */
+  translation?: TranslationService;
 }
 
 export interface FetchOutcome {
@@ -75,12 +80,19 @@ function setReference(db: Database, articleId: number, url: string | null, feedT
   db.prepare("INSERT INTO article_refs (article_id, url, site_name, title, position) VALUES (?, ?, ?, ?, 0)").run(articleId, url, feedTitle, title);
 }
 
+interface Stored {
+  /** Articles added. */
+  created: number;
+  /** The articles whose title is new or was rewritten: the ones a feed that translates has translated. */
+  titled: number[];
+}
+
 /**
  * Stores the items of a fetched document. New items become unread articles; a known item whose title or
- * content changed is rewritten in place, read or unread as it was. Returns how many articles were added.
- * The caller wraps this in a transaction.
+ * content changed is rewritten in place, read or unread as it was, and loses the translation of what
+ * changed. The caller wraps this in a transaction.
  */
-function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: Date): number {
+function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: Date): Stored {
   const language = getSettings(db).outputLanguage;
   const nowIso = now.toISOString();
   const cutoff = new Date(now.getTime() - FEED_RETENTION_DAYS * DAY);
@@ -107,6 +119,9 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
      ON CONFLICT (feed_id, item_key) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
   );
   const rewrite = db.prepare("UPDATE articles SET title = ?, summary = ?, body = ?, content_text = ?, author = ? WHERE id = ?");
+
+  const forgetTitle = db.prepare("UPDATE articles SET translated_title = NULL WHERE id = ?");
+  const titled: number[] = [];
 
   const inDocument = new Set<string>();
   const fresh: Prepared[] = [];
@@ -135,26 +150,34 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     if (str(known.title) !== title || str(known.body) !== prepared.body || (known.author ?? null) !== prepared.author) {
       rewrite.run(title, summaryOf(prepared.text), prepared.body, prepared.text, prepared.author, id);
       applyStopWords(db, id);
+      // A translation of what was rewritten no longer says what the article says.
+      if (str(known.title) !== title) {
+        forgetTitle.run(id);
+        titled.push(id);
+      }
+      if (str(known.body) !== prepared.body) deleteArticleTranslation(db, id);
     }
     if ((known.url ?? null) !== url || str(known.title) !== title) setReference(db, id, url, feedTitle, title);
   }
 
   const insert = db.prepare(
     `INSERT INTO articles
-       (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at)
-     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?)`,
+       (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at,
+        created_at)
+     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Lists show the highest id first among articles of the same time, so the first item of the document goes in last.
   for (const item of fresh.reverse()) {
     // An item sorts by when it was published; one without a date, or dated in the future, by when it was fetched.
     const at = item.publishedAt && item.publishedAt <= now ? item.publishedAt.toISOString() : nowIso;
     const id = num(
-      insert.run(feed.categoryId, feed.id, item.key, item.title, summaryOf(item.text), item.body, item.text, item.author, at, at).lastInsertRowid,
+      insert.run(feed.categoryId, feed.id, item.key, item.title, summaryOf(item.text), item.body, item.text, item.author, at, at, nowIso).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
     applyStopWords(db, id);
+    titled.push(id);
   }
-  return fresh.length;
+  return { created: fresh.length, titled: feed.translate ? titled : [] };
 }
 
 async function download(deps: FeedDeps, url: string, conditions: { etag: string | null; lastModified: string | null }) {
@@ -180,7 +203,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
       recordFetchSuccess(db, feedId, { now: now.toISOString() });
       return { status: "not_modified", created: 0 };
     }
-    const created = transaction(db, () => {
+    const stored = transaction(db, () => {
       // Read again inside the transaction: the category may have changed since the request started.
       const count = storeItems(db, getFeed(db, feedId), result.parsed, now);
       recordFetchSuccess(db, feedId, {
@@ -192,7 +215,10 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
       });
       return count;
     });
-    return { status: "updated", created };
+    // After the articles are stored, and never failing the fetch: an article without a translated title is
+    // translated when it is opened.
+    if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
+    return { status: "updated", created: stored.created };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (findFeed(db, feedId)) recordFetchFailure(db, feedId, { now: clock().toISOString(), error: message });
@@ -222,7 +248,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
     throw refuse(/not a feed/.test(message) ? `the document at ${url} is not a feed` : `the feed could not be fetched: ${message}`);
   }
   const now = clock();
-  return transaction(db, () => {
+  const stored = transaction(db, () => {
     const feed = insertFeed(
       db,
       {
@@ -233,11 +259,15 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         categoryId: input.categoryId,
         intervalMinutes: input.intervalMinutes,
         enabled: input.enabled,
+        autoSummarize: input.autoSummarize,
+        translate: input.translate,
       },
       clock,
     );
-    storeItems(db, feed, result.parsed, now);
+    const { titled } = storeItems(db, feed, result.parsed, now);
     recordFetchSuccess(db, feed.id, { now: now.toISOString(), etag: result.etag, lastModified: result.lastModified, siteUrl: result.parsed.siteUrl });
-    return getFeed(db, feed.id);
+    return { feed: getFeed(db, feed.id), titled };
   });
+  if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
+  return stored.feed;
 }

@@ -6,7 +6,6 @@ import {
   DomainError,
   exportOpml,
   exportSettings,
-  failInterruptedRuns,
   findCategoryBySlug,
   getRun,
   importOpml,
@@ -62,12 +61,12 @@ export function startServer(
 async function serveCommand(io: CliIo): Promise<number> {
   const runtime = createRuntime(io);
   for (const file of runtime.newTokenFiles) io.stdout(`created a token file: ${file}\n`);
-  const interrupted = failInterruptedRuns(runtime.db, systemClock);
-  if (interrupted > 0) io.stdout(`closed ${interrupted} run(s) that an earlier stop interrupted\n`);
+  const { closed, resumed } = runtime.recover();
+  if (closed > 0) io.stdout(`closed ${closed} run(s) that an earlier stop interrupted\n`);
+  if (resumed > 0) io.stdout(`resumed ${resumed} run(s) that were waiting when the server stopped\n`);
   const listen = parseListen(runtime.config.listen);
   const server = await startServer(runtime, listen);
-  runtime.scheduler.start();
-  runtime.poller.start();
+  runtime.start();
   io.stdout(`listening on http://${runtime.config.listen} (API token: ${runtime.paths.apiTokenFile})\n`);
   return new Promise((resolve) => {
     const stop = () => {

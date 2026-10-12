@@ -182,12 +182,12 @@ describe("settings file", () => {
 });
 
 describe("providers", () => {
-  it("shows which provider runs each of the five tasks, and no credentials", async () => {
+  it("shows which provider runs each of the tasks, and no credentials", async () => {
     const s = testServer();
     const body = await (await s.get("/api/v1/providers")).json();
-    expect(Object.keys(body.tasks).sort()).toEqual(["cluster", "interpret", "judge", "search", "write"]);
+    expect(Object.keys(body.tasks).sort()).toEqual(["cluster", "interpret", "judge", "search", "summarize", "translate", "write"]);
     expect(body.providers[0]).toEqual({ name: "interpret", adapter: "fake", model: "fake", webSearch: true });
-    expect(body).toMatchObject({ llmCallsToday: 0, limits: { llmCallsPerRun: 40, llmCallsPerDay: 300 } });
+    expect(body).toMatchObject({ llmCallsToday: 0, summariesToday: 0, limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100 } });
     expect(JSON.stringify(body)).not.toMatch(/key|token|secret/i);
   });
 });

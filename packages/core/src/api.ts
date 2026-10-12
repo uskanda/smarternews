@@ -28,6 +28,8 @@ export const settingsSchema = z.object({
   search: searchLocaleSchema,
   /** The base fetch interval of subscribed feeds. */
   feedIntervalMinutes: intervalMinutesSchema,
+  /** Whether a reader opens the next list with unread articles after marking a list as read. */
+  advanceAfterMarkAll: z.boolean(),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -150,6 +152,42 @@ export type ArticleEvent = z.infer<typeof articleEventSchema>;
 export const originSchema = z.enum(["generated", "feed"]);
 export type Origin = z.infer<typeof originSchema>;
 
+export const autoSummarySourceSchema = z.enum(["page", "feed"]);
+
+/**
+ * The answer to a reader who asks for the summary of the article they opened: it is on its way, the day has
+ * no summaries left, or this article does not get one.
+ */
+export const summaryRequestResultSchema = z.object({ status: z.enum(["queued", "limit", "none"]) });
+export type SummaryRequestResult = z.infer<typeof summaryRequestResultSchema>;
+export type AutoSummarySource = z.infer<typeof autoSummarySourceSchema>;
+
+export const translationMethodSchema = z.enum(["google", "llm"]);
+export type TranslationMethod = z.infer<typeof translationMethodSchema>;
+
+/** The content of a feed article in the output language, as pairs of translation and original. */
+export const articleTranslationSchema = z.object({
+  /** Null only between a rewrite of the title by the feed and its next translation. */
+  translatedTitle: z.string().nullable(),
+  /** The language of the original as the translation API found it. Null when a model translated. */
+  sourceLanguage: z.string().nullable(),
+  segments: z.array(
+    z.object({
+      /** Markdown, as in the content. */
+      original: z.string(),
+      /** Markdown. Null for a segment shown as it is: code, images, and what lies past the translated length. */
+      translated: z.string().nullable(),
+      originalHtml: z.string(),
+      translatedHtml: z.string().nullable(),
+    }),
+  ),
+  method: translationMethodSchema,
+  /** True when the end of the content was left untranslated because of its length. */
+  truncated: z.boolean(),
+  createdAt: z.string(),
+});
+export type ArticleTranslation = z.infer<typeof articleTranslationSchema>;
+
 export const articleSummarySchema = z.object({
   id: z.number().int(),
   /** Null for an article of a feed that belongs to no category. */
@@ -159,6 +197,8 @@ export const articleSummarySchema = z.object({
   author: z.string().nullable(),
   kind: kindSchema,
   title: z.string(),
+  /** The title of a feed article in the output language. Null when there is no translation. */
+  translatedTitle: z.string().nullable(),
   summary: z.string(),
   impact: z.string().nullable(),
   /** Null for a feed article. */
@@ -178,6 +218,23 @@ export type ArticleSummary = z.infer<typeof articleSummarySchema>;
 export const articleSchema = articleSummarySchema.extend({
   body: z.string(),
   bodyHtml: z.string(),
+  /** The summary a model wrote of a feed article. Null when there is none, and for a generated article. */
+  autoSummary: z
+    .object({
+      text: z.string(),
+      /** Written from the article's page, or only from what the feed delivered because the page could not be read. */
+      source: autoSummarySourceSchema,
+      createdAt: z.string(),
+    })
+    .nullable(),
+  /** True while a feed article waits for its summary. */
+  autoSummaryPending: z.boolean(),
+  /** True for an article of a feed that translates. Only such an article can be translated. */
+  translatable: z.boolean(),
+  /** The language of the original as the translation API found it. Null when it is not known. */
+  sourceLanguage: z.string().nullable(),
+  /** The stored translation of the content. Null until the article is translated. */
+  translation: articleTranslationSchema.nullable(),
   snippetOnly: z.boolean(),
   previousArticleId: z.number().int().nullable(),
   refs: z.array(articleRefSchema),
@@ -259,6 +316,10 @@ export const feedSchema = z.object({
   /** Null means the base interval of the settings. */
   intervalMinutes: z.number().int().nullable(),
   enabled: z.boolean(),
+  /** Whether the articles this feed delivers from now on are summarised by a model. */
+  autoSummarize: z.boolean(),
+  /** Whether the titles and contents of this feed's articles are translated into the output language. */
+  translate: z.boolean(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -277,11 +338,21 @@ export const feedCreateSchema = z.object({
   categoryId: z.number().int().nullable().optional(),
   intervalMinutes: intervalMinutesSchema.nullable().optional(),
   enabled: z.boolean().optional(),
+  autoSummarize: z.boolean().optional(),
+  translate: z.boolean().optional(),
 });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
 export const feedUpdateSchema = feedCreateSchema.omit({ url: true });
 export type FeedUpdate = z.infer<typeof feedUpdateSchema>;
+
+/** Where a category goes: before another one, or last. */
+export const categoryMoveSchema = z.object({ before: z.number().int().nullable() });
+export type CategoryMove = z.infer<typeof categoryMoveSchema>;
+
+/** Where a feed goes: into a category or none, before another feed there, or last. */
+export const feedMoveSchema = z.object({ categoryId: z.number().int().nullable(), before: z.number().int().nullable() });
+export type FeedMove = z.infer<typeof feedMoveSchema>;
 
 export const feedDiscoverSchema = z.object({ url: feedUrlSchema });
 export const feedDiscoveryResultSchema = z.object({ feeds: z.array(z.object({ url: z.string(), title: z.string() })) });
@@ -341,6 +412,11 @@ export const runFailureSchema = z.object({
 });
 export type RunFailure = z.infer<typeof runFailureSchema>;
 
+/** Why a failed run is not retried: the retries are used up, a later scheduled run came first, the category
+ * is disabled or has no enabled topic, or the run was started by hand. */
+export const retrySkippedSchema = z.enum(["limit", "superseded", "disabled", "manual"]);
+export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
+
 export const runSchema = z.object({
   id: z.number().int(),
   categoryId: z.number().int(),
@@ -356,6 +432,13 @@ export const runSchema = z.object({
   articlesUpdated: z.number().int(),
   llmCalls: z.number().int(),
   failures: z.array(runFailureSchema),
+  /** Which retry this run is. 0 for a run that is not a retry. */
+  attempt: z.number().int(),
+  /** The scheduled run this one retries. Null for a run that is not a retry, and once that run was deleted. */
+  retryOf: z.number().int().nullable(),
+  /** When the retry of this failed run is due. Null when none is planned, and once the retry was queued. */
+  retryAt: z.string().nullable(),
+  retrySkipped: retrySkippedSchema.nullable(),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -379,7 +462,7 @@ export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write"]);
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate"]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
 export const providerStatusSchema = z.object({
@@ -387,10 +470,26 @@ export const providerStatusSchema = z.object({
     z.object({ name: z.string(), adapter: z.string(), model: z.string(), webSearch: z.boolean() }),
   ),
   tasks: z.record(taskNameSchema, z.string()),
+  /** Calls made today for runs. Summaries of feed articles are counted apart. */
   llmCallsToday: z.number().int(),
-  limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int() }),
+  summariesToday: z.number().int(),
+  limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int(), summariesPerDay: z.number().int() }),
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
+
+// ---- translation -------------------------------------------------------------------------------
+
+/** How much the translation API was used this month. Holds no key. */
+export const translationStatusSchema = z.object({
+  /** The current month in the configured time zone, as YYYY-MM. */
+  month: z.string(),
+  /** Characters sent to the translation API in that month. */
+  chars: z.number().int(),
+  monthlyChars: z.number().int(),
+  /** False when no key is set: a model translates then, and only what is opened. */
+  apiKeyConfigured: z.boolean(),
+});
+export type TranslationStatus = z.infer<typeof translationStatusSchema>;
 
 // ---- settings file -----------------------------------------------------------------------------
 
@@ -407,6 +506,10 @@ const settingsFileSubscriptionSchema = z.object({
   title: feedTitleSchema.optional(),
   intervalMinutes: intervalMinutesSchema.optional(),
   enabled: z.boolean().optional(),
+  /** Left out, a new feed has no summaries and a known one keeps what it has. */
+  autoSummarize: z.boolean().optional(),
+  /** Left out, a new feed is not translated and a known one keeps what it has. */
+  translate: z.boolean().optional(),
 });
 export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
 
@@ -451,7 +554,7 @@ export type ImportResult = z.infer<typeof importResultSchema>;
 
 export const apiErrorSchema = z.object({
   error: z.object({
-    code: z.enum(["unauthorized", "invalid_input", "not_found", "conflict", "internal"]),
+    code: z.enum(["unauthorized", "invalid_input", "not_found", "conflict", "unavailable", "internal"]),
     message: z.string(),
     fields: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
   }),

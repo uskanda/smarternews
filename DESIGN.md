@@ -20,20 +20,30 @@ colors:
   warning: "#8A5200"
   error: "#A1260D"
   on-error: "#FFFFFF"
-  primary-dark: "#9CB6FF"
-  on-primary-dark: "#10151B"
-  background-dark: "#10151B"
-  surface-dark: "#171D25"
-  on-surface-dark: "#E7EBF0"
-  on-surface-muted-dark: "#9DA9B7"
-  outline-dark: "#2B3440"
-  outline-strong-dark: "#66727F"
-  selected-dark: "#212B3A"
-  mark-dark: "#E9C13A"
-  mark-fill-dark: "#5C4B12"
-  warning-dark: "#F0B45C"
-  error-dark: "#FFA08F"
-  on-error-dark: "#10151B"
+  primary-darkblue: "#9CB6FF"
+  on-primary-darkblue: "#10151B"
+  background-darkblue: "#10151B"
+  surface-darkblue: "#171D25"
+  on-surface-darkblue: "#E7EBF0"
+  on-surface-muted-darkblue: "#9DA9B7"
+  outline-darkblue: "#2B3440"
+  outline-strong-darkblue: "#66727F"
+  selected-darkblue: "#212B3A"
+  mark-darkblue: "#E9C13A"
+  mark-fill-darkblue: "#5C4B12"
+  warning-darkblue: "#F0B45C"
+  error-darkblue: "#FFA08F"
+  on-error-darkblue: "#10151B"
+  primary-dark: "#A9BEFF"
+  on-primary-dark: "#121212"
+  background-dark: "#121212"
+  surface-dark: "#1B1B1B"
+  on-surface-dark: "#E8E8E8"
+  on-surface-muted-dark: "#A6A6A6"
+  outline-dark: "#303030"
+  outline-strong-dark: "#757575"
+  selected-dark: "#2A2A2A"
+  on-error-dark: "#121212"
 typography:
   headline-lg:
     fontFamily: "'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif"
@@ -156,8 +166,14 @@ components:
 
 ## Colors
 
-明るい配色と暗い配色の2組を持つ。暗い配色の値は、名前の末尾に `-dark` を付けて定義する。
-画面のCSSが端末の設定を見て入れ替えるので、部品は末尾のない名前だけを使う。
+「ライト」「ダーク」「ダークブルー」の3組の配色を持つ。末尾のない名前が「ライト」の値である。「ダーク」の値は名前の末尾に `-dark` を、「ダークブルー」の値は `-darkblue` を付けて定義する。
+
+- 「ライト」は、青みのある薄い灰色の地に、白い紙面を置く。
+- 「ダークブルー」は、青みのある暗い灰色の濃淡で組む。「ライト」と同じ色相なので、端末が暗い配色を指定しているときの既定にする。
+- 「ダーク」は、色相を持たない黒と灰で組む。暗い画面で青みを避けたい利用者が選ぶ。
+
+利用者は、設定の画面で「端末に従う」とこの3つから選ぶ。「端末に従う」は、端末が明るい配色のとき「ライト」、暗い配色のとき「ダークブルー」で表示する。
+画面が利用者の選択と端末の設定を見て値を入れ替えるので、部品は末尾のない名前だけを使う。
 
 - `background`（`#F3F5F8`）は、項目の一覧と画面の地に使う。青みのある薄い灰色で、白い紙面との差で区画を分ける。
 - `surface`（`#FFFFFF`）は、記事の一覧と本文の紙面に使う。
@@ -171,7 +187,8 @@ components:
 - `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。
 - `error`（`#A1260D`）は、失敗の表示と、削除を確定するボタンに使う。
 
-暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-dark`（`#5C4B12`）を重ね、文字は `on-surface-dark` のままにする。
+暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-darkblue`（`#5C4B12`）を重ね、文字は `on-surface` の暗い配色の値のままにする。
+印の色（`mark`、`mark-fill`、`warning`、`error`）は、「ダーク」の値を定義しない。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
 
 ## Typography
 
@@ -217,11 +234,20 @@ components:
 - `button-secondary` は、枠（`outline-strong`）つきの白いボタン。それ以外の操作に使う。押されている状態は、地を `selected`、枠を `primary` にする。
 - `list-row` は記事の一覧の1行。選択中は `list-row-selected`、既読は `list-row-read` にする。重要度4は行の左に `mark` の短い線、5は見出しに `headline-mark` を重ねる。
 - `article-body` は本文。読み手への影響は、左に `mark` の線を引いた区画として本文の前に置く。
+- 配信記事の要約は、元のページを開く操作と内容の間に、左に `outline-strong` の線を引いた区画として置く。見出しは「AIによる要約」で、`label-sm` の大きさと `on-surface-muted` の色にする。要約の文は `body-md` にする。配信元が書いた内容とLLMが書いた文は、見た目で見分けられなければならないからである。線に `mark` を使わないのは、`mark` が重要度の印だからである。枠で囲まないのは、本文が角と枠を持たないからである。
+- 要約が配信された内容だけをもとにしているときは、そのことを区画の最後に `label-sm` の大きさと `on-surface-muted` の色で書く。要約を作っている途中は、同じ位置に同じ大きさと色の1行だけを出す。
+- 訳のある配信記事の本文は、まとまりごとに、訳を先に、原文をそのすぐ下に置く。訳は本文と同じ `body-lg` と `on-surface` にする。原文は `body-md` の大きさと `on-surface-muted` の色にする。読むのは訳で、原文は確かめるときに見るものだからである。訳と原文の間隔は `xs`、まとまりどうしの間隔は本文の段落と同じにする。対であることを、間隔の差だけで示す。線と枠は足さない。
+- 訳のないまとまり（コード、画像、翻訳していない残り）と、訳が原文と同じ文字列のまとまりは、本文の大きさと色で1度だけ出す。翻訳していない残りの前には、そのことを `label-sm` の大きさと `on-surface-muted` の色の1行で書く。
+- 訳のある配信記事の見出しは訳したタイトルにし、そのすぐ下（間隔 `xs`）に原文のタイトルを `body-md` の大きさと `on-surface-muted` の色で置く。原文のタイトルを見出しと同じ太さにしないのは、見出しが2つあるように見えるからである。原文のタイトルと原文のまとまりには、原文の言語を属性として付ける。見出しの原文は、見出しにせず太字の1行にする。読み上げで見出しをたどるときに、同じ見出しが2度出ないようにするためである。
+- 翻訳している途中は、内容の前に `label-sm` の大きさと `on-surface-muted` の色の1行を出す。翻訳できなかったときは、同じ位置に `body-md` の1行と、やり直すボタンを出す。どちらのときも、内容は原文のまま表示する。
 - 本文の中の画像は、配信記事にだけ出す。幅は本文の列までとし、縦横の比を保つ。角は `md`、上下の間隔は `lg` にする。枠と影は付けない。
 - 読み込めない画像の位置には、説明の文を `label-sm` の大きさと `on-surface-muted` の色で出す。説明の文がなければ何も出さない。
 - 配信記事の本文では、元のページを開く操作を見出しのすぐ下に置く。内容が抜粋だけの配信元が多く、続きは元のページで読むからである。
 - `nav` は項目の一覧。選択中の項目は地を `selected` にし、太さを600にする。未読数は右端に置く。カテゴリの行の左には、下の項目を折りたたむ印を置く。
 - ペインの境目は、罫線の上に重ねた幅 `sm` の見えない帯で、ドラッグと矢印キーを受ける。マウスを載せたときとフォーカスのあるときだけ、`primary` の2pxの線を出す。普段は罫線だけが見える。矢印キーの1回の刻みは `lg`（16px）。
+- 項目の一覧のカテゴリと購読フィードは、ドラッグで並べ替えられる。離したときに入る位置は、`primary` の2pxの横線で示す。ペインの境目と同じ線である。動かしている行は、文字を `on-surface-muted` にする。
+- ドラッグ中の購読フィードを別のカテゴリへ置ける状態になったら、そのカテゴリの行に `primary` の2pxの枠を内側へ出す。フォーカスの枠と同じ太さと色で、置ける先を示す。
+- 項目のメニューは、`surface` の地に `outline-strong` の枠で、角は `md` にする。影は付けない。選んでいる行は地を `selected` にし、選べない行は文字を `on-surface-muted` にする。購読フィードの「登録を解除」は、罫線で区切って最後に置く。
 - `badge-warning` は「未確認」の印。「更新」の印は同じ形で、文字を `on-surface-muted` にする。
 - `banner-error` は失敗の表示。何ができなかったかと、次にできる操作を1つ並べる。
 - フォーカスのある部品は、`primary` の2pxの枠を2px外側に出す。

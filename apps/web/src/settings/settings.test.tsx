@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { resetThemeState } from "../lib/theme.ts";
 import { qrPath } from "./ConnectCode.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
@@ -352,6 +353,21 @@ describe("reader information and global settings", () => {
   });
 });
 
+describe("moving on after marking all as read", () => {
+  it("is a switch in the global settings that is saved with them", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const box = within(global).getByRole("checkbox", { name: "「すべて既読にする」のあと、未読のある次の項目へ移る" });
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+
+    await waitFor(() => expect(getSettings(server.db).advanceAfterMarkAll).toBe(true));
+  });
+});
+
 describe("the settings file", () => {
   it("hands the settings file to the browser for saving", async () => {
     const server = makeServer();
@@ -405,6 +421,7 @@ describe("the settings file", () => {
     renderApp({ route: "/settings" });
     const settingsFile = await section("設定ファイル");
     expect(settingsFile).toHaveTextContent("ファイルに書かれていないカテゴリとトピックは消えません");
+    expect(settingsFile).toHaveTextContent("カテゴリと購読フィードは、ファイルに書かれた順に並びます");
   });
 });
 
@@ -426,6 +443,19 @@ describe("connecting the Android app", () => {
     const expected = qrPath(buildConnectLink(window.location.origin, API_TOKEN));
     expect(code.querySelector("path")?.getAttribute("d")).toBe(expected.d);
     expect(expected.d.length).toBeGreaterThan(100);
+  });
+
+  it("draws the code black on white in the dark scheme too", async () => {
+    const { user } = renderApp({ route: "/settings" });
+    await user.click(within(await screen.findByRole("radiogroup", { name: "配色" })).getByRole("radio", { name: "ダーク" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+
+    await user.click(screen.getByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    // Fixed values, not colour tokens: a token would follow the scheme.
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    expect(code).toHaveClass("bg-[#FFFFFF]");
+    expect(code.querySelector("path")).toHaveAttribute("fill", "#000000");
   });
 
   it("takes the code away again when the dialog is closed", async () => {
@@ -461,5 +491,73 @@ describe("the stored token", () => {
 
     expect(await screen.findByLabelText("APIのトークン")).toBeInTheDocument();
     expect(window.localStorage.getItem("smarternews.token")).toBeNull();
+  });
+});
+
+describe("the colour scheme", () => {
+  const choice = async (name: string) => within(await screen.findByRole("radiogroup", { name: "配色" })).getByRole("radio", { name });
+
+  it("offers following the device and the three schemes, and follows the device until the user chooses", async () => {
+    renderApp({ route: "/settings" });
+
+    const group = await screen.findByRole("radiogroup", { name: "配色" });
+    expect(within(group).getAllByRole("radio").map((radio) => (radio as HTMLInputElement).labels?.[0]?.textContent)).toEqual([
+      "端末に従う",
+      "ライト",
+      "ダーク",
+      "ダークブルー",
+    ]);
+    expect(await choice("端末に従う")).toBeChecked();
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+  });
+
+  it("shows the page in the chosen scheme at once, without a save", async () => {
+    const { user, requests } = renderApp({ route: "/settings" });
+
+    await user.click(await choice("ダークブルー"));
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "darkblue");
+    expect(await choice("ダークブルー")).toBeChecked();
+    expect(requests.filter((request) => !request.startsWith("GET"))).toEqual([]);
+  });
+
+  it("goes back to following the device", async () => {
+    const { user } = renderApp({ route: "/settings" });
+
+    await user.click(await choice("ダーク"));
+    await user.click(await choice("端末に従う"));
+
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(await choice("端末に従う")).toBeChecked();
+  });
+
+  it("keeps the choice over a reload", async () => {
+    const first = renderApp({ route: "/settings" });
+    await first.user.click(await choice("ダーク"));
+    first.unmount();
+    resetThemeState();
+
+    renderApp({ route: "/settings", server: first.server });
+
+    expect(await choice("ダーク")).toBeChecked();
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  });
+
+  it("is chosen with the arrow keys", async () => {
+    const { user } = renderApp({ route: "/settings" });
+    (await choice("端末に従う")).focus();
+
+    await user.keyboard("{ArrowDown}");
+
+    expect(await choice("ライト")).toBeChecked();
+    expect(await choice("ライト")).toHaveFocus();
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  });
+
+  it("says that the choice is kept in this browser only", async () => {
+    renderApp({ route: "/settings" });
+
+    expect(await section("配色")).toHaveTextContent("このブラウザーだけに保存");
+    expect(await screen.findByRole("radiogroup", { name: "配色" })).toHaveAccessibleDescription(/このブラウザーだけに保存/);
   });
 });

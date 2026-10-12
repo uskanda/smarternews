@@ -37,6 +37,8 @@ const tasksSchema = z.strictObject({
   judge: z.string().optional(),
   cluster: z.string().optional(),
   write: z.string().optional(),
+  summarize: z.string().optional(),
+  translate: z.string().optional(),
 });
 
 const configSchema = z.strictObject({
@@ -50,8 +52,12 @@ const configSchema = z.strictObject({
     .strictObject({
       llmCallsPerRun: z.number().int().min(1).default(40),
       llmCallsPerDay: z.number().int().min(1).default(300),
+      /** Summaries of feed articles, counted apart from the calls of runs. */
+      summariesPerDay: z.number().int().min(1).default(100),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
+      /** How often a scheduled run that failed is tried again. 0 switches retries off. */
+      runRetries: z.number().int().min(0).max(3).default(2),
     })
     .prefault({}),
   llm: z
@@ -67,6 +73,21 @@ const configSchema = z.strictObject({
       timeoutMs: z.number().int().min(100).default(15_000),
       maxBytes: z.number().int().min(1024).default(2_000_000),
       allowPrivateHosts: z.array(z.string().min(1)).default([]),
+    })
+    .prefault({}),
+  translation: z
+    .strictObject({
+      /** Google's Cloud Translation API. Left out, a model translates. */
+      google: z
+        .strictObject({
+          /** Name of the environment variable that holds the key. The key itself never goes into the file. */
+          apiKeyEnv: z.string().min(1),
+        })
+        .optional(),
+      /** No more characters than this are sent to the translation API in one month. */
+      monthlyChars: z.number().int().min(0).default(450_000),
+      /** Of one article's content, this much is translated, counted from its start. */
+      maxCharsPerArticle: z.number().int().min(1).max(100_000).default(20_000),
     })
     .prefault({}),
   newsSearch: z
@@ -116,6 +137,20 @@ export function parseConfig(text: string | null): Config {
   return { ...rest, providers, tasks: tasks ?? { default: names[0]! } };
 }
 
+/** The key of the translation API from the environment, or null when none is configured or the variable is empty. */
+export function translationApiKey(config: Config, env: Record<string, string | undefined>): string | null {
+  const name = config.translation.google?.apiKeyEnv;
+  const key = name === undefined ? "" : (env[name] ?? "").trim();
+  return key.length > 0 ? key : null;
+}
+
+/**
+ * Summaries and translations are many and simple. Left unassigned they go to the provider of this name, when
+ * there is one, rather than to the default, which is usually the expensive one.
+ */
+const CHEAP_PROVIDER = "fast";
+const CHEAP_TASKS: readonly TaskName[] = ["summarize", "translate"];
+
 /** Which provider runs each task. Throws when an assignment names a provider that is not configured. */
 export function resolveAssignment(config: Config): Record<TaskName, string> {
   const assignment = {} as Record<TaskName, string>;
@@ -124,7 +159,8 @@ export function resolveAssignment(config: Config): Record<TaskName, string> {
     problems.push(`tasks.default names the provider "${config.tasks.default}", which is not configured`);
   }
   for (const task of TASK_NAMES) {
-    const name = config.tasks[task] ?? config.tasks.default;
+    const fallback = CHEAP_TASKS.includes(task) && CHEAP_PROVIDER in config.providers ? CHEAP_PROVIDER : config.tasks.default;
+    const name = config.tasks[task] ?? fallback;
     if (config.tasks[task] !== undefined && !(name in config.providers)) {
       problems.push(`the task "${task}" is assigned to the provider "${name}", which is not configured`);
     }

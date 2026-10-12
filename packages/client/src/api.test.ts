@@ -162,3 +162,68 @@ describe("the API client", () => {
     await expect(api.createStopWord({ text: " " })).rejects.toMatchObject({ kind: "invalid" });
   });
 });
+
+describe("moving categories and feeds", () => {
+  it("moves a category and a feed, and reads the move-on setting", async () => {
+    const { server, api } = setup();
+    const a = server.category("A");
+    const b = server.category("B");
+    expect((await api.moveCategory(b.id, a.id)).map((category) => category.name)).toEqual(["B", "A"]);
+
+    server.site.set("https://blog.example.org/feed.xml", `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title></channel></rss>`);
+    const feed = await api.createFeed({ url: "https://blog.example.org/feed.xml", categoryId: a.id });
+    const moved = await api.moveFeed(feed.id, { categoryId: b.id, before: null });
+    expect(moved.map((entry) => entry.categoryId)).toEqual([b.id]);
+
+    expect((await api.settings()).advanceAfterMarkAll).toBe(false);
+    expect((await api.updateSettings({ advanceAfterMarkAll: true })).advanceAfterMarkAll).toBe(true);
+  });
+
+  describe("translation", () => {
+    const FEED = "https://blog.example.org/feed.xml";
+    const rss = '<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>A title</title><guid>a</guid><link>https://blog.example.org/a</link><description>One paragraph.</description></item></channel></rss>';
+
+    async function translating(options: Parameters<typeof testServer>[1] = {}) {
+      const server = testServer(undefined, options);
+      const api = createApi({ fetchImpl: (input, init) => server.app.request(String(input), init), getToken: () => API_TOKEN, onUnauthorized: () => {} });
+      server.site.set(FEED, rss);
+      const feed = await api.createFeed({ url: FEED, translate: true });
+      return { server, api, feed };
+    }
+
+    it("sends the setting of a feed, and reads the translated title and whether an article can be translated", async () => {
+      const { api, feed } = await translating();
+      expect(feed.translate).toBe(true);
+      const [item] = (await api.articles({ feed: feed.id })).items;
+      expect(item).toMatchObject({ title: "A title", translatedTitle: "訳:A title" });
+      expect(await api.article(item!.id)).toMatchObject({ translatable: true, translation: null });
+      expect((await api.updateFeed(feed.id, { translate: false })).translate).toBe(false);
+    });
+
+    it("asks for the translation of an article and reads its segments", async () => {
+      const { api, feed } = await translating();
+      const [item] = (await api.articles({ feed: feed.id })).items;
+      const translation = await api.translateArticle(item!.id);
+      expect(translation).toMatchObject({
+        translatedTitle: "訳:A title",
+        method: "google",
+        truncated: false,
+        segments: [{ original: "One paragraph.", translated: "訳:One paragraph.", translatedHtml: "<p>訳:One paragraph.</p>" }],
+      });
+      expect((await api.article(item!.id)).translation).toEqual(translation);
+    });
+
+    it("reads how much the translation API was used", async () => {
+      const { api } = await translating({ monthlyChars: 1000 });
+      expect(await api.translation()).toEqual({ month: "2026-03", chars: "A title".length, monthlyChars: 1000, apiKeyConfigured: true });
+    });
+
+    it("reports as unavailable an article that cannot be translated now", async () => {
+      const { api, feed } = await translating({ google: null, llmCallsPerDay: 0 });
+      const [item] = (await api.articles({ feed: feed.id })).items;
+      const failure = await api.translateArticle(item!.id).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ApiError);
+      expect(failure).toMatchObject({ kind: "unavailable", status: 503 });
+    });
+  });
+});

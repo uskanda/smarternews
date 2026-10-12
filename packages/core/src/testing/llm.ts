@@ -8,14 +8,14 @@ import { TASK_NAMES } from "../llm/tasks.ts";
 export type FakeHandler = (request: LlmRequest) => unknown | Promise<unknown>;
 
 /**
- * A TaskRunner whose five tasks are answered by test functions. Each task gets its own provider, named after
+ * A TaskRunner whose tasks are answered by test functions. Each task gets its own provider, named after
  * the task, so a test can see which task was called and with what prompt.
  */
 export function fakeLlm(
   db: Database,
   clock: Clock,
   handlers: Partial<Record<TaskName, FakeHandler>>,
-  options: { webSearch?: boolean; limits?: { llmCallsPerRun: number; llmCallsPerDay: number }; timeZone?: string } = {},
+  options: { webSearch?: boolean; limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number }; timeZone?: string } = {},
 ) {
   const requests = Object.fromEntries(TASK_NAMES.map((task) => [task, [] as LlmRequest[]])) as Record<TaskName, LlmRequest[]>;
   const providers = new Map<string, Provider>(

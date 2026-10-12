@@ -1,16 +1,21 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { buildNav, listKey, type NavEntry } from "@smarternews/client";
-import { useMemo, useState } from "react";
-import { Link, NavLink, Outlet, useLocation, useParams } from "react-router";
+import { useMemo, useRef, useState, type ReactElement } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useArticle, useCategories, useCounts, useFeeds } from "../api/queries.ts";
-import { useCollapsed } from "../lib/collapsed.ts";
+import { useApp } from "../app/context.ts";
+import { unfold, useCollapsed } from "../lib/collapsed.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { PANES, usePanes } from "../lib/panes.ts";
 import { usePageTitle } from "../lib/title.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
+import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
+import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
+import { useToast } from "./toast.tsx";
 
 const KEYS: Array<[string, string]> = [
   ["j", "次の記事"],
@@ -18,6 +23,7 @@ const KEYS: Array<[string, string]> = [
   ["s", "スターの切り替え"],
   ["m", "既読と未読の切り替え"],
   ["o", "主な出典を新しいタブで開く"],
+  ["Shift+F10", "フォーカスのあるカテゴリと購読フィードで、項目のメニューを開く（並べ替え、登録の解除）"],
   ["?", "この一覧を開く"],
 ];
 
@@ -54,6 +60,7 @@ function ListItem({
       onClick={onNavigate}
       aria-current={current ? "page" : undefined}
       title={entry.label}
+      draggable={false}
       className={`${ITEM} ${current || holdsCurrent ? "bg-selected font-semibold" : ""}`}
     >
       <span className="min-w-0 truncate">{entry.label}</span>
@@ -77,8 +84,54 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const pathOf = (entry: NavEntry) => listPathOf(entry.target, slugOf) ?? "/unread";
   // The fold buttons take a column of their own. It exists only once something can be folded.
   const foldable = model.groups.some((group) => group.children.length > 0);
+
+  const { api } = useApp();
+  const client = useQueryClient();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const element = useRef<HTMLElement>(null);
+  const move = useNavMoves();
+  const { drag, onPointerDown } = useNavDrag({
+    nav: element,
+    model,
+    onMove: move,
+    unfold,
+  });
+  const [leaving, setLeaving] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
+  // The row the dialog was opened from, or the first entry once that row is gone.
+  const leavingRow = useRef<number | null>(null);
+  if (leaving !== null) leavingRow.current = leaving;
+  const leavingFeed = feeds?.find((feed) => feed.id === leaving);
+  async function unsubscribe(feed: { id: number }) {
+    if (removing) return;
+    setRemoving(true);
+    try {
+      await api.deleteFeed(feed.id);
+      for (const key of ["feeds", "counts", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      toast({ message: "購読フィードを削除しました" });
+      // The list that was open is gone with the feed.
+      if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
+    } catch {
+      toast({ message: "削除できませんでした。もう一度試してください。" });
+    }
+    setRemoving(false);
+    setLeaving(null);
+  }
+  const menu = (entry: NavEntry, link: ReactElement) => (
+    <EntryMenu entry={entry} model={model} onMove={move} onUnsubscribe={setLeaving}>
+      {link}
+    </EntryMenu>
+  );
+
   return (
-    <nav aria-label="項目" className="flex h-full flex-col gap-lg overflow-y-auto bg-background p-sm">
+    <nav
+      ref={element}
+      aria-label="項目"
+      onPointerDown={onPointerDown}
+      onDragStart={(event) => event.preventDefault()}
+      className="relative flex h-full flex-col gap-lg overflow-y-auto bg-background p-sm"
+    >
       <ul className="flex flex-col gap-px">
         {model.views.map((entry) => (
           <li key={listKey(entry.target)} className="flex">
@@ -96,7 +149,13 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             const childIsCurrent = group.children.some((child) => isOnList(pathOf(child), pathname));
             return (
               <li key={key} className="flex flex-col gap-px">
-                <div className="flex items-center">
+                <div
+                  data-nav-key={key}
+                  data-dragging={drag?.key === key ? "" : undefined}
+                  data-drop-armed={drag?.armed === key ? "" : undefined}
+                  onKeyDown={openEntryMenu}
+                  className="nav-row flex items-center"
+                >
                   {group.children.length > 0 ? (
                     <button
                       type="button"
@@ -113,15 +172,21 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
                   ) : foldable ? (
                     <span aria-hidden="true" className="nav-fold shrink-0" />
                   ) : null}
-                  <ListItem entry={group.entry} to={pathOf(group.entry)} holdsCurrent={folded && childIsCurrent} onNavigate={onNavigate} />
+                  {menu(group.entry, <ListItem entry={group.entry} to={pathOf(group.entry)} holdsCurrent={folded && childIsCurrent} onNavigate={onNavigate} />)}
                 </div>
                 {group.children.length > 0 ? (
                   <ul id={`nav-group-${key}`} hidden={folded} className={folded ? "" : "flex flex-col gap-px"}>
                     {folded
                       ? null
                       : group.children.map((child) => (
-                          <li key={listKey(child.target)} className="nav-child flex">
-                            <ListItem entry={child} to={pathOf(child)} onNavigate={onNavigate} />
+                          <li
+                            key={listKey(child.target)}
+                            data-nav-key={listKey(child.target)}
+                            data-dragging={drag?.key === listKey(child.target) ? "" : undefined}
+                            onKeyDown={openEntryMenu}
+                            className="nav-row nav-child flex"
+                          >
+                            {menu(child, <ListItem entry={child} to={pathOf(child)} onNavigate={onNavigate} />)}
                           </li>
                         ))}
                   </ul>
@@ -142,6 +207,33 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
           </li>
         </ul>
       </div>
+      {drag && drag.lineTop !== null ? <div data-drop-line aria-hidden="true" className="nav-drop-line" style={{ top: `${drag.lineTop}px` }} /> : null}
+      <ConfirmDialog
+        open={leavingFeed !== undefined}
+        title="購読フィードを削除しますか"
+        onDismiss={() => setLeaving(null)}
+        returnFocus={() =>
+          element.current?.querySelector<HTMLElement>(`[data-nav-key="feed-${leavingRow.current}"] a`) ?? element.current?.querySelector<HTMLElement>("a")
+        }
+        actions={
+          <>
+            <Button variant="danger" disabled={removing} onClick={() => leavingFeed && void unsubscribe(leavingFeed)}>
+              削除する
+            </Button>
+            <Button onClick={() => setLeaving(null)}>やめる</Button>
+          </>
+        }
+      >
+        {leavingFeed ? (
+          <>
+            <p>
+              「{leavingFeed.title}」と、その配信記事{leavingFeed.articleCount}件が消えます。
+              {leavingFeed.starredCount > 0 ? `うち${leavingFeed.starredCount}件にはスターが付いています。` : ""}元に戻せません。
+            </p>
+            <p>記事を残したまま取得だけを止めるには、設定の購読フィードで一時停止にしてください。</p>
+          </>
+        ) : null}
+      </ConfirmDialog>
     </nav>
   );
 }
@@ -188,7 +280,8 @@ export function Shell() {
   useHotkeys({ "?": () => setHelpOpen(true) });
   // The reader fetches the same article, so this reads it from the cache.
   const articleId = Number(useParams().articleId);
-  usePageTitle(useCounts().data?.unread, useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data?.title);
+  const openArticle = useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data;
+  usePageTitle(useCounts().data?.unread, openArticle?.translatedTitle ?? openArticle?.title);
 
   return (
     <div className="flex h-full">

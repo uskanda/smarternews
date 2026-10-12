@@ -8,4 +8,6 @@ export * from "./merge.ts";
 export * from "./messages.ts";
 export * from "./nav.ts";
 export * from "./notify.ts";
+export * from "./order.ts";
+export * from "./theme.ts";
 export * from "./time.ts";

@@ -35,6 +35,7 @@ An error response has this shape:
 | 401 | `unauthorized` | The token is missing or wrong |
 | 404 | `not_found` | The article, category, topic, feed, stop word, run or path does not exist |
 | 409 | `conflict` | A slug is taken, a feed or a stop word is already registered, or the category already has a run waiting or in progress |
+| 503 | `unavailable` | The article cannot be translated now: the translation API cannot be used and the day has no model call left, or the model failed. Nothing was stored; the same request can be sent again later |
 
 ## Settings
 
@@ -63,6 +64,7 @@ Settings fields:
 | `timeZone` | An IANA name |
 | `search` | `{"language":"en","region":"US"}`, the default market for news search |
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
+| `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `false` by default |
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and stop words by their text. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
@@ -74,6 +76,7 @@ Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`
 | `POST /api/v1/categories` | Create one (status 201) |
 | `GET /api/v1/categories/:id` | Read one |
 | `PATCH /api/v1/categories/:id` | Change `name`, `schedule`, `minImportance`, `maxArticlesPerRun`, `windowHours`, `windowDays`, `enabled` |
+| `POST /api/v1/categories/:id/move` | Put it before another category, or last. Returns all categories in their new order |
 | `DELETE /api/v1/categories/:id` | Delete it with its topics, generated articles, candidates and runs (status 204). Its subscribed feeds stay, without a category |
 
 ```bash
@@ -112,6 +115,9 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
+| `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
+| `POST /api/v1/articles/:id/translation` | The translation of a feed article's content, made and stored when there is none yet |
+| `GET /api/v1/translation` | How much the translation API was used this month |
 
 Query parameters of the list:
 
@@ -188,6 +194,12 @@ The detail adds these:
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
+| `autoSummary` | The summary a model wrote of a feed article: `text`, `source` and `createdAt`. `source` is `page` when it was written from the article's page, and `feed` when that page could not be read and only what the feed delivered was used. `null` when there is no summary, and always for a generated article |
+| `autoSummaryPending` | True while a feed article waits for its summary. It stops waiting when it is read |
+| `translatedTitle` | The title of a feed article in the output language, also in the list. `title` stays the original. `null` when there is no translation |
+| `translatable` | True for an article of a subscribed feed that has `translate` switched on. Only such an article can be translated |
+| `sourceLanguage` | The language of the original as the translation API found it, such as `en`. `null` when a model translated or nothing did |
+| `translation` | The stored translation of the content, in the shape `POST /api/v1/articles/:id/translation` returns. `null` until the article is translated |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
 
 Generated articles without a star are deleted 180 days after their last update, feed articles without a star 90 days after the time they sort by. Starred articles are kept.
@@ -202,7 +214,8 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds` | Subscribe to a feed (status 201) |
 | `POST /api/v1/feeds/discover` | Find the feeds a page points to, without subscribing |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled` |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate` |
+| `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
 | `GET /api/v1/feeds/opml` | Download every subscribed feed as OPML |
@@ -226,7 +239,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$AP
 
 Subscribing fetches the URL once and answers when that is done. Status 400 means that the URL does not return RSS or Atom, or that it is a destination the crawler does not fetch (see the README). A 409 answer says that the URL is already subscribed; URLs that differ only in tracking parameters count as the same. Every item the feed delivers at that moment becomes an unread article, except items published more than 90 days ago.
 
-`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays.
+`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize` and `translate` are `false` unless you send `true`, at registration or in a change.
+
+`move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
 `discover` returns `feeds`, a list of `url` and `title`. When the URL is itself a feed, the list holds that one feed. For a page it holds the feeds the page names with `<link rel="alternate">`, and it is empty when there are none.
 
@@ -238,6 +253,8 @@ Fields of a feed:
 | `categoryId` | The category, or `null` |
 | `intervalMinutes` | The feed's own interval, or `null` for the base interval |
 | `enabled` | False while the feed is paused: it is not fetched, and its articles stay |
+| `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
+| `translate` | True when the titles and contents of this feed's articles are translated into the output language. Switching it on translates nothing that is stored: an article the feed already has is translated when it is opened |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused |
@@ -248,6 +265,39 @@ A fetch that fails is recorded on the feed and not in the run history. After eac
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
 The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders.
+
+## Translation
+
+Translation is for the articles of the subscribed feeds that have `translate` switched on, and for nothing else. The target is `outputLanguage` of the settings. The original title and content are kept; stop words are matched against the original only.
+
+The title of a new article is translated while the feed is fetched, by the translation API alone. Without a key, in a month that reached its limit, or when the API fails, the article is stored without a translated title, and the fetch still counts as a success.
+
+`POST /api/v1/articles/:id/translation` takes no body. It returns the stored translation when there is one. Otherwise it translates the content, and the title when that has no translation yet, stores both and returns them, so the first call for an article takes as long as translating does. Requests for the same article that overlap share one translation. It answers 400 for an article that is not `translatable`, and 503 with the code `unavailable` when nothing can translate now.
+
+```json
+{
+  "translatedTitle": "ベンダーが修正を公開",
+  "sourceLanguage": "en",
+  "segments": [
+    { "original": "The vendor shipped a fix.", "translated": "ベンダーが修正を公開しました。", "originalHtml": "<p>The vendor shipped a fix.</p>", "translatedHtml": "<p>ベンダーが修正を公開しました。</p>" },
+    { "original": "```\nnpm update\n```", "translated": null, "originalHtml": "<pre><code>npm update\n</code></pre>", "translatedHtml": null }
+  ],
+  "method": "google",
+  "truncated": false,
+  "createdAt": "2026-03-01T12:00:00.000Z"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `segments` | The content in order: every heading, paragraph, list item and quote is one segment. `original` and `translated` are Markdown; the two `Html` fields are the same text rendered, with raw HTML shown as text. A client draws the list from top to bottom and matches nothing up itself |
+| `translated` | `null` for a segment that is shown as it is: code, images, and what lies past the translated length |
+| `method` | `google` when the translation API translated, `llm` when the model did |
+| `truncated` | True when the end of the content was left untranslated. Of one article, the first 20,000 characters are translated (`translation.maxCharsPerArticle`) |
+
+When the feed rewrites an item, the translation of what changed is dropped. The title is translated again with the fetch, the content the next time the article is opened.
+
+`GET /api/v1/translation` returns `month` (the current month in the configured time zone, as `YYYY-MM`), `chars` (characters sent to the translation API in that month), `monthlyChars` (the limit) and `apiKeyConfigured`. It never returns the key.
 
 ## Stop words
 
@@ -296,11 +346,31 @@ A run has `trigger` (`schedule` or `manual`), `status`, `queuedAt`, `startedAt`,
 | `failed` | Every source failed, the run crashed, or the server stopped during it |
 | `stopped_by_limit` | A limit on model calls was reached. Finished articles are kept and the next run continues |
 
+A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
+
+| Field | Meaning |
+|---|---|
+| `attempt` | Which retry the run is: 1 for the first retry. 0 for a run that is not a retry |
+| `retryOf` | The id of the scheduled run this run retries, however many retries came between. `null` for a run that is not a retry |
+| `retryAt` | When the retry of this failed run is due. `null` when none is planned, and once the retry has been queued |
+| `retrySkipped` | Why this failed run is not retried, or `null` |
+
+A retry has the `trigger` `schedule`. `retrySkipped` is one of four values:
+
+| `retrySkipped` | Meaning |
+|---|---|
+| `limit` | The retries allowed by `limits.runRetries` are used up |
+| `superseded` | The next scheduled run of the category was queued first |
+| `disabled` | The category is disabled or has no enabled topic |
+| `manual` | The run was started by hand, and manual runs are not retried |
+
+A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been queued, or it failed before retries existed, or the server closed it at start-up because it had waited for more than six hours.
+
 `GET /api/v1/runs/:id/candidates` accepts `status=rejected` (the default), `pending`, `accepted` or `all`. Each candidate has `title`, `url`, `siteName`, `publishedAt`, `sourceKind`, `topics`, `importance` and `reason`. Runs and candidates are deleted after 30 days.
 
 ## Providers
 
-`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`), the provider assigned to each task, the model calls made today and the two call limits. It returns no credentials. Providers are changed in `config.yaml`, not through the API.
+`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`), the provider assigned to each task, the model calls made today for runs (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
 
 ## RSS
 
