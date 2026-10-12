@@ -73,10 +73,60 @@
     color: var(--color-on-surface-muted);
   }
 
-  .nav-row[data-drop-armed] {
+  /* The category a dragged feed is over: framed from the start, in the accent colour once the feed can go in. */
+  .nav-group[data-drop-over] {
     border-radius: var(--radius-md);
-    outline: 2px solid var(--color-primary);
-    outline-offset: -2px;
+    outline: 3px solid var(--color-outline-strong);
+    outline-offset: -1px;
+  }
+
+  .nav-group[data-drop-over="ready"],
+  .nav-group[data-drop-over="flash"] {
+    outline-color: var(--color-primary);
+  }
+
+  /* The wait is over: the frame goes out and comes back twice. */
+  .nav-group[data-drop-over="flash"] {
+    animation: nav-drop-flash 0.5s linear 1;
+  }
+
+  @keyframes nav-drop-flash {
+    0%,
+    24%,
+    50%,
+    74%,
+    100% {
+      outline-color: var(--color-primary);
+    }
+
+    25%,
+    49%,
+    75%,
+    99% {
+      outline-color: transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav-group[data-drop-over="flash"] {
+      animation: none;
+    }
+  }
+
+  /* The name of the entry that is dragged, in a box beside the pointer. */
+  .nav-drag-ghost {
+    position: fixed;
+    z-index: 60;
+    max-width: var(--spacing-nav);
+    overflow: hidden;
+    padding: var(--spacing-xs) var(--spacing-md);
+    border: 2px solid var(--color-primary);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-on-surface);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .nav-drop-line {

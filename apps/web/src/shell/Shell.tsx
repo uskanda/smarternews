@@ -148,11 +148,10 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             const folded = collapsed.isCollapsed(key);
             const childIsCurrent = group.children.some((child) => isOnList(pathOf(child), pathname));
             return (
-              <li key={key} className="flex flex-col gap-px">
+              <li key={key} data-drop-over={drag?.over?.key === key ? drag.over.state : undefined} className="nav-group flex flex-col gap-px">
                 <div
                   data-nav-key={key}
                   data-dragging={drag?.key === key ? "" : undefined}
-                  data-drop-armed={drag?.armed === key ? "" : undefined}
                   onKeyDown={openEntryMenu}
                   className="nav-row flex items-center"
                 >
@@ -208,6 +207,12 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         </ul>
       </div>
       {drag && drag.lineTop !== null ? <div data-drop-line aria-hidden="true" className="nav-drop-line" style={{ top: `${drag.lineTop}px` }} /> : null}
+      {drag ? (
+        // What is being dragged, carried beside the pointer so that it is plain that something is held.
+        <div data-drag-ghost aria-hidden="true" className="nav-drag-ghost type-body-md" style={{ left: `${drag.x + 12}px`, top: `${drag.y + 8}px` }}>
+          {drag.label}
+        </div>
+      ) : null}
       <ConfirmDialog
         open={leavingFeed !== undefined}
         title="購読フィードを削除しますか"

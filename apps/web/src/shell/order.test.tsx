@@ -265,6 +265,63 @@ describe("dragging an entry", () => {
     expect(groupLines().slice(0, 3)).toEqual(["A", "  AI生成", "  X"]);
   });
 
+  it("carries the name of the entry in a box under the pointer while it is dragged", async () => {
+    const { server } = seeded();
+    await ready({ server, route: "/all" });
+    layOut();
+
+    press("X");
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    await act(() => void fireEvent.pointerMove(document.body, { ...mouse(mid("Y"), { buttons: 1 }), clientX: 80 }));
+
+    const ghost = document.querySelector<HTMLElement>("[data-drag-ghost]")!;
+    expect(ghost).toHaveTextContent("X");
+    expect(ghost).toHaveAttribute("aria-hidden", "true");
+    // It follows the pointer, a little off it, and never takes the pointer's place as the thing under it.
+    expect(ghost.style.left).toBe("92px");
+    expect(ghost.style.top).toBe(`${mid("Y") + 8}px`);
+    await release(mid("Y"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+  });
+
+  it("frames the category the feed is over from the start, and marks it as ready after the wait", async () => {
+    const { server } = seeded();
+    await ready({ server, route: "/all" });
+    layOut();
+    const over = () => nav().querySelector<HTMLElement>("[data-drop-over]");
+
+    press("X");
+    await dragTo(mid("Y"));
+    // Its own category takes it at once: framed and ready, with nothing to wait for.
+    expect(over()).toHaveAttribute("data-drop-over", "ready");
+    expect(over()!.querySelector("a")).toHaveTextContent("A");
+
+    await dragTo(mid("P"));
+    expect(over()).toHaveAttribute("data-drop-over", "waiting");
+    expect(over()!.querySelector("a")).toHaveTextContent("B");
+    await wait(600);
+    // The wait is over: the frame flashes, and from now on the feed goes in when it is let go.
+    expect(over()).toHaveAttribute("data-drop-over", "flash");
+    expect(over()!.querySelector("a")).toHaveTextContent("B");
+
+    await dragTo(mid("Events"));
+    expect(over()).toBeNull();
+    await release(mid("Events"));
+    expect(over()).toBeNull();
+  });
+
+  it("frames no category while a category is dragged", async () => {
+    const { server } = seeded();
+    await ready({ server, route: "/all" });
+    layOut();
+
+    press("C");
+    await dragTo(mid("A") - 5);
+    expect(nav().querySelector("[data-drop-over]")).toBeNull();
+    expect(document.querySelector("[data-drag-ghost]")).toHaveTextContent("C");
+    await release(mid("A") - 5);
+  });
+
   it("gives up on Escape", async () => {
     const { server } = seeded();
     await ready({ server, route: "/all" });
@@ -330,7 +387,7 @@ describe("dragging an entry", () => {
     press("X");
     await dragTo(mid("P") - 5);
     await wait(600);
-    expect(nav().querySelector("[data-drop-armed]")).toHaveTextContent("B");
+    expect(nav().querySelector('[data-drop-over="flash"] a')).toHaveTextContent("B");
     expect(nav().querySelector("[data-drop-line]")).toBeInTheDocument();
     await release(mid("P") - 5);
 
@@ -361,7 +418,7 @@ describe("dragging an entry", () => {
     press("X");
     await dragTo(mid("Events"));
     await wait(600);
-    expect(nav().querySelector("[data-drop-armed]")).not.toBeInTheDocument();
+    expect(nav().querySelector("[data-drop-over]")).not.toBeInTheDocument();
     await release(mid("Events"));
     await wait(50);
     expect(listFeeds(server.db).find((feed) => feed.title === "X")!.categoryId).toBe(a.id);
