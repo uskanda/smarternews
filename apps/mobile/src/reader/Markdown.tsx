@@ -1,6 +1,8 @@
+import { relayedImageUrl } from "@smarternews/client";
 import { marked, type Token, type Tokens } from "marked";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Image, Text, View } from "react-native";
+import { useConnection } from "../connection/ConnectionProvider";
 import { isWebLink, openSource } from "../lib/links";
 import { useTheme, type Theme } from "../theme/theme";
 import { Highlighted } from "./highlight";
@@ -8,12 +10,14 @@ import { Highlighted } from "./highlight";
 // An article body is Markdown: written by a model that read web pages, or rewritten from what a feed
 // delivered. It is drawn from the parsed tokens with the app's own text components: HTML inside it is shown as
 // the characters it is, never interpreted, and a link opens only when it points to a web page. Images are
-// loaded only for the content of a feed article, and only over HTTPS.
+// loaded only for the content of a feed article, and only from the relay of the server the app is connected
+// to, whose addresses the API puts in the content. The device never asks another site for an image.
 
-const HTTPS = /^https:\/\//i;
-
-/** The theme, and the words of a search to mark in the text when the article was opened from search results. */
-type Drawing = Theme & { terms?: readonly string[] };
+/**
+ * The theme, the words of a search to mark in the text when the article was opened from search results, and
+ * the URL of the connected server, against which the addresses of relayed images are resolved.
+ */
+type Drawing = Theme & { terms?: readonly string[]; server?: string };
 
 /** A run of text, with the words of the search marked when there are any. */
 function words(text: string, theme: Drawing, key?: string): ReactNode {
@@ -21,8 +25,8 @@ function words(text: string, theme: Drawing, key?: string): ReactNode {
 }
 
 /**
- * An image of a feed article, as wide as the text. The device asks the other site for it. Its height follows
- * from its proportions once it has loaded; when it cannot be loaded, its description takes its place.
+ * An image of a feed article, as wide as the text, loaded from the server's relay. Its height follows from its
+ * proportions once it has loaded; when it cannot be loaded, its description takes its place.
  */
 function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
   const [ratio, setRatio] = useState<number | null>(null);
@@ -65,10 +69,10 @@ function paragraphBlocks(tokens: Token[] | undefined, theme: Drawing, key: strin
     run = [];
   };
   for (const token of tokens ?? []) {
-    if (images && token.type === "image" && HTTPS.test((token as Tokens.Image).href)) {
+    const uri = images && token.type === "image" && theme.server ? relayedImageUrl(theme.server, (token as Tokens.Image).href) : null;
+    if (uri !== null) {
       flush();
-      const image = token as Tokens.Image;
-      blocks.push(<ArticleImage key={`${key}.${blocks.length}`} uri={image.href} alt={image.text} theme={theme} />);
+      blocks.push(<ArticleImage key={`${key}.${blocks.length}`} uri={uri} alt={(token as Tokens.Image).text} theme={theme} />);
     } else {
       run.push(token);
     }
@@ -195,12 +199,14 @@ function block(token: Token, theme: Drawing, key: string, images: boolean): Reac
  */
 export function Markdown({ text, images = false, quiet = false, highlight }: { text: string; images?: boolean; quiet?: boolean; highlight?: readonly string[] }) {
   const base = useTheme();
+  const server = useConnection().connection?.url;
   const theme = useMemo<Drawing>(
     () => ({
       ...(quiet ? ({ ...base, type: { ...base.type, "body-lg": base.type["body-md"] }, colors: { ...base.colors, "on-surface": base.colors["on-surface-muted"] } } as unknown as Theme) : base),
       terms: highlight,
+      server,
     }),
-    [base, quiet, highlight],
+    [base, quiet, highlight, server],
   );
   const tokens = useMemo(() => marked.lexer(text, { gfm: true }), [text]);
   return <View style={{ gap: theme.spacing.lg }}>{tokens.map((token, index) => block(token, theme, String(index), images))}</View>;

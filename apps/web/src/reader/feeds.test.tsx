@@ -1,8 +1,10 @@
 import { insertFeed, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { relayPath } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { Markdown } from "./Markdown.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
@@ -275,10 +277,10 @@ describe("images", () => {
     return { server, route: `/c/tools/${id}` };
   }
 
-  it("are shown in the content of a feed article, without sending where the reader comes from", async () => {
+  it("are shown in the content of a feed article through the server's relay, without sending where the reader comes from", async () => {
     renderApp(withImage("Before.\n\n![A chart](https://img.example.org/a.png)\n\nAfter."));
     const image = await within(await opened()).findByRole("img", { name: "A chart" });
-    expect(image).toHaveAttribute("src", "https://img.example.org/a.png");
+    expect(image).toHaveAttribute("src", relayPath("https://img.example.org/a.png"));
     expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(image).toHaveAttribute("loading", "lazy");
     expect(image).toHaveClass("article-image");
@@ -295,10 +297,21 @@ describe("images", () => {
     expect(within(article()).getByText("After.")).toBeInTheDocument();
   });
 
-  it("are not loaded over plain HTTP", async () => {
+  it("over plain HTTP are shown through the relay too", async () => {
     renderApp(withImage("Text.\n\n![Plain](http://img.example.org/b.png)"));
-    await within(await opened()).findByText("Text.");
+    const image = await within(await opened()).findByRole("img", { name: "Plain" });
+    expect(image).toHaveAttribute("src", relayPath("http://img.example.org/b.png"));
+  });
+
+  it("are not loaded from anywhere but the relay", async () => {
+    renderApp(withImage("Text.\n\n![Inline](data:image/png;base64,AAAA) ![Local](/elsewhere.png)"));
+    await within(await opened()).findByText(/Text\./);
     expect(within(article()).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(article()).getByText("Inline Local")).toBeInTheDocument();
+    // An address the API did not rewrite, such as one a model wrote in another form, stays a description.
+    const direct = render(<Markdown text="![Direct](https://img.example.org/c.png)" images />);
+    expect(direct.container.querySelector("img")).toBeNull();
+    expect(direct.container).toHaveTextContent("Direct");
   });
 
   it("are never loaded in a generated article: only the description is shown", async () => {

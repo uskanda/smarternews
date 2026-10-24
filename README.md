@@ -143,7 +143,7 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 - The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts and embedded frames are removed.
 - Deleting a category keeps its feeds. They move to "未分類" with their articles.
 
-Images in the content are loaded by your browser or phone from the site that publishes them, over HTTPS only and without a referrer. That site learns the address of your device and when you read. For articles the model wrote, no image is ever loaded.
+Images in the content are loaded by your browser or phone through the server, which fetches them from the site that publishes them (see [Images](#images)). For articles the model wrote, no image is ever loaded.
 
 To move subscriptions between readers, use OPML: the web app loads and saves it, and so do two commands.
 
@@ -217,6 +217,18 @@ To read from other devices, set `listen` in `config.yaml` to an address those de
 - Subscribed feeds are fetched no more often than every five minutes, and every 30 minutes by default. The request carries the `ETag` and `Last-Modified` of the last answer, so an unchanged feed is answered without a body. What a feed delivers is shown to you only, and never served on.
 
 News search uses the RSS output of Google News by default, and of Bing News as an alternative. Both publishers allow that output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
+
+## Images
+
+The images in the content of feed articles reach the web app and the Android app through the server, so the sites that publish them see a request from the server, never your device's address or the fact that you opened the article. Images served over plain HTTP are shown too, since only the server asks for them. The server keeps each image on disk for a while and serves it from there the next time:
+
+```yaml
+images:
+  cacheDays: 7               # an image older than this is fetched again
+  cacheMaxBytes: 1000000000  # beyond this total, the oldest images are deleted
+```
+
+Both values are optional, and these are their defaults. The images are kept in `image-cache` in the data directory, next to `image-proxy.key`, the key that signs the image URLs the API gives out. Deleting the key and restarting the server invalidates every image URL given out before. [docs/api.md](docs/api.md#images) describes the relay.
 
 ## Where it does not go
 

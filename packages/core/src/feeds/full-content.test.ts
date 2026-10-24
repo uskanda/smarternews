@@ -131,7 +131,7 @@ describe("fetchFullContent", () => {
     expect(getArticle(s.db, id).fullContent?.body).toContain("short short");
   });
 
-  it("rewrites the page by the rules of delivered content: no scripts, no images over plain HTTP", async () => {
+  it("rewrites the page by the rules of delivered content: no scripts, images over HTTP and HTTPS with their original URLs", async () => {
     const s = setup({
       "https://site.example.org/1": () =>
         page(
@@ -143,7 +143,7 @@ describe("fetchFullContent", () => {
     await fetchFullContent(s.deps, s.pages, id);
     const body = getArticle(s.db, id).fullContent!.body;
     expect(body).not.toContain("steal");
-    expect(body).not.toContain("http://img.example.org/plain.png");
+    expect(body).toContain("![plain](http://img.example.org/plain.png)");
     expect(body).toContain("![safe](https://img.example.org/safe.png)");
     expect(body.split("\n\n").filter((block) => block.startsWith("fulltext"))).toHaveLength(2);
   });

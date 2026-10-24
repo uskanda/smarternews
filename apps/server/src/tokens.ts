@@ -14,3 +14,12 @@ export function ensureToken(path: string): { token: string; created: boolean } {
   chmodSync(path, 0o600);
   return { token, created: true };
 }
+
+/**
+ * Reads the 32-byte key stored at `path`, creating a random one readable only by its owner when there is none.
+ * The file holds the key in base64url, written the way a token is.
+ */
+export function ensureKey(path: string): { key: Buffer; created: boolean } {
+  const { token, created } = ensureToken(path);
+  return { key: Buffer.from(token, "base64url"), created };
+}

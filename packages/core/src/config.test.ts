@@ -83,6 +83,24 @@ describe("the example configuration", () => {
     const config = parseConfig(readFileSync(join(import.meta.dirname, "../../../examples/config.example.yaml"), "utf8"));
     expect(resolveAssignment(config)).toMatchObject({ judge: "fast", write: "smart" });
     expect(config.newsSearch).toEqual({ engine: "google-news", maxResultsPerQuery: 10 });
+    expect(config.images).toEqual({ cacheDays: 7, cacheMaxBytes: 1_000_000_000 });
+  });
+});
+
+describe("the images relayed by the server", () => {
+  it("are kept 7 days and up to 1,000,000,000 bytes unless the file says otherwise", () => {
+    expect(parseConfig(null).images).toEqual({ cacheDays: 7, cacheMaxBytes: 1_000_000_000 });
+    expect(parseConfig("images:\n  cacheDays: 3\n  cacheMaxBytes: 3000000\n").images).toEqual({ cacheDays: 3, cacheMaxBytes: 3_000_000 });
+  });
+
+  it("refuse a period or a size below 1, and one that is not a whole number", () => {
+    expect(() => parseConfig("images:\n  cacheDays: 0\n")).toThrow(/images\.cacheDays/);
+    expect(() => parseConfig("images:\n  cacheMaxBytes: 0\n")).toThrow(/images\.cacheMaxBytes/);
+    expect(() => parseConfig("images:\n  cacheDays: 1.5\n")).toThrow(/images\.cacheDays/);
+  });
+
+  it("have no switch to turn the relay off", () => {
+    expect(() => parseConfig("images:\n  enabled: false\n")).toThrow(/images/);
   });
 });
 

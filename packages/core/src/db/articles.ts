@@ -148,7 +148,7 @@ function otherFeedsOf(db: Database, articleId: number): Article["otherFeeds"] {
 function fullContentOf(row: Row): FullContent | null {
   const body = strOrNull(row.full_content);
   if (body === null || str(row.full_content_status) !== "fetched") return null;
-  return { body, bodyHtml: renderMarkdown(body, { images: true }), fetchedAt: str(row.full_content_at) };
+  return { body, bodyHtml: renderMarkdown(body, { images: "relayed" }), fetchedAt: str(row.full_content_at) };
 }
 
 function fullContentStatusOf(db: Database, row: Row): FullContentStatus {
@@ -169,7 +169,7 @@ function toArticle(db: Database, row: Row): Article {
   return {
     ...toSummary(row),
     body,
-    bodyHtml: renderMarkdown(body, { images: str(row.origin) === "feed" }),
+    bodyHtml: renderMarkdown(body, { images: str(row.origin) === "feed" ? "relayed" : "none" }),
     autoSummary:
       autoSummary === null
         ? null

@@ -248,3 +248,72 @@ describe("Fetcher over a real connection", () => {
     expect(hits).toEqual(["/to-address"]);
   });
 });
+
+describe("Fetcher bytes", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const image = () => new Response(png, { headers: { "content-type": "image/png" } });
+
+  it("hands back the body as bytes, untouched, with the status and media type", async () => {
+    const { fetcher } = setup({ "https://img.example.org/a.png": image });
+    const response = await fetcher.getBytes("https://img.example.org/a.png", { maxBytes: 100 });
+    expect(response).toMatchObject({ status: 200, url: "https://img.example.org/a.png", contentType: "image/png" });
+    expect([...response.bytes]).toEqual([...png]);
+  });
+
+  it("takes the size limit from the caller, apart from the configured one", async () => {
+    const { fetcher } = setup({ "https://img.example.org/big": () => new Response(new Uint8Array(5000)) });
+    await expect(fetcher.getBytes("https://img.example.org/big", { maxBytes: 4000 })).rejects.toThrow(/larger than 4000 bytes/);
+    await expect(fetcher.getBytes("https://img.example.org/big", { maxBytes: 6000 })).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("names itself and sends only the headers it is given", async () => {
+    const { fetcher, requests } = setup({ "https://img.example.org/a.png": image }, { userAgent: "my-crawler/9" });
+    await fetcher.getBytes("https://img.example.org/a.png", { maxBytes: 100, headers: { accept: "image/png" } });
+    expect(requests[0]!.headers).toEqual({ "user-agent": "my-crawler/9", accept: "image/png" });
+  });
+
+  it("refuses a refused address and a redirect into one, without asking it", async () => {
+    const { fetcher, requests } = setup({ "https://img.example.org/old": redirect("http://10.0.0.1/a.png") });
+    await expect(fetcher.getBytes("http://127.0.0.1/a.png", { maxBytes: 100 })).rejects.toMatchObject({ kind: "blocked" });
+    await expect(fetcher.getBytes("https://img.example.org/old", { maxBytes: 100 })).rejects.toMatchObject({ kind: "blocked" });
+    expect(requests.map((request) => request.url)).toEqual(["https://img.example.org/old"]);
+  });
+
+  it("asks an allowed address in a refused range", async () => {
+    const { fetcher } = setup({ "http://192.168.0.10/a.png": image }, { allowPrivateHosts: ["192.168.0.10"] });
+    await expect(fetcher.getBytes("http://192.168.0.10/a.png", { maxBytes: 100 })).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("gives up at the sixth redirect", async () => {
+    const { fetcher, requests } = setup({
+      "https://img.example.org/": (request) => {
+        const step = Number(new URL(request.url).searchParams.get("n") ?? 0);
+        return new Response(null, { status: 302, headers: { location: `https://img.example.org/?n=${step + 1}` } });
+      },
+    });
+    await expect(fetcher.getBytes("https://img.example.org/?n=0", { maxBytes: 100 })).rejects.toThrow(/more than 5 redirects/);
+    expect(requests).toHaveLength(6);
+  });
+
+  it("gives up on a response that does not arrive in time", async () => {
+    const { fetcher } = setup({ "https://img.example.org/slow": () => "hang" }, { timeoutMs: 20 });
+    await expect(fetcher.getBytes("https://img.example.org/slow", { maxBytes: 100 })).rejects.toMatchObject({ kind: "timeout" });
+  });
+
+  it("lets the caller refuse a response by its head, before the body is read", async () => {
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(10));
+        if (pulled > 3) controller.close();
+      },
+    });
+    const { fetcher } = setup({ "https://img.example.org/a.svg": () => new Response(body, { headers: { "content-type": "image/svg+xml" } }) });
+    const inspect = (head: { status: number; contentType: string }) => {
+      if (head.contentType.startsWith("image/svg")) throw new FetchError("an SVG image");
+    };
+    await expect(fetcher.getBytes("https://img.example.org/a.svg", { maxBytes: 100, inspect })).rejects.toThrow(/an SVG image/);
+    expect(pulled).toBeLessThanOrEqual(1);
+  });
+});

@@ -250,12 +250,21 @@ describe("images", () => {
     await renderApp({ server });
     await press(/Pictures/);
     await screen.findByRole("header", { name: "Pictures" });
+    return server;
   }
 
-  it("are shown in the content of a feed article, as wide as the text and no wider", async () => {
-    await withImage("Before.\n\n![A chart](https://img.example.org/a.png)\n\nAfter.");
+  /** The original address an image loads through the test server's relay, or null when it does not load from there. */
+  function relayedFrom(server: TestServer, uri: string): string | null {
+    const prefix = `${server.url}/api/v1/image-proxy/`;
+    if (!uri.startsWith(prefix)) return null;
+    const [, encoded] = uri.slice(prefix.length).split("/");
+    return Buffer.from(encoded!, "base64url").toString("utf8");
+  }
+
+  it("are shown in the content of a feed article from the server's relay, as wide as the text and no wider", async () => {
+    const server = await withImage("Before.\n\n![A chart](https://img.example.org/a.png)\n\nAfter.");
     const image = await screen.findByRole("image", { name: "A chart" });
-    expect(image.props.source).toEqual({ uri: "https://img.example.org/a.png" });
+    expect(relayedFrom(server, image.props.source.uri)).toBe("https://img.example.org/a.png");
     expect(flat(image.props.style)).toMatchObject({ width: "100%" });
     expect(screen.getByText("Before.")).toBeOnTheScreen();
     expect(screen.getByText("After.")).toBeOnTheScreen();
@@ -276,9 +285,28 @@ describe("images", () => {
     expect(screen.getByText("Before.")).toBeOnTheScreen();
   });
 
-  it("are not loaded over plain HTTP", async () => {
-    await withImage("Text.\n\n![Plain](http://img.example.org/b.png)");
-    expect(screen.getByText("Text.")).toBeOnTheScreen();
+  it("over plain HTTP are loaded from the relay too, never from the other site", async () => {
+    const server = await withImage("Text.\n\n![Plain](http://img.example.org/b.png)");
+    const image = await screen.findByRole("image", { name: "Plain" });
+    expect(relayedFrom(server, image.props.source.uri)).toBe("http://img.example.org/b.png");
+  });
+
+  it("are not loaded when their address is not on the relay", async () => {
+    // The API rewrites what the content holds; an address it did not, as a model may write in a translation, stays a description.
+    const server = await makeServer();
+    const blog = await server.feed("Blog", (await server.category("Tools")).id);
+    await server.core("updateFeed", blog.id, { translate: true }, "$clock");
+    const id = await server.feedArticle(blog.id, { title: "Pictures", body: "Text." });
+    await server.core("saveTranslatedTitle", id, { original: "Pictures", title: "Pictures", sourceLanguage: "en" });
+    await server.core("saveArticleTranslation", id, {
+      segments: [{ original: "Text.", translated: '訳 ![Direct](<https://img.example.org/c.png> "t") ![Inline](data:image/png;base64,AAAA)' }],
+      method: "google",
+      truncated: false,
+      now: "2026-03-01T11:00:00.000Z",
+    });
+    await renderApp({ server });
+    await press(/Pictures/);
+    expect(await screen.findByText(/Direct/)).toBeOnTheScreen();
     expect(screen.queryByRole("image")).toBeNull();
   });
 

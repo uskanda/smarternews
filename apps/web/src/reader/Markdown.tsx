@@ -1,13 +1,16 @@
+import { relayedImageUrl } from "@smarternews/client";
 import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { rehypeSearchMatch } from "./highlight.tsx";
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
-const SAFE_IMAGE = /^https:\/\//i;
+
+/** The address of an image on the server's relay, on this origin; empty for any other, which is never loaded. */
+const relayed = (url: string): string => relayedImageUrl("", url) ?? "";
 
 /**
- * An image of a feed article. The reader's browser asks the other site for it, so the request carries no
- * referrer. When it cannot be loaded, its description takes its place.
+ * An image of a feed article, loaded from the server's relay, which fetches it from the other site. The
+ * request carries no referrer. When it cannot be loaded, its description takes its place.
  */
 function ArticleImage({ src, alt }: { src: string; alt: string }) {
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
@@ -29,8 +32,9 @@ function ArticleImage({ src, alt }: { src: string; alt: string }) {
 /**
  * Renders an article body. The text is not trusted markup, whether a model wrote it or a feed delivered it:
  * raw HTML stays text (react-markdown does not parse it), and only web and mail links become links.
- * Images are loaded only when `images` is set, which is for the content of a feed article, and only over
- * HTTPS; everywhere else an image is shown as its description.
+ * Images are loaded only when `images` is set, which is for the content of a feed article, and only from the
+ * server's relay, whose addresses the API puts in the content; everywhere else an image is shown as its
+ * description.
  * With `plainHeadings` a heading is drawn as a line of bold text: the original under a translated heading
  * must not be a second heading in the outline of the page.
  * With `highlight`, the words of an article opened from search results are marked wherever they are in the text.
@@ -54,7 +58,7 @@ export function Markdown({
   return (
     <ReactMarkdown
       rehypePlugins={highlight && highlight.length > 0 ? [rehypeSearchMatch(highlight)] : []}
-      urlTransform={(url, key) => ((key === "src" ? SAFE_IMAGE : SAFE_LINK).test(url) ? url : "")}
+      urlTransform={(url, key) => (key === "src" ? relayed(url) : SAFE_LINK.test(url) ? url : "")}
       components={{
         a: ({ href, children }) =>
           href ? (

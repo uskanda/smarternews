@@ -17,7 +17,7 @@ Send the API token as a bearer token:
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/settings"
 ```
 
-A request without the right token gets status 401. `GET /api/v1/health` is the one operation that needs no token. It returns the status and the version of the server.
+A request without the right token gets status 401. Two operations need no token: `GET /api/v1/health`, which returns the status and the version of the server, and the image relay under `/api/v1/image-proxy/`, whose URLs carry a signature instead (see [Images](#images)).
 
 RSS feeds use a separate, read-only token in the query string. The API rejects that token, and the feeds reject the API token.
 
@@ -199,7 +199,7 @@ The detail adds these:
 
 | Field | Content |
 |---|---|
-| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered, reduced to paragraphs, headings, lists, quotes, emphasis, code, links and HTTPS images. Only the HTML of a feed article contains images |
+| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered, reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
@@ -340,6 +340,28 @@ A feed with `fetchFullContent` switched on has the full content of its new artic
 | `shorter` | The text taken out of the page is shorter than what the feed delivered, as a notice to subscribe would be |
 
 Storing the full content drops the translation of the article's content; the translated title stays. From then on, `POST /api/v1/articles/:id/translation` translates the full content in place of what the feed delivered, with the same limit of characters. When the feed also summarises, the summary is written from the full content, and the page is requested once for both. When the full content failed, the summary is written from what the feed delivered without another request.
+
+## Images
+
+The images in the content of a feed article are loaded from the server, never from the site that published them. In every answer that carries such content (`GET` and `PATCH /api/v1/articles/:id`, `POST /api/v1/articles/:id/translation` and `POST /api/v1/articles/:id/full-content`), the address of each image in `body`, in `fullContent` and in the segments of `translation` is a path of the relay:
+
+```text
+/api/v1/image-proxy/<signature>/<original URL in base64url>
+```
+
+The path has no origin. The web app loads it from its own origin; another client puts the URL of the server in front of it. The stored content keeps the original URLs, both `http` and `https`. The body of a generated article is never rewritten, and a screen loads no image from it.
+
+The signature is an HMAC-SHA256 of the original URL, made with a key that the server creates at its first start and keeps in the data directory as `image-proxy.key`. The key appears in no answer, no log and no settings file. A signed path does not expire. Deleting the key file and restarting the server makes every earlier path invalid; the next answers carry new ones.
+
+A request for a relay path needs no token, since an image element cannot send one. The server fetches the original with the same limits as a page: no request to a refused address, every redirect target checked, at most five redirects, the configured time limit and `User-Agent`. It sends nothing the device sent, such as cookies or the referrer, and it does not wait the interval per host or read `robots.txt`. It keeps at most four fetches open to one host; the others wait their turn. An image may be up to 10 MB, and its format is told from its bytes: JPEG, PNG, GIF, WebP and AVIF are served, anything else, SVG included, is refused.
+
+| Status | Meaning |
+|---|---|
+| 200 | The image, with `Content-Type` set to its format, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` and `Cache-Control: private, max-age=<the period images are kept>` |
+| 403 | The signature does not match or the path is malformed. Nothing is fetched |
+| 502 | The image could not be had: a refused destination, a timeout, a status other than 2xx, more than 10 MB, or an answer that is not an image in one of the five formats |
+
+An error answer is a short line of plain text. The server keeps the images it fetched on disk, in `image-cache` in the data directory, and answers a later request from there. `images` in `config.yaml` sets how long an image is kept and how much may be kept in all (see the README).
 
 ## Translation
 

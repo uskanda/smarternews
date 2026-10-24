@@ -41,7 +41,9 @@ describe("a feed article with full content", () => {
     expect(screen.queryByText(EXCERPT)).toBeNull();
     const image = screen.getByRole("image", { name: "Wide" });
     expect(flat(image.props.style)).toMatchObject({ width: "100%" });
-    expect(screen.queryByRole("image", { name: "Plain" })).toBeNull();
+    expect(image.props.source.uri).toMatch(new RegExp(`^${server.url}/api/v1/image-proxy/`));
+    // An image over plain HTTP is loaded through the relay like any other.
+    expect(screen.getByRole("image", { name: "Plain" }).props.source.uri).toMatch(new RegExp(`^${server.url}/api/v1/image-proxy/`));
   });
 
   it("switches with the button on top to what the feed delivered and back, and says which is shown", async () => {

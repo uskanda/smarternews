@@ -109,7 +109,8 @@ describe("saveFullContent", () => {
     expect(article.fullContentError).toBeNull();
     expect(article.fullContent).toEqual({
       body: "Full **text**\n\n![x](https://img.example.org/a.png)",
-      bodyHtml: expect.stringContaining('<img src="https://img.example.org/a.png"'),
+      // The stored image keeps its original URL, which no screen loads: the API names the relay in its place.
+      bodyHtml: "<p>Full <strong>text</strong></p>\n<p>x</p>",
       fetchedAt: LATEST,
     });
     expect(articleForFullContent(db, id)).toMatchObject({ status: "fetched", fullContentText: "Full text" });

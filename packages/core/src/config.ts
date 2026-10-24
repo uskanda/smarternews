@@ -90,6 +90,13 @@ const configSchema = z.strictObject({
       maxCharsPerArticle: z.number().int().min(1).max(100_000).default(20_000),
     })
     .prefault({}),
+  /** The images the server relays to the screens, and how long and how much of them it keeps on disk. */
+  images: z
+    .strictObject({
+      cacheDays: z.number().int().min(1).default(7),
+      cacheMaxBytes: z.number().int().min(1).default(1_000_000_000),
+    })
+    .prefault({}),
   newsSearch: z
     .strictObject({
       engine: z.enum(["google-news", "bing-news"]).default("google-news"),

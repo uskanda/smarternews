@@ -751,3 +751,16 @@ export const apiErrorSchema = z.object({
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;
+
+// ---- relayed images ----------------------------------------------------------------------------
+
+/**
+ * Where the server relays images: `<this path><signature>/<original URL in base64url>`. The API gives image
+ * URLs in this form, as paths without an origin; a screen loads an image only when its URL is one of them.
+ */
+export const IMAGE_PROXY_PATH = "/api/v1/image-proxy/";
+
+/** Whether an image URL is a path of the server's relay, the only kind of image a screen loads. */
+export function isImageProxyPath(url: string): boolean {
+  return url.startsWith(IMAGE_PROXY_PATH);
+}

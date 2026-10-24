@@ -78,7 +78,7 @@ function isTrackingPixel(node: DomNode): boolean {
 
 function image(node: DomNode, ctx: Context): string {
   if (ctx.plain || isTrackingPixel(node)) return "";
-  const url = resolve(attribute(node, "src"), ctx.baseUrl, ["https:"]);
+  const url = resolve(attribute(node, "src"), ctx.baseUrl, ["http:", "https:"]);
   if (!url) return "";
   return `![${escapeText(attribute(node, "alt").replace(/\s+/g, " "))}](${url})`;
 }

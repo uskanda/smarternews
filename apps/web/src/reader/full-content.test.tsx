@@ -1,5 +1,6 @@
 import { insertFeed, recordFullContentFailure, saveArticleTranslation, saveFullContent, saveTranslatedTitle } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
+import { relayPath } from "@smarternews/server/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { makeServer, renderApp } from "../testing/harness.tsx";
@@ -8,7 +9,7 @@ const opened = () => screen.findByRole("article", { name: "記事" });
 const article = () => screen.getByRole("article", { name: "記事" });
 const AT = "2026-03-01T11:00:00.000Z";
 const AFTER = "2026-03-01T12:01:00.000Z";
-const FULL = "The whole story, from the page.\n\n![A chart](https://img.example.org/chart.png)\n\nThe end of the story.";
+const FULL = "The whole story, from the page.\n\n![A chart](http://img.example.org/chart.png)\n\nThe end of the story.";
 const EXCERPT = "Only an excerpt.";
 const SHOWING_FULL = "元のページから取得した全文を表示しています。";
 const SHOWING_DELIVERED = "配信された内容を表示しています。";
@@ -52,7 +53,7 @@ describe("a feed article with full content", () => {
     expect(within(pane).queryByText(EXCERPT)).not.toBeInTheDocument();
     const image = within(pane).getByRole("img", { name: "A chart" });
     expect(image).toHaveClass("article-image");
-    expect(image).toHaveAttribute("src", "https://img.example.org/chart.png");
+    expect(image).toHaveAttribute("src", relayPath("http://img.example.org/chart.png"));
   });
 
   it("switches to what the feed delivered and back, and shows the full content again when the article is chosen again", async () => {

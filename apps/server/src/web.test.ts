@@ -1,11 +1,11 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FeedPoller, SummaryWorker, Fetcher, FullContentWorker, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
+import { FeedPoller, SummaryWorker, Fetcher, FullContentWorker, ImageCache, ImageProxy, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
-import { API_TOKEN, FEED_TOKEN } from "./testing.ts";
+import { API_TOKEN, FEED_TOKEN, IMAGE_KEY } from "./testing.ts";
 
 function server(build: "built" | "not-built") {
   const dir = join(mkdtempSync(join(tmpdir(), "sn-web-")), "dist");
@@ -33,6 +33,7 @@ function server(build: "built" | "not-built") {
     poller: new FeedPoller({ db, clock, fetcher }),
     summarizer: new SummaryWorker({ db, clock, fetcher, runner, fullContent }),
     fullContent,
+    images: { key: IMAGE_KEY, proxy: new ImageProxy({ fetcher, cache: new ImageCache({ dir: join(dir, "..", "image-cache"), maxBytes: 1000, maxAgeMs: 1000, clock }) }) },
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
     webDir: dir,
@@ -153,15 +154,15 @@ describe("response headers of the page", () => {
     expect(directives["connect-src"]).toBe("'self'");
   });
 
-  it("lets the page load images from this origin and over HTTPS, and from nowhere else", async () => {
+  it("lets the page load images from this origin only, where the server relays the images of other sites", async () => {
     const policy = (await server("built").request("/")).headers.get("content-security-policy") ?? "";
     const images = policy
       .split(";")
       .map((part) => part.trim())
       .find((part) => part.startsWith("img-src "));
-    // Feed articles carry images of other sites. Plain HTTP stays forbidden.
-    expect(images).toBe("img-src 'self' data: https:");
-    expect(policy).not.toMatch(/img-src[^;]*http:/);
+    // Feed articles carry images of other sites; the API names the relay of this server in their place.
+    expect(images).toBe("img-src 'self'");
+    expect(policy).not.toMatch(/img-src[^;]*(https?:|data:)/);
   });
 
   it("tells the browser not to send the referrer and not to guess content types", async () => {

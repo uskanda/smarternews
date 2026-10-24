@@ -21,6 +21,11 @@ import {
   feedUpdateSchema,
   findCategoryBySlug,
   getArticle,
+  ImageFetchError,
+  verifyImageProxyPath,
+  relayArticleImages,
+  relayFullContent,
+  relayTranslation,
   getCategory,
   getCounts,
   getFeed,
@@ -75,6 +80,7 @@ import {
   type FeedPoller,
   type Fetcher,
   type FullContentWorker,
+  type ImageProxy,
   type ProviderStatus,
   type RunQueue,
   type SummaryWorker,
@@ -99,6 +105,8 @@ export interface AppDeps {
   summarizer: SummaryWorker;
   /** Fetches the full content of feed articles, one at a time; an article a reader asks for goes first. */
   fullContent: FullContentWorker;
+  /** The relay of images: the key that signs their URLs, and what fetches and keeps them. */
+  images: { key: Uint8Array; proxy: ImageProxy };
   tokens: { api: string; feed: string };
   version: string;
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
@@ -139,8 +147,13 @@ function idParam(c: Context, what: string): number {
   return Number(raw);
 }
 
+/** What every answer of the image relay carries: a body that is never taken for anything but what it says. */
+const RELAY_HEADERS = { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" };
+
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, images } = deps;
+  /** An article as it is answered: the images of a feed article's content load through the relay. */
+  const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -188,6 +201,25 @@ export function createApp(deps: AppDeps): Hono {
   const api = new Hono();
 
   api.get("/health", (c) => c.json({ status: "ok", version: deps.version }));
+
+  // An image element sends no token, so the signature of the URL stands in for it. A path that is not exactly
+  // a signature and an address is refused like a wrong signature.
+  api.get("/image-proxy/*", async (c) => {
+    const parts = new URL(c.req.url).pathname.split("/").slice(4);
+    const url = parts.length === 2 ? verifyImageProxyPath(images.key, parts[0]!, parts[1]!) : null;
+    if (url === null) return c.text("invalid image signature\n", 403, RELAY_HEADERS);
+    try {
+      const image = await images.proxy.get(url);
+      return c.body(image.bytes as Uint8Array<ArrayBuffer>, 200, {
+        ...RELAY_HEADERS,
+        "content-type": image.type,
+        "cache-control": `private, max-age=${Math.floor(images.proxy.maxAgeMs / 1000)}`,
+      });
+    } catch (error) {
+      if (error instanceof ImageFetchError) return c.text("the image could not be fetched\n", 502, RELAY_HEADERS);
+      throw error;
+    }
+  });
 
   api.use("*", async (c, next) => {
     const header = c.req.header("authorization");
@@ -245,9 +277,9 @@ export function createApp(deps: AppDeps): Hono {
   // Plain matching against the search index: no model and no translation is involved.
   api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()))));
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
-  api.get("/articles/:id", (c) => c.json(getArticle(db, idParam(c, "article"))));
+  api.get("/articles/:id", (c) => c.json(answered(getArticle(db, idParam(c, "article")))));
   api.patch("/articles/:id", async (c) =>
-    c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)), clock().toISOString())),
+    c.json(answered(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)), clock().toISOString()))),
   );
   // Translates the content when it has no translation yet, so the answer can take as long as that does.
   api.post("/articles/:id/summary", (c) => {
@@ -257,9 +289,12 @@ export function createApp(deps: AppDeps): Hono {
     summarizer.tick();
     return c.json({ status: "queued" });
   });
-  api.post("/articles/:id/translation", async (c) => c.json(await translation.translateArticle(idParam(c, "article"))));
+  api.post("/articles/:id/translation", async (c) => c.json(relayTranslation(await translation.translateArticle(idParam(c, "article")), images.key)));
   // Answers once the page is fetched: no model is waited for, only the site and the interval per host.
-  api.post("/articles/:id/full-content", async (c) => c.json(await fullContent.fetchFor(idParam(c, "article"))));
+  api.post("/articles/:id/full-content", async (c) => {
+    const result = await fullContent.fetchFor(idParam(c, "article"));
+    return c.json(result.status === "fetched" ? { ...result, fullContent: relayFullContent(result.fullContent, images.key) } : result);
+  });
   api.get("/translation", (c) => c.json(translation.status()));
 
   // subscribed feeds

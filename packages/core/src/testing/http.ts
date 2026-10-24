@@ -8,7 +8,7 @@ export interface RecordedRequest {
   at: number;
 }
 
-type Route = (request: RecordedRequest) => Response | Promise<Response> | "hang";
+export type Route = (request: RecordedRequest) => Response | Promise<Response> | "hang";
 
 /**
  * A stand-in for the global fetch. Routes are matched by exact URL first, then by URL prefix; anything else

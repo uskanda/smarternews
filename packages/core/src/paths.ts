@@ -7,6 +7,10 @@ export interface Paths {
   dbFile: string;
   apiTokenFile: string;
   feedTokenFile: string;
+  /** The key that signs the URLs of relayed images. Data, not configuration: deleting it only makes new URLs. */
+  imageKeyFile: string;
+  /** The relayed images kept on disk. */
+  imageCacheDir: string;
 }
 
 /** Where configuration, tokens and the database live. Everything is outside the repository. */
@@ -22,5 +26,7 @@ export function resolvePaths(env: Record<string, string | undefined>, home: stri
     dbFile: join(dataDir, "db.sqlite"),
     apiTokenFile: join(configDir, "api-token"),
     feedTokenFile: join(configDir, "feed-token"),
+    imageKeyFile: join(dataDir, "image-proxy.key"),
+    imageCacheDir: join(dataDir, "image-cache"),
   };
 }
