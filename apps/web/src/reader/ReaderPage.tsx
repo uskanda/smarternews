@@ -25,6 +25,7 @@ import {
 } from "@smarternews/client";
 import { PANES, usePanes } from "../lib/panes.ts";
 import { listPathOf } from "../lib/paths.ts";
+import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
@@ -350,19 +351,46 @@ export function ReaderPage({ view }: { view: View }) {
     const to = followScroll({ top: pane.scrollTop, height: pane.clientHeight || view.height, rowTop, rowBottom: rowTop + box.height, step });
     if (to !== null) pane.scrollTop = to;
   }, [articleId]);
+  // The article pane starts every article at its top.
+  const articlePane = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (articlePane.current) articlePane.current.scrollTop = 0;
+  }, [articleId]);
+  /**
+   * Space: the body down by a screen less a line, so the last line read stays in view, or on to the next
+   * article at its end. Shift+Space the other way. Without a body, the article j or k would choose.
+   */
+  const page = (step: 1 | -1) => {
+    const pane = articlePane.current;
+    if (articleId === null || !pane) return move(step);
+    const end = step === 1 ? pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 : pane.scrollTop <= 0;
+    if (end) return move(step);
+    const by = Math.max(pane.clientHeight - lineHeights["body-lg"], lineHeights["body-lg"]);
+    pane.scrollTop = Math.max(0, pane.scrollTop + step * by);
+  };
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = opened ?? items[index];
-  useHotkeys({
-    j: () => move(1),
-    k: () => move(-1),
-    s: selected ? () => toggleStar(selected) : undefined,
-    m: selected ? () => setRead(selected, !selected.isRead) : undefined,
-    o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
-    // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
-    w:
-      opened?.origin === "feed" && opened.id === articleId && !fullContent.isFetching(opened.id)
-        ? () => (opened.fullContent !== null ? toggleDelivered(opened.id) : fullContent.fetch(opened.id))
-        : undefined,
-  });
+  const canMarkAll = listControls && (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
+  useHotkeys(
+    {
+      j: () => move(1),
+      k: () => move(-1),
+      Space: () => page(1),
+      "Shift+Space": () => page(-1),
+      // The same as the buttons and the toggle beside the list, and only while they are offered.
+      "Shift+A": canMarkAll ? () => void markAllRead() : undefined,
+      r: refresh,
+      u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
+      s: selected ? () => toggleStar(selected) : undefined,
+      m: selected ? () => setRead(selected, !selected.isRead) : undefined,
+      o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
+      // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
+      w:
+        opened?.origin === "feed" && opened.id === articleId && !fullContent.isFetching(opened.id)
+          ? () => (opened.fullContent !== null ? toggleDelivered(opened.id) : fullContent.fetch(opened.id))
+          : undefined,
+    },
+    { now },
+  );
 
   if (inCategory && categories.data && !category) {
     return <p className="p-xl type-body-md">このカテゴリはありません。</p>;
@@ -387,7 +415,6 @@ export function ReaderPage({ view }: { view: View }) {
               ? `「${words}」の検索結果`
               : "検索"
             : TITLES[view];
-  const canMarkAll = listControls && (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
 
   const listPane = isEvents ? (
     <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
@@ -497,7 +524,7 @@ export function ReaderPage({ view }: { view: View }) {
         )
       ) : null}
       {showArticle ? (
-        <div className="min-w-0 flex-1 overflow-y-auto bg-surface">
+        <div ref={articlePane} data-article-scroll className="min-w-0 flex-1 overflow-y-auto bg-surface">
           {showList ? null : <h1 className="sr-only">{title}</h1>}
           {articleId === null ? (
             <p className="p-xl type-body-md text-on-surface-muted">記事を選ぶと、ここに本文が表示されます。</p>

@@ -25,6 +25,44 @@ export function nextTarget(model: NavModel, current: ListTarget): ListTarget | n
   return null;
 }
 
+/**
+ * The entry the reader is on, as the left pane shows it: an entry hidden below a folded category is held by
+ * that category's row. Null when the current list is no entry that is shown.
+ */
+function shownCurrent(model: NavModel, current: ListTarget | null, isCollapsed: (key: string) => boolean): string | null {
+  if (current === null) return null;
+  const key = listKey(current);
+  const holder = model.groups.find((group) => isCollapsed(listKey(group.entry.target)) && group.children.some((child) => listKey(child.target) === key));
+  return holder ? listKey(holder.entry.target) : key;
+}
+
+/**
+ * The entry above (-1) or below (1) the current one among those the left pane shows: the views, then each
+ * category with the entries below it unless it is folded. Null at either end. When the current list is no
+ * entry that is shown, going down opens the first entry and going up the last.
+ */
+export function stepTarget(model: NavModel, current: ListTarget | null, step: -1 | 1, isCollapsed: (key: string) => boolean): ListTarget | null {
+  const shown = [
+    ...model.views,
+    ...model.groups.flatMap((group) => (isCollapsed(listKey(group.entry.target)) ? [group.entry] : [group.entry, ...group.children])),
+  ].map((entry) => entry.target);
+  const key = shownCurrent(model, current, isCollapsed);
+  const index = key === null ? -1 : shown.findIndex((target) => listKey(target) === key);
+  if (index === -1) return (step === 1 ? shown[0] : shown.at(-1)) ?? null;
+  return shown[index + step] ?? null;
+}
+
+/**
+ * The event category `g e` opens: the next one in the order of the left pane after the current one, round to
+ * the first after the last. The first one when the current list is no event category. Null when there is none.
+ */
+export function nextEventCategory(model: NavModel, current: ListTarget | null): ListTarget | null {
+  const events = model.groups.filter((group) => group.entry.target.type === "category" && !group.acceptsFeeds).map((group) => group.entry.target);
+  if (events.length === 0) return null;
+  const index = current === null ? -1 : events.findIndex((target) => listKey(target) === listKey(current));
+  return events[(index + 1) % events.length]!;
+}
+
 /** What a reader can move: a category among the categories, a feed among the feeds. */
 export type Movable = { kind: "category"; id: number } | { kind: "feed"; id: number };
 

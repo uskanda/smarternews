@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { buildNav, listKey, type NavEntry } from "@smarternews/client";
+import { buildNav, listKey, nextEventCategory, stepTarget, type ListTarget, type NavEntry, type NavModel } from "@smarternews/client";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -25,6 +25,17 @@ const KEYS: Array<[string, string]> = [
   ["m", "既読と未読の切り替え"],
   ["o", "主な出典を新しいタブで開く"],
   ["w", "全文の取得と、配信された内容との切り替え"],
+  ["Space", "本文を1画面分送る。本文の末尾なら次の記事"],
+  ["Shift+Space", "本文を1画面分戻す。本文の先頭なら前の記事"],
+  ["Shift+A", "表示中の一覧をすべて既読にする"],
+  ["r", "一覧と件数を読み直す"],
+  ["u", "既読も表示するかを切り替える"],
+  ["Shift+J", "左のペインの次の項目"],
+  ["Shift+K", "左のペインの前の項目"],
+  ["g a", "「未読」へ移る"],
+  ["g s", "「スター」へ移る"],
+  ["g e", "次のイベントのカテゴリへ移る"],
+  ["g r", "「最近読んだ記事」へ移る"],
   ["Shift+F10", "フォーカスのあるカテゴリと購読フィードで、項目のメニューを開く（並べ替え、登録の解除）"],
   ["/", "検索欄へ移る"],
   ["?", "この一覧を開く"],
@@ -290,6 +301,17 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/** The list of the left pane that is open, with an article opened from it or not; null on any other page. */
+function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTarget) => string | null): ListTarget | null {
+  const entries = [...model.views, ...model.groups.flatMap((group) => [group.entry, ...group.children])];
+  return (
+    entries.find((entry) => {
+      const path = pathOf(entry.target);
+      return path !== null && isOnList(path, pathname);
+    })?.target ?? null
+  );
+}
+
 const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";
 
 function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -297,7 +319,7 @@ function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: b
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-outline bg-surface p-xl">
+        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 max-h-[90dvh] w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-outline bg-surface p-xl">
           <Dialog.Title className="type-headline-md">キー操作</Dialog.Title>
           <Dialog.Description className="pt-xs type-label-sm text-on-surface-muted">
             入力欄で文字を打っている間は働きません。
@@ -329,18 +351,42 @@ export function Shell() {
   const panes = usePanes(layout);
   const [navOpen, setNavOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  useHotkeys({
-    "?": () => setHelpOpen(true),
-    // On a narrower screen the box is in the pane behind the button: opening it puts the focus in the box, its first field.
-    "/": () => {
-      if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
-      else setNavOpen(true);
+  const { now } = useApp();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const counts = useCounts().data;
+  const categories = useCategories().data;
+  const feeds = useFeeds().data;
+  const collapsed = useCollapsed();
+  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
+  const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
+  const current = currentEntry(model, pathname, pathOf);
+  const open = (target: ListTarget | null | undefined) => {
+    const path = target ? pathOf(target) : null;
+    if (path !== null) void navigate(path);
+  };
+  const view = (type: ListTarget["type"]) => model.views.find((entry) => entry.target.type === type)?.target;
+  useHotkeys(
+    {
+      "?": () => setHelpOpen(true),
+      // On a narrower screen the box is in the pane behind the button: opening it puts the focus in the box, its first field.
+      "/": () => {
+        if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
+        else setNavOpen(true);
+      },
+      "Shift+J": () => open(stepTarget(model, current, 1, collapsed.isCollapsed)),
+      "Shift+K": () => open(stepTarget(model, current, -1, collapsed.isCollapsed)),
+      "g a": () => open(view("unread")),
+      "g s": () => open(view("starred")),
+      "g e": () => open(nextEventCategory(model, current)),
+      "g r": () => open(view("recentlyRead")),
     },
-  });
+    { now },
+  );
   // The reader fetches the same article, so this reads it from the cache.
   const articleId = Number(useParams().articleId);
   const openArticle = useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data;
-  usePageTitle(useCounts().data?.unread, openArticle?.translatedTitle ?? openArticle?.title);
+  usePageTitle(counts?.unread, openArticle?.translatedTitle ?? openArticle?.title);
 
   return (
     <div className="flex h-full">

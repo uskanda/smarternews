@@ -684,3 +684,179 @@ describe("the recently read articles", () => {
     expect(getArticle(server.db, a).readAt).toBe("2026-03-02T09:00:00.000Z");
   });
 });
+
+describe("keys on the list and the article", () => {
+  it("marks the list as read with Shift+A, and offers the undo", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const ids = articles(server, category.id, [{ title: "One" }, { title: "Two" }, { title: "Three" }]);
+    const { user } = renderApp({ server, route: "/c/security" });
+    await screen.findByRole("link", { name: /Three/ });
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true, true]));
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("3件を既読にしました");
+    await user.click(within(status).getByRole("button", { name: "取り消す" }));
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false, false]));
+  });
+
+  it("marks nothing with Shift+A in an event category", async () => {
+    const server = makeServer("2026-03-10T12:00:00.000Z");
+    const category = server.category("Local events", "event");
+    const id = server.article(category.id, {
+      title: "Morning class",
+      kind: "event",
+      event: { key: "class", startsAt: "2026-03-11T10:00:00.000Z", endsAt: "2026-03-11T12:00:00.000Z", venue: null, fee: null, registration: "unknown" },
+    });
+    const { user, requests } = renderApp({ server, route: "/c/local-events" });
+    await screen.findByRole("link", { name: /Morning class/ });
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getArticle(server.db, id).isRead).toBe(false);
+    expect(requests.some((request) => request.startsWith("POST") && request.includes("mark-read"))).toBe(false);
+  });
+
+  it("refreshes the list and the counts with r, without fetching the feed", async () => {
+    const server = makeServer();
+    const category = server.category("Tools");
+    const feed = insertFeed(server.db, { url: "https://feed.example.org/feed.xml", title: "Feed", categoryId: category.id }, server.clock);
+    seedFeedArticle(server.db, feed.id, { title: "Already here" });
+    const { user, requests } = renderApp({ server, route: `/f/${feed.id}` });
+    await screen.findByRole("link", { name: /Already here/ });
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
+
+    seedFeedArticle(server.db, feed.id, { title: "Just arrived" });
+    await user.keyboard("r");
+
+    expect(await screen.findByRole("link", { name: /Just arrived/ })).toBeInTheDocument();
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2"));
+    expect(requests.some((request) => request.includes("/fetch"))).toBe(false);
+  });
+
+  it("adds the read articles with u, and takes them away again", async () => {
+    const server = makeServer();
+    const a = server.category("Security");
+    const [, read] = articles(server, a.id, [{ title: "A unread" }, { title: "A read" }]);
+    setArticleFlags(server.db, read!, { isRead: true }, server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: "/c/security" });
+    await screen.findByRole("link", { name: /A unread/ });
+
+    await user.keyboard("u");
+    expect(await screen.findByRole("link", { name: /A read/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "既読も表示" })).toBeChecked();
+    expect(path()).toBe("/c/security?read=1");
+
+    await user.keyboard("u");
+    await waitFor(() => expect(rowTitles()).toEqual(["A unread"]));
+    expect(screen.getByRole("checkbox", { name: "既読も表示" })).not.toBeChecked();
+  });
+
+  it("changes nothing with u in the unread list, which has no such toggle", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Only" }]);
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await screen.findByRole("link", { name: /Only/ });
+
+    await user.keyboard("u");
+
+    expect(path()).toBe("/unread");
+    expect(rowTitles()).toEqual(["Only"]);
+  });
+});
+
+describe("Space through the article", () => {
+  /** jsdom lays nothing out: the article pane is 400px tall and holds `height` pixels. */
+  function layOut(height: number): HTMLElement {
+    const pane = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: height });
+    return pane;
+  }
+
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const [older, newer] = articles(server, category.id, [{ title: "Older story" }, { title: "Newer story" }]);
+    return { server, older: older!, newer: newer! };
+  }
+
+  it("scrolls a long body down by a screen less a line, and back up with Shift+Space", async () => {
+    const { server, newer } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut(2000);
+
+    await user.keyboard(" ");
+    expect(pane.scrollTop).toBe(400 - 33);
+    await user.keyboard(" ");
+    expect(pane.scrollTop).toBe(2 * (400 - 33));
+
+    await user.keyboard("{Shift>} {/Shift}");
+    expect(pane.scrollTop).toBe(400 - 33);
+    expect(path()).toBe(`/all/${newer}`);
+  });
+
+  it("moves to the next article at the end of the body, and shows it from the top", async () => {
+    const { server, newer, older } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut(1000);
+    pane.scrollTop = 600;
+
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Older story" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${older}`);
+    expect(pane.scrollTop).toBe(0);
+  });
+
+  it("moves to the next article at once when the body fits", async () => {
+    const { server, newer } = seeded();
+    const { user } = renderApp({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    layOut(400);
+
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Older story" })).toBeInTheDocument();
+  });
+
+  it("moves to the previous article with Shift+Space at the top of the body", async () => {
+    const { server, older } = seeded();
+    const { user } = renderApp({ server, route: `/all/${older}` });
+    await screen.findByRole("heading", { level: 2, name: "Older story" });
+    layOut(2000);
+
+    await user.keyboard("{Shift>} {/Shift}");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Newer story" })).toBeInTheDocument();
+  });
+
+  it("selects the article j would select when no article is shown", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/all" });
+    await screen.findByRole("link", { name: /Newer story/ });
+
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Newer story" })).toBeInTheDocument();
+  });
+
+  it("leaves Space to the star button, which it presses", async () => {
+    const { server, newer } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut(2000);
+
+    screen.getByRole("button", { name: "スターを付ける" }).focus();
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(pane.scrollTop).toBe(0);
+    expect(path()).toBe(`/all/${newer}`);
+  });
+});
