@@ -380,9 +380,10 @@ describe("an article that other feeds delivered too", () => {
     await screen.findByRole("header", { name: "Big news" });
 
     await userEvent.setup().press(await screen.findByRole("link", { name: "Feed B" }));
-    expect(await screen.findByRole("header", { name: "Big news in B" })).toBeOnTheScreen();
+    // The pager is drawn again once the copy's feed list arrives, so a header found earlier may already be gone.
+    await eventually(() => expect(screen.getByRole("header", { name: "Big news in B" })).toBeOnTheScreen());
 
     await press("一覧へ戻る");
-    expect(await screen.findByRole("header", { name: "Big news" })).toBeOnTheScreen();
+    await eventually(() => expect(screen.getByRole("header", { name: "Big news" })).toBeOnTheScreen());
   });
 });
