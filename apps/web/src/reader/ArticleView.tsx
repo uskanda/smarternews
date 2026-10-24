@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { listPathOf } from "../lib/paths.ts";
 import { Markdown } from "./Markdown.tsx";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
@@ -193,6 +194,22 @@ export function ArticleView({
               元のページを開く
             </a>
           </p>
+        ) : null}
+        {article.otherFeeds.length > 0 ? (
+          // The same story as other feeds delivered it; each name opens that copy in the list of its feed. That
+          // list includes read articles: the copy was most likely marked read with this article.
+          <section aria-label="ほかに配信した購読フィード" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">ほかに配信した購読フィード</h3>
+            <ul className="flex flex-wrap gap-x-md gap-y-xs type-body-md">
+              {article.otherFeeds.map((other) => (
+                <li key={other.articleId} className="min-w-0">
+                  <Link to={`${listPathOf({ type: "feed", feedId: other.feedId }, () => undefined)}/${other.articleId}?read=1`} className="tap break-words text-primary underline underline-offset-4">
+                    {other.feedTitle}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null}
         {article.autoSummary ? (
           // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.

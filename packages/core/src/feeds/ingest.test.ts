@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getArticle, listArticles, setArticleFlags } from "../db/articles.ts";
+import { getArticle, insertArticle, listArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
@@ -463,5 +463,206 @@ describe("translating titles when a feed is fetched", () => {
     s.serve([{ title: "New title", key: "a", content: "<p>Same content.</p>" }]);
     await fetchFeed(s.deps, feed.id);
     expect(getArticle(s.db, id)).toMatchObject({ translatedTitle: "訳:New title", translation: { segments: [{ translated: "訳:Same content." }] } });
+  });
+});
+
+describe("duplicates across feeds", () => {
+  const FEEDS = { A: "https://a.example.org/feed.xml", B: "https://b.example.org/feed.xml", C: "https://c.example.org/feed.xml" };
+  type Name = keyof typeof FEEDS;
+
+  function several(translator?: Translator & { calls: Array<{ items: unknown[] }> }) {
+    const db = createTestDb();
+    const clock = fakeClock(START);
+    const answers: Record<string, Item[]> = {};
+    const routes = Object.fromEntries(Object.values(FEEDS).map((url) => [url, () => xml(rss(answers[url] ?? [], url))]));
+    const fake = fakeFetch(routes, clock);
+    const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+    const llm = fakeLlm(db, clock, {});
+    const translation = translator
+      ? new TranslationService({ db, clock, google: translator, llm: new LlmTranslator(llm.runner), monthlyChars: 450_000, maxCharsPerArticle: 20_000, log: () => {} })
+      : undefined;
+    const deps = { db, clock, fetcher, translation };
+    const ids: Partial<Record<Name, number>> = {};
+    return {
+      db,
+      clock,
+      llm,
+      /** Serves the items as the feed's document, subscribing on first use and fetching after that. */
+      async deliver(name: Name, items: Item[], options: { translate?: boolean; autoSummarize?: boolean } = {}) {
+        answers[FEEDS[name]] = items;
+        if (ids[name] === undefined) ids[name] = (await subscribe(deps, { url: FEEDS[name], ...options })).id;
+        else await fetchFeed(deps, ids[name]);
+        return ids[name];
+      },
+      /** The article of the feed with the given item key. */
+      article(name: Name, key: string) {
+        return db.prepare("SELECT id, duplicate_of, dedup_url, dedup_title, translated_title FROM articles WHERE feed_id = ? AND item_key = ?").get(ids[name]!, key)!;
+      },
+      duplicateOf(name: Name, key: string) {
+        const row = this.article(name, key);
+        return row.duplicate_of === null ? null : Number(row.duplicate_of);
+      },
+      idOf(name: Name, key: string) {
+        return Number(this.article(name, key).id);
+      },
+      list: (query: Parameters<typeof listArticles>[1] = {}) => listArticles(db, query, clock().toISOString()).items,
+    };
+  }
+
+  it("stores the normalized page and title of a new article, and replaces them when the item is rewritten", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Example社が新しい端末を発表！", link: "https://news.example.org/1?utm_source=rss#top" }]);
+    expect(s.article("A", "a")).toMatchObject({ dedup_url: "https://news.example.org/1", dedup_title: "example社が新しい端末を発表" });
+
+    await s.deliver("A", [{ key: "a", title: "Example社が新しい端末を正式に発表", link: "https://news.example.org/2" }]);
+    expect(s.article("A", "a")).toMatchObject({ dedup_url: "https://news.example.org/2", dedup_title: "example社が新しい端末を正式に発表" });
+  });
+
+  it("records an article whose page differs only in tracking parameters as a duplicate, and calls no model", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix", link: "https://news.example.org/1?utm_source=a" }]);
+    await s.deliver("B", [{ key: "b", title: "Something else entirely", link: "https://news.example.org/1?utm_source=b" }]);
+    expect(s.duplicateOf("B", "b")).toBe(s.idOf("A", "a"));
+    expect(s.db.prepare("SELECT count(*) AS n FROM llm_calls").get()).toEqual({ n: 0 });
+    expect(Object.values(s.llm.requests).flat()).toEqual([]);
+  });
+
+  it("records an article with the same title on another page as a duplicate", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://a.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug", link: "https://b.example.org/1" }]);
+    expect(s.duplicateOf("B", "b")).toBe(s.idOf("A", "a"));
+  });
+
+  it("does not record articles whose page and title both differ", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://a.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "Another vendor ships a release", link: "https://b.example.org/1" }]);
+    expect(s.duplicateOf("A", "a")).toBeNull();
+    expect(s.duplicateOf("B", "b")).toBeNull();
+  });
+
+  it("does not compare the items of one feed with each other", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a1", title: "Weekly maintenance notice", link: "https://a.example.org/1" }]);
+    await s.deliver("A", [
+      { key: "a2", title: "Weekly maintenance notice", link: "https://a.example.org/2" },
+      { key: "a3", title: "Weekly maintenance notice", link: "https://a.example.org/1" },
+      { key: "a1", title: "Weekly maintenance notice", link: "https://a.example.org/1" },
+    ]);
+    expect(["a1", "a2", "a3"].map((key) => s.duplicateOf("A", key))).toEqual([null, null, null]);
+  });
+
+  it("ignores width, case, white space and punctuation in titles", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Example社が新しい端末を発表", link: "https://a.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "ＥＸＡＭＰＬＥ社が 新しい 端末を発表！", link: "https://b.example.org/1" }]);
+    expect(s.duplicateOf("B", "b")).toBe(s.idOf("A", "a"));
+  });
+
+  it("compares a short title only by its page", async () => {
+    const s = several();
+    await s.deliver("A", [
+      { key: "a1", title: "お知らせ", link: "https://a.example.org/1" },
+      { key: "a2", title: "お知らせ", link: "https://shared.example.org/1" },
+    ]);
+    await s.deliver("B", [
+      { key: "b1", title: "お知らせ", link: "https://b.example.org/1" },
+      { key: "b2", title: "お知らせ", link: "https://shared.example.org/1" },
+    ]);
+    expect(s.duplicateOf("B", "b1")).toBeNull();
+    expect(s.duplicateOf("B", "b2")).toBe(s.idOf("A", "a2"));
+  });
+
+  it("does not compare with articles stored more than seven days before", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1", published: null }]);
+    s.clock.advance(8 * DAY);
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1", published: null }]);
+    expect(s.duplicateOf("B", "b")).toBeNull();
+  });
+
+  it("records every later copy against the article stored first, also when only a duplicate matches", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    s.clock.advance(HOUR);
+    await s.deliver("B", [{ key: "b", title: "A fix ships from the vendor", link: "https://news.example.org/1" }]);
+    s.clock.advance(HOUR);
+    await s.deliver("C", [
+      { key: "c1", title: "Vendor ships a fix for the bug", link: "https://c.example.org/1" },
+      { key: "c2", title: "A fix ships from the vendor", link: "https://c.example.org/2" },
+    ]);
+    const kept = s.idOf("A", "a");
+    expect([s.duplicateOf("B", "b"), s.duplicateOf("C", "c1"), s.duplicateOf("C", "c2")]).toEqual([kept, kept, kept]);
+  });
+
+  it("does not compare with generated articles or their sources", async () => {
+    const s = several();
+    const category = createCategory(s.db, { name: "Tools", kind: "news" }, s.clock);
+    insertArticle(s.db, {
+      categoryId: category.id,
+      kind: "news",
+      now: START,
+      previousArticleId: null,
+      title: "Vendor ships a fix for the bug",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      refs: [{ url: "https://news.example.org/1", siteName: "News", title: "Vendor ships a fix for the bug", publishedAt: null }],
+      topicIds: [],
+    });
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    expect(s.duplicateOf("A", "a")).toBeNull();
+  });
+
+  it("does not judge a rewritten item again", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://a.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "Something else entirely", link: "https://b.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug", link: "https://b.example.org/1" }]);
+    expect(s.duplicateOf("B", "b")).toBeNull();
+  });
+
+  it("neither records nor compares with articles stored before duplicate removal existed", async () => {
+    const s = several();
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    // What an earlier version stored has nothing to compare.
+    s.db.prepare("UPDATE articles SET dedup_url = NULL, dedup_title = NULL").run();
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    expect(s.duplicateOf("B", "b")).toBeNull();
+    // Rewriting such an article does not make it one to compare with.
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug, again", link: "https://news.example.org/1" }]);
+    expect(s.article("A", "a")).toMatchObject({ dedup_url: null, dedup_title: null });
+  });
+
+  it("records nothing while duplicate removal is off, and compares with what was stored then once it is on", async () => {
+    const s = several();
+    updateSettings(s.db, { removeDuplicates: false });
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    expect([s.duplicateOf("A", "a"), s.duplicateOf("B", "b")]).toEqual([null, null]);
+
+    updateSettings(s.db, { removeDuplicates: true });
+    await s.deliver("C", [{ key: "c", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }]);
+    expect(s.duplicateOf("C", "c")).toBe(s.idOf("A", "a"));
+  });
+
+  it("does not translate the title of a duplicate when it is fetched, new or rewritten", async () => {
+    const google = fakeTranslator();
+    const s = several(google);
+    updateSettings(s.db, { outputLanguage: "ja" });
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix for the bug", link: "https://news.example.org/1" }], { translate: true });
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug", link: "https://b.example.org/1" }], { translate: true });
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix for the bug, now rewritten", link: "https://b.example.org/1" }], { translate: true });
+
+    expect(s.duplicateOf("B", "b")).toBe(s.idOf("A", "a"));
+    expect(s.article("A", "a").translated_title).toBe("訳:Vendor ships a fix for the bug");
+    expect(s.article("B", "b").translated_title).toBeNull();
+    expect(google.calls.map((call) => call.items)).toEqual([[{ text: "Vendor ships a fix for the bug", plain: true }]]);
+    expect(s.db.prepare("SELECT coalesce(sum(chars), 0) AS n FROM translation_usage").get()).toEqual({ n: "Vendor ships a fix for the bug".length });
   });
 });

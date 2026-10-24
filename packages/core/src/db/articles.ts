@@ -14,7 +14,7 @@ import type {
 } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
-import type { Database } from "./database.ts";
+import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { findArticleTranslation } from "./translations.ts";
 
@@ -33,6 +33,16 @@ export function hiddenByFilters(alias: string): string {
   return `(${alias}.filtered = 1 AND ${alias}.starred = 0)`;
 }
 
+/**
+ * Whether the article of the given table alias is a hidden duplicate: a feed article recorded as a duplicate
+ * of one another feed delivered first, while duplicate removal is on. Such a row is left out of the lists
+ * and counts over everything and over categories, waits for no summary, and is read with the article kept
+ * for it. Switched off, recorded duplicates are like any other article; the record stays.
+ */
+export function hiddenDuplicate(alias: string): string {
+  return `(${alias}.duplicate_of IS NOT NULL AND coalesce((SELECT s.remove_duplicates FROM settings s WHERE s.id = 1), 1) = 1)`;
+}
+
 /** A summary is tried this many times; after that the article stays without one. */
 export const SUMMARY_ATTEMPTS = 2;
 
@@ -45,8 +55,10 @@ const CAN_BE_SUMMARIZED = `a.origin = 'feed' AND a.auto_summary IS NULL AND a.au
   AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT ${hiddenByFilters("a")}
   AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since)`;
 
-// An article that was read is left out, unless a reader opened it while its summary was waited for.
-const WAITING_FOR_SUMMARY = `${CAN_BE_SUMMARIZED} AND (a.is_read = 0 OR a.auto_summary_requested_at IS NOT NULL)`;
+// An article that was read is left out, and so is a hidden duplicate, whose summary the kept article has;
+// either is in, though, when a reader opened it while its summary was waited for.
+const WAITING_FOR_SUMMARY = `${CAN_BE_SUMMARIZED}
+  AND ((a.is_read = 0 AND NOT ${hiddenDuplicate("a")}) OR a.auto_summary_requested_at IS NOT NULL)`;
 
 const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
@@ -102,6 +114,17 @@ function refsOf(db: Database, articleId: number): ArticleRef[] {
     }));
 }
 
+/** The duplicates recorded against an article, with their feed, in the order they were stored. */
+function otherFeedsOf(db: Database, articleId: number): Article["otherFeeds"] {
+  return db
+    .prepare(
+      `SELECT d.id, d.feed_id, f.title FROM articles d JOIN feeds f ON f.id = d.feed_id
+        WHERE d.duplicate_of = ? AND NOT ${hiddenByFilters("d")} ORDER BY d.created_at, d.id`,
+    )
+    .all(articleId)
+    .map((row) => ({ articleId: num(row.id), feedId: num(row.feed_id), feedTitle: str(row.title) }));
+}
+
 function toArticle(db: Database, row: Row): Article {
   const id = num(row.id);
   const body = str(row.body);
@@ -121,6 +144,7 @@ function toArticle(db: Database, row: Row): Article {
     translation: findArticleTranslation(db, id, { translatedTitle: strOrNull(row.translated_title), sourceLanguage: strOrNull(row.source_language) }),
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
+    otherFeeds: otherFeedsOf(db, id),
     refs: refsOf(db, id),
     topics: db
       .prepare("SELECT t.id, t.text FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ? ORDER BY t.id")
@@ -400,6 +424,8 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
     where.push("a.feed_id = ?");
     params.push(query.feed);
   }
+  // A duplicate is listed with its own feed and among the starred, and nowhere else.
+  if (query.feed === undefined && query.starred !== "true") where.push(`NOT ${hiddenDuplicate("a")}`);
   if (query.kind !== undefined) {
     where.push("a.kind = ?");
     params.push(query.kind);
@@ -463,14 +489,40 @@ export function pageArticles(
   return { items: page.map(toSummary), nextCursor: rows.length > limit && last ? encodeCursor([str(last.updated_at), num(last.id)]) : null };
 }
 
+/**
+ * Marks read the unread hidden duplicates of the given kept articles, and returns them. A duplicate that
+ * filters hide stays unread, as "mark all as read" leaves such articles. Never the other way round: reading
+ * a duplicate, or putting the kept article back to unread, changes nothing else.
+ */
+function readDuplicatesOf(db: Database, keptIds: number[]): number[] {
+  if (keptIds.length === 0) return [];
+  return db
+    .prepare(
+      `UPDATE articles AS d SET is_read = 1
+        WHERE d.duplicate_of IN (SELECT value FROM json_each(?)) AND d.is_read = 0
+          AND ${hiddenDuplicate("d")} AND NOT ${hiddenByFilters("d")}
+        RETURNING id`,
+    )
+    .all(JSON.stringify(keptIds))
+    .map((row) => num(row.id));
+}
+
 export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate): Article {
   getArticle(db, id);
-  if (patch.isRead !== undefined) db.prepare("UPDATE articles SET is_read = ? WHERE id = ?").run(patch.isRead ? 1 : 0, id);
-  if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
+  transaction(db, () => {
+    if (patch.isRead !== undefined) {
+      const changed = num(db.prepare("UPDATE articles SET is_read = ? WHERE id = ? AND is_read <> ?").run(patch.isRead ? 1 : 0, id, patch.isRead ? 1 : 0).changes);
+      if (patch.isRead && changed > 0) readDuplicatesOf(db, [id]);
+    }
+    if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
+  });
   return getArticle(db, id);
 }
 
-/** Marks as read the unread articles last updated before the given time, and returns which ones changed. */
+/**
+ * Marks as read the unread articles last updated before the given time, and returns which ones changed:
+ * the hidden duplicates of those articles too, wherever they are.
+ */
 export function markArticlesRead(
   db: Database,
   filter: { categoryId?: number; uncategorized?: boolean; origin?: Origin; feedId?: number; minImportance?: number; before: string },
@@ -495,11 +547,13 @@ export function markArticlesRead(
     where.push("importance >= ?");
     params.push(filter.minImportance);
   }
-  return db
-    .prepare(`UPDATE articles SET is_read = 1 WHERE ${where.join(" AND ")} RETURNING id`)
-    .all(...params)
-    .map((row) => num(row.id))
-    .sort((a, b) => a - b);
+  return transaction(db, () => {
+    const marked = db
+      .prepare(`UPDATE articles SET is_read = 1 WHERE ${where.join(" AND ")} RETURNING id`)
+      .all(...params)
+      .map((row) => num(row.id));
+    return [...marked, ...readDuplicatesOf(db, marked)].sort((a, b) => a - b);
+  });
 }
 
 /** Puts the named articles back to unread. Returns how many changed. */
@@ -521,11 +575,13 @@ export function getCounts(db: Database, now: string): Counts {
       `SELECT category_id, feed_id, origin,
               count(*) AS total,
               sum(starred) AS starred,
-              sum(is_read = 0 AND (kind <> 'event' OR event_ends_at >= ?)) AS unread
+              sum(is_read = 0 AND (kind <> 'event' OR event_ends_at >= ?)) AS unread,
+              sum(${hiddenDuplicate("articles")}) AS duplicates,
+              sum(${hiddenDuplicate("articles")} AND is_read = 0 AND (kind <> 'event' OR event_ends_at >= ?)) AS unread_duplicates
          FROM articles WHERE NOT ${hiddenByFilters("articles")}
         GROUP BY category_id, feed_id, origin`,
     )
-    .all(now);
+    .all(now, now);
   const categories = new Map(
     db
       .prepare("SELECT id FROM categories ORDER BY id")
@@ -540,7 +596,8 @@ export function getCounts(db: Database, now: string): Counts {
   );
   const counts: Counts = { unread: 0, starred: 0, generatedUnread: 0, uncategorizedUnread: 0, categories: [], feeds: [] };
   for (const row of groups) {
-    const unread = num(row.unread);
+    // A hidden duplicate counts for its own feed and among the starred only. Generated articles have none.
+    const unread = num(row.unread) - num(row.unread_duplicates);
     const generated = str(row.origin) === "generated";
     counts.unread += unread;
     counts.starred += num(row.starred);
@@ -548,7 +605,7 @@ export function getCounts(db: Database, now: string): Counts {
     const category = row.category_id === null ? undefined : categories.get(num(row.category_id));
     if (category) {
       category.unread += unread;
-      category.total += num(row.total);
+      category.total += num(row.total) - num(row.duplicates);
       if (generated) {
         category.generatedUnread += unread;
         category.generatedTotal += num(row.total);
@@ -557,7 +614,7 @@ export function getCounts(db: Database, now: string): Counts {
       counts.uncategorizedUnread += unread;
     }
     const feed = row.feed_id === null ? undefined : feeds.get(num(row.feed_id));
-    if (feed) feed.unread += unread;
+    if (feed) feed.unread += num(row.unread);
   }
   counts.categories = [...categories.values()];
   counts.feeds = [...feeds.values()];

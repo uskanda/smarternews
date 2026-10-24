@@ -141,6 +141,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
     region: settings.search.region,
   });
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
+  const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
+  const duplicatesHint = useId();
   const [error, setError] = useState<unknown>(null);
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
 
@@ -152,6 +154,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         timeZone: form.timeZone.trim(),
         search: { language: form.language.trim(), region: form.region.trim() },
         advanceAfterMarkAll: advance,
+        removeDuplicates,
       });
       client.setQueryData(["settings"], saved);
       setError(null);
@@ -193,6 +196,17 @@ function GlobalSettings({ settings }: { settings: Settings }) {
             checked={advance}
             onChange={(event) => setAdvance(event.target.checked)}
           />
+        </div>
+        <div className="flex flex-col gap-xs sm:col-span-2">
+          <Checkbox
+            label="ほかの購読フィードが先に配信した記事を、全体とカテゴリの一覧に出さない"
+            checked={removeDuplicates}
+            aria-describedby={duplicatesHint}
+            onChange={(event) => setRemoveDuplicates(event.target.checked)}
+          />
+          <p id={duplicatesHint} className="type-label-sm text-on-surface-muted">
+            7日以内に同じURLか同じタイトルで届いた記事を、先に届いた1件にまとめます。まとめた記事も、それぞれの購読フィードの一覧には出ます。
+          </p>
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">

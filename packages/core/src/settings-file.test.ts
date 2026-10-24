@@ -40,6 +40,7 @@ describe("exportSettings", () => {
       search: { language: "ja", region: "JP" },
       feedIntervalMinutes: 30,
       advanceAfterMarkAll: true,
+      removeDuplicates: true,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -417,6 +418,23 @@ describe("order and the move-on setting in the settings file", () => {
     expect(getSettings(db).advanceAfterMarkAll).toBe(false);
     importSettings(db, "version: 1\nsettings:\n  advanceAfterMarkAll: true\n", clock);
     expect(getSettings(db).advanceAfterMarkAll).toBe(true);
+  });
+
+  it("carries duplicate removal switched off to an empty server", () => {
+    const db = createTestDb();
+    updateSettings(db, { removeDuplicates: false });
+    const written = exportSettings(db);
+    expect(parse(written).settings.removeDuplicates).toBe(false);
+    const empty = createTestDb();
+    importSettings(empty, written, clock);
+    expect(getSettings(empty).removeDuplicates).toBe(false);
+  });
+
+  it("leaves duplicate removal alone when the file does not mention it", () => {
+    const db = createTestDb();
+    updateSettings(db, { removeDuplicates: false });
+    importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
+    expect(getSettings(db).removeDuplicates).toBe(false);
   });
 });
 

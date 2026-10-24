@@ -31,6 +31,7 @@ export function getSettings(db: Database, defaultTimeZone: string = systemTimeZo
     search: { language: str(row.search_language), region: str(row.search_region) },
     feedIntervalMinutes: num(row.feed_interval_minutes),
     advanceAfterMarkAll: bool(row.advance_after_mark_all),
+    removeDuplicates: bool(row.remove_duplicates),
   };
 }
 
@@ -43,8 +44,17 @@ export function updateSettings(db: Database, patch: SettingsUpdate): Settings {
   const next = { ...getSettings(db), ...patch };
   db.prepare(
     `UPDATE settings SET reader_info = ?, output_language = ?, time_zone = ?, search_language = ?, search_region = ?,
-            feed_interval_minutes = ?, advance_after_mark_all = ?
+            feed_interval_minutes = ?, advance_after_mark_all = ?, remove_duplicates = ?
       WHERE id = 1`,
-  ).run(next.readerInfo, next.outputLanguage, next.timeZone, next.search.language, next.search.region, next.feedIntervalMinutes, next.advanceAfterMarkAll ? 1 : 0);
+  ).run(
+    next.readerInfo,
+    next.outputLanguage,
+    next.timeZone,
+    next.search.language,
+    next.search.region,
+    next.feedIntervalMinutes,
+    next.advanceAfterMarkAll ? 1 : 0,
+    next.removeDuplicates ? 1 : 0,
+  );
   return next;
 }

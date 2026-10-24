@@ -17,3 +17,15 @@ export function normalizeUrl(url: string): string {
   }
   return parsed.toString();
 }
+
+/** A title that normalizes to fewer characters than this is too plain to tell two articles apart. */
+export const MIN_TITLE_CHARS = 10;
+
+/**
+ * The form of a title used to tell whether two feed articles are the same: full and half width, case, white
+ * space, punctuation and symbols are ignored. Null when fewer than `MIN_TITLE_CHARS` characters remain.
+ */
+export function normalizeTitle(title: string): string | null {
+  const normalized = title.normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  return [...normalized].length < MIN_TITLE_CHARS ? null : normalized;
+}

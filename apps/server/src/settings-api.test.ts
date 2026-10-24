@@ -137,6 +137,13 @@ describe("settings", () => {
     });
   });
 
+  it("reads and changes duplicate removal, on by default", async () => {
+    const s = testServer();
+    expect((await (await s.get("/api/v1/settings")).json()).removeDuplicates).toBe(true);
+    expect((await (await s.patch("/api/v1/settings", { removeDuplicates: false })).json()).removeDuplicates).toBe(false);
+    expect((await (await s.get("/api/v1/settings")).json()).removeDuplicates).toBe(false);
+  });
+
   it("answers 400 for an unknown time zone and keeps the stored settings", async () => {
     const s = testServer();
     await s.patch("/api/v1/settings", { timeZone: "Asia/Tokyo" });

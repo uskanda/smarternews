@@ -368,6 +368,27 @@ describe("moving on after marking all as read", () => {
   });
 });
 
+describe("duplicate removal", () => {
+  const label = "ほかの購読フィードが先に配信した記事を、全体とカテゴリの一覧に出さない";
+
+  it("is switched on in the global settings of a server that never changed it", async () => {
+    const server = makeServer();
+    renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    expect(within(global).getByRole("checkbox", { name: label })).toBeChecked();
+    expect(within(global).getByText(/購読フィードの一覧には出ます/)).toBeInTheDocument();
+  });
+
+  it("can be switched off and saved", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    await user.click(within(global).getByRole("checkbox", { name: label }));
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await waitFor(() => expect(getSettings(server.db).removeDuplicates).toBe(false));
+  });
+});
+
 describe("the settings file", () => {
   it("hands the settings file to the browser for saving", async () => {
     const server = makeServer();

@@ -156,6 +156,12 @@ Filters hide articles of subscribed feeds. Hide filters apply to everything, to 
 
 Stop words, which this replaced, became hide filters over everything when the server was updated, and a settings file that still lists `stopWords` loads the same way.
 
+### Duplicates across feeds
+
+When two feeds deliver the same story, the lists over everything and over a category show it once. A new article counts as a duplicate when another feed delivered one with the same page or the same title in the last 7 days. Tracking parameters in the URL do not matter, and neither do case, width, spaces or punctuation in the title. Titles shorter than 10 characters are compared by their page only, and articles of the same feed are never compared. The article that arrived first stays in those lists and names the other feeds under the link to its page, each opening its own copy. Every copy stays in the list of its own feed and in that feed's unread count. Reading the article that stayed marks its copies read. The copies get no summary or translated title when they arrive, and no model is involved.
+
+Duplicate removal is on by default. Switch it off in the global settings to see every copy everywhere; switching it back on hides the same copies again.
+
 ### Reader information
 
 `readerInfo` is free text about who reads the articles. The model uses it to judge relevance and importance, and to add one sentence on what a story means for that reader. Leave it empty and articles carry no such sentence.

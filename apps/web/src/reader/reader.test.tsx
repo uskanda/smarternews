@@ -1,4 +1,5 @@
-import { getArticle, insertArticle, setArticleFlags } from "@smarternews/core";
+import { getArticle, insertArticle, insertFeed, setArticleFlags } from "@smarternews/core";
+import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -510,5 +511,54 @@ describe("events", () => {
     await screen.findByRole("heading", { level: 2, name: "Morning class" });
     expect(article()).toHaveTextContent("3月11日");
     expect(article()).toHaveTextContent("City Hall");
+  });
+});
+
+describe("an article that other feeds delivered too", () => {
+  /** Feed A keeps an article; feeds B and C delivered it too, recorded as its duplicates. */
+  function duplicated() {
+    const server = makeServer();
+    const category = server.category("Tools");
+    const feed = (title: string) => insertFeed(server.db, { url: `https://${title.toLowerCase().replace(/\W+/g, "-")}.example.org/feed.xml`, title, categoryId: category.id }, server.clock).id;
+    const [a, b, c] = [feed("Feed A"), feed("Feed B"), feed("Feed C")];
+    const kept = seedFeedArticle(server.db, a!, { title: "Kept story", url: "https://news.example.org/1", storedAt: "2026-03-01T01:00:00.000Z" });
+    const copyB = seedFeedArticle(server.db, b!, { title: "Copy in B", storedAt: "2026-03-01T02:00:00.000Z", duplicateOf: kept });
+    const copyC = seedFeedArticle(server.db, c!, { title: "Copy in C", storedAt: "2026-03-01T03:00:00.000Z", duplicateOf: kept });
+    const alone = seedFeedArticle(server.db, a!, { title: "Alone", url: "https://news.example.org/2" });
+    return { server, category, a, b, c, kept, copyB, copyC, alone };
+  }
+
+  it("is listed once in the unread list", async () => {
+    const { server } = duplicated();
+    renderApp({ server, route: "/unread" });
+    await within(list()).findByRole("link", { name: /Kept story/ });
+    expect(rowTitles()).toEqual(expect.arrayContaining(["Kept story", "Alone"]));
+    expect(rowTitles()).toHaveLength(2);
+  });
+
+  it("is listed once in the list of its category", async () => {
+    const { server, category } = duplicated();
+    renderApp({ server, route: `/c/${category.slug}` });
+    await within(list()).findByRole("link", { name: /Kept story/ });
+    expect(rowTitles()).not.toContain("Copy in B");
+    expect(rowTitles()).not.toContain("Copy in C");
+  });
+
+  it("names the other feeds under the way to its page", async () => {
+    const { server, kept } = duplicated();
+    renderApp({ server, route: `/all/${kept}` });
+    const pane = await screen.findByRole("article", { name: "記事" });
+    const others = await within(pane).findByRole("region", { name: "ほかに配信した購読フィード" });
+    expect(within(others).getAllByRole("link").map((link) => link.textContent)).toEqual(["Feed B", "Feed C"]);
+    const open = within(pane).getByRole("link", { name: "元のページを開く" });
+    expect(open.compareDocumentPosition(others) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("names no other feed for an article that only one feed delivered", async () => {
+    const { server, alone } = duplicated();
+    renderApp({ server, route: `/all/${alone}` });
+    const pane = await screen.findByRole("article", { name: "記事" });
+    await within(pane).findByRole("heading", { level: 2, name: "Alone" });
+    expect(within(pane).queryByRole("region", { name: "ほかに配信した購読フィード" })).toBeNull();
   });
 });

@@ -65,6 +65,7 @@ Settings fields:
 | `search` | `{"language":"en","region":"US"}`, the default market for news search |
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
 | `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `true` by default |
+| `removeDuplicates` | `true` hides a feed article that another feed delivered first from the lists over everything and over categories. `true` by default; see [Duplicates across feeds](#duplicates-across-feeds) |
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and filters by their action, scope and conditions. A filter names a category by its `slug` and a feed by its `url`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
@@ -148,7 +149,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   -d '{"categoryId":1,"before":"2026-03-01T12:00:00Z"}' "$API/api/v1/articles/mark-read"
 ```
 
-`mark-read` marks the unread articles that were last updated before `before`. Pass the time at which you loaded the list, so that articles that arrived afterwards stay unread. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. The response lists the articles it changed as `ids`, and `mark-unread` takes such a list to undo the change:
+`mark-read` marks the unread articles that were last updated before `before`. Pass the time at which you loaded the list, so that articles that arrived afterwards stay unread. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. The response lists the articles it changed as `ids`, including the duplicates marked read with the articles kept for them, and `mark-unread` takes such a list to undo the change:
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -167,7 +168,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
 | `categories` | Per category: `categoryId`, `unread`, `total`, `generatedUnread`, and `generatedTotal` (its generated articles, read or not) |
 | `feeds` | Per subscribed feed: `feedId` and `unread` |
 
-A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a filter hides.
+A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a filter hides. A hidden duplicate counts for its own feed and among the starred only, so a category's `unread` can be smaller than the sum of its feeds' `unread`.
 
 Fields of an article in the list:
 
@@ -201,6 +202,7 @@ The detail adds these:
 | `sourceLanguage` | The language of the original as the translation API found it, such as `en`. `null` when a model translated or nothing did |
 | `translation` | The stored translation of the content, in the shape `POST /api/v1/articles/:id/translation` returns. `null` until the article is translated |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
+| `otherFeeds` | The other feeds that delivered a feed article: one entry per copy recorded as its duplicate, with `articleId` (the copy), `feedId` and `feedTitle`, in the order the copies were stored. Empty for an article without duplicates |
 
 Generated articles without a star are deleted 180 days after their last update, feed articles without a star 90 days after the time they sort by. Starred articles are kept.
 
@@ -265,6 +267,14 @@ A fetch that fails is recorded on the feed and not in the run history. After eac
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
 The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders.
+
+### Duplicates across feeds
+
+When a feed delivers a new item, the server compares it with the feed articles that other feeds delivered in the last 7 days. An item is a duplicate when it has the same page, with tracking parameters and the fragment removed, or the same title. Titles are compared without regard to full and half width, case, white space, punctuation and symbols; a title with fewer than 10 characters left is compared by its page only. The items of one feed are not compared with each other, generated articles take no part, and no model is called. The article stored first is kept, and the duplicate is recorded against it. Each item is judged once, when it is stored: a rewritten item is not judged again, and articles stored before this version are never compared.
+
+While `removeDuplicates` is on, a duplicate is left out of the lists over everything, over a category and over no category, and out of their counts. It stays in the list of its own feed, with the starred articles, and in its feed's `unread`. Marking the kept article read, alone or with "mark all as read", marks its unread duplicates read too, except those a filter hides. Putting the kept article back to unread leaves them as they are. A duplicate waits for no summary and its title is not translated when it is fetched; both happen when it is opened and asked for. When the kept article is deleted, the duplicate stored first is kept instead.
+
+Switched off, duplicates are listed and counted like any other article and nothing new is recorded. The records stay, so switching it back on hides the same duplicates again.
 
 ## Translation
 

@@ -1,4 +1,5 @@
 import { reviseArticle } from "@smarternews/core";
+import { seedFeed, seedFeedArticle } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { testServer } from "./testing.ts";
 
@@ -111,6 +112,25 @@ describe("GET /api/v1/articles/:id", () => {
       topics: [],
     });
     expect(body.refs.map((ref: { url: string }) => ref.url)).toEqual(["https://example.org/first", "https://example.org/second"]);
+  });
+
+  it("names the other feeds that delivered a kept feed article, with the id of each copy", async () => {
+    const s = testServer();
+    const [a, b, c] = ["Feed A", "Feed B", "Feed C"].map((title) => seedFeed(s.db, { title }));
+    const kept = seedFeedArticle(s.db, a!, { storedAt: "2026-03-01T01:00:00.000Z" });
+    const copyB = seedFeedArticle(s.db, b!, { storedAt: "2026-03-01T02:00:00.000Z", duplicateOf: kept });
+    const copyC = seedFeedArticle(s.db, c!, { storedAt: "2026-03-01T03:00:00.000Z", duplicateOf: kept });
+
+    expect((await (await s.get(`/api/v1/articles/${kept}`)).json()).otherFeeds).toEqual([
+      { articleId: copyB, feedId: b, feedTitle: "Feed B" },
+      { articleId: copyC, feedId: c, feedTitle: "Feed C" },
+    ]);
+  });
+
+  it("names no other feed for an article without duplicates", async () => {
+    const s = testServer();
+    const id = seedFeedArticle(s.db, seedFeed(s.db));
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).otherFeeds).toEqual([]);
   });
 
   it("answers 404 for an article that does not exist", async () => {

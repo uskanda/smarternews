@@ -1,3 +1,4 @@
+import { listKey } from "@smarternews/client";
 import type { Article } from "@smarternews/core/api";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -67,6 +68,11 @@ export function ArticleScreen() {
     const { ref: list, router: to } = latest.current;
     to.push({ pathname: "/article/[id]", params: { id: String(id), list: list.key, ...listParams(list) } });
   }, []);
+  // The copy is opened in the list of its feed, read articles included: it was most likely read with this one.
+  const openCopy = useCallback((copy: Article["otherFeeds"][number]) => {
+    const list = { key: listKey({ type: "feed", feedId: copy.feedId }), includeRead: true, importantOnly: false };
+    latest.current.router.push({ pathname: "/article/[id]", params: { id: String(copy.articleId), list: list.key, ...listParams(list) } });
+  }, []);
   const sourceName = reader.sourceName;
 
   return (
@@ -125,6 +131,7 @@ export function ArticleScreen() {
               sourceName={sourceName(reader.items.find((item) => item.id === id) ?? { origin: "generated", feedId: null, categoryId: null })}
               onRead={onRead}
               onOpenArticle={openArticle}
+              onOpenCopy={openCopy}
             />
           ) : (
             <View key={id} style={{ width }} />

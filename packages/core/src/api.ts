@@ -30,6 +30,11 @@ export const settingsSchema = z.object({
   feedIntervalMinutes: intervalMinutesSchema,
   /** Whether a reader opens the next list with unread articles after marking a list as read. */
   advanceAfterMarkAll: z.boolean(),
+  /**
+   * Whether a feed article that another feed delivered within seven days is hidden from the lists over
+   * everything and over categories, as a duplicate of the one stored first.
+   */
+  removeDuplicates: z.boolean(),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -237,6 +242,11 @@ export const articleSchema = articleSummarySchema.extend({
   translation: articleTranslationSchema.nullable(),
   snippetOnly: z.boolean(),
   previousArticleId: z.number().int().nullable(),
+  /**
+   * The other feeds that delivered a feed article, in the order their copies were stored: one entry per
+   * copy recorded as a duplicate of this article. Empty for an article without duplicates.
+   */
+  otherFeeds: z.array(z.object({ articleId: z.number().int(), feedId: z.number().int(), feedTitle: z.string() })),
   refs: z.array(articleRefSchema),
   topics: z.array(z.object({ id: z.number().int(), text: z.string() })),
 });

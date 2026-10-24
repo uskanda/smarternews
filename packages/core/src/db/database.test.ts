@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrate, openDatabase, transaction } from "./database.ts";
+import { deleteUnstarredFeedArticlesBefore } from "./articles.ts";
 import { buildPendingFilterMatches, listFilters } from "./filters.ts";
 
 function tableNames(db: ReturnType<typeof openDatabase>): string[] {
@@ -476,5 +477,92 @@ describe("the migration from stop words to filters", () => {
     const db = openDatabase(":memory:");
     migrate(db);
     expect(db.prepare("SELECT count(*) AS n FROM filter_matches_pending").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("the migration to duplicate removal", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+  const BEFORE = [
+    "001_init.sql",
+    "002_feeds.sql",
+    "003_order.sql",
+    "004_auto_summary.sql",
+    "005_translation.sql",
+    "006_run_retries.sql",
+    "007_summary_requests.sql",
+    "008_advance_by_default.sql",
+    "009_filters.sql",
+  ];
+
+  it("leaves the feed articles that exist without values to compare and not duplicates, and switches removal on", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of BEFORE) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO settings (id, reader_info, output_language, time_zone, search_language, search_region) VALUES (1, '', 'ja', 'UTC', 'ja', 'JP')").run();
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (6, 'https://example.org/6', 'six', ?)").run(now);
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (?, 'feed', ?, 'k', 'news', 'The same long title', 's', 'b', ?, ?, ?)`,
+    );
+    insert.run(1, 5, now, now, now);
+    insert.run(2, 6, now, now, now);
+    db.prepare("INSERT INTO article_refs (article_id, url, site_name, title, position) VALUES (1, 'https://example.org/a', '', 't', 0)").run();
+    db.prepare("INSERT INTO article_refs (article_id, url, site_name, title, position) VALUES (2, 'https://example.org/a', '', 't', 0)").run();
+
+    copyFileSync(join(SHIPPED, "010_feed_dedup.sql"), join(dir, "010_feed_dedup.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, dedup_url, dedup_title, duplicate_of FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, dedup_url: null, dedup_title: null, duplicate_of: null },
+      { id: 2, dedup_url: null, dedup_title: null, duplicate_of: null },
+    ]);
+    expect(db.prepare("SELECT remove_duplicates FROM settings").get()).toEqual({ remove_duplicates: 1 });
+  });
+});
+
+describe("removing the article that duplicates were recorded against", () => {
+  function withDuplicates() {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const stored = (day: number) => `2026-03-0${day}T00:00:00.000Z`;
+    for (const id of [1, 2, 3]) db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (?, ?, ?, ?)").run(id, `https://example.org/${id}`, `feed ${id}`, stored(1));
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, duplicate_of)
+       VALUES (?, 'feed', ?, 'k', 'news', 't', 's', 'b', ?, ?, ?, ?)`,
+    );
+    // Article 1 of feed 1 is kept; feed 3's copy was stored before feed 2's, so it is the first duplicate.
+    insert.run(1, 1, stored(1), stored(1), stored(1), null);
+    insert.run(2, 2, stored(3), stored(3), stored(3), 1);
+    insert.run(3, 3, stored(2), stored(2), stored(2), 1);
+    return db;
+  }
+  const duplicates = (db: ReturnType<typeof openDatabase>) => db.prepare("SELECT id, duplicate_of FROM articles ORDER BY id").all();
+
+  it("keeps the duplicate stored first, and records the others against it, when the feed goes", () => {
+    const db = withDuplicates();
+    db.prepare("DELETE FROM feeds WHERE id = 1").run();
+    expect(duplicates(db)).toEqual([
+      { id: 2, duplicate_of: 3 },
+      { id: 3, duplicate_of: null },
+    ]);
+  });
+
+  it("does the same when the kept article outlives its retention period", () => {
+    const db = withDuplicates();
+    db.prepare("UPDATE articles SET updated_at = '2025-01-01T00:00:00.000Z' WHERE id = 1").run();
+    expect(deleteUnstarredFeedArticlesBefore(db, "2026-01-01T00:00:00.000Z")).toBe(1);
+    expect(duplicates(db)).toEqual([
+      { id: 2, duplicate_of: 3 },
+      { id: 3, duplicate_of: null },
+    ]);
+  });
+
+  it("leaves no duplicate behind when every copy goes at once", () => {
+    const db = withDuplicates();
+    db.prepare("DELETE FROM articles").run();
+    expect(duplicates(db)).toEqual([]);
   });
 });

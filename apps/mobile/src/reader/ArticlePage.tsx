@@ -78,6 +78,8 @@ export interface ArticlePageProps {
   sourceName: string;
   onRead: (article: Article) => void;
   onOpenArticle: (id: number) => void;
+  /** Opens the copy of the article that another feed delivered, with that feed's list behind it. */
+  onOpenCopy: (copy: Article["otherFeeds"][number]) => void;
 }
 
 /** One article: what the story is, what it means for the reader, the text, and where it came from. */
@@ -88,7 +90,7 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
-export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle }: ArticlePageProps) {
+export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle, onOpenCopy }: ArticlePageProps) {
   const theme = useTheme();
   const timeZone = useTimeZone();
   const categories = useCategories();
@@ -198,6 +200,27 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
             元のページを開く
           </Txt>
         </Pressable>
+      ) : null}
+      {article.otherFeeds.length > 0 ? (
+        // The same story as other feeds delivered it; each name opens that copy.
+        <View testID="other-feeds" style={{ gap: theme.spacing.xs }}>
+          <Txt variant="label-sm" color="on-surface-muted" heading>
+            ほかに配信した購読フィード
+          </Txt>
+          {article.otherFeeds.map((copy) => (
+            <Pressable
+              key={copy.articleId}
+              accessibilityRole="link"
+              accessibilityLabel={copy.feedTitle}
+              onPress={() => onOpenCopy(copy)}
+              style={{ minHeight: theme.spacing["touch-android"], justifyContent: "center", alignSelf: "flex-start" }}
+            >
+              <Txt variant="body-md" color="primary" style={{ textDecorationLine: "underline" }}>
+                {copy.feedTitle}
+              </Txt>
+            </Pressable>
+          ))}
+        </View>
       ) : null}
       {article.autoSummary ? (
         // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.

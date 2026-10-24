@@ -187,6 +187,8 @@ describe("moving categories and feeds", () => {
 
     expect((await api.settings()).advanceAfterMarkAll).toBe(true);
     expect((await api.updateSettings({ advanceAfterMarkAll: false })).advanceAfterMarkAll).toBe(false);
+    expect((await api.settings()).removeDuplicates).toBe(true);
+    expect((await api.updateSettings({ removeDuplicates: false })).removeDuplicates).toBe(false);
   });
 
   describe("translation", () => {
@@ -206,7 +208,7 @@ describe("moving categories and feeds", () => {
       expect(feed.translate).toBe(true);
       const [item] = (await api.articles({ feed: feed.id })).items;
       expect(item).toMatchObject({ title: "A title", translatedTitle: "訳:A title" });
-      expect(await api.article(item!.id)).toMatchObject({ translatable: true, translation: null });
+      expect(await api.article(item!.id)).toMatchObject({ translatable: true, translation: null, otherFeeds: [] });
       expect((await api.updateFeed(feed.id, { translate: false })).translate).toBe(false);
     });
 

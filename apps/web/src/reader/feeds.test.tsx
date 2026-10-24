@@ -492,3 +492,37 @@ describe("the summary of a feed article", () => {
     expect(within(pane).queryByRole("status")).toBeNull();
   });
 });
+
+describe("an article that other feeds delivered too", () => {
+  /** Blog keeps "Big news"; Releases delivered it too, recorded as its duplicate, next to two posts of its own. */
+  function duplicated() {
+    const s = seeded();
+    const kept = seedFeedArticle(s.server.db, s.blog.id, { title: "Big news", at: at(90), url: "https://news.example.org/big" });
+    const copy = seedFeedArticle(s.server.db, s.releases.id, { title: "Big news (Releases)", at: at(95), duplicateOf: kept });
+    seedFeedArticle(s.server.db, s.releases.id, { title: "Release 3", at: at(40) });
+    return { ...s, kept, copy };
+  }
+
+  it("is listed with its own feed, which counts it", async () => {
+    const { server, releases } = duplicated();
+    renderApp({ server, route: `/f/${releases.id}` });
+    await within(list()).findByRole("link", { name: /Big news \(Releases\)/ });
+    expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]);
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Releases/ })).toHaveTextContent("Releases3"));
+  });
+
+  it("opens the copy in the list of the other feed when its name is chosen", async () => {
+    const { server, blog, releases, kept, copy } = duplicated();
+    const { user, path } = renderApp({ server, route: `/f/${blog.id}/${kept}` });
+    const others = await within(await opened()).findByRole("region", { name: "ほかに配信した購読フィード" });
+
+    await user.click(within(others).getByRole("link", { name: "Releases" }));
+
+    await within(await opened()).findByRole("heading", { level: 2, name: "Big news (Releases)" });
+    expect(path()).toBe(`/f/${releases.id}/${copy}?read=1`);
+    expect(within(nav()).getByRole("link", { name: /Releases/ })).toHaveAttribute("aria-current", "page");
+    // The copy was marked read with the kept article, so the list includes read articles to show it.
+    await waitFor(() => expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]));
+    expect(row(/Big news \(Releases\)/)).toHaveAttribute("data-read", "true");
+  });
+});

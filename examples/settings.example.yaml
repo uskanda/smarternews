@@ -17,6 +17,9 @@ settings:
   feedIntervalMinutes: 30
   # After "mark all as read", open the next list that has unread articles.
   advanceAfterMarkAll: true
+  # Show an article that several feeds deliver once in the lists over everything and over categories.
+  # The copies stay in the list of their own feed.
+  removeDuplicates: true
 categories:
   - slug: security
     name: Security
