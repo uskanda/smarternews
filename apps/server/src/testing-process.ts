@@ -87,11 +87,11 @@ async function run(command: Command): Promise<unknown> {
       return server.clock().toISOString();
     case "core": {
       // Any function of the core package, or of its test helpers, that takes the database first. "$clock"
-      // stands for the server's clock.
+      // stands for the server's clock, "$now" for the time on it.
       const name = command.name ?? "";
       const fn = (core as unknown as Record<string, unknown>)[name] ?? (coreTesting as unknown as Record<string, unknown>)[name];
       if (typeof fn !== "function") throw new Error(`the core package has no function ${command.name}`);
-      return (fn as (...all: unknown[]) => unknown)(server.db, ...args.map((arg) => (arg === "$clock" ? server.clock : arg))) ?? null;
+      return (fn as (...all: unknown[]) => unknown)(server.db, ...args.map((arg) => (arg === "$clock" ? server.clock : arg === "$now" ? server.clock().toISOString() : arg))) ?? null;
     }
     case "sql": {
       const statement = server.db.prepare(command.query ?? "");

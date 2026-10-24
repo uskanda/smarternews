@@ -178,6 +178,9 @@ export function useArticleFlags() {
       void client.invalidateQueries({ queryKey: ["counts"] });
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
+      // A read state changes which articles the recently read list holds. While that list is shown, it keeps
+      // the row it changed until the reader refreshes; it shows the new list once the reader comes back to it.
+      else if (variables.isRead !== undefined) void client.invalidateQueries({ queryKey: ["articles", { recentlyRead: "true" }] });
     },
   });
 }

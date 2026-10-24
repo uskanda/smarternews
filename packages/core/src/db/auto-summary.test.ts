@@ -40,7 +40,7 @@ describe("nextArticleToSummarize", () => {
   it("leaves out an article that was read", () => {
     const { db, feedId } = setup();
     const id = seedFeedArticle(db, feedId, { at: LATER });
-    setArticleFlags(db, id, { isRead: true });
+    setArticleFlags(db, id, { isRead: true }, "2026-03-01T12:00:00.000Z");
     expect(nextArticleToSummarize(db)).toBeNull();
     expect(getArticle(db, id).autoSummaryPending).toBe(false);
   });
@@ -59,7 +59,7 @@ describe("nextArticleToSummarize", () => {
     const id = seedFeedArticle(db, feedId, { title: "Sponsored post", at: LATER });
     createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "sponsored" }] }, clock);
     expect(nextArticleToSummarize(db)).toBeNull();
-    setArticleFlags(db, id, { starred: true });
+    setArticleFlags(db, id, { starred: true }, "2026-03-01T12:00:00.000Z");
     expect(nextArticleToSummarize(db)?.id).toBe(id);
   });
 

@@ -95,6 +95,7 @@ function toSummary(row: Row): ArticleSummary {
     updatedAt: str(row.updated_at),
     revision: num(row.revision),
     isRead: bool(row.is_read),
+    readAt: strOrNull(row.read_at),
     starred: bool(row.starred),
     primaryUrl: strOrNull(row.primary_url),
     refCount: num(row.ref_count),
@@ -261,7 +262,7 @@ export function reviseArticle(
   db.prepare(
     `UPDATE articles
         SET title = ?, summary = ?, body = ?, impact = ?, importance = max(importance, ?), unconfirmed = ?,
-            snippet_only = ?, updated_at = ?, revision = revision + 1, is_read = 0,
+            snippet_only = ?, updated_at = ?, revision = revision + 1, is_read = 0, read_at = NULL,
             event_key = coalesce(?, event_key), event_starts_at = coalesce(?, event_starts_at),
             event_ends_at = coalesce(?, event_ends_at), event_venue = coalesce(?, event_venue),
             event_fee = coalesce(?, event_fee),
@@ -401,11 +402,55 @@ function decodeCursor(cursor: string): CursorValue {
   throw new DomainError("invalid", "the cursor is not one this server issued", [{ path: "cursor", message: "invalid cursor" }]);
 }
 
+/** How far back the list of recently read articles goes: seven days of 24 hours, counted from now. */
+export const RECENTLY_READ_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** What narrows the article list, none of which the list of recently read articles is combined with. */
+const NARROWING = ["category", "uncategorized", "origin", "feed", "kind", "unread", "starred", "minImportance"] as const;
+
+/**
+ * A page of the articles read in the last seven days, last read first, ended events included. What filters
+ * hide and hidden duplicates are left out, as in the list over everything: a duplicate is read with its kept
+ * article, which is listed instead.
+ */
+function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): ArticleList {
+  const given = NARROWING.filter((name) => query[name] !== undefined);
+  if (given.length > 0) {
+    throw new DomainError(
+      "invalid",
+      "recentlyRead cannot be combined with another narrowing of the list",
+      given.map((name) => ({ path: name, message: "not allowed with recentlyRead" })),
+    );
+  }
+  const limit = query.limit ?? 50;
+  const where = [
+    "a.is_read = 1",
+    "a.read_at IS NOT NULL",
+    "a.read_at >= ?",
+    `NOT ${hiddenByFilters("a")}`,
+    `NOT ${hiddenDuplicate("a")}`,
+  ];
+  const params: Array<string | number> = [new Date(new Date(now).getTime() - RECENTLY_READ_MS).toISOString()];
+  if (query.cursor !== undefined) {
+    const [value, id] = decodeCursor(query.cursor);
+    where.push("(a.read_at < ? OR (a.read_at = ? AND a.id < ?))");
+    params.push(value, value, id);
+  }
+  const rows = db
+    .prepare(`SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")} ORDER BY a.read_at DESC, a.id DESC LIMIT ?`)
+    .all(...params, limit + 1);
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return { items: page.map(toSummary), nextCursor: rows.length > limit && last ? encodeCursor([str(last.read_at), num(last.id)]) : null };
+}
+
 /**
  * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
- * by start time, soonest first; every other list by last update, newest first.
+ * by start time, soonest first; every other list by last update, newest first. The recently read articles
+ * are a list of their own.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
+  if (query.recentlyRead === "true") return listRecentlyRead(db, query, now);
   const limit = query.limit ?? 50;
   const byEventStart = query.kind === "event";
   const params: Array<string | number> = [];
@@ -490,29 +535,37 @@ export function pageArticles(
 }
 
 /**
- * Marks read the unread hidden duplicates of the given kept articles, and returns them. A duplicate that
- * filters hide stays unread, as "mark all as read" leaves such articles. Never the other way round: reading
- * a duplicate, or putting the kept article back to unread, changes nothing else.
+ * Marks read, at the given time, the unread hidden duplicates of the given kept articles, and returns them.
+ * A duplicate that filters hide stays unread, as "mark all as read" leaves such articles. Never the other way
+ * round: reading a duplicate, or putting the kept article back to unread, changes nothing else.
  */
-function readDuplicatesOf(db: Database, keptIds: number[]): number[] {
+function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[] {
   if (keptIds.length === 0) return [];
   return db
     .prepare(
-      `UPDATE articles AS d SET is_read = 1
+      `UPDATE articles AS d SET is_read = 1, read_at = ?
         WHERE d.duplicate_of IN (SELECT value FROM json_each(?)) AND d.is_read = 0
           AND ${hiddenDuplicate("d")} AND NOT ${hiddenByFilters("d")}
         RETURNING id`,
     )
-    .all(JSON.stringify(keptIds))
+    .all(now, JSON.stringify(keptIds))
     .map((row) => num(row.id));
 }
 
-export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate): Article {
+/**
+ * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
+ * one that was read already keeps its time, and one put back to unread loses it.
+ */
+export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, now: string): Article {
   getArticle(db, id);
   transaction(db, () => {
     if (patch.isRead !== undefined) {
-      const changed = num(db.prepare("UPDATE articles SET is_read = ? WHERE id = ? AND is_read <> ?").run(patch.isRead ? 1 : 0, id, patch.isRead ? 1 : 0).changes);
-      if (patch.isRead && changed > 0) readDuplicatesOf(db, [id]);
+      const changed = num(
+        db
+          .prepare("UPDATE articles SET is_read = ?, read_at = ? WHERE id = ? AND is_read <> ?")
+          .run(patch.isRead ? 1 : 0, patch.isRead ? now : null, id, patch.isRead ? 1 : 0).changes,
+      );
+      if (patch.isRead && changed > 0) readDuplicatesOf(db, [id], now);
     }
     if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
   });
@@ -520,12 +573,13 @@ export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate):
 }
 
 /**
- * Marks as read the unread articles last updated before the given time, and returns which ones changed:
- * the hidden duplicates of those articles too, wherever they are.
+ * Marks as read, at `now`, the unread articles last updated before the given time, and returns which ones
+ * changed: the hidden duplicates of those articles too, wherever they are.
  */
 export function markArticlesRead(
   db: Database,
   filter: { categoryId?: number; uncategorized?: boolean; origin?: Origin; feedId?: number; minImportance?: number; before: string },
+  now: string,
 ): number[] {
   // What filters hide is in no list, so it is not marked either: it comes back unread when the filter goes.
   const where = ["is_read = 0", "updated_at < ?", `NOT ${hiddenByFilters("articles")}`];
@@ -549,16 +603,16 @@ export function markArticlesRead(
   }
   return transaction(db, () => {
     const marked = db
-      .prepare(`UPDATE articles SET is_read = 1 WHERE ${where.join(" AND ")} RETURNING id`)
-      .all(...params)
+      .prepare(`UPDATE articles SET is_read = 1, read_at = ? WHERE ${where.join(" AND ")} RETURNING id`)
+      .all(now, ...params)
       .map((row) => num(row.id));
-    return [...marked, ...readDuplicatesOf(db, marked)].sort((a, b) => a - b);
+    return [...marked, ...readDuplicatesOf(db, marked, now)].sort((a, b) => a - b);
   });
 }
 
-/** Puts the named articles back to unread. Returns how many changed. */
+/** Puts the named articles back to unread, without their read times. Returns how many changed. */
 export function markArticlesUnread(db: Database, ids: number[]): number {
-  const statement = db.prepare("UPDATE articles SET is_read = 0 WHERE id = ? AND is_read = 1");
+  const statement = db.prepare("UPDATE articles SET is_read = 0, read_at = NULL WHERE id = ? AND is_read = 1");
   let changed = 0;
   for (const id of ids) changed += num(statement.run(id).changes);
   return changed;

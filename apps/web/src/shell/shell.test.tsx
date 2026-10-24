@@ -64,7 +64,7 @@ describe("the list of views and categories", () => {
     updateCategory(server.db, hidden.id, { enabled: false });
     server.article(a.id);
     server.article(a.id);
-    setArticleFlags(server.db, server.article(b.id), { isRead: true });
+    setArticleFlags(server.db, server.article(b.id), { isRead: true }, server.clock().toISOString());
     renderApp({ server });
 
     const security = await within(nav()).findByRole("link", { name: /Security/ });
@@ -72,6 +72,22 @@ describe("the list of views and categories", () => {
     expect(within(nav()).getByRole("link", { name: /Tools/ })).not.toHaveTextContent(/\d/);
     expect(within(nav()).queryByRole("link", { name: /Hidden/ })).not.toBeInTheDocument();
     expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2");
+  });
+
+  it("lists the views in order, with 最近読んだ記事 last and without a number", async () => {
+    const server = makeServer();
+    const a = server.category("Security");
+    setArticleFlags(server.db, server.article(a.id), { isRead: true }, server.clock().toISOString());
+    server.article(a.id);
+    const { user, path } = renderApp({ server });
+
+    const views = await within(nav()).findAllByRole("list");
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事"]);
+    expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
+
+    await user.click(within(nav()).getByRole("link", { name: "最近読んだ記事" }));
+    expect(path()).toBe("/recently-read");
   });
 
   it("links to the settings and the run history", async () => {

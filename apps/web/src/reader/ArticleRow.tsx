@@ -14,6 +14,7 @@ export function ArticleRow({
   sourceName,
   timeZone,
   now,
+  time = "updated",
 }: {
   article: ArticleSummary;
   to: string;
@@ -22,6 +23,8 @@ export function ArticleRow({
   sourceName: string;
   timeZone: string;
   now: Date;
+  /** Which time the row shows: when the article was last updated, or, in the recently read articles, when it was read. */
+  time?: "updated" | "read";
 }) {
   // A feed article has no importance, and so no mark.
   const marked = (article.importance ?? 0) >= 4;
@@ -47,7 +50,7 @@ export function ArticleRow({
         <span className="line-clamp-1 type-body-md text-on-surface-muted">{article.summary}</span>
         <span className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
           <span>{sourceName}</span>
-          <span className="tabular-nums">{formatShort(article.updatedAt, timeZone, now)}</span>
+          <span className="tabular-nums">{formatShort(time === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, now)}</span>
           {article.origin === "generated" ? <span>出典{article.refCount}件</span> : null}
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}

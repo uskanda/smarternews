@@ -231,7 +231,7 @@ export function createApp(deps: AppDeps): Hono {
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
   api.post("/articles/mark-read", async (c) => {
-    const ids = markArticlesRead(db, parse(markReadSchema, await jsonBody(c)));
+    const ids = markArticlesRead(db, parse(markReadSchema, await jsonBody(c)), clock().toISOString());
     return c.json({ updated: ids.length, ids });
   });
   api.post("/articles/mark-unread", async (c) =>
@@ -240,7 +240,7 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
   api.get("/articles/:id", (c) => c.json(getArticle(db, idParam(c, "article"))));
   api.patch("/articles/:id", async (c) =>
-    c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)))),
+    c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)), clock().toISOString())),
   );
   // Translates the content when it has no translation yet, so the answer can take as long as that does.
   api.post("/articles/:id/summary", (c) => {

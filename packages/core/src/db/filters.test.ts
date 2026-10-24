@@ -199,7 +199,7 @@ describe("taking filters away", () => {
     seedFeedArticle(db, feed, { title: "新製品", at: "2026-03-01T10:00:00.000Z" });
     const filter = createFilter(db, keep([title("新製品")], { type: "feed", feedId: feed }), clock);
 
-    markArticlesRead(db, { feedId: feed, before: NOW });
+    markArticlesRead(db, { feedId: feed, before: NOW }, NOW);
     const result = updateFilter(db, filter.id, { enabled: false });
 
     expect(result).toMatchObject({ enabled: false, hiddenCount: 0, restored: 1 });
@@ -278,7 +278,7 @@ describe("hidden articles and the lists", () => {
     const feed = seedFeed(db);
     const sale = seedFeedArticle(db, feed, { title: "特売" });
     createFilter(db, hide([title("特売")]), clock);
-    setArticleFlags(db, sale, { starred: true });
+    setArticleFlags(db, sale, { starred: true }, NOW);
     expect(listed(db, { feed })).toEqual(["特売"]);
   });
 });

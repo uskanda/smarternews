@@ -20,6 +20,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   updatedAt: "2026-03-01T12:00:00.000Z",
   revision: 0,
   isRead: false,
+  readAt: null,
   starred: false,
   primaryUrl: "https://example.org/a",
   refCount: 2,

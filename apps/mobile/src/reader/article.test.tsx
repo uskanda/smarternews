@@ -88,7 +88,7 @@ describe("reading an article", () => {
     const server = await makeServer();
     const category = await server.category();
     const first = await server.article(category.id, { title: "First report" });
-    await server.core("setArticleFlags", first, { isRead: true });
+    await server.core("setArticleFlags", first, { isRead: true }, "$now");
     await server.advance(7 * 24 * 60 * MINUTE);
     const later = await server.article(category.id, { title: "Follow-up" });
     await server.sql("UPDATE articles SET previous_article_id = ? WHERE id = ?", first, later);

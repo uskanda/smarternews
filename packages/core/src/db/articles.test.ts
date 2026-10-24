@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import type { ArticleListQuery } from "../api.ts";
+import { DomainError } from "../errors.ts";
 import {
   deleteUnstarredArticlesBefore,
   findEventByKey,
@@ -14,6 +15,7 @@ import {
   nextArticleToSummarize,
   openEventArticles,
   recentNewsArticles,
+  reviseArticle,
   requestAutoSummary,
   saveAutoSummary,
   setArticleFlags,
@@ -117,7 +119,7 @@ describe("duplicates across feeds", () => {
       const s = withDuplicates();
       expect(s.titles({ feed: s.b, unread: "true" })).toHaveLength(3);
       expect(s.titles({ feed: s.b })).toContain("Copy in B");
-      setArticleFlags(s.db, s.copyC, { starred: true });
+      setArticleFlags(s.db, s.copyC, { starred: true }, NOW);
       expect(s.titles({ starred: "true" })).toEqual(["Copy in C"]);
     });
 
@@ -154,7 +156,7 @@ describe("duplicates across feeds", () => {
 
     it("counts a starred duplicate among the starred", () => {
       const s = withDuplicates();
-      setArticleFlags(s.db, s.copyB, { starred: true });
+      setArticleFlags(s.db, s.copyB, { starred: true }, NOW);
       expect(getCounts(s.db, NOW).starred).toBe(1);
     });
   });
@@ -162,14 +164,14 @@ describe("duplicates across feeds", () => {
   describe("when the kept article is read", () => {
     it("marks its unread duplicates read, and the feed of a duplicate has one fewer unread", () => {
       const s = withDuplicates();
-      setArticleFlags(s.db, s.kept, { isRead: true });
+      setArticleFlags(s.db, s.kept, { isRead: true }, NOW);
       expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([true, true]);
       expect(getCounts(s.db, NOW).feeds.find((feed) => feed.feedId === s.b)!.unread).toBe(2);
     });
 
     it("marks them read with a list of another category, and returns their ids", () => {
       const s = withDuplicates();
-      const ids = markArticlesRead(s.db, { categoryId: s.x, before: "2026-03-02T00:00:00.000Z" });
+      const ids = markArticlesRead(s.db, { categoryId: s.x, before: "2026-03-02T00:00:00.000Z" }, NOW);
       expect(ids).toEqual([s.kept, s.copyB, s.copyC].sort((left, right) => left - right));
       expect(markArticlesUnread(s.db, ids)).toBe(3);
       expect([s.isRead(s.kept), s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([false, false, false]);
@@ -178,30 +180,30 @@ describe("duplicates across feeds", () => {
     it("leaves a duplicate that a filter hides unread", () => {
       const s = withDuplicates();
       s.db.prepare("UPDATE articles SET filtered = 1 WHERE id = ?").run(s.copyB);
-      setArticleFlags(s.db, s.kept, { isRead: true });
-      expect(markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" })).not.toContain(s.copyB);
+      setArticleFlags(s.db, s.kept, { isRead: true }, NOW);
+      expect(markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, NOW)).not.toContain(s.copyB);
       expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([false, true]);
     });
 
     it("leaves the duplicates read when the kept article is put back to unread", () => {
       const s = withDuplicates();
-      setArticleFlags(s.db, s.kept, { isRead: true });
-      setArticleFlags(s.db, s.kept, { isRead: false });
+      setArticleFlags(s.db, s.kept, { isRead: true }, NOW);
+      setArticleFlags(s.db, s.kept, { isRead: false }, NOW);
       expect([s.isRead(s.kept), s.isRead(s.copyB)]).toEqual([false, true]);
     });
 
     it("leaves the duplicates alone while removal is off", () => {
       const s = withDuplicates();
       updateSettings(s.db, { removeDuplicates: false });
-      setArticleFlags(s.db, s.kept, { isRead: true });
-      expect(markArticlesRead(s.db, { categoryId: s.x, before: "2026-03-02T00:00:00.000Z" })).toEqual([]);
+      setArticleFlags(s.db, s.kept, { isRead: true }, NOW);
+      expect(markArticlesRead(s.db, { categoryId: s.x, before: "2026-03-02T00:00:00.000Z" }, NOW)).toEqual([]);
       expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([false, false]);
     });
 
     it("leaves the kept article alone when a duplicate is read", () => {
       const s = withDuplicates();
-      setArticleFlags(s.db, s.copyB, { isRead: true });
-      markArticlesRead(s.db, { feedId: s.c, before: "2026-03-02T00:00:00.000Z" });
+      setArticleFlags(s.db, s.copyB, { isRead: true }, NOW);
+      markArticlesRead(s.db, { feedId: s.c, before: "2026-03-02T00:00:00.000Z" }, NOW);
       expect(s.isRead(s.kept)).toBe(false);
     });
   });
@@ -254,5 +256,197 @@ describe("duplicates across feeds", () => {
       expect(getArticle(s.db, s.ownB[0]!).otherFeeds).toEqual([]);
       expect(getArticle(s.db, s.copyB).otherFeeds).toEqual([]);
     });
+  });
+});
+
+describe("read times", () => {
+  const TEN = "2026-03-01T10:00:00.000Z";
+  const ELEVEN = "2026-03-01T11:00:00.000Z";
+  const NOON = "2026-03-01T12:00:00.000Z";
+
+  function reading() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const readAt = (id: number) => db.prepare("SELECT read_at FROM articles WHERE id = ?").get(id)!.read_at;
+    return { db, category, readAt, article: () => generated(db, category, {}, "2026-03-01T00:00:00.000Z") };
+  }
+
+  it("records when an unread article is read", () => {
+    const s = reading();
+    const id = s.article();
+    expect(s.readAt(id)).toBeNull();
+    setArticleFlags(s.db, id, { isRead: true }, TEN);
+    expect(s.readAt(id)).toBe(TEN);
+  });
+
+  it("keeps the time when an article that is read already is read again", () => {
+    const s = reading();
+    const id = s.article();
+    setArticleFlags(s.db, id, { isRead: true }, TEN);
+    setArticleFlags(s.db, id, { isRead: true }, ELEVEN);
+    setArticleFlags(s.db, id, { starred: true }, ELEVEN);
+    expect(s.readAt(id)).toBe(TEN);
+  });
+
+  it("clears the time when the article is put back to unread, and takes the new one when it is read again", () => {
+    const s = reading();
+    const id = s.article();
+    setArticleFlags(s.db, id, { isRead: true }, TEN);
+    setArticleFlags(s.db, id, { isRead: false }, ELEVEN);
+    expect(s.readAt(id)).toBeNull();
+    setArticleFlags(s.db, id, { isRead: true }, NOON);
+    expect(s.readAt(id)).toBe(NOON);
+  });
+
+  it("gives every article that mark all as read changes the same time, and leaves those read before alone", () => {
+    const s = reading();
+    const before = s.article();
+    setArticleFlags(s.db, before, { isRead: true }, TEN);
+    const ids = [s.article(), s.article(), s.article()];
+    markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN);
+    expect(ids.map(s.readAt)).toEqual([ELEVEN, ELEVEN, ELEVEN]);
+    expect(s.readAt(before)).toBe(TEN);
+  });
+
+  it("clears the times of the articles that undoing mark all as read puts back", () => {
+    const s = reading();
+    s.article();
+    s.article();
+    const ids = markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN);
+    markArticlesUnread(s.db, ids);
+    expect(ids.map(s.readAt)).toEqual([null, null]);
+  });
+
+  it("clears the time when a follow-up puts the article back to unread", () => {
+    const s = reading();
+    const id = s.article();
+    setArticleFlags(s.db, id, { isRead: true }, TEN);
+    reviseArticle(s.db, id, {
+      title: "Revised",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: ELEVEN,
+      refs: [],
+      topicIds: [],
+    });
+    expect(s.readAt(id)).toBeNull();
+  });
+
+  it("gives the duplicates read with a kept article the same time", () => {
+    const s = reading();
+    const a = seedFeed(s.db, { title: "Feed A" });
+    const b = seedFeed(s.db, { title: "Feed B" });
+    const kept = seedFeedArticle(s.db, a, { title: "Kept" });
+    const copy = seedFeedArticle(s.db, b, { title: "Copy", duplicateOf: kept });
+    setArticleFlags(s.db, kept, { isRead: true }, TEN);
+    expect(s.readAt(copy)).toBe(TEN);
+    setArticleFlags(s.db, kept, { isRead: false }, ELEVEN);
+    const other = seedFeedArticle(s.db, a, { title: "Other kept" });
+    const otherCopy = seedFeedArticle(s.db, b, { title: "Other copy", duplicateOf: other });
+    markArticlesRead(s.db, { feedId: a, before: "2026-03-02T00:00:00.000Z" }, NOON);
+    expect([s.readAt(kept), s.readAt(copy), s.readAt(other), s.readAt(otherCopy)]).toEqual([NOON, TEN, NOON, NOON]);
+  });
+});
+
+describe("the list of recently read articles", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function reading() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const article = (title: string, overrides: Partial<ArticleContent> = {}) =>
+      generated(db, category, { title, ...overrides }, "2026-02-01T00:00:00.000Z");
+    const read = (id: number, at: string) => setArticleFlags(db, id, { isRead: true }, at);
+    const titles = (query: ArticleListQuery = { recentlyRead: "true" }) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, article, read, titles };
+  }
+
+  it("lists the articles read in the last seven days, last read first", () => {
+    const s = reading();
+    s.read(s.article("A"), ago(HOUR));
+    s.read(s.article("B"), ago(48 * HOUR));
+    s.read(s.article("C"), ago(HOUR / 2));
+    s.read(s.article("Old"), ago(8 * 24 * HOUR));
+    s.article("Unread");
+    expect(s.titles()).toEqual(["C", "A", "B"]);
+  });
+
+  it("leaves out what was read before read times were kept, and what was put back to unread", () => {
+    const s = reading();
+    s.db.prepare("UPDATE articles SET is_read = 1 WHERE id = ?").run(s.article("Read long ago"));
+    const back = s.article("Back to unread");
+    s.read(back, ago(HOUR));
+    setArticleFlags(s.db, back, { isRead: false }, NOW);
+    s.read(s.article("Read"), ago(HOUR));
+    expect(s.titles()).toEqual(["Read"]);
+  });
+
+  it("includes feed articles and events that have ended, and leaves out what filters hide and hidden duplicates", () => {
+    const s = reading();
+    const feed = seedFeed(s.db, { categoryId: s.category });
+    const other = seedFeed(s.db);
+    const kept = seedFeedArticle(s.db, feed, { title: "Feed article" });
+    seedFeedArticle(s.db, other, { title: "Duplicate", duplicateOf: kept });
+    const hidden = seedFeedArticle(s.db, feed, { title: "Hidden" });
+    s.read(hidden, ago(3 * HOUR));
+    s.db.prepare("UPDATE articles SET filtered = 1 WHERE id = ?").run(hidden);
+    s.read(kept, ago(2 * HOUR));
+    s.read(
+      s.article("Ended event", { event: { key: "e", startsAt: "2026-02-01T00:00:00.000Z", endsAt: "2026-02-02T00:00:00.000Z", venue: null, fee: null, registration: "unknown" } }),
+      ago(HOUR),
+    );
+    expect(s.titles()).toEqual(["Ended event", "Feed article"]);
+  });
+
+  it("pages by read time without repeating or skipping articles read at the same time", () => {
+    const s = reading();
+    for (let index = 0; index < 120; index += 1) s.read(s.article(`#${index}`), ago(index < 60 ? HOUR : (index + 1) * 60_000));
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = listArticles(s.db, { recentlyRead: "true", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(page.items.length);
+      seen.push(...page.items.map((item) => item.title));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    const times = listArticles(s.db, { recentlyRead: "true", limit: 200 }, NOW).items.map((item) => item.readAt!);
+    expect(times).toEqual([...times].sort().reverse());
+  });
+
+  it("gives each article its read time, and none to unread articles", () => {
+    const s = reading();
+    const read = s.article("Read");
+    s.read(read, ago(HOUR));
+    const unread = s.article("Unread");
+    const items = listArticles(s.db, {}, NOW).items;
+    expect(items.find((item) => item.id === read)!.readAt).toBe(ago(HOUR));
+    expect(items.find((item) => item.id === unread)!.readAt).toBeNull();
+    expect(getArticle(s.db, read).readAt).toBe(ago(HOUR));
+  });
+
+  it("refuses to be combined with another narrowing of the list", () => {
+    const s = reading();
+    for (const query of [
+      { category: s.category },
+      { uncategorized: "true" },
+      { origin: "feed" },
+      { feed: 1 },
+      { unread: "false" },
+      { starred: "true" },
+      { kind: "news" },
+      { minImportance: 4 },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, { recentlyRead: "true", ...query }, NOW)).toThrow(DomainError);
+    }
+    expect(() => listArticles(s.db, { recentlyRead: "true", includeEnded: "false", limit: 10 }, NOW)).not.toThrow();
   });
 });

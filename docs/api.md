@@ -133,10 +133,15 @@ Query parameters of the list:
 | `starred` | `true` or `false` |
 | `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
+| `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred` or `minImportance` |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
-Unless `origin` or `feed` narrows it, a list holds generated articles and feed articles together. Articles come ordered by last update, newest first. A feed article sorts by the time its item was published. When the item has no date, or one in the future, the time it was fetched is used. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given. Each response has two fields: `items`, the articles of this page, and `nextCursor`, which is `null` on the last page.
+Unless `origin` or `feed` narrows it, a list holds generated articles and feed articles together. Articles come ordered by last update, newest first. A feed article sorts by the time its item was published. When the item has no date, or one in the future, the time it was fetched is used. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given.
+
+`recentlyRead=true` lists the articles whose `readAt` falls within the last seven days (168 hours, not calendar days), ordered by `readAt`, newest first. It includes events that have ended and ignores `includeEnded`. Articles read before the server started to record read times have no `readAt`, so they never appear here. Combined with any other narrowing, the request gets 400.
+
+Each response has two fields: `items`, the articles of this page, and `nextCursor`, which is `null` on the last page.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true&limit=20"
@@ -184,6 +189,7 @@ Fields of an article in the list:
 | `firstPublishedAt`, `updatedAt` | When the article was first written and last rewritten |
 | `revision` | How many times a follow-up rewrote it |
 | `isRead`, `starred` | The reader's marks |
+| `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
 | `event` | For events: `startsAt`, `endsAt`, `venue`, `fee`, `registration` |
 

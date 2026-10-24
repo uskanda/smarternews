@@ -1,4 +1,16 @@
-import { GENERATED_LABEL, hasReadToggle, mergeKept, parseListKey, targetFilter, targetScope, UNCATEGORIZED_LABEL, type ListTarget } from "@smarternews/client";
+import {
+  GENERATED_LABEL,
+  hasListControls,
+  hasReadToggle,
+  mergeKept,
+  parseListKey,
+  RECENTLY_READ_LABEL,
+  sortKeyFor,
+  targetFilter,
+  targetScope,
+  UNCATEGORIZED_LABEL,
+  type ListTarget,
+} from "@smarternews/client";
 import type { ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
@@ -21,6 +33,7 @@ const TITLES: Record<Exclude<View, "category" | "feed">, string> = {
   starred: "スター",
   generated: GENERATED_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
+  recentlyRead: RECENTLY_READ_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
@@ -47,8 +60,9 @@ export function useReaderList(ref: ListRef) {
   const feed: Feed | undefined = target.type === "feed" ? feeds.data?.find((entry) => entry.id === target.feedId) : undefined;
   const isEvents = target.type === "category" && !target.generatedOnly && category?.kind === "event";
   const readToggle = hasReadToggle(target) && !isEvents;
+  const listControls = hasListControls(target);
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
-  const importanceFilter = view !== "feed" && view !== "uncategorized";
+  const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const importantOnly = importanceFilter && ref.importantOnly;
   /** True when the list names a category or a feed that does not exist. */
   const missing = (target.type === "category" && categories.isSuccess && !category) || (target.type === "feed" && feeds.isSuccess && !feed);
@@ -62,6 +76,8 @@ export function useReaderList(ref: ListRef) {
     };
   }, [target, category, isEvents, readToggle, ref.includeRead, importantOnly]);
   const unreadOnly = filter.unread === "true";
+  // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
+  const recentlyRead = filter.recentlyRead === "true";
   const listKey = JSON.stringify(filter);
 
   const list = useArticleList(filter, !missing);
@@ -74,15 +90,15 @@ export function useReaderList(ref: ListRef) {
     if (newest !== "") void advanceCheckedAt(newest);
   }, [fetched]);
   const kept = session.keptFor(listKey);
-  const items = useMemo(() => mergeKept(fetched, kept), [fetched, kept]);
+  const items = useMemo(() => mergeKept(fetched, kept, sortKeyFor(target)), [fetched, kept, target]);
 
   const setRead = useCallback(
     (target: { id: number }, isRead: boolean) => {
       const summary = items.find((item) => item.id === target.id);
-      if (unreadOnly && summary) session.keep(listKey, { ...summary, isRead });
+      if ((unreadOnly || recentlyRead) && summary) session.keep(listKey, { ...summary, isRead });
       flags.mutate({ id: target.id, isRead });
     },
-    [items, unreadOnly, session, listKey, flags],
+    [items, unreadOnly, recentlyRead, session, listKey, flags],
   );
   const toggleStar = useCallback(
     (target: { id: number; starred: boolean }) => {
@@ -120,7 +136,11 @@ export function useReaderList(ref: ListRef) {
     isEvents,
     /** True when the list shows unread articles only until the reader asks for the read ones too. */
     readToggle,
+    /** False where mark all as read and the importance toggle are never offered: the recently read articles. */
+    listControls,
     importanceFilter,
+    /** Which time a row shows: when it was read in the recently read articles, else when it was last updated. */
+    rowTime: (recentlyRead ? "read" : "updated") as "read" | "updated",
     importantOnly,
     /** What a mark-all-read of this list covers. */
     scope: targetScope(target),

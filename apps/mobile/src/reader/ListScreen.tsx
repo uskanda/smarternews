@@ -24,6 +24,7 @@ function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): stri
   if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
   if (isEvents) return "これから開催されるイベントはありません。";
   if (view === "unread") return "未読の記事はありません。";
+  if (view === "recentlyRead") return "直近7日に読んだ記事はありません。";
   if (view === "starred") return "スターを付けた記事はありません。";
   if (view === "all") return "記事はまだありません。カテゴリを実行すると、ここに並びます。";
   return "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
@@ -127,7 +128,7 @@ export function ListScreen() {
     }
   }
 
-  const canMarkAll = (view === "unread" || reader.readToggle) && fetched.some((item) => !item.isRead);
+  const canMarkAll = reader.listControls && (view === "unread" || reader.readToggle) && fetched.some((item) => !item.isRead);
   const header = (
     <ScreenHeader
       title={reader.title}
@@ -152,9 +153,14 @@ export function ListScreen() {
       {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
       {list.isPending && !list.isError ? <Loading /> : null}
       {list.isSuccess && items.length === 0 ? (
-        <Txt variant="body-md" color="on-surface-muted" style={{ padding: theme.spacing.lg }}>
-          {emptyText(view, reader.hasSources, isEvents)}
-        </Txt>
+        <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm, alignItems: "flex-start" }}>
+          <Txt variant="body-md" color="on-surface-muted">
+            {emptyText(view, reader.hasSources, isEvents)}
+          </Txt>
+          {view === "recentlyRead" ? (
+            <Button label="「未読」を開く" variant="quiet" onPress={() => router.navigate({ pathname: "/list/[key]", params: { key: "unread" } })} />
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -210,6 +216,7 @@ export function ListScreen() {
               sourceName={reader.sourceName(item)}
               timeZone={timeZone}
               now={minute}
+              time={reader.rowTime}
               onOpen={open}
               onToggleRead={toggleRead}
               onLongPress={showMenu}

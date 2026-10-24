@@ -111,6 +111,17 @@ describe("the API client", () => {
     expect(Object.fromEntries(url.searchParams)).toEqual({ unread: "true", minImportance: "4", limit: "50" });
   });
 
+  it("asks for the recently read articles, and reads when each was read", async () => {
+    const { api, server, seen } = setup();
+    const id = server.article(server.category().id, { title: "Read" });
+    await api.updateArticle(id, { isRead: true });
+
+    const list = await api.articles({ recentlyRead: "true", limit: 50 });
+
+    expect(Object.fromEntries(new URL(seen.at(-1)!.url, "http://x").searchParams)).toEqual({ recentlyRead: "true", limit: "50" });
+    expect(list.items).toMatchObject([{ title: "Read", isRead: true, readAt: server.clock().toISOString() }]);
+  });
+
   it("downloads the settings file as text and uploads it back", async () => {
     const { api, server } = setup();
     server.category("Security");

@@ -48,6 +48,7 @@ describe("the drawer with subscribed feeds", () => {
       "すべて",
       "スター",
       "AI生成、未読2件",
+      "最近読んだ記事",
       "Tools、未読4件",
       "ToolsのAI生成、未読1件",
       "Blog、未読2件",
@@ -106,7 +107,7 @@ describe("the list an entry of the drawer opens", () => {
 
   it("shows only the unread articles of the feed that is chosen, under the feed's name", async () => {
     const { server, oldPost } = await seeded();
-    await server.core("setArticleFlags", oldPost, { isRead: true });
+    await server.core("setArticleFlags", oldPost, { isRead: true }, "$now");
     await renderApp({ server });
     await openDrawer();
     await press("Blog、未読1件");

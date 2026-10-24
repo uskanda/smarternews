@@ -50,7 +50,7 @@ describe("the entries of the navigation", () => {
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Blog/ });
     await waitFor(() =>
-      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
+      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
     );
   });
 
@@ -60,7 +60,7 @@ describe("the entries of the navigation", () => {
     server.article(tools.id);
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Tools/ });
-    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "Tools1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "Tools1"]));
     expect(within(nav()).queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -138,7 +138,7 @@ describe("the list an entry opens", () => {
 
   it("shows only the unread articles of the feed that is chosen", async () => {
     const { server, oldPost } = seeded();
-    setArticleFlags(server.db, oldPost, { isRead: true });
+    setArticleFlags(server.db, oldPost, { isRead: true }, server.clock().toISOString());
     const { user, path } = renderApp({ server });
     await user.click(await within(nav()).findByRole("link", { name: /Blog/ }));
     await screen.findByRole("heading", { level: 1, name: "Blog" });
@@ -318,7 +318,7 @@ describe("marking everything read", () => {
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
 
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
-    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
 
     await user.click(screen.getByRole("button", { name: "取り消す" }));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));

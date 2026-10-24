@@ -213,6 +213,8 @@ export const articleSummarySchema = z.object({
   updatedAt: z.string(),
   revision: z.number().int(),
   isRead: z.boolean(),
+  /** When the article was last marked read. Null for an unread article, and for one read before read times were kept. */
+  readAt: z.string().nullable(),
   starred: z.boolean(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
@@ -263,6 +265,11 @@ export const articleListQuerySchema = z.object({
   starred: z.enum(["true", "false"]).optional(),
   includeEnded: z.enum(["true", "false"]).optional(),
   minImportance: z.coerce.number().int().min(1).max(5).optional(),
+  /**
+   * Only the articles read in the last seven days, last read first, ended events included. Refused together
+   * with any other narrowing of the list.
+   */
+  recentlyRead: z.enum(["true"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });

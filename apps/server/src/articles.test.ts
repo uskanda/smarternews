@@ -339,3 +339,48 @@ describe("bulk read state", () => {
     expect((await s.post("/api/v1/articles/mark-unread", { ids: "all" })).status).toBe(400);
   });
 });
+
+describe("read times and the recently read articles", () => {
+  type Item = { id: number; readAt: string | null };
+  const ids = (body: { items: Item[] }) => body.items.map((item) => item.id);
+
+  it("records the server's time when an article is read, and keeps it when it is read again", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    const readAt = s.clock().toISOString();
+
+    expect((await (await s.patch(`/api/v1/articles/${id}`, { isRead: true })).json()).readAt).toBe(readAt);
+    s.clock.advance(MINUTE);
+    await s.patch(`/api/v1/articles/${id}`, { isRead: true });
+
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).readAt).toBe(readAt);
+    expect((await (await s.patch(`/api/v1/articles/${id}`, { isRead: false })).json()).readAt).toBeNull();
+  });
+
+  it("lists what was read one by one and by mark all as read, last read first, and drops what undoing puts back", async () => {
+    const s = testServer();
+    const category = s.category();
+    const opened = s.article(category.id);
+    const marked = [s.article(category.id), s.article(category.id)];
+    await s.patch(`/api/v1/articles/${opened}`, { isRead: true });
+    s.clock.advance(MINUTE);
+    const markedAt = s.clock().toISOString();
+    await s.post("/api/v1/articles/mark-read", { categoryId: category.id, before: markedAt });
+
+    const body = await (await s.get("/api/v1/articles?recentlyRead=true")).json();
+    expect(ids(body)).toEqual([...marked].reverse().concat(opened));
+    expect(body.items.slice(0, 2).map((item: Item) => item.readAt)).toEqual([markedAt, markedAt]);
+
+    await s.post("/api/v1/articles/mark-unread", { ids: marked });
+    expect(ids(await (await s.get("/api/v1/articles?recentlyRead=true")).json())).toEqual([opened]);
+    s.clock.advance(8 * DAY);
+    expect(ids(await (await s.get("/api/v1/articles?recentlyRead=true")).json())).toEqual([]);
+  });
+
+  it("refuses the recently read articles together with another narrowing", async () => {
+    const s = testServer();
+    const response = await s.get(`/api/v1/articles?recentlyRead=true&category=${s.category().id}`);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields[0].path).toBe("category");
+  });
+});

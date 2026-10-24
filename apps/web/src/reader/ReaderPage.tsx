@@ -11,10 +11,13 @@ import { useLayout } from "../lib/layout.ts";
 import {
   buildNav,
   GENERATED_LABEL,
+  hasListControls,
   hasReadToggle,
   listKey as keyOf,
   mergeKept,
   nextTarget,
+  RECENTLY_READ_LABEL,
+  sortKeyFor,
   targetFilter,
   targetScope,
   UNCATEGORIZED_LABEL,
@@ -29,7 +32,16 @@ import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 
-export type View = "unread" | "all" | "starred" | "generated" | "uncategorized" | "category" | "category-generated" | "feed";
+export type View =
+  | "unread"
+  | "all"
+  | "starred"
+  | "generated"
+  | "uncategorized"
+  | "recentlyRead"
+  | "category"
+  | "category-generated"
+  | "feed";
 
 const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed">, string> = {
   unread: "未読",
@@ -37,6 +49,7 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed">, 
   starred: "スター",
   generated: GENERATED_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
+  recentlyRead: RECENTLY_READ_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
@@ -48,6 +61,16 @@ function EmptyList({ view, hasSources }: { view: View; hasSources: boolean }) {
         <p>カテゴリがまだありません。</p>
         <Link to="/settings" className={link}>
           設定でカテゴリを追加する
+        </Link>
+      </div>
+    );
+  }
+  if (view === "recentlyRead") {
+    return (
+      <div className="flex flex-col items-start gap-sm p-lg type-body-md">
+        <p>直近7日に読んだ記事はありません。</p>
+        <Link to="/unread" className={link}>
+          「未読」を開く
         </Link>
       </div>
     );
@@ -98,8 +121,9 @@ export function ReaderPage({ view }: { view: View }) {
   }, [view, inCategory, category, feed]);
   const isEvents = view === "category" && category?.kind === "event";
   const readToggle = target !== null && hasReadToggle(target) && !isEvents;
+  const listControls = target === null || hasListControls(target);
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
-  const importanceFilter = view !== "feed" && view !== "uncategorized";
+  const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
   const includeRead = search.get("read") === "1";
   const importantOnly = importanceFilter && search.get("min") === "4";
@@ -114,6 +138,8 @@ export function ReaderPage({ view }: { view: View }) {
     };
   }, [target, category, isEvents, readToggle, includeRead, importantOnly]);
   const unreadOnly = filter.unread === "true";
+  // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
+  const recentlyRead = filter.recentlyRead === "true";
   const list = useArticleList(filter, target !== null);
   const fetched = useMemo(() => list.data?.pages.flatMap((page) => page.items) ?? EMPTY, [list.data]);
 
@@ -121,7 +147,8 @@ export function ReaderPage({ view }: { view: View }) {
   const listKey = JSON.stringify(filter);
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
-  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : []), [fetched, kept, listKey]);
+  const sortKey = target ? sortKeyFor(target) : undefined;
+  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey), [fetched, kept, listKey, sortKey]);
 
   const basePath = (target && listPathOf(target, () => category?.slug)) ?? `/${view}`;
   const query = search.toString() ? `?${search.toString()}` : "";
@@ -134,7 +161,7 @@ export function ReaderPage({ view }: { view: View }) {
 
   function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
     const summary = items.find((item) => item.id === target.id);
-    if (unreadOnly && summary) {
+    if ((unreadOnly || recentlyRead) && summary) {
       setKept((current) => ({
         key: listKey,
         items: [...current.items.filter((item) => item.id !== target.id), { ...summary, isRead }],
@@ -272,7 +299,7 @@ export function ReaderPage({ view }: { view: View }) {
         : view === "feed"
           ? (feed?.title ?? "")
           : TITLES[view];
-  const canMarkAll = (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
+  const canMarkAll = listControls && (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
 
   const listPane = isEvents ? (
     <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
@@ -313,6 +340,7 @@ export function ReaderPage({ view }: { view: View }) {
               sourceName={sourceName(item)}
               timeZone={timeZone}
               now={now()}
+              time={recentlyRead ? "read" : "updated"}
             />
           ))}
         </ul>

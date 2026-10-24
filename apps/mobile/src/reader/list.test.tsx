@@ -23,7 +23,7 @@ describe("the list that opens first", () => {
     const b = await server.category("B");
     await articles(server, a.id, [{ title: "Oldest" }, { title: "Middle" }]);
     await articles(server, b.id, [{ title: "Newest" }]);
-    for (let index = 0; index < 20; index += 1) await server.core("setArticleFlags", await server.article(a.id), { isRead: true });
+    for (let index = 0; index < 20; index += 1) await server.core("setArticleFlags", await server.article(a.id), { isRead: true }, "$now");
     await renderApp({ server });
 
     await waitFor(() => expect(rowTitles()).toEqual(["Newest", "Middle", "Oldest"]));
@@ -32,7 +32,7 @@ describe("the list that opens first", () => {
 
   it("says that nothing is unread", async () => {
     const server = await makeServer();
-    await server.core("setArticleFlags", await server.article((await server.category()).id, { title: "Read already" }), { isRead: true });
+    await server.core("setArticleFlags", await server.article((await server.category()).id, { title: "Read already" }), { isRead: true }, "$now");
     await renderApp({ server });
 
     expect(await screen.findByText("未読の記事はありません。")).toBeOnTheScreen();
@@ -47,8 +47,8 @@ describe("choosing a view", () => {
     const b = await server.category("Category B");
     const [aUnread, aRead, aStarred] = await articles(server, a.id, [{ title: "A unread" }, { title: "A read" }, { title: "A starred" }]);
     await articles(server, b.id, [{ title: "B unread" }]);
-    await server.core("setArticleFlags", aRead, { isRead: true });
-    await server.core("setArticleFlags", aStarred, { isRead: true, starred: true });
+    await server.core("setArticleFlags", aRead, { isRead: true }, "$now");
+    await server.core("setArticleFlags", aStarred, { isRead: true, starred: true }, "$now");
     return { server, aUnread };
   }
 
@@ -71,7 +71,7 @@ describe("choosing a view", () => {
 
   it("shows starred articles whether read or not", async () => {
     const { server, aUnread } = await setup();
-    await server.core("setArticleFlags", aUnread, { starred: true });
+    await server.core("setArticleFlags", aUnread, { starred: true }, "$now");
     await renderApp({ server, url: "/list/starred" });
 
     await waitFor(() => expect(rowTitles()).toEqual(["A starred", "A unread"]));
@@ -106,7 +106,7 @@ describe("a row of the list", () => {
     const server = await makeServer();
     const category = await server.category();
     const [read] = await articles(server, category.id, [{ title: "Read one" }, { title: "Unread one" }]);
-    await server.core("setArticleFlags", read, { isRead: true });
+    await server.core("setArticleFlags", read, { isRead: true }, "$now");
     await renderApp({ server, url: "/list/all" });
 
     const unreadStyle = flat((await screen.findByText("Unread one")).props.style);
@@ -120,7 +120,7 @@ describe("a row of the list", () => {
   it("keeps a headline at the same height when it is read, so that the rows below do not move", async () => {
     const server = await makeServer();
     const [read] = await articles(server, (await server.category()).id, [{ title: "Read one" }, { title: "Unread one" }]);
-    await server.core("setArticleFlags", read, { isRead: true });
+    await server.core("setArticleFlags", read, { isRead: true }, "$now");
     await renderApp({ server, url: "/list/all" });
 
     const unreadStyle = flat((await screen.findByText("Unread one")).props.style);
@@ -132,7 +132,7 @@ describe("a row of the list", () => {
   it("keeps the full text colour on a read headline that carries the importance-five mark", async () => {
     const server = await makeServer();
     const id = await server.article((await server.category()).id, { title: "Urgent and read", importance: 5 });
-    await server.core("setArticleFlags", id, { isRead: true });
+    await server.core("setArticleFlags", id, { isRead: true }, "$now");
     await renderApp({ server, url: "/list/all" });
 
     const style = flat((await screen.findByText("Urgent and read")).props.style);
@@ -213,4 +213,76 @@ describe("narrowing and paging", () => {
     const ids = listData().map((item) => item.id);
     expect(new Set(ids).size).toBe(120);
   }, 60_000);
+});
+
+describe("the recently read articles", () => {
+  /** Article A is opened at 09:00; at 10:00 mark all as read in Tools reads its three articles. */
+  async function readMistakenly() {
+    const server = await makeServer("2026-03-02T08:00:00.000Z");
+    const security = await server.category("Security");
+    const tools = await server.category("Tools");
+    const a = await server.article(security.id, { title: "Article A" });
+    const ids = await articles(server, tools.id, [{ title: "Tools 1" }, { title: "Tools 2" }, { title: "Tools 3" }]);
+    await server.advance(57 * MINUTE);
+    await server.core("setArticleFlags", a, { isRead: true }, "$now");
+    await server.advance(60 * MINUTE);
+    await server.core("markArticlesRead", { categoryId: tools.id, before: server.now().toISOString() }, "$now");
+    return { server, a, ids };
+  }
+
+  it("lists what mark all as read read before the article opened earlier, and nothing read eight days ago", async () => {
+    const { server } = await readMistakenly();
+    await server.core("setArticleFlags", await server.article((await server.category("Old")).id, { title: "Read long ago" }), { isRead: true }, "2026-02-22T10:00:00.000Z");
+    await renderApp({ server });
+    await screen.findByRole("header", { name: "未読" });
+
+    await userEvent.setup().press(await screen.findByRole("button", { name: "項目を開く" }));
+    await userEvent.setup().press(await screen.findByRole("button", { name: "最近読んだ記事" }));
+
+    expect(await screen.findByRole("header", { name: "最近読んだ記事" })).toBeOnTheScreen();
+    await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 2", "Tools 1", "Article A"]));
+  });
+
+  it("offers neither mark all as read, nor the read toggle, nor the importance toggle", async () => {
+    const { server } = await readMistakenly();
+    await renderApp({ server, url: "/list/recently-read" });
+    await screen.findByText("Article A");
+
+    expect(screen.queryByRole("button", { name: "すべて既読にする" })).toBeNull();
+    expect(screen.queryByText("既読も表示")).toBeNull();
+    expect(screen.queryByText("重要度4以上だけ")).toBeNull();
+  });
+
+  it("says that nothing was read in the last seven days and opens the unread list", async () => {
+    const server = await makeServer();
+    await server.article((await server.category()).id, { title: "Still unread" });
+    await renderApp({ server, url: "/list/recently-read" });
+
+    expect(await screen.findByText("直近7日に読んだ記事はありません。")).toBeOnTheScreen();
+    await userEvent.setup().press(screen.getByRole("button", { name: "「未読」を開く" }));
+    expect(await screen.findByRole("header", { name: "未読" })).toBeOnTheScreen();
+    expect(await screen.findByText("Still unread")).toBeOnTheScreen();
+  });
+
+  it("shows on each row when it was read, for a generated and a feed article alike, and the update time elsewhere", async () => {
+    const server = await makeServer("2026-03-01T18:00:00.000Z");
+    const category = await server.category("Security");
+    const generated = await server.article(category.id, { title: "Generated story" });
+    const blog = await server.feed("Blog", category.id);
+    const post = await server.feedArticle(blog.id, { title: "Feed post", at: "2026-03-01T18:00:00.000Z" });
+    await server.advance(15 * 60 * MINUTE);
+    await server.core("setArticleFlags", generated, { isRead: true }, "$now");
+    await server.advance(15 * MINUTE);
+    await server.core("setArticleFlags", post, { isRead: true }, "$now");
+    await renderApp({ server, url: "/list/recently-read" });
+
+    await screen.findByText("Feed post");
+    expect(row(/Generated story/).props.accessibilityLabel).toContain("。09:00。");
+    expect(row(/Feed post/).props.accessibilityLabel).toContain("。09:15。");
+
+    await userEvent.setup().press(screen.getByRole("button", { name: "項目を開く" }));
+    await userEvent.setup().press(await screen.findByRole("button", { name: "すべて" }));
+    await screen.findByRole("header", { name: "すべて" });
+    await waitFor(() => expect(row(/Generated story/).props.accessibilityLabel).toContain("。昨日。"));
+  });
 });

@@ -25,6 +25,8 @@ export interface ArticleRowProps {
   timeZone: string;
   /** The current time in milliseconds, the same for every row of one drawing of the list. */
   now: number;
+  /** Which time the row shows: when the article was last updated, or, in the recently read articles, when it was read. */
+  time?: "updated" | "read";
   onOpen: (article: ArticleSummary) => void;
   onToggleRead: (article: ArticleSummary) => void;
   onLongPress: (article: ArticleSummary) => void;
@@ -36,13 +38,13 @@ export interface ArticleRowProps {
  *
  * Drawn again only when its own article changes: a list redraws for many reasons, and a row holds a gesture.
  */
-export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZone, now, onOpen, onToggleRead, onLongPress }: ArticleRowProps) {
+export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZone, now, time: shownTime = "updated", onOpen, onToggleRead, onLongPress }: ArticleRowProps) {
   const theme = useTheme();
   const swipeable = useRef<SwipeableMethods>(null);
   // A feed article has no importance, and so no mark; it has its page instead of counted sources.
   const marked = (article.importance ?? 0) >= 4;
   const generated = article.origin === "generated";
-  const time = formatShort(article.updatedAt, timeZone, new Date(now));
+  const time = formatShort(shownTime === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, new Date(now));
   const spoken = [
     marked ? `重要度${article.importance}` : null,
     article.translatedTitle ?? article.title,

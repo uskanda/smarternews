@@ -116,7 +116,7 @@ describe("summarizeNext", () => {
 
   it("does nothing when no article waits", async () => {
     const s = setup({});
-    setArticleFlags(s.db, s.article(), { isRead: true });
+    setArticleFlags(s.db, s.article(), { isRead: true }, "2026-03-01T12:00:00.000Z");
     expect(await summarizeNext(s.deps, s.pages)).toBe("none");
     expect(s.urls()).toEqual([]);
     expect(s.prompts()).toEqual([]);

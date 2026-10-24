@@ -159,7 +159,7 @@ describe("fetchFeed", () => {
   it("adds only the items it has not stored, as unread articles", async () => {
     const s = setup([{ title: "A" }, { title: "B" }, { title: "C" }]);
     const feed = await subscribe(s.deps, { url: FEED_URL });
-    for (const article of s.list()) setArticleFlags(s.db, article.id, { isRead: true });
+    for (const article of s.list()) setArticleFlags(s.db, article.id, { isRead: true }, "2026-03-01T12:00:00.000Z");
     s.clock.advance(HOUR);
     s.serve([{ title: "E", published: s.clock().toISOString() }, { title: "D", published: s.clock().toISOString() }, { title: "A" }, { title: "B" }, { title: "C" }]);
 
@@ -190,7 +190,7 @@ describe("fetchFeed", () => {
     const s = setup([{ title: "A", key: "a", content: "<p>First words.</p>" }]);
     const feed = await subscribe(s.deps, { url: FEED_URL });
     const [before] = s.list();
-    setArticleFlags(s.db, before!.id, { isRead: true });
+    setArticleFlags(s.db, before!.id, { isRead: true }, "2026-03-01T12:00:00.000Z");
     s.clock.advance(HOUR);
     s.serve([{ title: "A (corrected)", key: "a", content: "<p>Better words.</p>", published: s.clock().toISOString() }]);
 
@@ -350,7 +350,7 @@ describe("items whose article was purged", () => {
   it("keeps a starred article past the retention period", async () => {
     const s = setup([{ title: "Keep", key: "k" }]);
     const feed = await subscribe(s.deps, { url: FEED_URL });
-    setArticleFlags(s.db, s.list()[0]!.id, { starred: true });
+    setArticleFlags(s.db, s.list()[0]!.id, { starred: true }, "2026-03-01T12:00:00.000Z");
     s.clock.advance(365 * DAY);
     purgeExpired(s.db, s.clock);
     expect(getFeed(s.db, feed.id)).toMatchObject({ articleCount: 1, starredCount: 1 });

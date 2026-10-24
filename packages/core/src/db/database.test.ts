@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -564,5 +564,32 @@ describe("removing the article that duplicates were recorded against", () => {
     const db = withDuplicates();
     db.prepare("DELETE FROM articles").run();
     expect(duplicates(db)).toEqual([]);
+  });
+});
+
+describe("the migration to read times", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the articles read before it without a read time", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "011")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, is_read)
+       VALUES (?, 'feed', 5, ?, 'news', 't', 's', 'b', ?, ?, ?, ?)`,
+    );
+    insert.run(1, "k1", now, now, now, 1);
+    insert.run(2, "k2", now, now, now, 0);
+
+    copyFileSync(join(SHIPPED, "011_read_at.sql"), join(dir, "011_read_at.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, is_read, read_at FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, is_read: 1, read_at: null },
+      { id: 2, is_read: 0, read_at: null },
+    ]);
   });
 });
