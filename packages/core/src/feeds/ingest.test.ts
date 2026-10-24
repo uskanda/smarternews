@@ -3,7 +3,7 @@ import { getArticle, listArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
-import { createStopWord } from "../db/stop-words.ts";
+import { createFilter } from "../db/filters.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { purgeExpired } from "../runs/retention.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
@@ -228,10 +228,12 @@ describe("fetchFeed", () => {
     expect(s.list({ limit: 1 })[0]!.title).toBe("Post 0");
   });
 
-  it("hides a new article that contains a stop word, and still stores it", async () => {
+  const hideTitle = (value: string) => ({ action: "hide" as const, scope: { type: "all" as const }, conditions: [{ fields: ["title" as const], match: "contains" as const, value }] });
+
+  it("hides a new article that a filter matches, and still stores it", async () => {
     const s = setup([{ title: "One" }]);
     const feed = await subscribe(s.deps, { url: FEED_URL });
-    createStopWord(s.db, { text: "特売" }, s.clock);
+    createFilter(s.db, hideTitle("特売"), s.clock);
     s.serve([{ title: "春の特売", key: "sale" }, { title: "One" }]);
 
     await fetchFeed(s.deps, feed.id);
@@ -243,10 +245,37 @@ describe("fetchFeed", () => {
   it("judges an article again when its title is rewritten", async () => {
     const s = setup([{ title: "新製品", key: "a" }]);
     const feed = await subscribe(s.deps, { url: FEED_URL });
-    createStopWord(s.db, { text: "特売" }, s.clock);
+    createFilter(s.db, hideTitle("特売"), s.clock);
     s.serve([{ title: "新製品の特売", key: "a" }]);
     await fetchFeed(s.deps, feed.id);
     expect(s.list()).toEqual([]);
+  });
+
+  it("matches the author and the page of a new article", async () => {
+    const s = setup([{ title: "One" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["url"], match: "contains", value: "/sponsored/" }] }, s.clock);
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["author"], match: "regex", value: "^広報" }] }, s.clock);
+    s.serve([
+      { title: "Paid", key: "p", link: "https://example.org/sponsored/1" },
+      { title: "Press", key: "q", author: "広報部" },
+      { title: "One" },
+    ]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(s.list().map((article) => article.title)).toEqual(["One"]);
+  });
+
+  it("matches a keep filter of the feed against what it delivers next", async () => {
+    const s = setup([{ title: "One" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    createFilter(s.db, { action: "keep", scope: { type: "feed", feedId: feed.id }, conditions: [{ fields: ["title"], match: "contains", value: "release" }] }, s.clock);
+    s.serve([{ title: "Release 2.0", key: "r" }, { title: "Weekly notes", key: "w" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(s.list().map((article) => article.title)).toEqual(["Release 2.0"]);
   });
 });
 
@@ -386,6 +415,18 @@ describe("translating titles when a feed is fetched", () => {
       expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: null, failureCount: 0 });
       expect(s.llmCalls()).toBe(0);
     }
+  });
+
+  it("matches filters against the original title only, and calls no model for them", async () => {
+    const s = translating();
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "訳" }] }, s.clock);
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title"], match: "regex", value: "^sponsored" }] }, s.clock);
+    s.serve([{ title: "Vendor ships a fix", key: "a" }, { title: "Sponsored: buy now", key: "b" }]);
+
+    await subscribe(s.deps, { url: FEED_URL, translate: true });
+
+    expect(s.list()).toMatchObject([{ title: "Vendor ships a fix", translatedTitle: "訳:Vendor ships a fix" }]);
+    expect(s.llmCalls()).toBe(0);
   });
 
   it("sends nothing for a feed that does not translate", async () => {

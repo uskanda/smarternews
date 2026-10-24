@@ -8,11 +8,11 @@ import {
   createTopic,
   deleteCategory,
   deleteFeed,
-  deleteStopWord,
+  deleteFilter,
   deleteTopic,
   discoverFeeds,
   DomainError,
-  createStopWord,
+  createFilter,
   exportOpml,
   exportSettings,
   feedCreateSchema,
@@ -33,7 +33,8 @@ import {
   listFeedArticles,
   listFeeds,
   listRunCandidates,
-  listStopWords,
+  listFilters,
+  listFilterArticles,
   listRuns,
   listTopics,
   markArticlesRead,
@@ -50,15 +51,18 @@ import {
   requestInterpretation,
   setArticleFlags,
   settingsUpdateSchema,
-  stopWordCreateSchema,
-  stopWordUpdateSchema,
+  filterArticlesQuerySchema,
+  filterCreateSchema,
+  filterPreviewSchema,
+  filterUpdateSchema,
+  previewFilter,
   subscribe,
   topicCreateSchema,
   topicUpdateSchema,
   updateCategory,
   updateFeed,
   updateSettings,
-  updateStopWord,
+  updateFilter,
   updateTopic,
   zodFieldErrors,
   type ApiError,
@@ -276,13 +280,16 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(result);
   });
 
-  // stop words
-  api.get("/stop-words", (c) => c.json(listStopWords(db)));
-  api.post("/stop-words", async (c) => c.json(createStopWord(db, parse(stopWordCreateSchema, await jsonBody(c)), clock), 201));
-  api.patch("/stop-words/:id", async (c) =>
-    c.json(updateStopWord(db, idParam(c, "stop word"), parse(stopWordUpdateSchema, await jsonBody(c)))),
+  // filters
+  api.get("/filters", (c) => c.json(listFilters(db)));
+  api.post("/filters", async (c) => c.json(createFilter(db, parse(filterCreateSchema, await jsonBody(c)), clock), 201));
+  // Matches against the stored articles without saving anything. Before `/filters/:id`, which it is not.
+  api.post("/filters/preview", async (c) => c.json(previewFilter(db, parse(filterPreviewSchema, await jsonBody(c)))));
+  api.patch("/filters/:id", async (c) => c.json(updateFilter(db, idParam(c, "filter"), parse(filterUpdateSchema, await jsonBody(c)))));
+  api.delete("/filters/:id", (c) => c.json(deleteFilter(db, idParam(c, "filter"))));
+  api.get("/filters/:id/articles", (c) =>
+    c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
   );
-  api.delete("/stop-words/:id", (c) => c.json(deleteStopWord(db, idParam(c, "stop word"))));
 
   // runs
   api.post("/categories/:id/runs", (c) => c.json(queue.enqueue(idParam(c, "category"), "manual", null), 202));

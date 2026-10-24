@@ -1,4 +1,4 @@
-import { createStopWord, getFeed, getSettings, insertFeed, listFeeds, listStopWords, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
+import { getFeed, getSettings, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -20,15 +20,16 @@ function feedOf(server: TestServer, title: string, categoryId: number | null = n
 const rowOf = async (name: string) => (await within(await section("購読フィードの一覧")).findByText(name)).closest("li")!;
 
 describe("the way to the pages", () => {
-  it("leads from the settings to the feeds and the stop words", async () => {
+  it("leads from the settings to the feeds and the filters", async () => {
     const { user, path } = renderApp({ route: "/settings" });
     await user.click(await screen.findByRole("link", { name: "購読フィードを設定する" }));
     expect(await screen.findByRole("heading", { level: 1, name: "購読フィード" })).toBeInTheDocument();
     expect(path()).toBe("/settings/feeds");
 
     await user.click(screen.getByRole("link", { name: "設定へ戻る" }));
-    await user.click(await screen.findByRole("link", { name: "ストップワードを設定する" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "ストップワード" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("link", { name: "フィルターを設定する" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "フィルター" })).toBeInTheDocument();
+    expect(path()).toBe("/settings/filters");
   });
 });
 
@@ -405,82 +406,6 @@ describe("OPML", () => {
 
     await waitFor(() => expect(blobs).toHaveLength(1));
     expect(await blobs[0]!.text()).toContain('xmlUrl="https://blog.example.org/feed.xml"');
-  });
-});
-
-describe("stop words", () => {
-  function withArticles() {
-    const server = makeServer();
-    const feed = feedOf(server, "Shop");
-    for (const title of ["春の特売", "夏の特売", "特売の予告", "新製品"]) seedFeedArticle(server.db, feed.id, { title });
-    return server;
-  }
-  const wordRow = async (text: string) => (await within(await section("ストップワードの一覧")).findByText(text)).closest("li")!;
-
-  it("explains, beside the form, what is hidden and what never is", async () => {
-    renderApp({ route: "/settings/stop-words" });
-    const form = await section("ストップワードの追加");
-    expect(form).toHaveTextContent("配信記事だけを隠します");
-    expect(form).toHaveTextContent("スターのある記事は隠しません");
-  });
-
-  it("adds a word and says how many stored articles it hides", async () => {
-    const server = withArticles();
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-
-    const form = await section("ストップワードの追加");
-    await user.type(within(form).getByLabelText("隠す語"), "特売");
-    await user.click(within(form).getByRole("button", { name: "ストップワードを追加" }));
-
-    expect(await screen.findByText("「特売」を追加しました。3件を隠しています。")).toBeInTheDocument();
-    const row = await wordRow("特売");
-    expect(row).toHaveTextContent("3件を隠しています");
-    expect(row).toHaveTextContent("タイトルだけ");
-    expect(listStopWords(server.db)).toMatchObject([{ text: "特売", scope: "title" }]);
-    expect(within(form).getByLabelText("隠す語")).toHaveValue("");
-  });
-
-  it("adds a word that covers the content too", async () => {
-    const server = withArticles();
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-    const form = await section("ストップワードの追加");
-    await user.type(within(form).getByLabelText("隠す語"), "提供");
-    await user.click(within(form).getByRole("radio", { name: "タイトルと内容" }));
-    await user.click(within(form).getByRole("button", { name: "ストップワードを追加" }));
-    await waitFor(() => expect(listStopWords(server.db)).toMatchObject([{ text: "提供", scope: "title_and_content" }]));
-  });
-
-  it("lists every word with what it covers and how many articles it hides", async () => {
-    const server = withArticles();
-    createStopWord(server.db, { text: "特売" }, server.clock);
-    createStopWord(server.db, { text: "広告", scope: "title_and_content" }, server.clock);
-    renderApp({ server, route: "/settings/stop-words" });
-    expect(await wordRow("特売")).toHaveTextContent("3件を隠しています");
-    const second = await wordRow("広告");
-    expect(second).toHaveTextContent("タイトルと内容");
-    expect(second).toHaveTextContent("隠している記事はありません");
-  });
-
-  it("says that the word is already there", async () => {
-    const server = withArticles();
-    createStopWord(server.db, { text: "特売" }, server.clock);
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-    const form = await section("ストップワードの追加");
-    await user.type(within(form).getByLabelText("隠す語"), "特売");
-    await user.click(within(form).getByRole("button", { name: "ストップワードを追加" }));
-    expect(await within(form).findByText("この語はすでに登録しています。")).toBeInTheDocument();
-  });
-
-  it("removes a word and says how many articles came back", async () => {
-    const server = withArticles();
-    createStopWord(server.db, { text: "特売" }, server.clock);
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-
-    await user.click(within(await wordRow("特売")).getByRole("button", { name: "特売を削除" }));
-
-    expect(await screen.findByText("「特売」を削除しました。3件が一覧に戻りました。")).toBeInTheDocument();
-    expect(listStopWords(server.db)).toEqual([]);
-    expect(await within(await section("ストップワードの一覧")).findByText("ストップワードはまだありません。")).toBeInTheDocument();
   });
 });
 

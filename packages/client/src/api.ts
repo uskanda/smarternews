@@ -17,8 +17,10 @@ import {
   providerStatusSchema,
   runSchema,
   settingsSchema,
-  stopWordDeleteResultSchema,
-  stopWordSchema,
+  filterDeleteResultSchema,
+  filterPreviewResultSchema,
+  filterSchema,
+  filterUpdateResultSchema,
   topicSchema,
   translationStatusSchema,
   type Article,
@@ -46,10 +48,14 @@ import {
   type Run,
   type Settings,
   type SettingsUpdate,
-  type StopWord,
-  type StopWordCreate,
-  type StopWordDeleteResult,
-  type StopWordUpdate,
+  type Filter,
+  type FilterArticlesQuery,
+  type FilterCreate,
+  type FilterDeleteResult,
+  type FilterPreview,
+  type FilterPreviewResult,
+  type FilterUpdate,
+  type FilterUpdateResult,
   type Topic,
   type TopicCreate,
   type TopicUpdate,
@@ -214,10 +220,16 @@ export function createApi(options: ApiOptions) {
     importOpml: (text: string): Promise<OpmlImportResult> =>
       json(opmlImportResultSchema, "/feeds/opml", { method: "POST", headers: { "content-type": "text/x-opml" }, body: text }),
 
-    stopWords: (): Promise<StopWord[]> => json(z.array(stopWordSchema), "/stop-words"),
-    createStopWord: (input: StopWordCreate): Promise<StopWord> => json(stopWordSchema, "/stop-words", body("POST", input)),
-    updateStopWord: (id: number, patch: StopWordUpdate): Promise<StopWord> => json(stopWordSchema, `/stop-words/${id}`, body("PATCH", patch)),
-    deleteStopWord: (id: number): Promise<StopWordDeleteResult> => json(stopWordDeleteResultSchema, `/stop-words/${id}`, { method: "DELETE" }),
+    filters: (): Promise<Filter[]> => json(z.array(filterSchema), "/filters"),
+    createFilter: (input: FilterCreate): Promise<Filter> => json(filterSchema, "/filters", body("POST", input)),
+    /** Changes a filter or switches it. Says how many articles came back to the lists. */
+    updateFilter: (id: number, patch: FilterUpdate): Promise<FilterUpdateResult> => json(filterUpdateResultSchema, `/filters/${id}`, body("PATCH", patch)),
+    deleteFilter: (id: number): Promise<FilterDeleteResult> => json(filterDeleteResultSchema, `/filters/${id}`, { method: "DELETE" }),
+    /** The feed articles a filter hides, newest first, a page at a time. */
+    filterArticles: (id: number, page: FilterArticlesQuery = {}): Promise<ArticleList> =>
+      json(articleListSchema, `/filters/${id}/articles${query(page)}`),
+    /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
+    previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
 
     runCategory: (categoryId: number): Promise<Run> => json(runSchema, `/categories/${categoryId}/runs`, { method: "POST" }),
     runs: (filter: { category?: number; limit?: number } = {}): Promise<Run[]> => json(z.array(runSchema), `/runs${query(filter)}`),

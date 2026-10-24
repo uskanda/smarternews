@@ -37,12 +37,12 @@ const STAGE_LABEL: Record<string, string> = {
 
 /**
  * What a refused change ran into, in the app's language. The server says it in English; the kinds it
- * produces for feeds and stop words are known, and anything else is shown as the server said it.
+ * produces for feeds and filters are known, and anything else is shown as the server said it.
  */
 export function conflictLabel(message: string): string {
   const subscribed = /already subscribed: (\S+)/.exec(message)?.[1];
   if (subscribed) return `このフィードはすでに購読しています（${subscribed}）。`;
-  if (/stop word .* is already registered/.test(message)) return "この語はすでに登録しています。";
+  if (/the same filter is already registered/.test(message)) return "同じフィルターがすでにあります。";
   return `ほかの内容とぶつかるため、実行できませんでした（${message}）。`;
 }
 

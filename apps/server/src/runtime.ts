@@ -12,6 +12,7 @@ import {
   LlmTranslator,
   migrate,
   openDatabase,
+  buildPendingFilterMatches,
   parseConfig,
   recoverInterruptedRuns,
   resolveAssignment,
@@ -72,6 +73,8 @@ export function createRuntime(options: { env: Record<string, string | undefined>
   mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 });
   const db = openDatabase(paths.dbFile);
   migrate(db);
+  // Once, after the migration from stop words: what they hid is matched again as filters.
+  buildPendingFilterMatches(db);
 
   const version = productVersion();
   const runner = new TaskRunner({

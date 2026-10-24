@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrate, openDatabase, transaction } from "./database.ts";
+import { buildPendingFilterMatches, listFilters } from "./filters.ts";
 
 function tableNames(db: ReturnType<typeof openDatabase>): string[] {
   return db
@@ -388,5 +389,92 @@ describe("the migration that switches moving on after marking all as read on", (
     migrate(db, dir);
 
     expect(db.prepare("SELECT advance_after_mark_all FROM settings").get()).toEqual({ advance_after_mark_all: 1 });
+  });
+});
+
+describe("the migration from stop words to filters", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+  const BEFORE = [
+    "001_init.sql",
+    "002_feeds.sql",
+    "003_order.sql",
+    "004_auto_summary.sql",
+    "005_translation.sql",
+    "006_run_retries.sql",
+    "007_summary_requests.sql",
+    "008_advance_by_default.sql",
+  ];
+
+  function withStopWords() {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of BEFORE) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO stop_words (id, text, normalized, scope, created_at) VALUES (1, '特売', '特売', 'title', ?)").run("2025-12-01T00:00:00.000Z");
+    db.prepare("INSERT INTO stop_words (id, text, normalized, scope, created_at) VALUES (2, 'ＰＲ', 'pr', 'title_and_content', ?)").run("2025-12-02T00:00:00.000Z");
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, content_text, first_published_at, updated_at, created_at, stop_word_id, is_read, starred, auto_summary, translated_title)
+       VALUES (?, 'feed', 5, ?, 'news', ?, 's', 'b', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(1, "k1", "春の特売", "", now, now, now, 1, 0, 0, null, null);
+    insert.run(2, "k2", "新製品", "PRです", now, now, now, 2, 1, 0, "要約", "訳");
+    insert.run(3, "k3", "決算", "", now, now, now, null, 0, 1, null, null);
+    copyFileSync(join(SHIPPED, "009_filters.sql"), join(dir, "009_filters.sql"));
+    return { db, dir };
+  }
+
+  it("turns each stop word into a hide filter over everything, with its fields and time", () => {
+    const { db, dir } = withStopWords();
+
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, action, scope, category_id, feed_id, enabled, created_at FROM filters ORDER BY id").all()).toEqual([
+      { id: 1, action: "hide", scope: "all", category_id: null, feed_id: null, enabled: 1, created_at: "2025-12-01T00:00:00.000Z" },
+      { id: 2, action: "hide", scope: "all", category_id: null, feed_id: null, enabled: 1, created_at: "2025-12-02T00:00:00.000Z" },
+    ]);
+    expect(db.prepare("SELECT filter_id, position, fields, method, value, normalized FROM filter_conditions ORDER BY filter_id").all()).toEqual([
+      { filter_id: 1, position: 0, fields: '["title"]', method: "contains", value: "特売", normalized: "特売" },
+      { filter_id: 2, position: 0, fields: '["title","content"]', method: "contains", value: "ＰＲ", normalized: "pr" },
+    ]);
+    expect(tableNames(db)).not.toContain("stop_words");
+  });
+
+  it("keeps the articles, and hides what a stop word hid", () => {
+    const { db, dir } = withStopWords();
+
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, filtered, is_read, starred, auto_summary, translated_title FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, filtered: 1, is_read: 0, starred: 0, auto_summary: null, translated_title: null },
+      { id: 2, filtered: 1, is_read: 1, starred: 0, auto_summary: "要約", translated_title: "訳" },
+      { id: 3, filtered: 0, is_read: 0, starred: 1, auto_summary: null, translated_title: null },
+    ]);
+    const columns = db.prepare("SELECT name FROM pragma_table_info('articles')").all().map((row) => row.name);
+    expect(columns).not.toContain("stop_word_id");
+    // The first start matches the filters again.
+    expect(db.prepare("SELECT count(*) AS n FROM filter_matches_pending").get()).toEqual({ n: 1 });
+  });
+
+  it("matches the filters once at the first start, and what the words hid stays hidden", () => {
+    const { db, dir } = withStopWords();
+    migrate(db, dir);
+
+    expect(buildPendingFilterMatches(db)).toBe(true);
+
+    expect(db.prepare("SELECT filter_id, article_id FROM filter_matches ORDER BY filter_id").all()).toEqual([
+      { filter_id: 1, article_id: 1 },
+      { filter_id: 2, article_id: 2 },
+    ]);
+    expect(db.prepare("SELECT id FROM articles WHERE filtered = 1 ORDER BY id").all()).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(listFilters(db).map((filter) => filter.hiddenCount)).toEqual([1, 1]);
+    expect(buildPendingFilterMatches(db)).toBe(false);
+  });
+
+  it("leaves nothing to match on a server without stop words", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    expect(db.prepare("SELECT count(*) AS n FROM filter_matches_pending").get()).toEqual({ n: 0 });
   });
 });

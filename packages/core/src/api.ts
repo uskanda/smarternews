@@ -374,31 +374,95 @@ export const opmlImportResultSchema = z.object({
 });
 export type OpmlImportResult = z.infer<typeof opmlImportResultSchema>;
 
-// ---- stop words --------------------------------------------------------------------------------
+// ---- filters -----------------------------------------------------------------------------------
 
-export const stopWordScopeSchema = z.enum(["title", "title_and_content"]);
-export type StopWordScope = z.infer<typeof stopWordScopeSchema>;
+/** A hide filter hides the feed articles that meet it; a keep filter hides those of its scope that meet none. */
+export const filterActionSchema = z.enum(["hide", "keep"]);
+export type FilterAction = z.infer<typeof filterActionSchema>;
 
-const stopWordTextSchema = z.string().trim().min(1).max(100);
+export const filterFieldSchema = z.enum(["title", "content", "author", "url"]);
+export type FilterField = z.infer<typeof filterFieldSchema>;
 
-export const stopWordSchema = z.object({
+export const filterMatchSchema = z.enum(["contains", "regex"]);
+export type FilterMatch = z.infer<typeof filterMatchSchema>;
+
+/** The most conditions one filter holds, and the longest value a condition holds. */
+export const MAX_FILTER_CONDITIONS = 10;
+export const MAX_FILTER_VALUE_CHARS = 200;
+
+/** An article meets a condition when any of the chosen fields matches the value. */
+export const filterConditionSchema = z.object({
+  fields: z
+    .array(filterFieldSchema)
+    .min(1, "choose at least one field")
+    .refine((fields) => new Set(fields).size === fields.length, "a field is chosen twice"),
+  match: filterMatchSchema,
+  value: z.string().trim().min(1).max(MAX_FILTER_VALUE_CHARS),
+});
+export type FilterCondition = z.infer<typeof filterConditionSchema>;
+
+export const filterScopeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("all") }),
+  z.object({ type: z.literal("category"), categoryId: z.number().int() }),
+  z.object({ type: z.literal("feed"), feedId: z.number().int() }),
+]);
+export type FilterScope = z.infer<typeof filterScopeSchema>;
+
+export const filterSchema = z.object({
   id: z.number().int(),
-  text: z.string(),
-  scope: stopWordScopeSchema,
-  /** Feed articles this word hides now. An article that matches several words counts for the oldest one. */
+  action: filterActionSchema,
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema),
+  enabled: z.boolean(),
+  /** Feed articles without a star this filter hides now. An article several filters hide counts for each. 0 while disabled. */
   hiddenCount: z.number().int(),
   createdAt: z.string(),
 });
-export type StopWord = z.infer<typeof stopWordSchema>;
+export type Filter = z.infer<typeof filterSchema>;
 
-export const stopWordCreateSchema = z.object({ text: stopWordTextSchema, scope: stopWordScopeSchema.optional() });
-export type StopWordCreate = z.infer<typeof stopWordCreateSchema>;
+const KEEP_EVERYWHERE = "a keep filter cannot apply to everything";
 
-export const stopWordUpdateSchema = z.object({ scope: stopWordScopeSchema });
-export type StopWordUpdate = z.infer<typeof stopWordUpdateSchema>;
+const filterFields = {
+  action: filterActionSchema,
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema).min(1, "a filter needs at least one condition").max(MAX_FILTER_CONDITIONS),
+  enabled: z.boolean(),
+};
 
-export const stopWordDeleteResultSchema = z.object({ restored: z.number().int() });
-export type StopWordDeleteResult = z.infer<typeof stopWordDeleteResultSchema>;
+export const filterCreateSchema = z
+  .object({ ...filterFields, enabled: filterFields.enabled.optional() })
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type FilterCreate = z.infer<typeof filterCreateSchema>;
+
+/** A change to a filter. A keep filter over everything is refused once the change is applied. */
+export const filterUpdateSchema = z
+  .object(filterFields)
+  .partial()
+  .refine((filter) => !(filter.action === "keep" && filter.scope?.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type FilterUpdate = z.infer<typeof filterUpdateSchema>;
+
+/** A changed filter, and how many feed articles came back to the lists with the change. */
+export const filterUpdateResultSchema = filterSchema.extend({ restored: z.number().int() });
+export type FilterUpdateResult = z.infer<typeof filterUpdateResultSchema>;
+
+export const filterDeleteResultSchema = z.object({ restored: z.number().int() });
+export type FilterDeleteResult = z.infer<typeof filterDeleteResultSchema>;
+
+/** A filter to try without saving it. With `id`, the stored filter of that id is left out of the count. */
+export const filterPreviewSchema = z
+  .object({ ...filterFields, enabled: filterFields.enabled.optional(), id: z.number().int().optional() })
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type FilterPreview = z.infer<typeof filterPreviewSchema>;
+
+export const filterPreviewResultSchema = z.object({ hiddenCount: z.number().int() });
+export type FilterPreviewResult = z.infer<typeof filterPreviewResultSchema>;
+
+/** A page of the feed articles a filter hides. The answer has the shape of the article list. */
+export const filterArticlesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+});
+export type FilterArticlesQuery = z.infer<typeof filterArticlesQuerySchema>;
 
 // ---- runs --------------------------------------------------------------------------------------
 
@@ -527,13 +591,40 @@ const settingsFileCategorySchema = z.object({
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
 });
 
+/** A filter's scope in the file: a category by its slug, a feed by its URL. */
+const settingsFileFilterScopeSchema = z.union([
+  z.literal("all"),
+  z.object({ category: slugSchema }).strict(),
+  z.object({ feed: feedUrlSchema }).strict(),
+]);
+export type SettingsFileFilterScope = z.infer<typeof settingsFileFilterScopeSchema>;
+
+const settingsFileFilterSchema = z
+  .object({
+    action: filterActionSchema,
+    scope: settingsFileFilterScopeSchema,
+    /** Left out when the filter is enabled. */
+    enabled: z.boolean().optional(),
+    conditions: filterFields.conditions,
+  })
+  .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
+
+/** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
+const settingsFileStopWordSchema = z.object({
+  text: z.string().trim().min(1).max(100),
+  scope: z.enum(["title", "title_and_content"]).optional(),
+});
+
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema.partial().optional(),
   categories: z.array(settingsFileCategorySchema).default([]),
   /** Subscribed feeds that belong to no category. */
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
-  stopWords: z.array(z.object({ text: stopWordTextSchema, scope: stopWordScopeSchema.optional() })).default([]),
+  filters: z.array(settingsFileFilterSchema).default([]),
+  /** Read for files written before filters, and turned into hide filters over everything. Never written. */
+  stopWords: z.array(settingsFileStopWordSchema).default([]),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 /** The file as it is written: lists that are empty may be left out. */
@@ -546,7 +637,7 @@ export const importResultSchema = z.object({
   topicsUpdated: z.number().int(),
   feedsCreated: z.number().int(),
   feedsUpdated: z.number().int(),
-  stopWordsCreated: z.number().int(),
+  filtersCreated: z.number().int(),
 });
 export type ImportResult = z.infer<typeof importResultSchema>;
 

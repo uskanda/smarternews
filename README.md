@@ -61,7 +61,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
 - Categories and feeds can be reordered by dragging them in the left pane. A feed held over another category for half a second can be dropped into it. A right click on a category or a feed opens a menu that moves it up or down; for a feed the menu also unsubscribes. The menu key or `Shift+F10` opens the same menu from the keyboard. The order is kept on the server, so the Android app, the settings file and OPML follow it.
 - Marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed. "「すべて既読にする」のあと、未読のある次の項目へ移る" in the global settings switches this off.
-- The settings pages edit categories, topics, subscribed feeds, stop words, the reader information and the global settings, and load or save the settings file and OPML.
+- The settings pages edit categories, topics, subscribed feeds, filters, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 
 Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
@@ -80,7 +80,7 @@ To connect, open the web app's settings on a computer, press "アプリ接続用
 
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
 - The drawer on the left lists the same views, categories and subscribed feeds as the web app, with unread counts.
-- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds and stop words are edited in the web app, which the settings screen opens in the browser.
+- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds and filters are edited in the web app, which the settings screen opens in the browser.
 - The interface is in Japanese, and the screen stays in portrait.
 
 Notifications are made on the device. While the app is closed, Android lets it ask your server for new articles from time to time, no more often than every 15 minutes and at moments Android chooses. So a notification can arrive well after the article, and battery saving can delay it further; opening the app always shows the current state. Nothing is sent to a notification service. The default notifies articles of importance 5 only; the settings screen offers every new written article, or none. Articles of subscribed feeds are never notified.
@@ -101,7 +101,7 @@ Without a signing key the build is signed with the debug key, which is enough to
 
 Two files hold your configuration, and both live outside the repository.
 
-The settings file holds what you want to read: categories, topics, subscribed feeds, stop words, a description of the reader, the output language and the time zone. [examples/settings.example.yaml](examples/settings.example.yaml) shows the format. `import` loads a settings file and `export` writes the current settings back, so the file also serves as a backup. Everything in it can be changed through the API as well.
+The settings file holds what you want to read: categories, topics, subscribed feeds, filters, a description of the reader, the output language and the time zone. [examples/settings.example.yaml](examples/settings.example.yaml) shows the format. `import` loads a settings file and `export` writes the current settings back, so the file also serves as a backup. Everything in it can be changed through the API as well.
 
 `~/.config/smarternews/config.yaml` holds how the server runs: the listen address, the model providers, and the limits. Every key is optional. [examples/config.example.yaml](examples/config.example.yaml) lists the keys with their defaults.
 
@@ -131,7 +131,7 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
 - "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.
 - For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. The page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
-- "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and stop words are matched against it.
+- "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and filters are matched against it.
 - Translation sends the titles and contents of that feed's articles to Google's translation API, or to the model provider you configured, and sends nothing else. Titles are translated when articles arrive, by the API only. The content is translated when you first open an article, and the first 20,000 characters of it. Articles the feed already had are translated when you open them.
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
@@ -150,9 +150,11 @@ node apps/server/src/main.ts opml-export > feeds.opml
 
 A folder becomes the category of the same name. If that category does not exist yet, it is created without topics, and such a category starts no scheduled run. Loading a file skips the feeds you already have and deletes nothing.
 
-### Stop words
+### Filters
 
-A stop word hides the articles of subscribed feeds whose title contains it. Each word can also cover the content. Matching ignores case and the difference between full-width and half-width characters. A hidden article is kept and comes back when you remove the word. Starred articles and articles the model wrote are never hidden.
+Filters hide articles of subscribed feeds. Hide filters apply to everything, to a category or to one feed, and hide the articles that meet all their conditions. Keep filters sit on a category or a feed and hide the articles there that meet none of them. Each condition looks at the title, the content, the author or the page URL, and matches a plain value or a regular expression; case and full-width letters do not matter. Translations are never matched, only the original text. The settings page shows how many articles each filter hides, lists them, and counts what a filter would hide before you save it. Switching a filter off or removing it brings its hidden articles back. Starred articles and articles the model wrote are never hidden.
+
+Stop words, which this replaced, became hide filters over everything when the server was updated, and a settings file that still lists `stopWords` loads the same way.
 
 ### Reader information
 

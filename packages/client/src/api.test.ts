@@ -116,7 +116,7 @@ describe("the API client", () => {
     server.category("Security");
     const text = await api.exportSettings();
     expect(text).toContain("slug: security");
-    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, stopWordsCreated: 0 });
+    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0 });
   });
 
   it("subscribes to a feed, changes it, fetches it now and deletes it", async () => {
@@ -152,14 +152,24 @@ describe("the API client", () => {
     expect(seen.at(-1)!.url).toBe("/api/v1/feeds/opml");
   });
 
-  it("adds a stop word, changes what it covers and removes it", async () => {
-    const { api } = setup();
-    const word = await api.createStopWord({ text: "sponsored" });
-    expect(word).toMatchObject({ text: "sponsored", scope: "title", hiddenCount: 0 });
-    expect((await api.updateStopWord(word.id, { scope: "title_and_content" })).scope).toBe("title_and_content");
-    expect(await api.stopWords()).toHaveLength(1);
-    expect(await api.deleteStopWord(word.id)).toEqual({ restored: 0 });
-    await expect(api.createStopWord({ text: " " })).rejects.toMatchObject({ kind: "invalid" });
+  it("adds a filter, tries one, changes, lists and removes it, on the paths of the filters", async () => {
+    const { api, seen } = setup();
+    const at = () => seen.at(-1)!.url;
+    const conditions = [{ fields: ["title" as const], match: "contains" as const, value: "sponsored" }];
+
+    const filter = await api.createFilter({ action: "hide", scope: { type: "all" }, conditions });
+    expect([at(), filter]).toEqual(["/api/v1/filters", expect.objectContaining({ action: "hide", enabled: true, hiddenCount: 0 })]);
+    expect(await api.previewFilter({ action: "hide", scope: { type: "all" }, conditions, id: filter.id })).toEqual({ hiddenCount: 0 });
+    expect(at()).toBe("/api/v1/filters/preview");
+    expect(await api.updateFilter(filter.id, { enabled: false })).toMatchObject({ enabled: false, restored: 0 });
+    expect(at()).toBe(`/api/v1/filters/${filter.id}`);
+    expect(await api.filters()).toHaveLength(1);
+    expect(at()).toBe("/api/v1/filters");
+    expect(await api.filterArticles(filter.id, { limit: 10 })).toEqual({ items: [], nextCursor: null });
+    expect(at()).toBe(`/api/v1/filters/${filter.id}/articles?limit=10`);
+    expect(await api.deleteFilter(filter.id)).toEqual({ restored: 0 });
+    expect(at()).toBe(`/api/v1/filters/${filter.id}`);
+    await expect(api.createFilter({ action: "keep", scope: { type: "all" }, conditions })).rejects.toMatchObject({ kind: "invalid" });
   });
 });
 

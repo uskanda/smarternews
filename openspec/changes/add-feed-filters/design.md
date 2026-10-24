@@ -60,7 +60,7 @@
 移行で次の表と列を作る。
 
 - `filters`：`id`、`action`（`hide` か `keep`）、`scope`（`all`、`category`、`feed`）、`category_id`、`feed_id`、`enabled`、`created_at`。`action = 'keep'` で `scope = 'all'` の行は `CHECK` で拒む。`category_id` と `feed_id` は `ON DELETE CASCADE` とする。
-- `filter_conditions`：`filter_id`、`position`、`fields`（JSONの配列）、`match`、`value`、`normalized`。
+- `filter_conditions`：`filter_id`、`position`、`fields`（JSONの配列）、`method`、`value`、`normalized`。照合の方法の列は、SQLの演算子と同じ名前を避けて `method` とする。APIと設定ファイルでは `match` と書く。
 - `filter_matches`：`(filter_id, article_id)`。フィルターの条件をすべて満たす配信記事の組を持つ。両方とも `ON DELETE CASCADE` とする。
 - `articles.filtered`：有効なフィルターで隠れている配信記事を1にする。スターは見ない。一覧と件数は `filtered = 1 AND starred = 0` の行を除く。
 
@@ -169,7 +169,7 @@ filters:
 2. `stop_words` の各行を、全体の隠すフィルターと1つの条件に移す。照合の対象が `title` の語は欄を `[title]`、`title_and_content` の語は `[title, content]` にし、方法は部分一致、`created_at` はそのまま移す。
 3. 記事の表を作り直して `stop_word_id` を外し、`filtered` を足す。`articles_stop_word` の索引を消し、`articles_counts` の索引の `stop_word_id` を `filtered` に替える。
 4. `stop_words` を消す。
-5. 移行のあとの最初の起動で、すべてのフィルターとすべての配信記事を照合し、`filter_matches` と `filtered` を作る。移行のSQLでは部分一致の照合を正しく書けないため、起動の処理で行う。照合が済んでいないことは、`filter_matches` の作成済みの印で見分ける。
+5. 移行のあとの最初の起動で、すべてのフィルターとすべての配信記事を照合し、`filter_matches` と `filtered` を作る。移行のSQLでは部分一致の照合を正しく書けないため、起動の処理で行う。照合が済んでいないことは、移行が `filter_matches_pending` の表に置く行で見分ける。最初の起動は照合のあとにその行を消す。
 6. 戻すときは、移行の前のデータベースの写しを使う。移行は戻す処理を持たない。
 
 ## Open Questions

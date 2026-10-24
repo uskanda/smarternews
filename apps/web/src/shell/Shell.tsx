@@ -12,6 +12,7 @@ import { PANES, usePanes } from "../lib/panes.ts";
 import { usePageTitle } from "../lib/title.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
+import { ScopedFiltersNote } from "../settings/ScopedFiltersNote.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
 import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
@@ -108,7 +109,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     setRemoving(true);
     try {
       await api.deleteFeed(feed.id);
-      for (const key of ["feeds", "counts", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["feeds", "counts", "articles", "filters"]) void client.invalidateQueries({ queryKey: [key] });
       toast({ message: "購読フィードを削除しました" });
       // The list that was open is gone with the feed.
       if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
@@ -235,6 +236,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
               「{leavingFeed.title}」と、その配信記事{leavingFeed.articleCount}件が消えます。
               {leavingFeed.starredCount > 0 ? `うち${leavingFeed.starredCount}件にはスターが付いています。` : ""}元に戻せません。
             </p>
+            <ScopedFiltersNote target={{ feedId: leavingFeed.id }} />
             <p>記事を残したまま取得だけを止めるには、設定の購読フィードで一時停止にしてください。</p>
           </>
         ) : null}

@@ -24,8 +24,14 @@ import { findArticleTranslation } from "./translations.ts";
  */
 const GENERATED = "origin = 'generated'";
 
-/** A feed article that a stop word hides. A star keeps it visible. */
-const HIDDEN = "(stop_word_id IS NOT NULL AND starred = 0)";
+/**
+ * Whether the article of the given table alias is hidden by filters: a feed article that an enabled filter
+ * hides, unless it has a star. Every list, count, "mark all as read" and the summaries leave such a row out.
+ * A generated article is never hidden.
+ */
+export function hiddenByFilters(alias: string): string {
+  return `(${alias}.filtered = 1 AND ${alias}.starred = 0)`;
+}
 
 /** A summary is tried this many times; after that the article stays without one. */
 export const SUMMARY_ATTEMPTS = 2;
@@ -36,7 +42,7 @@ export const SUMMARY_ATTEMPTS = 2;
  */
 /** Everything that makes a feed article one that gets a summary, apart from whether it has been read. */
 const CAN_BE_SUMMARIZED = `a.origin = 'feed' AND a.auto_summary IS NULL AND a.auto_summary_skipped = 0
-  AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT (a.stop_word_id IS NOT NULL AND a.starred = 0)
+  AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT ${hiddenByFilters("a")}
   AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since)`;
 
 // An article that was read is left out, unless a reader opened it while its summary was waited for.
@@ -379,8 +385,8 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const limit = query.limit ?? 50;
   const byEventStart = query.kind === "event";
   const params: Array<string | number> = [];
-  // A feed article that a stop word hides is in no list.
-  const where: string[] = ["NOT (a.stop_word_id IS NOT NULL AND a.starred = 0)"];
+  // A feed article that filters hide is in no list.
+  const where: string[] = [`NOT ${hiddenByFilters("a")}`];
   if (query.category !== undefined) {
     where.push("a.category_id = ?");
     params.push(query.category);
@@ -434,6 +440,29 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   return { items: page.map(toSummary), nextCursor };
 }
 
+/** A page of the articles `a` that meet `where`, newest first by the time lists sort by, as the article list pages. */
+export function pageArticles(
+  db: Database,
+  where: string,
+  params: Array<string | number>,
+  query: { limit?: number; cursor?: string },
+): ArticleList {
+  const limit = query.limit ?? 50;
+  const conditions = [`(${where})`];
+  const values = [...params];
+  if (query.cursor !== undefined) {
+    const [value, id] = decodeCursor(query.cursor);
+    conditions.push("(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))");
+    values.push(value, value, id);
+  }
+  const rows = db
+    .prepare(`SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${conditions.join(" AND ")} ORDER BY a.updated_at DESC, a.id DESC LIMIT ?`)
+    .all(...values, limit + 1);
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return { items: page.map(toSummary), nextCursor: rows.length > limit && last ? encodeCursor([str(last.updated_at), num(last.id)]) : null };
+}
+
 export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate): Article {
   getArticle(db, id);
   if (patch.isRead !== undefined) db.prepare("UPDATE articles SET is_read = ? WHERE id = ?").run(patch.isRead ? 1 : 0, id);
@@ -446,8 +475,8 @@ export function markArticlesRead(
   db: Database,
   filter: { categoryId?: number; uncategorized?: boolean; origin?: Origin; feedId?: number; minImportance?: number; before: string },
 ): number[] {
-  // What a stop word hides is in no list, so it is not marked either: it comes back unread when the word goes.
-  const where = ["is_read = 0", "updated_at < ?", `NOT ${HIDDEN}`];
+  // What filters hide is in no list, so it is not marked either: it comes back unread when the filter goes.
+  const where = ["is_read = 0", "updated_at < ?", `NOT ${hiddenByFilters("articles")}`];
   const params: Array<string | number> = [new Date(filter.before).toISOString()];
   if (filter.categoryId !== undefined) {
     where.push("category_id = ?");
@@ -493,7 +522,7 @@ export function getCounts(db: Database, now: string): Counts {
               count(*) AS total,
               sum(starred) AS starred,
               sum(is_read = 0 AND (kind <> 'event' OR event_ends_at >= ?)) AS unread
-         FROM articles WHERE NOT ${HIDDEN}
+         FROM articles WHERE NOT ${hiddenByFilters("articles")}
         GROUP BY category_id, feed_id, origin`,
     )
     .all(now);

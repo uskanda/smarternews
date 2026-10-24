@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getArticle, listArticles } from "../db/articles.ts";
 import { updateFeed } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
-import { createStopWord } from "../db/stop-words.ts";
+import { createFilter } from "../db/filters.ts";
 import { translationCharsOf } from "../db/translations.ts";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import { fakeLlm, type FakeHandler } from "../testing/llm.ts";
@@ -259,16 +259,17 @@ describe("translating an article that is opened", () => {
   });
 });
 
-describe("stop words and translations", () => {
+describe("filters and translations", () => {
   it("are matched against the original only: a word that only the translation holds hides nothing", async () => {
     const s = setup();
     const id = seedFeedArticle(s.db, s.feedId, { title: "Plain title", body: "Plain content." });
     await s.service.translateArticle(id);
     expect(getArticle(s.db, id).translatedTitle).toBe("訳:Plain title");
 
-    const word = createStopWord(s.db, { text: "訳", scope: "title_and_content" }, s.clock);
-    expect(word.hiddenCount).toBe(0);
+    const hide = (value: string) =>
+      createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title", "content"], match: "contains", value }] }, s.clock);
+    expect(hide("訳").hiddenCount).toBe(0);
     expect(listArticles(s.db, {}, START).items.map((article) => article.id)).toEqual([id]);
-    expect(createStopWord(s.db, { text: "plain" }, s.clock).hiddenCount).toBe(1);
+    expect(hide("plain").hiddenCount).toBe(1);
   });
 });

@@ -10,8 +10,8 @@ import { RunPage } from "./runs/RunPage.tsx";
 import { RunsPage } from "./runs/RunsPage.tsx";
 import { CategoryPage } from "./settings/CategoryPage.tsx";
 import { FeedsPage } from "./settings/FeedsPage.tsx";
+import { FiltersPage } from "./settings/FiltersPage.tsx";
 import { SettingsPage } from "./settings/SettingsPage.tsx";
-import { StopWordsPage } from "./settings/StopWordsPage.tsx";
 import { NotFound, Shell } from "./shell/Shell.tsx";
 import { ToastProvider } from "./shell/toast.tsx";
 import { TokenScreen } from "./shell/TokenScreen.tsx";
@@ -42,7 +42,7 @@ const routes: RouteObject[] = [
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
       { path: "settings/feeds", element: <FeedsPage /> },
-      { path: "settings/stop-words", element: <StopWordsPage /> },
+      { path: "settings/filters", element: <FiltersPage /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId", element: <RunPage /> },
       { path: "*", element: <NotFound /> },

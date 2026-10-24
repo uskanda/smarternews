@@ -4,6 +4,7 @@ import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
+import { refreshFiltered } from "./filters.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { getSettings } from "./settings.ts";
 
@@ -118,6 +119,8 @@ function setFeedCategory(db: Database, id: number, categoryId: number | null): v
   db.prepare("UPDATE feeds SET category_id = ? WHERE id = ?").run(categoryId, id);
   // Articles carry their feed's category, so that lists and counts by category need no join.
   db.prepare("UPDATE articles SET category_id = ? WHERE feed_id = ?").run(categoryId, id);
+  // The filters of the category the feed left stop applying, and those of the one it joined start to.
+  refreshFiltered(db, "a.feed_id = ?", [id]);
 }
 
 /** The ids of the feeds of one category, or of none, in their order. */
@@ -238,10 +241,16 @@ export function deleteFeed(db: Database, id: number): void {
   db.prepare("DELETE FROM feeds WHERE id = ?").run(id);
 }
 
-/** Moves the feeds of a category, and their articles, to no category. Called before the category is deleted. */
-export function releaseFeedsOfCategory(db: Database, categoryId: number): void {
+/**
+ * Moves the feeds of a category, and their articles, to no category. Called before the category is deleted.
+ * Returns the ids of the feeds that moved, whose articles the filters judge again once the category is gone.
+ */
+export function releaseFeedsOfCategory(db: Database, categoryId: number): number[] {
   db.prepare("UPDATE articles SET category_id = NULL WHERE origin = 'feed' AND category_id = ?").run(categoryId);
-  db.prepare("UPDATE feeds SET category_id = NULL WHERE category_id = ?").run(categoryId);
+  return db
+    .prepare("UPDATE feeds SET category_id = NULL WHERE category_id = ? RETURNING id")
+    .all(categoryId)
+    .map((row) => num(row.id));
 }
 
 export interface FetchSuccess {

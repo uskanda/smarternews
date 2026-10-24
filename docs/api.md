@@ -33,8 +33,8 @@ An error response has this shape:
 |---|---|---|
 | 400 | `invalid_input` | The input does not match the schema. `fields` names each problem |
 | 401 | `unauthorized` | The token is missing or wrong |
-| 404 | `not_found` | The article, category, topic, feed, stop word, run or path does not exist |
-| 409 | `conflict` | A slug is taken, a feed or a stop word is already registered, or the category already has a run waiting or in progress |
+| 404 | `not_found` | The article, category, topic, feed, filter, run or path does not exist |
+| 409 | `conflict` | A slug is taken, a feed or a filter is already registered, or the category already has a run waiting or in progress |
 | 503 | `unavailable` | The article cannot be translated now: the translation API cannot be used and the day has no model call left, or the model failed. Nothing was stored; the same request can be sent again later |
 
 ## Settings
@@ -66,7 +66,7 @@ Settings fields:
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
 | `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `true` by default |
 
-Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and stop words by their text. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
+Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and filters by their action, scope and conditions. A filter names a category by its `slug` and a feed by its `url`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
 ## Categories
 
@@ -167,7 +167,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
 | `categories` | Per category: `categoryId`, `unread`, `total`, `generatedUnread`, and `generatedTotal` (its generated articles, read or not) |
 | `feeds` | Per subscribed feed: `feedId` and `unread` |
 
-A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a stop word hides.
+A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a filter hides.
 
 Fields of an article in the list:
 
@@ -268,7 +268,7 @@ The OPML import subscribes to the feeds that are not subscribed yet and skips th
 
 ## Translation
 
-Translation is for the articles of the subscribed feeds that have `translate` switched on, and for nothing else. The target is `outputLanguage` of the settings. The original title and content are kept; stop words are matched against the original only.
+Translation is for the articles of the subscribed feeds that have `translate` switched on, and for nothing else. The target is `outputLanguage` of the settings. The original title and content are kept; filters are matched against the original only.
 
 The title of a new article is translated while the feed is fetched, by the translation API alone. Without a key, in a month that reached its limit, or when the API fails, the article is stored without a translated title, and the fetch still counts as a success.
 
@@ -299,25 +299,51 @@ When the feed rewrites an item, the translation of what changed is dropped. The 
 
 `GET /api/v1/translation` returns `month` (the current month in the configured time zone, as `YYYY-MM`), `chars` (characters sent to the translation API in that month), `monthlyChars` (the limit) and `apiKeyConfigured`. It never returns the key.
 
-## Stop words
+## Filters
 
-A stop word hides the feed articles whose title contains it. With the scope `title_and_content` the content counts too. Matching ignores case and the difference between full-width and half-width characters, and treats the word as plain text. Generated articles and starred articles are never hidden.
+Filters hide feed articles. A hide filter hides the articles that meet all its conditions. Keep filters hide the articles of their scope that meet none of them: two keep filters of one feed keep what either matches. When the keep filters of a category and of one of its feeds both apply, an article must pass both. An article that a hide filter matches is hidden even when a keep filter keeps it. Generated articles and starred articles are never hidden.
 
 | Operation | Purpose |
 |---|---|
-| `GET /api/v1/stop-words` | List the stop words with the number of articles each hides |
-| `POST /api/v1/stop-words` | Add one (status 201) |
-| `PATCH /api/v1/stop-words/:id` | Change its `scope` |
-| `DELETE /api/v1/stop-words/:id` | Remove it |
+| `GET /api/v1/filters` | List the filters with the number of articles each hides |
+| `POST /api/v1/filters` | Add one (status 201) |
+| `PATCH /api/v1/filters/:id` | Change its action, scope or conditions, or switch it on or off |
+| `DELETE /api/v1/filters/:id` | Remove it |
+| `GET /api/v1/filters/:id/articles` | The articles it hides, newest first, in pages like `GET /api/v1/articles` (`limit`, `cursor`) |
+| `POST /api/v1/filters/preview` | Count what a filter would hide, without saving it |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"text":"sponsored","scope":"title_and_content"}' "$API/api/v1/stop-words"
+  -d '{"action":"hide","scope":{"type":"all"},"conditions":[{"fields":["title","content"],"match":"contains","value":"sponsored"}]}' \
+  "$API/api/v1/filters"
 
-curl -s -X DELETE -H "Authorization: Bearer $TOKEN" "$API/api/v1/stop-words/1"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"action":"keep","scope":{"type":"feed","feedId":1},"conditions":[{"fields":["title"],"match":"regex","value":"release|announce"}]}' \
+  "$API/api/v1/filters/preview"
+
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":false}' "$API/api/v1/filters/1"
+
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" "$API/api/v1/filters/1"
 ```
 
-`scope` is `title` (the default) or `title_and_content`. A new word applies to the articles already stored. Hidden articles are kept: they are in no list and no count, and they come back, read or unread as they were, when the word is removed. `DELETE` answers with `restored`, the number of articles that came back. `hiddenCount` counts an article that several words match for the oldest of them.
+Filter fields:
+
+| Field | Content |
+|---|---|
+| `action` | `hide` or `keep` |
+| `scope` | `{"type":"all"}`, `{"type":"category","categoryId":1}` or `{"type":"feed","feedId":2}`. A keep filter cannot have `all` |
+| `conditions` | 1 to 10 conditions; an article must meet all of them |
+| `enabled` | `false` keeps the filter without applying it. `true` by default |
+| `hiddenCount` | Articles without a star that the filter hides now. An article that several filters hide counts for each. 0 while the filter is off |
+
+A condition has `fields` (one or more of `title`, `content`, `author` and `url`), `match` and `value` (up to 200 characters). An article meets the condition when any of the chosen fields matches. With `match` set to `contains`, the value is plain text found anywhere in the field; with `regex`, it is a JavaScript regular expression that may match anywhere in the field. Neither method tells upper case from lower case or full-width from half-width characters. `content` is the delivered content without markup and link targets, `url` is the address of the article's page, and an article without an author never meets an `author` condition. Translations are never matched.
+
+New filters and changed ones apply to the articles already stored. The scope of a category follows the feeds that belong to it now: a feed moved to another category takes that category's filters. Deleting a category or a feed deletes the filters of that scope. Hidden articles are kept. They are in no list and no count, and a "mark all as read" passes over them. Removing the filter or switching it off brings them back, read or unread as they were. `DELETE` answers with `restored`, the number of articles that came back; `PATCH` answers with the filter and `restored`.
+
+Status 400 answers a wrong regular expression, a keep filter over everything, and a scope that names a missing category or feed. Its `fields` name the problem, for example `conditions.1.value`. A filter with the same action, scope and conditions as a registered one gets status 409.
+
+`POST /api/v1/filters/preview` takes the body of `POST /api/v1/filters` and answers with a count such as `{"hiddenCount":3}`. It counts like `hiddenCount`, as if the filter were saved and on. With `id` in the body, that registered filter is left out of the count, which shows what a change would do. Nothing is stored.
 
 ## Runs
 

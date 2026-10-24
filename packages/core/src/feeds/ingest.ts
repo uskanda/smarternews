@@ -17,7 +17,7 @@ import {
 } from "../db/feeds.ts";
 import { num, str } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
-import { applyStopWords } from "../db/stop-words.ts";
+import { applyFilters } from "../db/filters.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
@@ -147,9 +147,9 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       continue;
     }
     const id = num(known.id);
-    if (str(known.title) !== title || str(known.body) !== prepared.body || (known.author ?? null) !== prepared.author) {
+    const rewritten = str(known.title) !== title || str(known.body) !== prepared.body || (known.author ?? null) !== prepared.author;
+    if (rewritten) {
       rewrite.run(title, summaryOf(prepared.text), prepared.body, prepared.text, prepared.author, id);
-      applyStopWords(db, id);
       // A translation of what was rewritten no longer says what the article says.
       if (str(known.title) !== title) {
         forgetTitle.run(id);
@@ -157,7 +157,10 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       }
       if (str(known.body) !== prepared.body) deleteArticleTranslation(db, id);
     }
-    if ((known.url ?? null) !== url || str(known.title) !== title) setReference(db, id, url, feedTitle, title);
+    const moved = (known.url ?? null) !== url;
+    if (moved || str(known.title) !== title) setReference(db, id, url, feedTitle, title);
+    // Matched after the reference is set: a condition may look at the URL.
+    if (rewritten || moved) applyFilters(db, id);
   }
 
   const insert = db.prepare(
@@ -174,7 +177,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       insert.run(feed.categoryId, feed.id, item.key, item.title, summaryOf(item.text), item.body, item.text, item.author, at, at, nowIso).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
-    applyStopWords(db, id);
+    applyFilters(db, id);
     titled.push(id);
   }
   return { created: fresh.length, titled: feed.translate ? titled : [] };

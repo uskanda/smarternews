@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import { getArticle, nextArticleToSummarize, recordSummaryFailure, saveAutoSummary, setArticleFlags, skipAutoSummary } from "./articles.ts";
 import { updateFeed } from "./feeds.ts";
-import { createStopWord } from "./stop-words.ts";
+import { createFilter } from "./filters.ts";
 
 const SINCE = "2026-03-01T12:00:00.000Z";
 const LATER = "2026-03-01T13:00:00.000Z";
@@ -54,10 +54,10 @@ describe("nextArticleToSummarize", () => {
     expect(nextArticleToSummarize(db)).toBeNull();
   });
 
-  it("leaves out an article that a stop word hides, unless it has a star", () => {
+  it("leaves out an article that a filter hides, unless it has a star", () => {
     const { db, clock, feedId } = setup();
     const id = seedFeedArticle(db, feedId, { title: "Sponsored post", at: LATER });
-    createStopWord(db, { text: "sponsored" }, clock);
+    createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "sponsored" }] }, clock);
     expect(nextArticleToSummarize(db)).toBeNull();
     setArticleFlags(db, id, { starred: true });
     expect(nextArticleToSummarize(db)?.id).toBe(id);

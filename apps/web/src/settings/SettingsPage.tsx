@@ -260,7 +260,7 @@ function SettingsFile() {
       setResult(
         `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。`,
       );
-      for (const key of ["categories", "topics", "settings", "counts", "feeds", "stop-words", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "articles"]) void client.invalidateQueries({ queryKey: [key] });
     } catch (caught) {
       setError(caught);
     }
@@ -270,7 +270,7 @@ function SettingsFile() {
     <section aria-label="設定ファイル" className={SECTION}>
       <h2 className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
-        カテゴリ、トピック、購読フィード、ストップワード、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
+        カテゴリ、トピック、購読フィード、フィルター、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
       </p>
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
@@ -286,7 +286,7 @@ function SettingsFile() {
           />
         </label>
         <p className="type-label-sm text-on-surface-muted">
-          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとストップワードも消えません。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
+          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとフィルターも消えません。以前のストップワードの形式のファイルも読み込め、各語は全体の隠すフィルターになります。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
         </p>
         <div>
           <Button type="submit" disabled={!file}>
@@ -381,7 +381,7 @@ export function SettingsPage() {
       <section aria-label="購読フィード" className={SECTION}>
         <h2 className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、ストップワードで隠せます。
+          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
         </p>
         <ul className="flex flex-col gap-xs type-body-md">
           <li>
@@ -390,8 +390,8 @@ export function SettingsPage() {
             </Link>
           </li>
           <li>
-            <Link to="/settings/stop-words" className="tap text-primary underline underline-offset-4">
-              ストップワードを設定する
+            <Link to="/settings/filters" className="tap text-primary underline underline-offset-4">
+              フィルターを設定する
             </Link>
           </li>
         </ul>

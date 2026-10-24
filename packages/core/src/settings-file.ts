@@ -3,19 +3,25 @@ import type { z } from "zod";
 import {
   settingsFileSchema,
   type Feed,
+  type FilterCondition,
+  type FilterCreate,
+  type FilterScope,
   type ImportResult,
   type SettingsFile,
+  type SettingsFileFilter,
+  type SettingsFileFilterScope,
   type SettingsFileInput,
   type SettingsFileSubscription,
 } from "./api.ts";
 import type { Clock } from "./clock.ts";
-import { createCategory, findCategoryBySlug, listCategories, orderCategories, updateCategory } from "./db/categories.ts";
+import { createCategory, findCategory, findCategoryBySlug, listCategories, orderCategories, updateCategory } from "./db/categories.ts";
 import { transaction, type Database } from "./db/database.ts";
-import { findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
+import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
+import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
-import { createStopWord, listStopWords, normalizeForMatch } from "./db/stop-words.ts";
 import { createTopic, listTopics, updateTopic, applyInterpretation } from "./db/topics.ts";
 import { DomainError, type FieldError } from "./errors.ts";
+import { conditionProblems } from "./filters/match.ts";
 
 export function zodFieldErrors(error: z.ZodError): FieldError[] {
   return error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }));
@@ -33,8 +39,25 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
   };
 }
 
+/** A filter's scope as the file names it: a category by its slug, a feed by its URL. */
+function toFileScope(db: Database, scope: FilterScope): SettingsFileFilterScope {
+  if (scope.type === "category") return { category: findCategory(db, scope.categoryId)!.slug };
+  if (scope.type === "feed") return { feed: findFeed(db, scope.feedId)!.url };
+  return "all";
+}
+
+function toFileFilters(db: Database): SettingsFileFilter[] {
+  return listFilters(db).map((filter) => ({
+    action: filter.action,
+    scope: toFileScope(db, filter.scope),
+    // Written only when it is off: a filter is enabled unless the file says otherwise.
+    ...(filter.enabled ? {} : { enabled: false }),
+    conditions: filter.conditions,
+  }));
+}
+
 /**
- * Writes categories, topics, subscribed feeds, stop words, reader information and global settings as YAML.
+ * Writes categories, topics, subscribed feeds, filters, reader information and global settings as YAML.
  * Holds no secrets, no articles and no fetch state.
  */
 export function exportSettings(db: Database): string {
@@ -43,7 +66,7 @@ export function exportSettings(db: Database): string {
     const list = feeds.filter((feed) => feed.categoryId === categoryId).map(toSubscription);
     return list.length > 0 ? { subscriptions: list } : {};
   };
-  const stopWords = listStopWords(db).map((word) => ({ text: word.text, scope: word.scope }));
+  const filters = toFileFilters(db);
   const file: SettingsFileInput = {
     version: 1,
     settings: getSettings(db),
@@ -68,7 +91,7 @@ export function exportSettings(db: Database): string {
       ...subscriptionsOf(category.id),
     })),
     ...subscriptionsOf(null),
-    ...(stopWords.length > 0 ? { stopWords } : {}),
+    ...(filters.length > 0 ? { filters } : {}),
   };
   return stringify(file, { lineWidth: 0 });
 }
@@ -148,10 +171,54 @@ function importSubscriptions(
   if (listed.length > 0) orderFeeds(db, categoryId, listed);
 }
 
+/** A stop word of a file written before filters, as the hide filter over everything it became. */
+function fromStopWord(word: SettingsFile["stopWords"][number]): SettingsFileFilter {
+  const fields: FilterCondition["fields"] = word.scope === "title_and_content" ? ["title", "content"] : ["title"];
+  return { action: "hide", scope: "all", conditions: [{ fields, match: "contains", value: word.text }] };
+}
+
+function refuseFilter(path: string, message: string): DomainError {
+  return new DomainError("invalid", `${path}: ${message}`, [{ path, message }]);
+}
+
 /**
- * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL and stop
- * words by their text; whatever the file does not mention stays as it is. Nothing is stored when any part of
- * the file is refused.
+ * Stores the filters of the file, once its categories and feeds are stored. A scope is tied to the category
+ * of that slug, or the feed of that URL, on the server. A filter that is registered already only takes the
+ * file's switch; a stop word of an older file that is registered already is left as it is.
+ */
+function importFilters(db: Database, file: SettingsFile, result: ImportResult, clock: Clock): void {
+  const entries = [
+    ...file.filters.map((filter, index) => ({ filter, path: `filters.${index}`, switchable: true })),
+    ...file.stopWords.map((word, index) => ({ filter: fromStopWord(word), path: `stopWords.${index}`, switchable: false })),
+  ];
+  for (const { filter, path, switchable } of entries) {
+    const problems = conditionProblems(filter.conditions, `${path}.conditions`);
+    if (problems.length > 0) throw new DomainError("invalid", `${problems[0]!.path}: ${problems[0]!.message}`, problems);
+    let scope: FilterScope = { type: "all" };
+    if (filter.scope !== "all" && "category" in filter.scope) {
+      const category = findCategoryBySlug(db, filter.scope.category);
+      if (!category) throw refuseFilter(`${path}.scope.category`, `no category "${filter.scope.category}" in the file or on the server`);
+      scope = { type: "category", categoryId: category.id };
+    } else if (filter.scope !== "all") {
+      const feed = findFeedByUrl(db, filter.scope.feed);
+      if (!feed) throw refuseFilter(`${path}.scope.feed`, `no feed ${filter.scope.feed} in the file or on the server`);
+      scope = { type: "feed", feedId: feed.id };
+    }
+    const input: FilterCreate = { action: filter.action, scope, conditions: filter.conditions, enabled: filter.enabled ?? true };
+    const same = findSameFilter(db, input);
+    if (same) {
+      if (switchable && same.enabled !== input.enabled) updateFilter(db, same.id, { enabled: input.enabled });
+      continue;
+    }
+    createFilter(db, input, clock);
+    result.filtersCreated += 1;
+  }
+}
+
+/**
+ * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL and
+ * filters by action, scope and conditions; whatever the file does not mention stays as it is. Nothing is
+ * stored when any part of the file is refused.
  */
 export function importSettings(db: Database, text: string, clock: Clock): ImportResult {
   const file = parseFile(text);
@@ -162,7 +229,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     topicsUpdated: 0,
     feedsCreated: 0,
     feedsUpdated: 0,
-    stopWordsCreated: 0,
+    filtersCreated: 0,
   };
   transaction(db, () => {
     if (file.settings) updateSettings(db, file.settings);
@@ -205,14 +272,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     if (listed.length > 0) orderCategories(db, listed);
     importSubscriptions(db, file.subscriptions, null, "subscriptions", result, clock);
 
-    const known = new Set(listStopWords(db).map((word) => normalizeForMatch(word.text)));
-    for (const word of file.stopWords) {
-      const normalized = normalizeForMatch(word.text);
-      if (known.has(normalized)) continue;
-      known.add(normalized);
-      createStopWord(db, word, clock);
-      result.stopWordsCreated += 1;
-    }
+    importFilters(db, file, result, clock);
   });
   return result;
 }

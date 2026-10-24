@@ -28,6 +28,26 @@ export function useFeeds() {
   return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
 }
 
+/** The filters with what each hides now. Asked for again whenever a filter, a feed or a category changes. */
+export function useFilters() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["filters"], queryFn: () => api.filters() });
+}
+
+/**
+ * How many filters have the given feed or category as their scope, enabled or not: what goes with it when it
+ * is deleted. Undefined until the filters have arrived.
+ */
+export function useScopedFilterCount(target: { feedId: number } | { categoryId: number } | null): number | undefined {
+  const filters = useFilters().data;
+  if (!filters || target === null) return undefined;
+  return filters.filter((filter) =>
+    "feedId" in target
+      ? filter.scope.type === "feed" && filter.scope.feedId === target.feedId
+      : filter.scope.type === "category" && filter.scope.categoryId === target.categoryId,
+  ).length;
+}
+
 export function useCounts() {
   const { api } = useApp();
   return useQuery({ queryKey: ["counts"], queryFn: () => api.counts(), refetchInterval: REFRESH_MS });
