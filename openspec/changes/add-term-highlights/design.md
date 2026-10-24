@@ -2,7 +2,7 @@
 
 ## Context
 
-ストップワードは `packages/core/src/db/stop-words.ts` にある。照合の形への変換 `normalizeForMatch`（NFKCで正規化し、小文字にする）もこのファイルにあり、設定ファイルの読み込みも使っている。
+フィルター（#56、#57）の照合は `packages/core/src/filters/match.ts` にある。照合の形への変換 `normalizeForMatch`（NFKCで正規化し、小文字にする）もこのファイルにある。
 このファイルはデータベースに依存するので、ブラウザーとアプリからは読み込めない。`packages/core` の入口 `.` もNodeの機能を含む。ブラウザーとアプリが読めるのは、型とスキーマだけの `@smarternews/core/api` である。
 `packages/client` はWebとアプリが共有する処理を置く場所で、`@smarternews/core` に依存してよい。画面の部品とNodeの機能には依存させない。
 
@@ -51,7 +51,7 @@
 ### 照合の形への変換を、ブラウザーでも読める場所へ移す
 
 `normalizeForMatch` を、依存のない新しいファイル `packages/core/src/text-match.ts` へ移す。`packages/core/package.json` の `exports` に `./match` を足して公開する。
-`stop-words.ts` と `settings-file.ts` は、ここから読み込む。ストップワードの振る舞いは変えない。
+`packages/core/src/filters/match.ts` は、ここから読み込む。フィルターの振る舞いは変えない。
 変換を `packages/client` に書き写す案は採らない。2つの実装がずれると、ストップワードで隠れる語と色付けされる語が食い違う。
 
 ### 一致した範囲は、元の文字の単位に戻して求める
@@ -179,7 +179,7 @@ termGroups:
 
 設定の画面の「購読フィード」の区画のすぐあとに、「語の色付け」の区画を置く。ストップワードは「購読フィード」の区画の中のリンクなので、その隣にあたる位置である。
 色付けは生成記事にも及ぶので、「購読フィード」の区画の中には置かない。
-区画から、新しい画面 `/settings/term-highlights` を開く。画面の形は `StopWordsPage.tsx` にそろえる。
+区画から、新しい画面 `/settings/term-highlights` を開く。画面の形は `FiltersPage.tsx` にそろえる。
 並べ替えは、まとまりごとの「上へ」「下へ」のボタンで行う。数の少ない一覧なので、ドラッグは足さない。ボタンはキーボードで押せ、押したあともフォーカスを同じまとまりのボタンに残す。
 色は、4つの選択肢から1つだけを選ぶ操作にし、見本と名前を並べる。
 

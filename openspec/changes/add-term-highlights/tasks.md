@@ -4,7 +4,7 @@
 
 ## 1. 照合の関数
 
-- [ ] 1.1 `packages/core/src/text-match.ts` を作り、`normalizeForMatch` を `stop-words.ts` から移す。`packages/core/package.json` の `exports` に `./match` を足す。`stop-words.ts` と `settings-file.ts` をここから読み込むように変え、ストップワードの既存のテストが変わらず通ることを確かめる
+- [ ] 1.1 `packages/core/src/text-match.ts` を作り、`normalizeForMatch` を `packages/core/src/filters/match.ts` から移す。`packages/core/package.json` の `exports` に `./match` を足す。`packages/core/src/filters/match.ts` をここから読み込むように変え、フィルターの既存のテストが変わらず通ることを確かめる
 - [ ] 1.2 `packages/client/src/highlight.ts` に、文字列を色付けしない区間とまとまりごとの区間に分ける関数を書く。仕様 `term-highlights` の「色付けの語の照合の方法」「一致した箇所の範囲」「重なる一致の色」の各場面をテストで確かめる。半角のカタカナと濁点、全角の英数字、合字で、範囲が元の文字の全体を覆うことと、ストップワードの照合と同じ結果になることも確かめる
 - [ ] 1.3 `packages/client/src/highlight.ts` に、複数の文字列が一致したまとまりを並び順のとおりに返す関数を書く。一致しないとき空になることと、同じまとまりが1度だけ返ることをテストで確かめる
 - [ ] 1.4 10万文字の文字列と50の語で区間に分ける時間を測るテストを置き、描く処理を目に見えて遅らせないことを確かめる。測った時間をPRに書く
