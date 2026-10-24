@@ -562,6 +562,42 @@ export const filterArticlesQuerySchema = z.object({
 });
 export type FilterArticlesQuery = z.infer<typeof filterArticlesQuerySchema>;
 
+// ---- term highlights ---------------------------------------------------------------------------
+
+/** The colours a term group can take. Their values are in DESIGN.md, one for each colour scheme. */
+export const termColorSchema = z.enum(["green", "purple", "pink", "orange"]);
+export type TermColor = z.infer<typeof termColorSchema>;
+export const TERM_COLORS = termColorSchema.options;
+
+const termGroupNameSchema = z.string().trim().min(1, "a name is required").max(100);
+const highlightTermTextSchema = z.string().trim().min(1, "a term is required").max(100);
+
+/** A word marked in lists and article texts wherever it occurs, as stop words were matched. */
+export const highlightTermSchema = z.object({ id: z.number().int(), text: z.string() });
+export type HighlightTerm = z.infer<typeof highlightTermSchema>;
+
+/** Terms under one name and one colour. Groups are kept in an order: where two match one place, the upper one colours it. */
+export const termGroupSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  color: termColorSchema,
+  terms: z.array(highlightTermSchema),
+});
+export type TermGroup = z.infer<typeof termGroupSchema>;
+
+export const termGroupCreateSchema = z.object({ name: termGroupNameSchema, color: termColorSchema.optional() });
+export type TermGroupCreate = z.infer<typeof termGroupCreateSchema>;
+
+export const termGroupUpdateSchema = z.object({ name: termGroupNameSchema, color: termColorSchema }).partial();
+export type TermGroupUpdate = z.infer<typeof termGroupUpdateSchema>;
+
+/** Where a term group goes: before another one, or last. */
+export const termGroupMoveSchema = z.object({ before: z.number().int().nullable() });
+export type TermGroupMove = z.infer<typeof termGroupMoveSchema>;
+
+export const highlightTermCreateSchema = z.object({ text: highlightTermTextSchema });
+export type HighlightTermCreate = z.infer<typeof highlightTermCreateSchema>;
+
 // ---- runs --------------------------------------------------------------------------------------
 
 export const runStatusSchema = z.enum(["queued", "running", "succeeded", "partial", "failed", "stopped_by_limit"]);
@@ -716,6 +752,14 @@ const settingsFileStopWordSchema = z.object({
   scope: z.enum(["title", "title_and_content"]).optional(),
 });
 
+/** A term group in the file, matched by its name. */
+const settingsFileTermGroupSchema = z.object({
+  name: termGroupNameSchema,
+  color: termColorSchema,
+  terms: z.array(highlightTermTextSchema).default([]),
+});
+export type SettingsFileTermGroup = z.infer<typeof settingsFileTermGroupSchema>;
+
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema.partial().optional(),
@@ -725,6 +769,8 @@ export const settingsFileSchema = z.object({
   filters: z.array(settingsFileFilterSchema).default([]),
   /** Read for files written before filters, and turned into hide filters over everything. Never written. */
   stopWords: z.array(settingsFileStopWordSchema).default([]),
+  /** In the order of the groups. Left out when there are none. */
+  termGroups: z.array(settingsFileTermGroupSchema).default([]),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 /** The file as it is written: lists that are empty may be left out. */
@@ -738,6 +784,8 @@ export const importResultSchema = z.object({
   feedsCreated: z.number().int(),
   feedsUpdated: z.number().int(),
   filtersCreated: z.number().int(),
+  termGroupsCreated: z.number().int(),
+  highlightTermsCreated: z.number().int(),
 });
 export type ImportResult = z.infer<typeof importResultSchema>;
 

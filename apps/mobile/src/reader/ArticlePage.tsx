@@ -1,14 +1,14 @@
-import { ApiError, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
+import { ApiError, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel, type TermMatcher } from "@smarternews/client";
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { memo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useArticle, useArticleTranslation, useCategories, useFeeds, useSummaryRequest, useTimeZone } from "../api/queries";
+import { useArticle, useArticleTranslation, useCategories, useFeeds, useSummaryRequest, useTermMatcher, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, Loading } from "../ui/controls";
 import { Txt } from "../ui/Txt";
 import { Badge } from "./ArticleRow";
-import { Highlighted } from "./highlight";
+import { Highlighted, highlight } from "./highlight";
 import { Markdown } from "./Markdown";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
@@ -44,7 +44,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * original right under it, smaller and quieter. The pairs come from the server as they are shown. A segment
  * without a translation, and one whose translation is the same text, is shown once as content.
  */
-function TranslatedBody({ translation, terms }: { translation: ArticleTranslation; terms?: readonly string[] }) {
+function TranslatedBody({ translation, terms, groups }: { translation: ArticleTranslation; terms?: readonly string[]; groups: TermMatcher }) {
   const theme = useTheme();
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -53,11 +53,11 @@ function TranslatedBody({ translation, terms }: { translation: ArticleTranslatio
         <View key={index} style={{ gap: theme.spacing.lg }}>
           {segment.translated !== null && segment.translated.trim() !== segment.original.trim() ? (
             <View style={{ gap: theme.spacing.xs }}>
-              <Markdown text={segment.translated} images highlight={terms} />
-              <Markdown text={segment.original} images quiet highlight={terms} />
+              <Markdown text={segment.translated} images highlight={terms} groups={groups} />
+              <Markdown text={segment.original} images quiet highlight={terms} groups={groups} />
             </View>
           ) : (
-            <Markdown text={segment.original} images highlight={terms} />
+            <Markdown text={segment.original} images highlight={terms} groups={groups} />
           )}
           {translation.truncated && index === lastTranslated ? (
             <Txt variant="label-sm" color="on-surface-muted">
@@ -128,6 +128,7 @@ export const ArticlePage = memo(function ArticlePage({
   const timeZone = useTimeZone();
   const categories = useCategories();
   const feeds = useFeeds();
+  const groups = useTermMatcher();
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
@@ -200,12 +201,12 @@ export const ArticlePage = memo(function ArticlePage({
       </View>
       <View style={{ gap: theme.spacing.xs }}>
         <Txt variant="headline-lg" heading>
-          {terms ? <Highlighted text={article.translatedTitle ?? article.title} terms={terms} /> : (article.translatedTitle ?? article.title)}
+          {highlight(article.translatedTitle ?? article.title, terms, groups)}
         </Txt>
         {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
           // The title as the site wrote it, read out in its own language where the system can.
           <Txt testID="original-title" variant="body-md" color="on-surface-muted" accessibilityLanguage={article.sourceLanguage ?? undefined}>
-            {terms ? <Highlighted text={article.title} terms={terms} /> : article.title}
+            {highlight(article.title, terms, groups)}
           </Txt>
         ) : null}
       </View>
@@ -267,7 +268,7 @@ export const ArticlePage = memo(function ArticlePage({
           <Txt variant="label-sm" color="on-surface-muted" heading>
             AIによる要約
           </Txt>
-          <Txt variant="body-md">{terms ? <Highlighted text={article.autoSummary.text} terms={terms} /> : article.autoSummary.text}</Txt>
+          <Txt variant="body-md">{highlight(article.autoSummary.text, terms, groups)}</Txt>
           {article.autoSummary.source === "feed" ? (
             <Txt variant="label-sm" color="on-surface-muted">
               元のページを読めなかったため、配信された内容だけをもとにしています。
@@ -298,9 +299,9 @@ export const ArticlePage = memo(function ArticlePage({
       ) : null}
       {article.translation && (fullShown || article.fullContent === null) ? (
         // The translation is of the full content when there is one: what the feed delivered is then shown without one.
-        <TranslatedBody translation={article.translation} terms={terms} />
+        <TranslatedBody translation={article.translation} terms={terms} groups={groups} />
       ) : (
-        <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} />
+        <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} groups={groups} />
       )}
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>

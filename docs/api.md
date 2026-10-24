@@ -67,7 +67,7 @@ Settings fields:
 | `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `true` by default |
 | `removeDuplicates` | `true` hides a feed article that another feed delivered first from the lists over everything and over categories. `true` by default; see [Duplicates across feeds](#duplicates-across-feeds) |
 
-Import matches categories by `slug`, topics by `text`, subscribed feeds by `url` and filters by their action, scope and conditions. A filter names a category by its `slug` and a feed by its `url`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
+Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
 ## Categories
 
@@ -441,6 +441,38 @@ New filters and changed ones apply to the articles already stored. The scope of 
 Status 400 answers a wrong regular expression, a keep filter over everything, and a scope that names a missing category or feed. Its `fields` name the problem, for example `conditions.1.value`. A filter with the same action, scope and conditions as a registered one gets status 409.
 
 `POST /api/v1/filters/preview` takes the body of `POST /api/v1/filters` and answers with a count such as `{"hiddenCount":3}`. It counts like `hiddenCount`, as if the filter were saved and on. With `id` in the body, that registered filter is left out of the count, which shows what a change would do. Nothing is stored.
+
+## Term highlights
+
+Term groups colour their terms in the lists and the texts of articles, generated and delivered alike. Nothing is hidden, and no article changes: the server only stores the groups and answers them, and the web app and the Android app match the terms against the text they show. A term matches as a filter's `contains` does: anywhere in the text, upper and lower case alike, full-width and half-width alike. Where terms of two groups match one place, the group that comes first colours it.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/term-groups` | List the groups in their order, each with its terms |
+| `POST /api/v1/term-groups` | Add a group at the end (status 201) |
+| `PATCH /api/v1/term-groups/:id` | Change its `name` or `color` |
+| `DELETE /api/v1/term-groups/:id` | Remove it with its terms (status 204) |
+| `POST /api/v1/term-groups/:id/move` | Put it before another group, `{"before":2}`, or last, `{"before":null}`. Answers with every group in the new order |
+| `POST /api/v1/term-groups/:id/terms` | Add a term, `{"text":"tariff"}` (status 201). Answers with the group |
+| `DELETE /api/v1/term-groups/:id/terms/:termId` | Remove one term (status 204) |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Trade","color":"orange"}' "$API/api/v1/term-groups"
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"tariff"}' "$API/api/v1/term-groups/1/terms"
+```
+
+Term group fields:
+
+| Field | Content |
+|---|---|
+| `name` | 1 to 100 characters, one group per name |
+| `color` | `green`, `purple`, `pink` or `orange`. `green` when left out. The apps take the values of the colour scheme in use |
+| `terms` | `[{"id":1,"text":"tariff"}]`, in the order they were added. A term has 1 to 100 characters |
+
+Status 400 answers an empty name or term, a colour outside the four, and a `before` that names no group; status 404 answers a group or term that does not exist. A name that another group has, and a term the group has already in another case or width, get status 409. Another group may have the same term.
 
 ## Runs
 

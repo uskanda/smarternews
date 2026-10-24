@@ -7,7 +7,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { BackHandler, FlatList, RefreshControl, ScrollView, SectionList, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../api/AppProvider";
-import { useCategories, useFeeds, useSettings, useTimeZone } from "../api/queries";
+import { useCategories, useFeeds, useSettings, useTermMatcher, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { unfold } from "../shell/collapsed";
 import { useTheme } from "../theme/theme";
@@ -50,6 +50,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const settings = useSettings();
   const categories = useCategories();
   const feeds = useFeeds();
+  const groups = useTermMatcher();
   const client = useQueryClient();
   const params = useLocalSearchParams<{ key: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string }>();
   const ref = listRefOf(search ? SEARCH_KEY : (params.key ?? "unread"), params);
@@ -250,6 +251,8 @@ export function ListScreen({ search = false }: { search?: boolean }) {
           data={items}
           contentContainerStyle={listPadding}
           keyExtractor={(item) => String(item.id)}
+          // New term groups colour every row again.
+          extraData={groups}
           renderItem={({ item }) => (
             <ArticleRow
               article={item}
@@ -262,6 +265,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               onLongPress={showMenu}
               excerpt={reader.excerptOf(item.id)}
               terms={reader.terms}
+              groups={groups}
             />
           )}
           ListHeaderComponent={

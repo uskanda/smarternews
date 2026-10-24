@@ -19,6 +19,8 @@ import { transaction, type Database } from "./db/database.ts";
 import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
 import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
+import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
+import { normalizeForMatch } from "./search/text.ts";
 import { createTopic, listTopics, updateTopic, applyInterpretation } from "./db/topics.ts";
 import { DomainError, type FieldError } from "./errors.ts";
 import { conditionProblems } from "./filters/match.ts";
@@ -58,7 +60,7 @@ function toFileFilters(db: Database): SettingsFileFilter[] {
 }
 
 /**
- * Writes categories, topics, subscribed feeds, filters, reader information and global settings as YAML.
+ * Writes categories, topics, subscribed feeds, filters, term groups, reader information and global settings as YAML.
  * Holds no secrets, no articles and no fetch state.
  */
 export function exportSettings(db: Database): string {
@@ -68,6 +70,7 @@ export function exportSettings(db: Database): string {
     return list.length > 0 ? { subscriptions: list } : {};
   };
   const filters = toFileFilters(db);
+  const termGroups = listTermGroups(db).map((group) => ({ name: group.name, color: group.color, terms: group.terms.map((term) => term.text) }));
   const file: SettingsFileInput = {
     version: 1,
     settings: getSettings(db),
@@ -93,6 +96,7 @@ export function exportSettings(db: Database): string {
     })),
     ...subscriptionsOf(null),
     ...(filters.length > 0 ? { filters } : {}),
+    ...(termGroups.length > 0 ? { termGroups } : {}),
   };
   return stringify(file, { lineWidth: 0 });
 }
@@ -220,9 +224,33 @@ function importFilters(db: Database, file: SettingsFile, result: ImportResult, c
 }
 
 /**
- * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL and
- * filters by action, scope and conditions; whatever the file does not mention stays as it is. Nothing is
- * stored when any part of the file is refused.
+ * Stores the term groups of the file. A group is matched by its name: a known one takes the file's colour, a
+ * new one is registered. Terms are only added, never removed; one the group has already, whatever its case and
+ * width, is left as it is. The groups of the file come first, in its order, and the others follow.
+ */
+function importTermGroups(db: Database, file: SettingsFile, result: ImportResult, clock: Clock): void {
+  const listed: number[] = [];
+  for (const entry of file.termGroups) {
+    const existing = findTermGroupByName(db, entry.name);
+    const group = existing ? updateTermGroup(db, existing.id, { color: entry.color }) : createTermGroup(db, { name: entry.name, color: entry.color }, clock);
+    if (!existing) result.termGroupsCreated += 1;
+    listed.push(group.id);
+    const known = new Set(group.terms.map((term) => normalizeForMatch(term.text)));
+    for (const text of entry.terms) {
+      const normalized = normalizeForMatch(text);
+      if (known.has(normalized)) continue;
+      addHighlightTerm(db, group.id, { text }, clock);
+      known.add(normalized);
+      result.highlightTermsCreated += 1;
+    }
+  }
+  if (listed.length > 0) orderTermGroups(db, listed);
+}
+
+/**
+ * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL,
+ * filters by action, scope and conditions, and term groups by name; whatever the file does not mention stays
+ * as it is. Nothing is stored when any part of the file is refused.
  */
 export function importSettings(db: Database, text: string, clock: Clock): ImportResult {
   const file = parseFile(text);
@@ -234,6 +262,8 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     feedsCreated: 0,
     feedsUpdated: 0,
     filtersCreated: 0,
+    termGroupsCreated: 0,
+    highlightTermsCreated: 0,
   };
   transaction(db, () => {
     if (file.settings) updateSettings(db, file.settings);
@@ -277,6 +307,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     importSubscriptions(db, file.subscriptions, null, "subscriptions", result, clock);
 
     importFilters(db, file, result, clock);
+    importTermGroups(db, file, result, clock);
   });
   return result;
 }

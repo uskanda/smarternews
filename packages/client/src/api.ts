@@ -23,6 +23,7 @@ import {
   filterPreviewResultSchema,
   filterSchema,
   filterUpdateResultSchema,
+  termGroupSchema,
   topicSchema,
   translationStatusSchema,
   type Article,
@@ -61,6 +62,10 @@ import {
   type FilterPreviewResult,
   type FilterUpdate,
   type FilterUpdateResult,
+  type HighlightTermCreate,
+  type TermGroup,
+  type TermGroupCreate,
+  type TermGroupUpdate,
   type Topic,
   type TopicCreate,
   type TopicUpdate,
@@ -243,6 +248,20 @@ export function createApi(options: ApiOptions) {
       json(articleListSchema, `/filters/${id}/articles${query(page)}`),
     /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
     previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
+
+    /** The term groups in their order, each with its terms. */
+    termGroups: (): Promise<TermGroup[]> => json(z.array(termGroupSchema), "/term-groups"),
+    createTermGroup: (input: TermGroupCreate): Promise<TermGroup> => json(termGroupSchema, "/term-groups", body("POST", input)),
+    updateTermGroup: (id: number, patch: TermGroupUpdate): Promise<TermGroup> => json(termGroupSchema, `/term-groups/${id}`, body("PATCH", patch)),
+    deleteTermGroup: async (id: number): Promise<void> => void (await request(`/term-groups/${id}`, { method: "DELETE" })),
+    /** Puts the term group before another one, or last. Answers with all term groups in their order. */
+    moveTermGroup: (id: number, before: number | null): Promise<TermGroup[]> =>
+      json(z.array(termGroupSchema), `/term-groups/${id}/move`, body("POST", { before })),
+    /** Adds a term to a group. Answers with the group. */
+    addHighlightTerm: (groupId: number, input: HighlightTermCreate): Promise<TermGroup> =>
+      json(termGroupSchema, `/term-groups/${groupId}/terms`, body("POST", input)),
+    deleteHighlightTerm: async (groupId: number, termId: number): Promise<void> =>
+      void (await request(`/term-groups/${groupId}/terms/${termId}`, { method: "DELETE" })),
 
     runCategory: (categoryId: number): Promise<Run> => json(runSchema, `/categories/${categoryId}/runs`, { method: "POST" }),
     runs: (filter: { category?: number; limit?: number } = {}): Promise<Run[]> => json(z.array(runSchema), `/runs${query(filter)}`),

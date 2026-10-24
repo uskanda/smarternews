@@ -63,6 +63,17 @@ import {
   filterPreviewSchema,
   filterUpdateSchema,
   previewFilter,
+  addHighlightTerm,
+  createTermGroup,
+  deleteHighlightTerm,
+  deleteTermGroup,
+  highlightTermCreateSchema,
+  listTermGroups,
+  moveTermGroup,
+  termGroupCreateSchema,
+  termGroupMoveSchema,
+  termGroupUpdateSchema,
+  updateTermGroup,
   subscribe,
   topicCreateSchema,
   topicUpdateSchema,
@@ -141,8 +152,8 @@ async function jsonBody(c: Context): Promise<unknown> {
 }
 
 /** A numeric identifier from the path. Anything else cannot name an existing object. */
-function idParam(c: Context, what: string): number {
-  const raw = c.req.param("id") ?? "";
+function idParam(c: Context, what: string, name = "id"): number {
+  const raw = c.req.param(name) ?? "";
   if (!/^\d{1,15}$/.test(raw)) throw notFound(what, raw);
   return Number(raw);
 }
@@ -334,6 +345,25 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/filters/:id/articles", (c) =>
     c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
   );
+
+  // term highlights: only stored and answered here; the apps match the terms against what they show
+  api.get("/term-groups", (c) => c.json(listTermGroups(db)));
+  api.post("/term-groups", async (c) => c.json(createTermGroup(db, parse(termGroupCreateSchema, await jsonBody(c)), clock), 201));
+  api.patch("/term-groups/:id", async (c) => c.json(updateTermGroup(db, idParam(c, "term group"), parse(termGroupUpdateSchema, await jsonBody(c)))));
+  api.delete("/term-groups/:id", (c) => {
+    deleteTermGroup(db, idParam(c, "term group"));
+    return c.body(null, 204);
+  });
+  api.post("/term-groups/:id/move", async (c) =>
+    c.json(moveTermGroup(db, idParam(c, "term group"), parse(termGroupMoveSchema, await jsonBody(c)).before)),
+  );
+  api.post("/term-groups/:id/terms", async (c) =>
+    c.json(addHighlightTerm(db, idParam(c, "term group"), parse(highlightTermCreateSchema, await jsonBody(c)), clock), 201),
+  );
+  api.delete("/term-groups/:id/terms/:termId", (c) => {
+    deleteHighlightTerm(db, idParam(c, "term group"), idParam(c, "term", "termId"));
+    return c.body(null, 204);
+  });
 
   // runs
   api.post("/categories/:id/runs", (c) => c.json(queue.enqueue(idParam(c, "category"), "manual", null), 202));

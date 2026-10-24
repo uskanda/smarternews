@@ -46,17 +46,22 @@ export type MatchRange = [number, number];
 // voiced and semi-voiced sound marks of half-width katakana.
 const CLUSTER = /[\s\S][\p{M}ﾞﾟ]*/gu;
 
+/** A text in the form it is matched in, with the way back from each position to the original. */
+export interface NormalizedText {
+  /** The text normalized one cluster at a time. */
+  normalized: string;
+  /** For each UTF-16 unit of `normalized`, the start of the original cluster it came from. */
+  starts: number[];
+  /** For each UTF-16 unit of `normalized`, the end of the original cluster it came from. */
+  ends: number[];
+}
+
 /**
- * Where the terms occur in `text`, as ranges of the original, sorted and joined where they touch or overlap.
- * The text is normalized one cluster at a time, so that a position in the normalized text leads back to the
- * original. A cluster that widens when normalized (㍿ is four characters) is marked whole when a part of it
- * matches. Terms are expected normalized, as `parseSearchTerms` returns them.
+ * Normalizes `text` one cluster at a time, so that a position in the normalized text leads back to the
+ * original. A cluster that widens when normalized (㍿ is four characters) leads back to the whole cluster.
  */
-export function matchRanges(text: string, terms: readonly string[]): MatchRange[] {
-  const wanted = terms.filter((term) => term.length > 0);
-  if (wanted.length === 0 || text.length === 0) return [];
+export function normalizeWithMap(text: string): NormalizedText {
   let normalized = "";
-  // For each UTF-16 unit of `normalized`, the original range of the cluster it came from.
   const starts: number[] = [];
   const ends: number[] = [];
   for (const match of text.matchAll(CLUSTER)) {
@@ -69,6 +74,18 @@ export function matchRanges(text: string, terms: readonly string[]): MatchRange[
       ends.push(end);
     }
   }
+  return { normalized, starts, ends };
+}
+
+/**
+ * Where the terms occur in `text`, as ranges of the original, sorted and joined where they touch or overlap.
+ * A cluster that widens when normalized is marked whole when a part of it matches. Terms are expected
+ * normalized, as `parseSearchTerms` returns them.
+ */
+export function matchRanges(text: string, terms: readonly string[]): MatchRange[] {
+  const wanted = terms.filter((term) => term.length > 0);
+  if (wanted.length === 0 || text.length === 0) return [];
+  const { normalized, starts, ends } = normalizeWithMap(text);
   const found: MatchRange[] = [];
   for (const term of wanted) {
     let from = normalized.indexOf(term);

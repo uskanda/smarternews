@@ -1,6 +1,7 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { Link } from "react-router";
 import { formatShort } from "@smarternews/client";
+import { useTermMatcher } from "../api/queries.ts";
 import { Badge } from "../ui/controls.tsx";
 import { Highlighted } from "./highlight.tsx";
 
@@ -35,6 +36,11 @@ export function ArticleRow({
 }) {
   // A feed article has no importance, and so no mark.
   const marked = (article.importance ?? 0) >= 4;
+  const headline = article.translatedTitle ?? article.title;
+  const line = excerpt ?? article.summary;
+  // The term groups are judged by what the row shows: a group whose terms are only in the body gets no badge.
+  const matcher = useTermMatcher();
+  const groups = matcher.groupsIn([headline, line]);
   return (
     <li
       data-read={article.isRead}
@@ -51,16 +57,16 @@ export function ArticleRow({
         <span className={article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
           {marked ? <span className="sr-only">重要度{article.importance}。</span> : null}
           <span data-title className={article.importance === 5 ? "headline-mark" : ""}>
-            <Highlighted text={article.translatedTitle ?? article.title} terms={terms} />
+            <Highlighted text={headline} terms={terms} groups={matcher} />
           </span>
         </span>
         {excerpt !== null ? (
           <span data-excerpt className="line-clamp-2 type-body-md text-on-surface-muted">
-            <Highlighted text={excerpt} terms={terms} />
+            <Highlighted text={excerpt} terms={terms} groups={matcher} />
           </span>
         ) : (
           <span className="line-clamp-1 type-body-md text-on-surface-muted">
-            <Highlighted text={article.summary} terms={terms} />
+            <Highlighted text={article.summary} terms={terms} groups={matcher} />
           </span>
         )}
         <span className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
@@ -70,6 +76,11 @@ export function ArticleRow({
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
           {article.starred ? <span>スター</span> : null}
+          {groups.map((group) => (
+            <span key={group.id} data-term-badge className="term-badge" data-term={group.color}>
+              {group.name}
+            </span>
+          ))}
         </span>
       </Link>
     </li>

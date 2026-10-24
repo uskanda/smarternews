@@ -705,3 +705,35 @@ describe("the migration to full content", () => {
     expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
   });
 });
+
+describe("the migration to term highlights", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("adds the two tables and leaves the articles and settings as they were", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "014")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, is_read, starred)
+       VALUES (1, 'feed', 5, 'k1', 'news', '規制の話', 's', 'b', ?, ?, ?, 1, 1)`,
+    ).run(now, now, now);
+    const articles = () => db.prepare("SELECT * FROM articles ORDER BY id").all();
+    const settings = () => db.prepare("SELECT * FROM settings").all();
+    const before = { articles: articles(), settings: settings() };
+
+    for (const name of readdirSync(SHIPPED).filter((file) => file >= "014")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    migrate(db, dir);
+
+    expect({ articles: articles(), settings: settings() }).toEqual(before);
+    expect(tableNames(db)).toEqual(expect.arrayContaining(["term_groups", "highlight_terms"]));
+    db.prepare("INSERT INTO term_groups (id, name, color, position, created_at) VALUES (1, 'A', 'green', 1, ?)").run(now);
+    db.prepare("INSERT INTO highlight_terms (group_id, text, normalized, created_at) VALUES (1, '規制', '規制', ?)").run(now);
+    expect(() => db.prepare("INSERT INTO highlight_terms (group_id, text, normalized, created_at) VALUES (1, '規制', '規制', ?)").run(now)).toThrow();
+    expect(() => db.prepare("INSERT INTO term_groups (name, color, position, created_at) VALUES ('B', 'yellow', 2, ?)").run(now)).toThrow();
+    db.prepare("DELETE FROM term_groups WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM highlight_terms").get()).toEqual({ n: 0 });
+  });
+});

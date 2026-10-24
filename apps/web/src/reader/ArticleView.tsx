@@ -1,8 +1,8 @@
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import { ApiError, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
-import { useArticle, useArticleTranslation, useSummaryRequest } from "../api/queries.ts";
+import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
+import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { listPathOf } from "../lib/paths.ts";
 import { Highlighted } from "./highlight.tsx";
@@ -45,7 +45,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * original right under it. The pairs come from the server as they are shown; nothing is matched up here.
  * A segment without a translation, and one whose translation says the same in the same words, is shown once.
  */
-function TranslatedBody({ translation, terms }: { translation: ArticleTranslation; terms?: readonly string[] }) {
+function TranslatedBody({ translation, terms, groups }: { translation: ArticleTranslation; terms?: readonly string[]; groups: TermMatcher }) {
   const lang = translation.sourceLanguage ?? undefined;
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -55,14 +55,14 @@ function TranslatedBody({ translation, terms }: { translation: ArticleTranslatio
         const shown = paired ? (
           <div key={index} className="segment">
             <div>
-              <Markdown text={segment.translated!} images highlight={terms} />
+              <Markdown text={segment.translated!} images highlight={terms} groups={groups} />
             </div>
             <div className="segment-original" lang={lang}>
-              <Markdown text={segment.original} images plainHeadings highlight={terms} />
+              <Markdown text={segment.original} images plainHeadings highlight={terms} groups={groups} />
             </div>
           </div>
         ) : (
-          <Markdown key={index} text={segment.original} images highlight={terms} />
+          <Markdown key={index} text={segment.original} images highlight={terms} groups={groups} />
         );
         return translation.truncated && index === lastTranslated
           ? [
@@ -167,6 +167,7 @@ export function ArticleView({
   const previous = useArticle(article?.previousArticleId ?? null).data;
   const translating = useArticleTranslation(article);
   const summaryState = useSummaryRequest(article);
+  const groups = useTermMatcher();
 
   // On a narrow screen the article replaces the list, and the link that was activated is gone:
   // the focus moves to the headline so that keyboard and screen reader users land in the article.
@@ -226,12 +227,12 @@ export function ArticleView({
         </div>
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
-            <Highlighted text={article.translatedTitle ?? article.title} terms={terms} />
+            <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
           </h2>
           {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
             // The title as the site wrote it, marked with its language so that it is read out in that language.
             <p lang={article.sourceLanguage ?? undefined} className="type-body-md text-on-surface-muted">
-              <Highlighted text={article.title} terms={terms} />
+              <Highlighted text={article.title} terms={terms} groups={groups} />
             </p>
           ) : null}
         </div>
@@ -278,7 +279,7 @@ export function ArticleView({
           <section aria-label="AIによる要約" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
             <h3 className="type-label-sm text-on-surface-muted">AIによる要約</h3>
             <p className="break-words whitespace-pre-line type-body-md">
-              <Highlighted text={article.autoSummary.text} terms={terms} />
+              <Highlighted text={article.autoSummary.text} terms={terms} groups={groups} />
             </p>
             {article.autoSummary.source === "feed" ? (
               <p className="type-label-sm text-on-surface-muted">元のページを読めなかったため、配信された内容だけをもとにしています。</p>
@@ -302,10 +303,10 @@ export function ArticleView({
         {delivered ? <FullContentBar article={article} control={fullContent} /> : null}
         {article.translation && (fullShown || article.fullContent === null) ? (
           // The translation is of the full content when there is one: what the feed delivered is then shown without one.
-          <TranslatedBody translation={article.translation} terms={terms} />
+          <TranslatedBody translation={article.translation} terms={terms} groups={groups} />
         ) : (
           <div className="article-body type-body-lg">
-            <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} />
+            <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} groups={groups} />
           </div>
         )}
         {previous ? (

@@ -1,6 +1,7 @@
 import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createTermMatcher, type TermMatcher } from "@smarternews/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../app/context.ts";
 
 /** How often lists and counts are fetched again while the page is open. */
@@ -46,6 +47,21 @@ export function useScopedFilterCount(target: { feedId: number } | { categoryId: 
       ? filter.scope.type === "feed" && filter.scope.feedId === target.feedId
       : filter.scope.type === "category" && filter.scope.categoryId === target.categoryId,
   ).length;
+}
+
+/**
+ * The term groups in their order. Changing them on the settings page sets this anew, so lists and articles
+ * take the new colours without a reload.
+ */
+export function useTermGroups() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["term-groups"], queryFn: () => api.termGroups() });
+}
+
+/** Finds the terms of the term groups in a text. Has no terms until the groups have arrived. */
+export function useTermMatcher(): TermMatcher {
+  const groups = useTermGroups().data;
+  return useMemo(() => createTermMatcher(groups ?? []), [groups]);
 }
 
 export function useCounts() {

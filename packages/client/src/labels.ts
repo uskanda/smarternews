@@ -1,4 +1,4 @@
-import type { Run } from "@smarternews/core/api";
+import type { Run, TermColor } from "@smarternews/core/api";
 
 export const STATUS_LABEL: Record<Run["status"], string> = {
   queued: "待機中",
@@ -65,3 +65,6 @@ export function feedErrorLabel(error: string): string {
 export function stageLabel(stage: string): string {
   return STAGE_LABEL[stage] ?? stage;
 }
+
+/** The colours of term groups, by the names the screens use. */
+export const TERM_COLOR_LABEL: Record<TermColor, string> = { green: "緑", purple: "紫", pink: "桃色", orange: "橙色" };

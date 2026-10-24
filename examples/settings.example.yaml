@@ -89,3 +89,15 @@ filters:
       - fields: [title]
         match: regex
         value: "^RFC \\d+: (HTTP|TLS)"
+# Term groups colour their terms wherever they occur in the lists and the texts of articles, generated and
+# delivered alike; nothing is hidden. Each group has a name and one colour of four: green, purple, pink or
+# orange. Terms match as filters do: as a part of the text, whatever the case and the width. Where terms of two
+# groups match one place, the group listed first colours it. A group is matched by its name; terms are added,
+# never removed.
+termGroups:
+  - name: Rust
+    color: orange
+    terms: [Rust, cargo]
+  - name: Standards
+    color: purple
+    terms: [RFC]

@@ -272,9 +272,10 @@ function SettingsFile() {
       const done = await api.importSettings(await file.text());
       setError(null);
       setResult(
-        `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。`,
+        `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。` +
+          `語のまとまりを${done.termGroupsCreated}件作成、語を${done.highlightTermsCreated}件追加。`,
       );
-      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "articles", "term-groups"]) void client.invalidateQueries({ queryKey: [key] });
     } catch (caught) {
       setError(caught);
     }
@@ -284,7 +285,7 @@ function SettingsFile() {
     <section aria-label="設定ファイル" className={SECTION}>
       <h2 className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
-        カテゴリ、トピック、購読フィード、フィルター、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
+        カテゴリ、トピック、購読フィード、フィルター、語の色付け、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
       </p>
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
@@ -300,7 +301,7 @@ function SettingsFile() {
           />
         </label>
         <p className="type-label-sm text-on-surface-muted">
-          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとフィルターも消えません。以前のストップワードの形式のファイルも読み込め、各語は全体の隠すフィルターになります。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
+          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとフィルターも消えません。語の色付けは、名前が一致するまとまりの色を変え、ない語だけを足します。ファイルにないまとまりと語は消えません。以前のストップワードの形式のファイルも読み込め、各語は全体の隠すフィルターになります。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
         </p>
         <div>
           <Button type="submit" disabled={!file}>
@@ -409,6 +410,17 @@ export function SettingsPage() {
             </Link>
           </li>
         </ul>
+      </section>
+      <section aria-label="語の色付け" className={SECTION}>
+        <h2 className="type-headline-md">語の色付け</h2>
+        <p className="max-w-measure type-body-md text-on-surface-muted">
+          登録した語を、生成記事と配信記事の両方の一覧と本文で色付けします。語はまとまりに分け、まとまりごとに色を選びます。色付けは記事を隠しません。
+        </p>
+        <div>
+          <Link to="/settings/term-highlights" className="tap type-body-md text-primary underline underline-offset-4">
+            語の色付けを設定する
+          </Link>
+        </div>
       </section>
       {settings.isError ? <ErrorNotice error={settings.error} onRetry={() => void settings.refetch()} /> : null}
       {settings.data ? (

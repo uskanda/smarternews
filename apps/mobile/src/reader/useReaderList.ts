@@ -171,7 +171,12 @@ export function useReaderList(ref: ListRef) {
   );
   const refresh = useCallback(async () => {
     session.reset(listKey);
-    await Promise.all([client.invalidateQueries({ queryKey: ["articles"] }), client.invalidateQueries({ queryKey: ["counts"] })]);
+    // The term groups too: they are changed on the web page, and a pull is how the app hears of it.
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["articles"] }),
+      client.invalidateQueries({ queryKey: ["counts"] }),
+      client.invalidateQueries({ queryKey: ["term-groups"] }),
+    ]);
   }, [session, listKey, client]);
 
   const categoryName = (categoryId: number | null) => categories.data?.find((entry) => entry.id === categoryId)?.name ?? "";

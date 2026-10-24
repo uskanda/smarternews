@@ -61,7 +61,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
 - Categories and feeds can be reordered by dragging them in the left pane. A feed held over another category for half a second can be dropped into it. A right click on a category or a feed opens a menu that moves it up or down; for a feed the menu also unsubscribes. The menu key or `Shift+F10` opens the same menu from the keyboard. The order is kept on the server, so the Android app, the settings file and OPML follow it.
 - Marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed. "「すべて既読にする」のあと、未読のある次の項目へ移る" in the global settings switches this off.
-- The settings pages edit categories, topics, subscribed feeds, filters, the reader information and the global settings, and load or save the settings file and OPML.
+- The settings pages edit categories, topics, subscribed feeds, filters, term highlights, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 - The search box at the top of the left pane finds articles by words, read ones included, and marks the matching words in the list and the article. The result narrows to a category, a feed or unread articles, and its URL keeps the words.
 
@@ -82,7 +82,8 @@ To connect, open the web app's settings on a computer, press "アプリ接続用
 - The button on top of a feed article fetches its full content, and switches between it and what the feed delivered once it is there.
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
 - The drawer on the left lists the same views, categories and subscribed feeds as the web app, with unread counts.
-- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds and filters are edited in the web app, which the settings screen opens in the browser.
+- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds, filters and term highlights are edited in the web app, which the settings screen opens in the browser.
+- The list and the article colour the terms of your term groups as the web app does. Pulling the list down fetches terms changed on the web.
 - The interface is in Japanese, and the screen stays in portrait.
 
 Notifications are made on the device. While the app is closed, Android lets it ask your server for new articles from time to time, no more often than every 15 minutes and at moments Android chooses. So a notification can arrive well after the article, and battery saving can delay it further; opening the app always shows the current state. Nothing is sent to a notification service. The default notifies articles of importance 5 only; the settings screen offers every new written article, or none. Articles of subscribed feeds are never notified.
@@ -103,7 +104,7 @@ Without a signing key the build is signed with the debug key, which is enough to
 
 Two files hold your configuration, and both live outside the repository.
 
-The settings file holds what you want to read: categories, topics, subscribed feeds, filters, a description of the reader, the output language and the time zone. [examples/settings.example.yaml](examples/settings.example.yaml) shows the format. `import` loads a settings file and `export` writes the current settings back, so the file also serves as a backup. Everything in it can be changed through the API as well.
+The settings file holds what you want to read: categories, topics, subscribed feeds, filters, term groups, a description of the reader, the output language and the time zone. [examples/settings.example.yaml](examples/settings.example.yaml) shows the format. `import` loads a settings file and `export` writes the current settings back, so the file also serves as a backup. Everything in it can be changed through the API as well.
 
 `~/.config/smarternews/config.yaml` holds how the server runs: the listen address, the model providers, and the limits. Every key is optional. [examples/config.example.yaml](examples/config.example.yaml) lists the keys with their defaults.
 
@@ -159,6 +160,10 @@ A folder becomes the category of the same name. If that category does not exist 
 Filters hide articles of subscribed feeds. Hide filters apply to everything, to a category or to one feed, and hide the articles that meet all their conditions. Keep filters sit on a category or a feed and hide the articles there that meet none of them. Each condition looks at the title, the content, the author or the page URL, and matches a plain value or a regular expression; case and full-width letters do not matter. Translations are never matched, only the original text. The settings page shows how many articles each filter hides, lists them, and counts what a filter would hide before you save it. Switching a filter off or removing it brings its hidden articles back. Starred articles and articles the model wrote are never hidden.
 
 Stop words, which this replaced, became hide filters over everything when the server was updated, and a settings file that still lists `stopWords` loads the same way.
+
+### Term highlights
+
+Term groups colour words you want to spot, in the lists and the articles, written and delivered alike. A group has a name, one of four colours (green, purple, pink, orange) and its terms. A term matches anywhere in the text, as a filter's plain value does: case and full-width letters do not matter. The headline, the summary line, the article, its translation and original, and the feed summary are coloured, with a line under each match for readers who cannot tell the colours apart. A list row whose headline or summary line has a term shows the name of its group at the end of the row. Where terms of two groups meet in one place, the group higher on the settings page wins; its buttons move groups up and down. Nothing is hidden and no article changes: the apps match the terms on the device, and no model is involved.
 
 ### Duplicates across feeds
 

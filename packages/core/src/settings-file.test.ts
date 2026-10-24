@@ -6,6 +6,7 @@ import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
+import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
 import { exportSettings, importSettings } from "./settings-file.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "./testing/db.ts";
 
@@ -73,7 +74,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -452,7 +453,13 @@ describe("the example settings file", () => {
       feedsCreated: 3,
       feedsUpdated: 0,
       filtersCreated: 2,
+      termGroupsCreated: 2,
+      highlightTermsCreated: 3,
     });
+    expect(listTermGroups(db).map((group) => [group.name, group.color, group.terms.map((term) => term.text)])).toEqual([
+      ["Rust", "orange", ["Rust", "cargo"]],
+      ["Standards", "purple", ["RFC"]],
+    ]);
     expect(getSettings(db)).toMatchObject({ timeZone: "America/Los_Angeles", feedIntervalMinutes: 30 });
     const tools = listCategories(db).find((category) => category.slug === "developer-tools")!;
     expect(listFeeds(db).map((feed) => [feed.categoryId, feed.intervalMinutes])).toEqual([
@@ -617,5 +624,82 @@ describe("translation of a feed in the settings file", () => {
     const db = createTestDb();
     insertFeed(db, { url: A, title: "A", translate: true }, clock);
     expect(exportSettings(db)).not.toMatch(/key/i);
+  });
+});
+
+describe("term groups in the settings file", () => {
+  type Db = ReturnType<typeof createTestDb>;
+  const add = (db: Db, name: string, color: "green" | "purple" | "pink" | "orange", ...terms: string[]) => {
+    const group = createTermGroup(db, { name, color }, clock);
+    for (const text of terms) addHighlightTerm(db, group.id, { text }, clock);
+    return group;
+  };
+  const groups = (db: Db) => listTermGroups(db).map((group) => [group.name, group.color, group.terms.map((term) => term.text)]);
+  const file = (termGroups: unknown) => `version: 1\ntermGroups: ${JSON.stringify(termGroups)}\n`;
+
+  it("are written in their order, with name, colour and terms", () => {
+    const db = createTestDb();
+    const a = add(db, "A", "green", "規制", "関税");
+    add(db, "B", "pink", "TSMC");
+    moveTermGroup(db, a.id, null);
+    expect(parse(exportSettings(db)).termGroups).toEqual([
+      { name: "B", color: "pink", terms: ["TSMC"] },
+      { name: "A", color: "green", terms: ["規制", "関税"] },
+    ]);
+  });
+
+  it("are not written when there are none", () => {
+    expect(parse(exportSettings(createTestDb()))).not.toHaveProperty("termGroups");
+  });
+
+  it("are matched by name: a known group takes the file's colour, a new one is registered", () => {
+    const db = createTestDb();
+    add(db, "A", "green");
+    const result = importSettings(db, file([{ name: "A", color: "purple" }, { name: "B", color: "orange", terms: ["関税"] }]), clock);
+    expect(groups(db)).toEqual([
+      ["A", "purple", []],
+      ["B", "orange", ["関税"]],
+    ]);
+    expect(result).toMatchObject({ termGroupsCreated: 1, highlightTermsCreated: 1 });
+  });
+
+  it("only add terms: a registered term is not added twice, and a term the file leaves out stays", () => {
+    const db = createTestDb();
+    add(db, "A", "green", "規制", "関税");
+    const result = importSettings(db, file([{ name: "A", color: "green", terms: ["規制", "補助金", "ＴＳＭＣ", "tsmc"] }]), clock);
+    expect(groups(db)).toEqual([["A", "green", ["規制", "関税", "補助金", "ＴＳＭＣ"]]]);
+    expect(result).toMatchObject({ termGroupsCreated: 0, highlightTermsCreated: 2 });
+  });
+
+  it("keep a group the file does not mention, with its terms, after those it does in the file's order", () => {
+    const db = createTestDb();
+    add(db, "A", "green");
+    add(db, "B", "green", "規制");
+    add(db, "C", "green");
+    importSettings(db, file([{ name: "C", color: "green" }, { name: "A", color: "green" }]), clock);
+    expect(listTermGroups(db).map((group) => group.name)).toEqual(["C", "A", "B"]);
+    expect(groups(db)[2]).toEqual(["B", "green", ["規制"]]);
+  });
+
+  it("refuse a colour outside the four, and store nothing of the file", () => {
+    const db = createTestDb();
+    const text = `version: 1\nsettings: { readerInfo: changed }\ntermGroups: [{ name: A, color: yellow }]\n`;
+    expect(() => importSettings(db, text, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "termGroups.0.color" })] }),
+    );
+    expect(listTermGroups(db)).toEqual([]);
+    expect(getSettings(db).readerInfo).not.toBe("changed");
+  });
+
+  it("make the same file again on an empty server", () => {
+    const db = createTestDb();
+    const a = add(db, "A", "green", "規制", "関税");
+    add(db, "B", "purple", "TSMC");
+    add(db, "C", "orange");
+    moveTermGroup(db, a.id, null);
+    const written = exportSettings(db);
+    const other = createTestDb();
+    importSettings(other, written, clock);
+    expect(exportSettings(other)).toBe(written);
   });
 });

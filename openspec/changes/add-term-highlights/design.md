@@ -2,8 +2,8 @@
 
 ## Context
 
-フィルター（#56、#57）の照合は `packages/core/src/filters/match.ts` にある。照合の形への変換 `normalizeForMatch`（NFKCで正規化し、小文字にする）もこのファイルにある。
-このファイルはデータベースに依存するので、ブラウザーとアプリからは読み込めない。`packages/core` の入口 `.` もNodeの機能を含む。ブラウザーとアプリが読めるのは、型とスキーマだけの `@smarternews/core/api` である。
+フィルター（#56、#57）の照合は `packages/core/src/filters/match.ts` にある。照合の形への変換 `normalizeForMatch`（NFKCで正規化し、小文字にする）は、全文検索（#47）で `packages/core/src/search/text.ts` へ移った。
+`packages/core` の入口 `.` はNodeの機能を含む。ブラウザーとアプリが読めるのは `@smarternews/core/api` である。型とスキーマのほか、`search/text.ts` のようなNodeに依存しない関数を集めている。
 `packages/client` はWebとアプリが共有する処理を置く場所で、`@smarternews/core` に依存してよい。画面の部品とNodeの機能には依存させない。
 
 記事の文字は、どこでもMarkdownとして描いている。
@@ -48,16 +48,16 @@
 色付けするのは、一覧の行の見出しと抜粋、本文のペインの見出しと本文、訳したタイトル、原文のタイトル、訳と原文のまとまり、要約の区画である。
 読み手への影響、出典の題名、イベントの一覧の行は、この変更では色付けしない。round 3で、この範囲に決めた。grillingの決定が挙げた場所に含まれず、対象にするなら `web-reader` と `mobile-reader` に要件を足すことになる。必要になったら、別の変更で足す。
 
-### 照合の形への変換を、ブラウザーでも読める場所へ移す
+### 照合の形への変換は、ブラウザーでも読める場所にあるものを使う
 
-`normalizeForMatch` を、依存のない新しいファイル `packages/core/src/text-match.ts` へ移す。`packages/core/package.json` の `exports` に `./match` を足して公開する。
-`packages/core/src/filters/match.ts` は、ここから読み込む。フィルターの振る舞いは変えない。
+`normalizeForMatch` は、全文検索（#47）で `packages/core/src/search/text.ts` へ移った。このファイルは依存を持たず、`@smarternews/core/api` から読み込める。`packages/core/src/filters/match.ts` も、ここから読み込んでいる。
+色付けも、この関数と、同じファイルの単位ごとの変換を使う。新しいファイルと `exports` の項目は足さない。
 変換を `packages/client` に書き写す案は採らない。2つの実装がずれると、ストップワードで隠れる語と色付けされる語が食い違う。
 
 ### 一致した範囲は、元の文字の単位に戻して求める
 
 NFKCは文字の数を変える。半角のカタカナと半角の濁点は1文字にまとまり、「㍿」は4文字に開く。照合の形の上の位置は、そのままでは元の文字の位置に使えない。
-`packages/client/src/highlight.ts` で次のように求める。
+`packages/client/src/highlight.ts` で次のように求める。手順1と2には、`packages/core/src/search/text.ts` の処理（`normalizeWithMap`）を使う。全文検索が一致した語を示すために置いたものである。
 
 1. 元の文字列を単位に分ける。単位は、1つの文字と、そのあとに続く結合文字（`\p{M}`）と半角の濁点と半濁点（U+FF9E、U+FF9F）である。
 2. 単位ごとに照合の形にして、つなげる。照合の形の各文字が、どの単位から来たかを控える。
@@ -85,9 +85,11 @@ NFKCは文字の数を変える。半角のカタカナと半角の濁点は1文
 属性（`href`、`src`）は文字の節ではないので照合しない。仕様の「文字だけの照合」をこの形で満たす。生のHTMLは、いまと同じく文字のままである。
 Markdownの文字列に印を差し込む案は採らない。URLやコードの中に差し込むと、リンクやコードのまとまりとして解析されなくなる。
 木をたどる処理は自前で書き、依存を増やさない。
+生のHTMLの節（`raw`）は、`react-markdown` がプラグインのあとで文字の節に変える。この処理は、その変換を少し早めて文字の節にしてから区間に分ける。表示は変わらず、タグの文字列の中の語も色付けされる。
+全文検索で一致した語と重なるときは、まとまりの `mark` の内側に検索の `mark` を入れる。1つの一致した箇所が、検索の一致で切れずに1つの要素になる。
 
 一覧の行、本文の見出し、原文のタイトル、要約の区画の段落は、ただの文字なので、同じ区間を `mark` で包む小さな部品で描く。
-語のまとまりは、APIから取得してReact Queryのキャッシュに置き、部品は文脈から読む。編集の画面で変えたときは、このキャッシュを無効にする。仕様の「語の変更の反映」をこの形で満たす。
+語のまとまりは、APIから取得してReact Queryのキャッシュに置く。一覧の行と本文のペインがキャッシュから照合の準備をした値を読み、文字を描く部品へ渡す。編集の画面で変えたときは、応答でこのキャッシュを置き換える。仕様の「語の変更の反映」をこの形で満たす。
 
 ### アプリは、Markdownの字句の文字を入れ子の `Text` に分ける
 
@@ -136,7 +138,7 @@ APIと設定ファイルでは、色を `green`、`purple`、`pink`、`orange` �
 
 ### 語とまとまりの保存
 
-移行 `<番号>_term_highlights.sql` で2つの表を足す。
+移行 `014_term_highlights.sql` で2つの表を足す。
 
 - `term_groups`: `id`、`name`（一意）、`color`、`position`、`created_at`
 - `highlight_terms`: `id`、`group_id`（`term_groups` の削除に連動して消える）、`text`、`normalized`、`created_at`。`(group_id, normalized)` を一意にする

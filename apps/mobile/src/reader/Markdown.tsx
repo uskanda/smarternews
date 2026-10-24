@@ -1,4 +1,4 @@
-import { relayedImageUrl } from "@smarternews/client";
+import { relayedImageUrl, type TermMatcher } from "@smarternews/client";
 import { marked, type Token, type Tokens } from "marked";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Image, Text, View } from "react-native";
@@ -14,14 +14,20 @@ import { Highlighted } from "./highlight";
 // to, whose addresses the API puts in the content. The device never asks another site for an image.
 
 /**
- * The theme, the words of a search to mark in the text when the article was opened from search results, and
- * the URL of the connected server, against which the addresses of relayed images are resolved.
+ * The theme, the words of a search to mark in the text when the article was opened from search results, the
+ * term groups to colour the text by, and the URL of the connected server, against which the addresses of
+ * relayed images are resolved.
  */
-type Drawing = Theme & { terms?: readonly string[]; server?: string };
+type Drawing = Theme & { terms?: readonly string[]; groups?: TermMatcher | null; server?: string };
 
-/** A run of text, with the words of the search marked when there are any. */
+/**
+ * A run of text, with the words of the search marked and the terms of the term groups coloured when there
+ * are any. Only text comes here: the address of a link or an image is never matched.
+ */
 function words(text: string, theme: Drawing, key?: string): ReactNode {
-  return theme.terms && theme.terms.length > 0 ? <Highlighted key={key} text={text} terms={theme.terms} /> : text;
+  const searched = theme.terms && theme.terms.length > 0;
+  const colored = theme.groups && !theme.groups.empty && theme.groups.split(text).some((part) => part.group !== null);
+  return searched || colored ? <Highlighted key={key} text={text} terms={theme.terms} groups={theme.groups} /> : text;
 }
 
 /**
@@ -196,17 +202,31 @@ function block(token: Token, theme: Drawing, key: string, images: boolean): Reac
 /**
  * `quiet` draws the text one size smaller and in the muted colour: the original under its translation.
  * `highlight` marks the words of the search an article was opened from, wherever they are in the text.
+ * `groups` colours the terms of the term groups in the text.
  */
-export function Markdown({ text, images = false, quiet = false, highlight }: { text: string; images?: boolean; quiet?: boolean; highlight?: readonly string[] }) {
+export function Markdown({
+  text,
+  images = false,
+  quiet = false,
+  highlight,
+  groups,
+}: {
+  text: string;
+  images?: boolean;
+  quiet?: boolean;
+  highlight?: readonly string[];
+  groups?: TermMatcher | null;
+}) {
   const base = useTheme();
   const server = useConnection().connection?.url;
   const theme = useMemo<Drawing>(
     () => ({
       ...(quiet ? ({ ...base, type: { ...base.type, "body-lg": base.type["body-md"] }, colors: { ...base.colors, "on-surface": base.colors["on-surface-muted"] } } as unknown as Theme) : base),
       terms: highlight,
+      groups,
       server,
     }),
-    [base, quiet, highlight, server],
+    [base, quiet, highlight, groups, server],
   );
   const tokens = useMemo(() => marked.lexer(text, { gfm: true }), [text]);
   return <View style={{ gap: theme.spacing.lg }}>{tokens.map((token, index) => block(token, theme, String(index), images))}</View>;

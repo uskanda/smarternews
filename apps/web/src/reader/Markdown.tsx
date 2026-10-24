@@ -1,7 +1,7 @@
-import { relayedImageUrl } from "@smarternews/client";
+import { relayedImageUrl, type TermMatcher } from "@smarternews/client";
 import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
-import { rehypeSearchMatch } from "./highlight.tsx";
+import { rehypeHighlights } from "./highlight.tsx";
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
@@ -38,18 +38,23 @@ function ArticleImage({ src, alt }: { src: string; alt: string }) {
  * With `plainHeadings` a heading is drawn as a line of bold text: the original under a translated heading
  * must not be a second heading in the outline of the page.
  * With `highlight`, the words of an article opened from search results are marked wherever they are in the text.
+ * With `groups`, the terms of the term groups are coloured in the text, never in the address of a link or image.
  */
 export function Markdown({
   text,
   images = false,
   plainHeadings = false,
   highlight,
+  groups,
 }: {
   text: string;
   images?: boolean;
   plainHeadings?: boolean;
   highlight?: readonly string[];
+  groups?: TermMatcher | null;
 }) {
+  const colored = groups && !groups.empty ? groups : null;
+  const searched = highlight && highlight.length > 0 ? highlight : undefined;
   const plain = ({ children }: { children?: ReactNode }) => (
     <p>
       <strong>{children}</strong>
@@ -57,7 +62,7 @@ export function Markdown({
   );
   return (
     <ReactMarkdown
-      rehypePlugins={highlight && highlight.length > 0 ? [rehypeSearchMatch(highlight)] : []}
+      rehypePlugins={searched || colored ? [rehypeHighlights(searched, colored)] : []}
       urlTransform={(url, key) => (key === "src" ? relayed(url) : SAFE_LINK.test(url) ? url : "")}
       components={{
         a: ({ href, children }) =>
