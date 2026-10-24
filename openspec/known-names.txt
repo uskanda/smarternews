@@ -44,3 +44,10 @@ opml-export
 002_feeds.sql
 feed-subscriptions
 stop-words
+images.cacheDays
+images.cacheMaxBytes
+full-content.ts
+filters.ts
+FiltersPage.tsx
+articles.filtered
+event.code
