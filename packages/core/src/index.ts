@@ -20,6 +20,7 @@ export * from "./feeds/content.ts";
 export * from "./filters/match.ts";
 export * from "./search/plain.ts";
 export * from "./feeds/discover.ts";
+export * from "./feeds/full-content.ts";
 export * from "./feeds/ingest.ts";
 export * from "./feeds/opml.ts";
 export * from "./feeds/poller.ts";

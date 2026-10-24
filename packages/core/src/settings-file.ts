@@ -36,6 +36,7 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     // Written only when it is on: a file without the line leaves the setting of a known feed as it is.
     ...(feed.autoSummarize ? { autoSummarize: true } : {}),
     ...(feed.translate ? { translate: true } : {}),
+    ...(feed.fetchFullContent ? { fetchFullContent: true } : {}),
   };
 }
 
@@ -141,6 +142,8 @@ function importSubscriptions(
             // Switching summaries on here starts them at this moment: the articles the feed already has stay as they are.
             ...(entry.autoSummarize !== undefined ? { autoSummarize: entry.autoSummarize } : {}),
             ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
+            // Likewise full content: only articles stored from now on have it fetched.
+            ...(entry.fetchFullContent !== undefined ? { fetchFullContent: entry.fetchFullContent } : {}),
           },
           clock,
         );
@@ -158,6 +161,7 @@ function importSubscriptions(
           enabled: entry.enabled,
           autoSummarize: entry.autoSummarize,
           translate: entry.translate,
+          fetchFullContent: entry.fetchFullContent,
         },
         clock,
       );

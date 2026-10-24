@@ -571,3 +571,43 @@ describe("translation of a feed", () => {
     expect(usage).not.toHaveTextContent("450,000");
   });
 });
+
+describe("full content of a feed", () => {
+  const HINT = "記事ごとに元のページを取得して、本文を保存します。これから届く記事だけが対象です。";
+
+  it("is switched on in the edit form, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).not.toHaveTextContent("全文を取得");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "全文を取得する" });
+    expect(choice).not.toBeChecked();
+    expect(choice).toHaveAccessibleDescription(HINT);
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).fetchFullContent).toBe(true);
+    await waitFor(async () => expect(within(await rowOf("Blog")).getByText("全文を取得")).toBeInTheDocument());
+  });
+
+  it("can be switched on while a feed is added, with the same words beside it", async () => {
+    const server = makeServer();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const form = await section("購読フィードの追加");
+    const choice = within(form).getByRole("checkbox", { name: "全文を取得する" });
+    expect(choice).not.toBeChecked();
+    expect(choice).toHaveAccessibleDescription(HINT);
+    await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await user.click(choice);
+    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+
+    expect(within(await rowOf("Example Blog")).getByText("全文を取得")).toBeInTheDocument();
+    expect(listFeeds(server.db)).toMatchObject([{ url: FEED, fetchFullContent: true }]);
+  });
+});

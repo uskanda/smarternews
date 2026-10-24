@@ -3,6 +3,7 @@
 export * from "./api.ts";
 export * from "./connect.ts";
 export * from "./events.ts";
+export * from "./full-content.ts";
 export * from "./labels.ts";
 export * from "./merge.ts";
 export * from "./messages.ts";

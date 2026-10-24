@@ -5,6 +5,7 @@ import {
   articleSearchResultSchema,
   articleSchema,
   articleTranslationSchema,
+  fullContentResultSchema,
   summaryRequestResultSchema,
   candidateSchema,
   categorySchema,
@@ -30,6 +31,7 @@ import {
   type ArticleSearchQuery,
   type ArticleSearchResult,
   type ArticleTranslation,
+  type FullContentResult,
   type SummaryRequestResult,
   type ArticleUpdate,
   type Candidate,
@@ -211,6 +213,8 @@ export function createApi(options: ApiOptions) {
     /** Says that the article is open and its summary is wanted now. The answer tells whether one is on its way. */
     requestSummary: (id: number): Promise<SummaryRequestResult> => json(summaryRequestResultSchema, `/articles/${id}/summary`, { method: "POST" }),
     translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
+    /** Fetches the full content of a feed article from its page. Answers once the fetch is over, which can take seconds. */
+    fetchFullContent: (id: number): Promise<FullContentResult> => json(fullContentResultSchema, `/articles/${id}/full-content`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>
       json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),

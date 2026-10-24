@@ -87,7 +87,7 @@ describe("PageFetcher", () => {
 
   it("reports an error status as a failed page", async () => {
     const { pages } = setup({});
-    await expect(pages.fetchPage("https://example.org/gone")).resolves.toEqual({ ok: false, reason: "http", detail: "HTTP status 404" });
+    await expect(pages.fetchPage("https://example.org/gone")).resolves.toEqual({ ok: false, reason: "http", status: 404, detail: "HTTP status 404" });
   });
 
   it("reports a response that is not a document", async () => {
@@ -95,5 +95,30 @@ describe("PageFetcher", () => {
       "https://example.org/file.pdf": () => new Response("%PDF", { headers: { "content-type": "application/pdf" } }),
     });
     await expect(pages.fetchPage("https://example.org/file.pdf")).resolves.toMatchObject({ ok: false, reason: "not-html" });
+  });
+
+  it("reports a refused destination apart from robots.txt and other failures", async () => {
+    const { pages, urls } = setup({});
+    await expect(pages.fetchPage("http://127.0.0.1/admin")).resolves.toMatchObject({ ok: false, reason: "blocked" });
+    expect(urls()).toEqual([]);
+  });
+
+  it("reports a page that does not answer in time apart from other failures", async () => {
+    const fake = fakeFetch({ "https://example.org/robots.txt": robots(""), "https://example.org/slow": () => "hang" });
+    const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 20, maxBytes: 100000, fetchImpl: fake.fetchImpl });
+    const pages = new PageFetcher(fetcher, { pagesPerRun: 20 });
+    await expect(pages.fetchPage("https://example.org/slow")).resolves.toMatchObject({ ok: false, reason: "timeout" });
+  });
+
+  it("reports any other failed request as an error", async () => {
+    const fake = fakeFetch({
+      "https://example.org/robots.txt": robots(""),
+      "https://example.org/broken": () => {
+        throw new TypeError("socket hang up");
+      },
+    });
+    const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 100000, fetchImpl: fake.fetchImpl });
+    const pages = new PageFetcher(fetcher, { pagesPerRun: 20 });
+    await expect(pages.fetchPage("https://example.org/broken")).resolves.toMatchObject({ ok: false, reason: "error" });
   });
 });

@@ -1,7 +1,7 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { createCategory, findCategoryBySlug, listCategories, moveCategory } from "./db/categories.ts";
-import { nextArticleToSummarize } from "./db/articles.ts";
+import { nextArticleForFullContent, nextArticleToSummarize, recordFullContentFailure, saveFullContent } from "./db/articles.ts";
 import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
@@ -460,6 +460,7 @@ describe("the example settings file", () => {
       [tools.id, 360],
       [null, null],
     ]);
+    expect(listFeeds(db).map((feed) => feed.fetchFullContent)).toEqual([false, true, false]);
   });
 });
 
@@ -512,6 +513,71 @@ describe("summaries of feeds in the settings file", () => {
 
   it("refuses a setting that is not true or false", () => {
     expect(() => importSettings(createTestDb(), file("    autoSummarize: sometimes\n"), clock)).toThrow(/expected format/);
+  });
+});
+
+describe("full content of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the setting for the feeds that fetch full content only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", fetchFullContent: true }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.fetchFullContent)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.fetchFullContent])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without the setting as not fetching full content, and leaves a known feed as it is", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { fetchFullContent: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(true);
+    importSettings(db, file("    fetchFullContent: false\n"), clock);
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(false);
+  });
+
+  it("fetches the full content of none of the articles a feed already has when the file switches it on", () => {
+    const local = fakeClock("2026-03-01T00:00:00.000Z");
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: A, title: "A" }, local);
+    seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    local.advance(60_000);
+
+    importSettings(db, file("    fetchFullContent: true\n"), local);
+
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(true);
+    expect(nextArticleForFullContent(db)).toBeNull();
+    local.advance(60_000);
+    const later = seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    expect(nextArticleForFullContent(db)?.id).toBe(later);
+  });
+
+  it("writes neither the full content nor its state", () => {
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: A, title: "A", fetchFullContent: true }, clock);
+    const id = seedFeedArticle(db, feed.id, { at: clock().toISOString() });
+    saveFullContent(db, id, { markdown: "Distinctive full text", text: "Distinctive full text", now: clock().toISOString() });
+    const failed = seedFeedArticle(db, feed.id, { at: clock().toISOString() });
+    recordFullContentFailure(db, failed, { reason: "http", detail: "404" });
+
+    const exported = exportSettings(db);
+    expect(exported).not.toContain("Distinctive");
+    expect(exported).not.toMatch(/fullContent|fetched|failed|404/);
+  });
+
+  it("refuses a setting that is not true or false", () => {
+    expect(() => importSettings(createTestDb(), file("    fetchFullContent: sometimes\n"), clock)).toThrow(/expected format/);
   });
 });
 

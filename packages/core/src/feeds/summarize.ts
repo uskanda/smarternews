@@ -2,7 +2,7 @@
 // and it runs after the article is stored, in a line of its own: fetching a feed never waits for a model.
 import type { AutoSummarySource } from "../api.ts";
 import type { Clock } from "../clock.ts";
-import { nextArticleToSummarize, recordSummaryFailure, saveAutoSummary, skipAutoSummary } from "../db/articles.ts";
+import { articleForFullContent, nextArticleToSummarize, recordSummaryFailure, saveAutoSummary, skipAutoSummary } from "../db/articles.ts";
 import type { Database } from "../db/database.ts";
 import { getSettings } from "../db/settings.ts";
 import type { Fetcher } from "../fetch/http.ts";
@@ -10,6 +10,7 @@ import { PageFetcher } from "../fetch/pages.ts";
 import { LlmLimitError, type TaskRunner } from "../llm/runner.ts";
 import { SUMMARIZE_INPUT_CHARS } from "../llm/tasks.ts";
 import { extractArticle } from "../sources/extract.ts";
+import type { FullContentWorker } from "./full-content.ts";
 
 /** Less text than this is not worth a summary: the reader has read it by then. */
 export const SUMMARY_MIN_CHARS = 200;
@@ -19,6 +20,8 @@ export interface SummaryDeps {
   clock: Clock;
   fetcher: Fetcher;
   runner: TaskRunner;
+  /** Fetches full content. A page the full content is fetched from is the one the summary reads. */
+  fullContent: FullContentWorker;
 }
 
 /**
@@ -27,16 +30,37 @@ export interface SummaryDeps {
  */
 export type SummaryOutcome = "none" | "limit" | "summarized" | "skipped" | "failed";
 
-/** The text to summarise: the article's page when it can be read, else what the feed delivered. */
-async function textOf(pages: PageFetcher, article: { url: string | null; contentText: string }): Promise<{ text: string; source: AutoSummarySource } | null> {
+type SummaryInput = { text: string; source: AutoSummarySource } | null;
+
+function deliveredText(article: { contentText: string }): SummaryInput {
+  const delivered = article.contentText.trim();
+  return delivered.length >= SUMMARY_MIN_CHARS ? { text: delivered, source: "feed" } : null;
+}
+
+/**
+ * The text to summarise. The full content when the article has it; what the feed delivered when fetching
+ * it failed; for an article whose feed fetches full content and that has none yet, the full content once it
+ * is fetched, so that the page is requested once. Any other article's page is read here, its text used for
+ * this one call and kept nowhere. What the feed delivered stands in for a page that cannot be read.
+ */
+async function textOf(deps: SummaryDeps, pages: PageFetcher, article: { id: number; url: string | null; contentText: string }): Promise<SummaryInput> {
+  let full = articleForFullContent(deps.db, article.id);
+  if (full.status === null && full.feedFetchesFullContent) {
+    await deps.fullContent.fetchFor(article.id);
+    full = articleForFullContent(deps.db, article.id);
+  }
+  if (full.status === "fetched") {
+    const text = (full.fullContentText ?? "").slice(0, SUMMARIZE_INPUT_CHARS);
+    return text.length >= SUMMARY_MIN_CHARS ? { text, source: "page" } : deliveredText(article);
+  }
+  if (full.status === "failed") return deliveredText(article);
   if (article.url !== null) {
     const page = await pages.fetchPage(article.url);
     // The page text is used for this one call and kept nowhere.
     const text = page.ok ? extractArticle(page.html, page.url, SUMMARIZE_INPUT_CHARS).text : "";
     if (text.length >= SUMMARY_MIN_CHARS) return { text, source: "page" };
   }
-  const delivered = article.contentText.trim();
-  return delivered.length >= SUMMARY_MIN_CHARS ? { text: delivered, source: "feed" } : null;
+  return deliveredText(article);
 }
 
 /**
@@ -50,7 +74,7 @@ export async function summarizeNext(deps: SummaryDeps, pages: PageFetcher): Prom
   // Asked before the page is fetched: a day without allowance sends no request to other sites either.
   if (!runner.canSummarize()) return "limit";
   try {
-    const input = await textOf(pages, article);
+    const input = await textOf(deps, pages, article);
     if (input === null) {
       skipAutoSummary(db, article.id);
       return "skipped";

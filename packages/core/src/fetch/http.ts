@@ -9,10 +9,19 @@ export function defaultUserAgent(version: string): string {
   return `smarternews/${version} (+${REPOSITORY_URL})`;
 }
 
+/**
+ * What kind of failure a request met: the destination is refused (this machine, its network, a scheme that is
+ * not the web), the site did not answer in time, or anything else.
+ */
+export type FetchErrorKind = "blocked" | "timeout" | "error";
+
 export class FetchError extends Error {
-  constructor(message: string) {
+  readonly kind: FetchErrorKind;
+
+  constructor(message: string, kind: FetchErrorKind = "error") {
     super(message);
     this.name = "FetchError";
+    this.kind = kind;
   }
 }
 
@@ -66,7 +75,7 @@ const MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function notAllowed(url: string, reason: string): FetchError {
-  return new FetchError(`destination not allowed: ${url} (${reason}); to fetch it, list the host under fetch.allowPrivateHosts in config.yaml`);
+  return new FetchError(`destination not allowed: ${url} (${reason}); to fetch it, list the host under fetch.allowPrivateHosts in config.yaml`, "blocked");
 }
 
 export class Fetcher {
@@ -107,7 +116,7 @@ export class Fetcher {
         response = await fetchImpl(current, { method, body, headers, redirect: "manual", signal });
       } catch (error) {
         const name = (error as Error).name;
-        if (name === "TimeoutError" || name === "AbortError") throw new FetchError(`timed out after ${timeoutMs} ms: ${url}`);
+        if (name === "TimeoutError" || name === "AbortError") throw new FetchError(`timed out after ${timeoutMs} ms: ${url}`, "timeout");
         const cause = (error as { cause?: { code?: string; message?: string } }).cause;
         if (cause?.code === DESTINATION_CODE) throw notAllowed(current, cause.message ?? "refused address");
         throw new FetchError(`request failed: ${current}: ${(error as Error).message}`);
@@ -168,7 +177,8 @@ export class Fetcher {
     } catch (error) {
       if (error instanceof FetchError) throw error;
       const name = (error as Error).name;
-      throw new FetchError(name === "TimeoutError" ? `timed out after ${this.#options.timeoutMs} ms: ${url}` : `reading failed: ${url}`);
+      if (name === "TimeoutError") throw new FetchError(`timed out after ${this.#options.timeoutMs} ms: ${url}`, "timeout");
+      throw new FetchError(`reading failed: ${url}`);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;

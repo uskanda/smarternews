@@ -59,6 +59,9 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
     core,
     /** Lets the translation API of a server made with `translation: "gated"` answer. */
     releaseTranslation: () => call<null>("releaseTranslation"),
+    /** A page of another site that the server can fetch. A gated page answers once `releasePage` lets it. */
+    page: (url: string, html: string, options: { gated?: boolean } = {}) => call<null>("page", { args: [url, html, options.gated ?? false] }),
+    releasePage: (url: string) => call<null>("releasePage", { args: [url] }),
     sql: <T = unknown>(query: string, ...args: unknown[]) => call<T>("sql", { query, args }),
   };
 }

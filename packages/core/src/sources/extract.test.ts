@@ -58,4 +58,20 @@ describe("extractArticle", () => {
   it("returns the page title", () => {
     expect(extractArticle(page("", ARTICLE_BODY), "https://example.org/a").title).toContain("Vendor ships fix");
   });
+
+  it("returns the HTML of the article body, with its paragraphs, apart from the text, which stays as it was", () => {
+    const extracted = extractArticle(page("", ARTICLE_BODY), "https://example.org/a");
+    expect(extracted.html).toMatch(/<p>The vendor released a patch on Sunday/);
+    expect(extracted.html).toContain("</p>");
+    expect(extracted.html).not.toContain("About us");
+    expect(extracted.text).toBe(
+      "The vendor released a patch on Sunday for a flaw that attackers had been using for two weeks, according to its advisory. " +
+        "Administrators are asked to install the update as soon as possible because the flaw allows remote code execution without a login. " +
+        "The company said that it found no sign of customer data being taken, and that an investigation continues with outside help.",
+    );
+  });
+
+  it("gives empty HTML for a page without readable content", () => {
+    expect(extractArticle("<html><body><script>app()</script></body></html>", "https://example.org/a").html).toBe("");
+  });
 });

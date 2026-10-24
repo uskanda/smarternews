@@ -27,6 +27,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   enabled: true,
   autoSummarize: false,
   translate: false,
+  fetchFullContent: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,

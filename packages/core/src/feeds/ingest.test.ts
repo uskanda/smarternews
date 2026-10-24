@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getArticle, insertArticle, listArticles, searchArticles, setArticleFlags } from "../db/articles.ts";
+import { getArticle, insertArticle, listArticles, saveFullContent, searchArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
@@ -479,6 +479,20 @@ describe("translating titles when a feed is fetched", () => {
     await fetchFeed(s.deps, feed.id);
     expect(getArticle(s.db, id)).toMatchObject({ translatedTitle: "訳:New title", translation: { segments: [{ translated: "訳:Same content." }] } });
   });
+
+  it("keeps the translation of the full content when only what the feed delivered was rewritten", async () => {
+    const s = translating();
+    s.serve([{ title: "Title", key: "a", content: "<p>Old excerpt.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    saveFullContent(s.db, id, { markdown: "Full text.", text: "Full text.", now: s.clock().toISOString() });
+    await s.service.translateArticle(id);
+
+    s.serve([{ title: "Title", key: "a", content: "<p>New excerpt.</p>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id)).toMatchObject({ body: "New excerpt.", translation: { segments: [{ original: "Full text.", translated: "訳:Full text." }] } });
+  });
 });
 
 describe("duplicates across feeds", () => {
@@ -679,5 +693,43 @@ describe("duplicates across feeds", () => {
     expect(s.article("B", "b").translated_title).toBeNull();
     expect(google.calls.map((call) => call.items)).toEqual([[{ text: "Vendor ships a fix for the bug", plain: true }]]);
     expect(s.db.prepare("SELECT coalesce(sum(chars), 0) AS n FROM translation_usage").get()).toEqual({ n: "Vendor ships a fix for the bug".length });
+  });
+});
+
+describe("full content when a feed is fetched", () => {
+  const FULL_MARKDOWN = "The whole story, with a giveaway at the end.";
+
+  async function withFullContent() {
+    const s = setup([{ title: "A", key: "a", content: "<p>First words.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, fetchFullContent: true });
+    const id = s.list()[0]!.id;
+    saveFullContent(s.db, id, { markdown: FULL_MARKDOWN, text: FULL_MARKDOWN, now: s.clock().toISOString() });
+    return { ...s, feed, id };
+  }
+
+  it("keeps the full content of a rewritten item, and fetches no page for it", async () => {
+    const s = await withFullContent();
+    s.clock.advance(HOUR);
+    s.serve([{ title: "A (corrected)", key: "a", content: "<p>Better words.</p>" }]);
+
+    await fetchFeed(s.deps, s.feed.id);
+
+    expect(getArticle(s.db, s.id)).toMatchObject({
+      title: "A (corrected)",
+      body: "Better words.",
+      fullContentStatus: "fetched",
+      fullContent: { body: FULL_MARKDOWN, fetchedAt: START },
+    });
+    expect(s.requests.map((request) => request.url).filter((url) => url !== FEED_URL)).toEqual([]);
+  });
+
+  it("matches filters against what the feed delivered, never against the full content", async () => {
+    const s = await withFullContent();
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["content"], match: "contains", value: "giveaway" }] }, s.clock);
+    expect(s.list().map((article) => article.id)).toEqual([s.id]);
+
+    s.serve([{ title: "A (corrected)", key: "a", content: "<p>Better words.</p>" }]);
+    await fetchFeed(s.deps, s.feed.id);
+    expect(s.list().map((article) => article.id)).toEqual([s.id]);
   });
 });

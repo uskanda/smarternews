@@ -1,4 +1,4 @@
-import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
+import { ApiError, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { memo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, View } from "react-native";
@@ -81,8 +81,26 @@ export interface ArticlePageProps {
   onOpenArticle: (id: number) => void;
   /** Opens the copy of the article that another feed delivered, with that feed's list behind it. */
   onOpenCopy: (copy: Article["otherFeeds"][number]) => void;
+  /** The full content of this article is being fetched. */
+  fullContentFetching: boolean;
+  /** The last request for the full content of this article got no answer. */
+  fullContentRequestFailed: boolean;
+  /** The reader switched from the full content to what the feed delivered. */
+  deliveredShown: boolean;
   /** The words of the search the article was opened from, marked in its headline and text. */
   terms?: readonly string[];
+}
+
+/**
+ * The line before the content of a feed article: which content is shown, the fetch under way, or why the full
+ * content could not be had. The button on top of the screen fetches and switches.
+ */
+function fullContentNote(article: Article, fetching: boolean, requestFailed: boolean, deliveredShown: boolean): string | null {
+  if (article.fullContent !== null) return deliveredShown ? "配信された内容を表示しています。" : "元のページから取得した全文を表示しています。";
+  if (fetching) return "全文を取得しています。";
+  if (requestFailed) return "全文を取得できませんでした。通信に失敗しました。";
+  if (article.fullContentError) return `全文を取得できませんでした。${fullContentErrorLabel(article.fullContentError)}`;
+  return null;
 }
 
 /** One article: what the story is, what it means for the reader, the text, and where it came from. */
@@ -93,7 +111,19 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
-export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle, onOpenCopy, terms }: ArticlePageProps) {
+export const ArticlePage = memo(function ArticlePage({
+  id,
+  active,
+  width,
+  sourceName,
+  onRead,
+  onOpenArticle,
+  onOpenCopy,
+  fullContentFetching,
+  fullContentRequestFailed,
+  deliveredShown,
+  terms,
+}: ArticlePageProps) {
   const theme = useTheme();
   const timeZone = useTimeZone();
   const categories = useCategories();
@@ -138,6 +168,9 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
 
   // A feed article is what another site delivered: no importance, no sources; the way to its page instead.
   const delivered = article.origin === "feed";
+  // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
+  const fullShown = article.fullContent !== null && !deliveredShown;
+  const note = delivered ? fullContentNote(article, fullContentFetching, fullContentRequestFailed, deliveredShown) : null;
   const meta = (
     delivered
       ? [
@@ -258,7 +291,17 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Button label="翻訳をやり直す" onPress={() => void translating.refetch()} />
         </View>
       ) : null}
-      {article.translation ? <TranslatedBody translation={article.translation} terms={terms} /> : <Markdown text={article.body} images={delivered} highlight={terms} />}
+      {note ? (
+        <Txt variant="label-sm" color="on-surface-muted" accessibilityLiveRegion="polite">
+          {note}
+        </Txt>
+      ) : null}
+      {article.translation && (fullShown || article.fullContent === null) ? (
+        // The translation is of the full content when there is one: what the feed delivered is then shown without one.
+        <TranslatedBody translation={article.translation} terms={terms} />
+      ) : (
+        <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} />
+      )}
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">

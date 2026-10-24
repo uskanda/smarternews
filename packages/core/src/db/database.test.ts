@@ -662,3 +662,46 @@ describe("the shipped search index", () => {
     expect(count("articles")).toBe(3);
   });
 });
+
+describe("the migration to full content", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the feeds that exist without full content fetching, and the articles without a state", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "013")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k1', 'news', 't', 's', 'b', ?, ?, ?)`,
+    ).run(now, now, now);
+
+    for (const name of readdirSync(SHIPPED).filter((file) => file >= "013")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT fetch_full_content, fetch_full_content_since FROM feeds").all()).toEqual([
+      { fetch_full_content: 0, fetch_full_content_since: null },
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT full_content, full_content_text, full_content_at, full_content_status, full_content_error, full_content_error_detail
+             FROM articles`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        full_content: null,
+        full_content_text: null,
+        full_content_at: null,
+        full_content_status: null,
+        full_content_error: null,
+        full_content_error_detail: null,
+      },
+    ]);
+    // The search triggers survive: the table is not rebuilt.
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+  });
+});

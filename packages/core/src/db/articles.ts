@@ -11,6 +11,10 @@ import type {
   ArticleUpdate,
   AutoSummarySource,
   Counts,
+  FullContent,
+  FullContentError,
+  FullContentErrorReason,
+  FullContentStatus,
   Kind,
   Origin,
   Registration,
@@ -21,7 +25,7 @@ import { searchBody } from "../search/plain.ts";
 import { charCount, excerptOf, parseSearchTerms, SHORT_TERM_CHARS } from "../search/text.ts";
 import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
-import { findArticleTranslation } from "./translations.ts";
+import { deleteArticleTranslation, findArticleTranslation } from "./translations.ts";
 
 /**
  * The condition every query must carry that is about generated articles only: follow-ups, event matching,
@@ -64,6 +68,16 @@ const CAN_BE_SUMMARIZED = `a.origin = 'feed' AND a.auto_summary IS NULL AND a.au
 // either is in, though, when a reader opened it while its summary was waited for.
 const WAITING_FOR_SUMMARY = `${CAN_BE_SUMMARIZED}
   AND ((a.is_read = 0 AND NOT ${hiddenDuplicate("a")}) OR a.auto_summary_requested_at IS NOT NULL)`;
+
+/**
+ * A feed article `a` that waits for its full content: its feed fetches full content, it was stored after the
+ * feed began to, it has neither full content nor a failure, and it is unread and visible. A hidden duplicate
+ * is left out: it is read with the article kept for it, and its page would be fetched for nobody. A failed
+ * article is not tried again unless a reader asks.
+ */
+const WAITING_FOR_FULL_CONTENT = `a.origin = 'feed' AND a.full_content_status IS NULL AND a.is_read = 0
+  AND NOT ${hiddenByFilters("a")} AND NOT ${hiddenDuplicate("a")}
+  AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.fetch_full_content = 1 AND a.created_at > f.fetch_full_content_since)`;
 
 const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
@@ -131,6 +145,23 @@ function otherFeedsOf(db: Database, articleId: number): Article["otherFeeds"] {
     .map((row) => ({ articleId: num(row.id), feedId: num(row.feed_id), feedTitle: str(row.title) }));
 }
 
+function fullContentOf(row: Row): FullContent | null {
+  const body = strOrNull(row.full_content);
+  if (body === null || str(row.full_content_status) !== "fetched") return null;
+  return { body, bodyHtml: renderMarkdown(body, { images: true }), fetchedAt: str(row.full_content_at) };
+}
+
+function fullContentStatusOf(db: Database, row: Row): FullContentStatus {
+  const status = strOrNull(row.full_content_status);
+  if (status === "fetched" || status === "failed") return status;
+  return db.prepare(`SELECT 1 FROM articles a WHERE a.id = ? AND ${WAITING_FOR_FULL_CONTENT}`).get(num(row.id)) !== undefined ? "waiting" : "none";
+}
+
+function fullContentErrorOf(row: Row): FullContentError | null {
+  if (str(row.full_content_status) !== "failed") return null;
+  return { reason: str(row.full_content_error) as FullContentErrorReason, detail: strOrNull(row.full_content_error_detail) };
+}
+
 function toArticle(db: Database, row: Row): Article {
   const id = num(row.id);
   const body = str(row.body);
@@ -148,6 +179,9 @@ function toArticle(db: Database, row: Row): Article {
     translatable: db.prepare("SELECT 1 FROM feeds WHERE id = ? AND translate = 1").get(numOrNull(row.feed_id)) !== undefined,
     sourceLanguage: strOrNull(row.source_language),
     translation: findArticleTranslation(db, id, { translatedTitle: strOrNull(row.translated_title), sourceLanguage: strOrNull(row.source_language) }),
+    fullContent: fullContentOf(row),
+    fullContentStatus: fullContentStatusOf(db, row),
+    fullContentError: fullContentErrorOf(row),
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
     otherFeeds: otherFeedsOf(db, id),
@@ -387,6 +421,83 @@ export function recordSummaryFailure(db: Database, id: number): void {
 /** Marks an article as having too little text to summarise, so that it no longer waits. */
 export function skipAutoSummary(db: Database, id: number): void {
   db.prepare("UPDATE articles SET auto_summary_skipped = 1 WHERE id = ?").run(id);
+}
+
+// ---- full content of feed articles -------------------------------------------------------------
+
+export interface ArticleForFullContent {
+  id: number;
+  /** The article's page, or null when the feed gave none. */
+  url: string | null;
+  /** What the feed delivered, without markup. The full content must not be shorter. */
+  contentText: string;
+}
+
+const FULL_CONTENT_COLUMNS = `a.id, a.content_text,
+  (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url`;
+
+function toArticleForFullContent(row: Row): ArticleForFullContent {
+  return { id: num(row.id), url: strOrNull(row.url), contentText: str(row.content_text) };
+}
+
+/** The feed article whose full content is fetched next: of those that wait, the one stored last. */
+export function nextArticleForFullContent(db: Database): ArticleForFullContent | null {
+  const row = db
+    .prepare(`SELECT ${FULL_CONTENT_COLUMNS} FROM articles a WHERE ${WAITING_FOR_FULL_CONTENT} ORDER BY a.created_at DESC, a.id DESC LIMIT 1`)
+    .get();
+  return row ? toArticleForFullContent(row) : null;
+}
+
+/**
+ * One feed article as a request for its full content needs it, with where it stands: fetched, failed, or
+ * neither. Refuses a generated article, which has no full content, and an article that does not exist.
+ */
+export function articleForFullContent(
+  db: Database,
+  id: number,
+): ArticleForFullContent & { status: "fetched" | "failed" | null; fullContentText: string | null; feedFetchesFullContent: boolean } {
+  const row = db
+    .prepare(
+      `SELECT ${FULL_CONTENT_COLUMNS}, a.origin, a.full_content_status, a.full_content_text,
+              (SELECT f.fetch_full_content FROM feeds f WHERE f.id = a.feed_id) AS feed_fetches
+         FROM articles a WHERE a.id = ?`,
+    )
+    .get(id);
+  if (!row) throw notFound("article", id);
+  if (str(row.origin) !== "feed") {
+    throw new DomainError("invalid", `article ${id} is not a feed article`, [{ path: "id", message: "only a feed article has full content" }]);
+  }
+  return {
+    ...toArticleForFullContent(row),
+    status: strOrNull(row.full_content_status) as "fetched" | "failed" | null,
+    fullContentText: strOrNull(row.full_content_text),
+    feedFetchesFullContent: bool(row.feed_fetches),
+  };
+}
+
+/**
+ * Stores the full content of a feed article, and forgets the translation of its content in the same
+ * transaction: that translation is of what the feed delivered, and the full content is translated instead
+ * the next time a reader asks. The translated title stays.
+ */
+export function saveFullContent(db: Database, id: number, content: { markdown: string; text: string; now: string }): void {
+  transaction(db, () => {
+    db.prepare(
+      `UPDATE articles SET full_content = ?, full_content_text = ?, full_content_at = ?, full_content_status = 'fetched',
+              full_content_error = NULL, full_content_error_detail = NULL
+        WHERE id = ?`,
+    ).run(content.markdown, content.text, content.now, id);
+    deleteArticleTranslation(db, id);
+  });
+}
+
+/** Records why the full content could not be had. The article then no longer waits for it. */
+export function recordFullContentFailure(db: Database, id: number, failure: { reason: FullContentErrorReason; detail: string | null }): void {
+  db.prepare("UPDATE articles SET full_content_status = 'failed', full_content_error = ?, full_content_error_detail = ? WHERE id = ?").run(
+    failure.reason,
+    failure.detail === null ? null : failure.detail.slice(0, 500),
+    id,
+  );
 }
 
 // ---- reading for the API and RSS ---------------------------------------------------------------

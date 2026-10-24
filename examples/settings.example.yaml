@@ -54,8 +54,9 @@ categories:
       - url: https://www.typescriptlang.org/feed.xml
         title: TypeScript blog
         intervalMinutes: 360
-        autoSummarize: true   # a model summarises the articles this feed delivers from now on
-        translate: true       # titles and contents are translated into outputLanguage; they leave this server for that
+        autoSummarize: true    # a model summarises the articles this feed delivers from now on
+        translate: true        # titles and contents are translated into outputLanguage; they leave this server for that
+        fetchFullContent: true # the page of each new article is fetched and its text kept as the full content
   - slug: local-events
     name: Local events
     kind: event

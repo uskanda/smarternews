@@ -196,6 +196,44 @@ export const articleTranslationSchema = z.object({
 });
 export type ArticleTranslation = z.infer<typeof articleTranslationSchema>;
 
+/**
+ * Why the full content of a feed article could not be had: the article has no page, robots.txt forbids it,
+ * the destination is refused, the site answered with an HTTP failure or with something that is not HTML, it
+ * did not answer in time, the request failed otherwise, no text could be taken out of the page, or what was
+ * taken out was shorter than what the feed delivered. A screen turns the reason into a sentence.
+ */
+export const fullContentErrorReasonSchema = z.enum(["no-url", "robots", "blocked", "http", "not-html", "timeout", "error", "no-content", "shorter"]);
+export type FullContentErrorReason = z.infer<typeof fullContentErrorReasonSchema>;
+
+export const fullContentErrorSchema = z.object({
+  reason: fullContentErrorReasonSchema,
+  /** The HTTP status for `http`, the media type for `not-html`, the message for `error`; otherwise null. */
+  detail: z.string().nullable(),
+});
+export type FullContentError = z.infer<typeof fullContentErrorSchema>;
+
+/** The text of a feed article's page, rewritten as Markdown by the rules of delivered content. */
+export const fullContentSchema = z.object({
+  body: z.string(),
+  bodyHtml: z.string(),
+  fetchedAt: z.string(),
+});
+export type FullContent = z.infer<typeof fullContentSchema>;
+
+/**
+ * Where a feed article stands with its full content: not fetched, waiting to be fetched by its feed's setting,
+ * fetched, or failed. A generated article is always `none`.
+ */
+export const fullContentStatusSchema = z.enum(["none", "waiting", "fetched", "failed"]);
+export type FullContentStatus = z.infer<typeof fullContentStatusSchema>;
+
+/** The answer to a request for the full content of one feed article, given once the fetch is over. */
+export const fullContentResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("fetched"), fullContent: fullContentSchema }),
+  z.object({ status: z.literal("failed"), error: fullContentErrorSchema }),
+]);
+export type FullContentResult = z.infer<typeof fullContentResultSchema>;
+
 export const articleSummarySchema = z.object({
   id: z.number().int(),
   /** Null for an article of a feed that belongs to no category. */
@@ -245,6 +283,11 @@ export const articleSchema = articleSummarySchema.extend({
   sourceLanguage: z.string().nullable(),
   /** The stored translation of the content. Null until the article is translated. */
   translation: articleTranslationSchema.nullable(),
+  /** The full content taken from the feed article's page, apart from what the feed delivered. Null when there is none. */
+  fullContent: fullContentSchema.nullable(),
+  fullContentStatus: fullContentStatusSchema,
+  /** Why the full content could not be had. Null unless the status is `failed`. */
+  fullContentError: fullContentErrorSchema.nullable(),
   snippetOnly: z.boolean(),
   previousArticleId: z.number().int().nullable(),
   /**
@@ -372,6 +415,8 @@ export const feedSchema = z.object({
   autoSummarize: z.boolean(),
   /** Whether the titles and contents of this feed's articles are translated into the output language. */
   translate: z.boolean(),
+  /** Whether the full content of the articles this feed delivers from now on is fetched from their pages. */
+  fetchFullContent: z.boolean(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -392,6 +437,7 @@ export const feedCreateSchema = z.object({
   enabled: z.boolean().optional(),
   autoSummarize: z.boolean().optional(),
   translate: z.boolean().optional(),
+  fetchFullContent: z.boolean().optional(),
 });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
@@ -626,6 +672,8 @@ const settingsFileSubscriptionSchema = z.object({
   autoSummarize: z.boolean().optional(),
   /** Left out, a new feed is not translated and a known one keeps what it has. */
   translate: z.boolean().optional(),
+  /** Left out, a new feed does not fetch full content and a known one keeps what it has. */
+  fetchFullContent: z.boolean().optional(),
 });
 export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
 

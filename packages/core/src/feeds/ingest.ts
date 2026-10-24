@@ -130,7 +130,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const stored = new Map(
     db
       .prepare(
-        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.duplicate_of, a.dedup_url, a.dedup_title,
+        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
                 (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
            FROM articles a WHERE a.feed_id = ?`,
       )
@@ -181,7 +181,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
         // A hidden duplicate is not judged again, and its title waits until it is opened.
         if (!(removeDuplicates && known.duplicate_of !== null)) titled.push(id);
       }
-      if (str(known.body) !== prepared.body) deleteArticleTranslation(db, id);
+      // The full content is what was translated when the article has one; it stays as it was.
+      if (str(known.body) !== prepared.body && known.full_content_status !== "fetched") deleteArticleTranslation(db, id);
     }
     const moved = (known.url ?? null) !== url;
     if (moved || str(known.title) !== title) {
@@ -312,6 +313,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         enabled: input.enabled,
         autoSummarize: input.autoSummarize,
         translate: input.translate,
+        fetchFullContent: input.fetchFullContent,
       },
       clock,
     );

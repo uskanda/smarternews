@@ -119,6 +119,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `GET /api/v1/search` | Search the articles by words |
 | `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
 | `POST /api/v1/articles/:id/translation` | The translation of a feed article's content, made and stored when there is none yet |
+| `POST /api/v1/articles/:id/full-content` | Fetch the full content of a feed article from its page, and answer when that is done |
 | `GET /api/v1/translation` | How much the translation API was used this month |
 
 Query parameters of the list:
@@ -210,6 +211,9 @@ The detail adds these:
 | `translation` | The stored translation of the content, in the shape `POST /api/v1/articles/:id/translation` returns. `null` until the article is translated |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
 | `otherFeeds` | The other feeds that delivered a feed article: one entry per copy recorded as its duplicate, with `articleId` (the copy), `feedId` and `feedTitle`, in the order the copies were stored. Empty for an article without duplicates |
+| `fullContent` | The full content of a feed article, taken from its page: `body` (Markdown), `bodyHtml` and `fetchedAt`. It comes apart from `body`, which stays what the feed delivered. `null` when there is none, and always for a generated article |
+| `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |
+| `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
 
 ### Search
 
@@ -246,7 +250,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds` | Subscribe to a feed (status 201) |
 | `POST /api/v1/feeds/discover` | Find the feeds a page points to, without subscribing |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate` |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent` |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -271,7 +275,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$AP
 
 Subscribing fetches the URL once and answers when that is done. Status 400 means that the URL does not return RSS or Atom, or that it is a destination the crawler does not fetch (see the README). A 409 answer says that the URL is already subscribed; URLs that differ only in tracking parameters count as the same. Every item the feed delivers at that moment becomes an unread article, except items published more than 90 days ago.
 
-`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize` and `translate` are `false` unless you send `true`, at registration or in a change.
+`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize`, `translate` and `fetchFullContent` are `false` unless you send `true`, at registration or in a change.
 
 `move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
@@ -287,6 +291,7 @@ Fields of a feed:
 | `enabled` | False while the feed is paused: it is not fetched, and its articles stay |
 | `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
 | `translate` | True when the titles and contents of this feed's articles are translated into the output language. Switching it on translates nothing that is stored: an article the feed already has is translated when it is opened |
+| `fetchFullContent` | True when the server fetches the page of every article this feed delivers and stores its text as the full content. Only articles stored after it was switched on are fetched |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused |
@@ -305,6 +310,36 @@ When a feed delivers a new item, the server compares it with the feed articles t
 While `removeDuplicates` is on, a duplicate is left out of the lists over everything, over a category and over no category, and out of their counts. It stays in the list of its own feed, with the starred articles, and in its feed's `unread`. Marking the kept article read, alone or with "mark all as read", marks its unread duplicates read too, except those a filter hides. Putting the kept article back to unread leaves them as they are. A duplicate waits for no summary and its title is not translated when it is fetched; both happen when it is opened and asked for. When the kept article is deleted, the duplicate stored first is kept instead.
 
 Switched off, duplicates are listed and counted like any other article and nothing new is recorded. The records stay, so switching it back on hides the same duplicates again.
+
+## Full content
+
+The full content of a feed article is the text of its page, taken out of the page and reduced to Markdown by the same rules as the content a feed delivers. It is stored next to what the feed delivered, which stays as it was. Filters, the detection of rewritten items and the start of the content in lists use what the feed delivered only. Search does not match the full content. Full content is never in the RSS output, and no model is called to fetch it.
+
+A feed with `fetchFullContent` switched on has the full content of its new articles fetched after they are stored, apart from the fetching of the feed, one page at a time and newest first. An article that is read before its turn comes, a duplicate that is hidden, and an article that a filter hides are skipped. There is no daily limit: the pages are fetched like any other, obeying `robots.txt` and the interval between requests to one host. A fetch that fails is recorded on the article with its reason and is not tried again by itself, not even for a reason that may pass, such as a timeout. When the feed rewrites an item, the full content stays as it was.
+
+`POST /api/v1/articles/:id/full-content` takes no body and works for any feed article, whatever its feed's setting and whether it failed before. It goes ahead of the articles that wait, right after the page being fetched, and answers when its own fetch is over, which can take several seconds. An article that has full content is answered from it without a request. It answers 400 for a generated article and 404 for one that does not exist.
+
+```json
+{ "status": "fetched", "fullContent": { "body": "The vendor shipped a fix…", "bodyHtml": "<p>The vendor shipped a fix…</p>", "fetchedAt": "2026-03-01T12:00:00.000Z" } }
+```
+
+```json
+{ "status": "failed", "error": { "reason": "http", "detail": "404" } }
+```
+
+| `reason` | When |
+|---|---|
+| `no-url` | The article has no page |
+| `robots` | `robots.txt` forbids the page |
+| `blocked` | The page is a destination the crawler does not fetch (see the README) |
+| `http` | The site answered with a status other than 2xx; `detail` is the status |
+| `not-html` | The answer is not HTML; `detail` is its media type |
+| `timeout` | The site did not answer in time |
+| `error` | The request failed otherwise; `detail` says how |
+| `no-content` | No text could be taken out of the page |
+| `shorter` | The text taken out of the page is shorter than what the feed delivered, as a notice to subscribe would be |
+
+Storing the full content drops the translation of the article's content; the translated title stays. From then on, `POST /api/v1/articles/:id/translation` translates the full content in place of what the feed delivered, with the same limit of characters. When the feed also summarises, the summary is written from the full content, and the page is requested once for both. When the full content failed, the summary is written from what the feed delivered without another request.
 
 ## Translation
 

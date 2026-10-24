@@ -2,7 +2,7 @@ import type { Article, ArticleListQuery, ArticleSummary, Category, Feed } from "
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { useArticle, useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useSettings, useTimeZone } from "../api/queries.ts";
+import { useArticle, useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useFullContentFetch, useSettings, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
 import { followScroll } from "../lib/follow.ts";
@@ -226,18 +226,30 @@ export function ReaderPage({ view }: { view: View }) {
     flags.mutate({ id: target.id, starred: !target.starred });
   }
 
-  // Opening an unread article marks it as read, once per visit to that article.
+  // Full content: the fetch is kept here, for the `w` key and the article pane alike. Which content is shown is
+  // held for one visit to an article; choosing it again shows the full content.
+  const fullContent = useFullContentFetch();
+  const [deliveredShown, setDeliveredShown] = useState<number | null>(null);
+  useEffect(() => setDeliveredShown(null), [articleId]);
+
+  // Opening an unread article marks it as read, once per visit to that article. An article that waits for its
+  // full content has it asked for: once read, it would no longer be fetched by itself.
   const opened = useArticle(articleId).data;
   const autoMarked = useRef<number | null>(null);
   useEffect(() => {
     if (!opened || autoMarked.current === opened.id) return;
     autoMarked.current = opened.id;
+    if (opened.fullContentStatus === "waiting") fullContent.fetch(opened.id);
     if (!opened.isRead) setRead(opened, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when another article is opened, not on every change
   }, [opened?.id]);
   useEffect(() => {
     if (articleId === null) autoMarked.current = null;
   }, [articleId]);
+
+  function toggleDelivered(id: number) {
+    setDeliveredShown((current) => (current === id ? null : id));
+  }
 
   function refresh() {
     setKept({ key: listKey, items: [] });
@@ -345,6 +357,11 @@ export function ReaderPage({ view }: { view: View }) {
     s: selected ? () => toggleStar(selected) : undefined,
     m: selected ? () => setRead(selected, !selected.isRead) : undefined,
     o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
+    // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
+    w:
+      opened?.origin === "feed" && opened.id === articleId && !fullContent.isFetching(opened.id)
+        ? () => (opened.fullContent !== null ? toggleDelivered(opened.id) : fullContent.fetch(opened.id))
+        : undefined,
   });
 
   if (inCategory && categories.data && !category) {
@@ -495,6 +512,13 @@ export function ReaderPage({ view }: { view: View }) {
               articlePath={articlePath}
               onToggleStar={toggleStar}
               onToggleRead={(article) => setRead(article, !article.isRead)}
+              fullContent={{
+                fetching: fullContent.isFetching(articleId),
+                requestFailed: fullContent.requestFailed(articleId),
+                showDelivered: deliveredShown === articleId,
+                onFetch: () => fullContent.fetch(articleId),
+                onToggle: () => toggleDelivered(articleId),
+              }}
               terms={terms}
             />
           )}

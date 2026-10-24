@@ -270,4 +270,51 @@ describe("moving categories and feeds", () => {
       expect(failure).toMatchObject({ kind: "unavailable", status: 503 });
     });
   });
+
+  describe("full content", () => {
+    const FEED = "https://blog.example.org/feed.xml";
+    const rss = '<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>A title</title><guid>a</guid><link>https://blog.example.org/a</link><description>One paragraph.</description></item></channel></rss>';
+    const LONG = "A sentence of the page that the full content is taken from. ".repeat(8);
+
+    async function subscribed() {
+      const server = testServer();
+      const api = createApi({ fetchImpl: (input, init) => server.app.request(String(input), init), getToken: () => API_TOKEN, onUnauthorized: () => {} });
+      server.site.set(FEED, rss);
+      const feed = await api.createFeed({ url: FEED, fetchFullContent: true });
+      const [item] = (await api.articles({ feed: feed.id })).items;
+      return { server, api, feed, id: item!.id };
+    }
+
+    it("sends the setting of a feed, and reads the state of an article", async () => {
+      const { api, feed, id } = await subscribed();
+      expect(feed.fetchFullContent).toBe(true);
+      expect(await api.article(id)).toMatchObject({ fullContent: null, fullContentStatus: "none", fullContentError: null });
+      expect((await api.updateFeed(feed.id, { fetchFullContent: false })).fetchFullContent).toBe(false);
+    });
+
+    it("asks for the full content of an article and reads it", async () => {
+      const { api, server, id } = await subscribed();
+      server.site.set(
+        "https://blog.example.org/a",
+        () => new Response(`<html><body><article><h1>a</h1><p>${LONG}</p><p>${LONG}</p></article></body></html>`, { headers: { "content-type": "text/html" } }),
+      );
+      const result = await api.fetchFullContent(id);
+      expect(result).toMatchObject({ status: "fetched", fullContent: { body: expect.stringContaining("A sentence") } });
+      expect((await api.article(id)).fullContentStatus).toBe("fetched");
+    });
+
+    it("reads a failure and its reason", async () => {
+      const { api, id } = await subscribed();
+      expect(await api.fetchFullContent(id)).toEqual({ status: "failed", error: { reason: "http", detail: "404" } });
+    });
+
+    it("refuses an answer outside the shape", async () => {
+      const api = createApi({
+        fetchImpl: async () => new Response(JSON.stringify({ status: "fetched" }), { headers: { "content-type": "application/json" } }),
+        getToken: () => API_TOKEN,
+        onUnauthorized: () => {},
+      });
+      await expect(api.fetchFullContent(1)).rejects.toBeInstanceOf(Error);
+    });
+  });
 });

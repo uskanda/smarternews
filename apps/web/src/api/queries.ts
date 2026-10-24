@@ -1,6 +1,6 @@
 import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../app/context.ts";
 
 /** How often lists and counts are fetched again while the page is open. */
@@ -113,7 +113,8 @@ export function useArticleTranslation(article: Article | undefined) {
   const id = article?.id ?? null;
   const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
-    queryKey: ["article-translation", id],
+    // The full content, once it arrives, is translated anew: the server dropped the translation of the excerpt.
+    queryKey: ["article-translation", id, article?.fullContent?.fetchedAt ?? null],
     queryFn: async () => {
       const translation = await api.translateArticle(id!);
       patchArticle(client, id!, { translatedTitle: translation.translatedTitle });
@@ -124,6 +125,46 @@ export function useArticleTranslation(article: Article | undefined) {
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
   });
+}
+
+/**
+ * Fetching the full content of feed articles from their pages. `fetch` asks the server and waits for the page;
+ * a second press for an article under way does nothing. What arrives, full content or the reason it failed, is
+ * put into the article, which is then fetched again. `requestFailed` is for a request that got no answer.
+ */
+export function useFullContentFetch() {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const underWay = useRef(new Set<number>());
+  const [fetching, setFetching] = useState<ReadonlySet<number>>(new Set());
+  const [unanswered, setUnanswered] = useState<ReadonlySet<number>>(new Set());
+  const fetch = useCallback(
+    (id: number) => {
+      if (underWay.current.has(id)) return;
+      underWay.current.add(id);
+      setFetching(new Set(underWay.current));
+      setUnanswered((current) => new Set([...current].filter((other) => other !== id)));
+      api
+        .fetchFullContent(id)
+        .then((result) => {
+          client.setQueryData<Article>(["article", id], (current) => {
+            if (!current) return current;
+            if (result.status === "failed") return { ...current, fullContentStatus: "failed", fullContentError: result.error };
+            // Storing the full content dropped the translation of what the feed delivered.
+            const translation = current.fullContentStatus === "fetched" ? current.translation : null;
+            return { ...current, fullContent: result.fullContent, fullContentStatus: "fetched", fullContentError: null, translation };
+          });
+          void client.invalidateQueries({ queryKey: ["article", id] });
+        })
+        .catch(() => setUnanswered((current) => new Set([...current, id])))
+        .finally(() => {
+          underWay.current.delete(id);
+          setFetching(new Set(underWay.current));
+        });
+    },
+    [api, client],
+  );
+  return { fetch, isFetching: (id: number) => fetching.has(id), requestFailed: (id: number) => unanswered.has(id) };
 }
 
 /** How much the translation API was used this month. */

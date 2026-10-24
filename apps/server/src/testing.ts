@@ -2,6 +2,7 @@ import {
   createCategory,
   FeedPoller,
   Fetcher,
+  FullContentWorker,
   insertArticle,
   RunQueue,
   LlmTranslator,
@@ -75,7 +76,9 @@ export function testServer(
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
   const poller = new FeedPoller({ db, clock, fetcher, translation });
   // Summaries are made when a test tells the worker to look: `summarizer.tick()`, then `summarizer.idle()`.
-  const summarizer = new SummaryWorker({ db, clock, fetcher, runner: llm.runner });
+  // Likewise full content: `fullContent.tick()`, then `fullContent.idle()`. A request through the API waits for it.
+  const fullContent = new FullContentWorker({ db, clock, fetcher });
+  const summarizer = new SummaryWorker({ db, clock, fetcher, runner: llm.runner, fullContent });
   const app = createApp({
     db,
     clock,
@@ -85,6 +88,7 @@ export function testServer(
     poller,
     translation,
     summarizer,
+    fullContent,
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
   });
@@ -107,6 +111,7 @@ export function testServer(
     queue,
     poller,
     summarizer,
+    fullContent,
     /** What the stand-in for the translation API was asked. Null on a server without a key. */
     google,
     llmRequests: llm.requests,

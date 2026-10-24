@@ -6,6 +6,11 @@ export interface ExtractedArticle {
   title: string;
   /** Readable text of the page, or "" when nothing could be extracted. */
   text: string;
+  /**
+   * The HTML of the article body as Readability left it, or "" when nothing could be extracted. Not cut: it is
+   * written by another site, and is shown only after `convertContent` rewrites it, which bounds its length.
+   */
+  html: string;
   publishedAt: Date | null;
 }
 
@@ -65,19 +70,21 @@ function publishedAt(document: DomDocument): Date | null {
   return parseDate(document.querySelector("time[datetime]")?.getAttribute("datetime"));
 }
 
-/** Pulls the readable text and the publication time out of a page. */
+/** Pulls the readable text, its HTML and the publication time out of a page. */
 export function extractArticle(html: string, _url: string, maxChars = 8000): ExtractedArticle {
   const { document } = parseHTML(html) as unknown as { document: DomDocument };
   const published = publishedAt(document);
   const pageTitle = (document.querySelector("title")?.textContent ?? "").replace(/\s+/g, " ").trim();
   let text = "";
+  let content = "";
   let title = pageTitle;
   try {
     const article = new Readability(document as unknown as ConstructorParameters<typeof Readability>[0], { charThreshold: 100 }).parse();
     text = (article?.textContent ?? "").replace(/\s+/g, " ").trim();
+    content = text.length > 0 ? (article?.content ?? "") : "";
     title = article?.title?.trim() || pageTitle;
   } catch {
     // an unreadable page leaves the text empty
   }
-  return { title, text: text.slice(0, maxChars), publishedAt: published };
+  return { title, text: text.slice(0, maxChars), html: content, publishedAt: published };
 }

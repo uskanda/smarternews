@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FeedPoller, SummaryWorker, Fetcher, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
+import { FeedPoller, SummaryWorker, Fetcher, FullContentWorker, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
@@ -22,6 +22,7 @@ function server(build: "built" | "not-built") {
   const queue = new RunQueue({ db, clock, execute: async () => {} });
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1000, fetchImpl: fakeFetch({}).fetchImpl });
   const runner = fakeLlm(db, clock, {}).runner;
+  const fullContent = new FullContentWorker({ db, clock, fetcher });
   const app = createApp({
     db,
     clock,
@@ -30,7 +31,8 @@ function server(build: "built" | "not-built") {
     fetcher,
     translation: new TranslationService({ db, clock, google: null, llm: new LlmTranslator(runner), monthlyChars: 0, maxCharsPerArticle: 20_000 }),
     poller: new FeedPoller({ db, clock, fetcher }),
-    summarizer: new SummaryWorker({ db, clock, fetcher, runner }),
+    summarizer: new SummaryWorker({ db, clock, fetcher, runner, fullContent }),
+    fullContent,
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
     webDir: dir,

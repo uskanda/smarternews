@@ -1,10 +1,10 @@
 import { listKey } from "@smarternews/client";
 import type { Article } from "@smarternews/core/api";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useArticle } from "../api/queries";
+import { useArticle, useFullContentFetch } from "../api/queries";
 import { useBack } from "../lib/back";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
@@ -46,6 +46,34 @@ export function ArticleScreen() {
   const currentId = ids[position] ?? openedId;
   const current = useArticle(currentId).data;
 
+  // Full content: fetched from the button on top, and asked for when an article that waits for it is in view,
+  // since once read it would no longer be fetched by itself. Which content is shown holds while the article is
+  // in view; moving to another one, or opening it again, shows the full content.
+  const fullContent = useFullContentFetch();
+  const [deliveredShown, setDeliveredShown] = useState<number | null>(null);
+  useEffect(() => setDeliveredShown(null), [currentId]);
+  const asked = useRef(new Set<number>());
+  const fetchFull = fullContent.fetch;
+  useEffect(() => {
+    if (!current || current.fullContentStatus !== "waiting" || asked.current.has(current.id)) return;
+    asked.current.add(current.id);
+    fetchFull(current.id);
+  }, [current, fetchFull]);
+  const fullButton =
+    current?.origin === "feed" ? (
+      current.fullContent !== null ? (
+        <IconButton
+          label="全文の表示を切り替える"
+          icon="fullText"
+          filled={deliveredShown !== current.id}
+          value={deliveredShown === current.id ? "配信された内容を表示中" : "全文を表示中"}
+          onPress={() => setDeliveredShown((shown) => (shown === current.id ? null : current.id))}
+        />
+      ) : (
+        <IconButton label="全文を取得" icon="fullText" disabled={fullContent.isFetching(current.id)} onPress={() => fullContent.fetch(current.id)} />
+      )
+    ) : null;
+
   // The page in view is read off the scroll position whenever a scroll comes to rest, however it was started:
   // a fling, a slow drag, or a screen reader's scroll.
   function settled(event: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -82,7 +110,9 @@ export function ArticleScreen() {
         title={current ? sourceName(current) : ""}
         left={<IconButton label="一覧へ戻る" icon="back" onPress={back} />}
         right={
-          ids.length > 1 ? (
+          <>
+          {fullButton}
+          {ids.length > 1 ? (
             <Txt
               variant="label-sm"
               color="on-surface-muted"
@@ -93,7 +123,8 @@ export function ArticleScreen() {
             >
               {position + 1} / {ids.length}
             </Txt>
-          ) : null
+          ) : null}
+          </>
         }
       />
       <ScrollView
@@ -133,6 +164,9 @@ export function ArticleScreen() {
               onRead={onRead}
               onOpenArticle={openArticle}
               onOpenCopy={openCopy}
+              fullContentFetching={fullContent.isFetching(id)}
+              fullContentRequestFailed={fullContent.requestFailed(id)}
+              deliveredShown={deliveredShown === id}
               terms={reader.terms}
             />
           ) : (

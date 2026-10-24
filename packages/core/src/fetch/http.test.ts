@@ -72,6 +72,7 @@ describe("Fetcher", () => {
     const { fetcher } = setup({ "https://example.org/slow": () => "hang" }, { timeoutMs: 20 });
     await expect(fetcher.get("https://example.org/slow")).rejects.toThrow(FetchError);
     await expect(fetcher.get("https://example.org/slow")).rejects.toThrow(/timed out/);
+    await expect(fetcher.get("https://example.org/slow")).rejects.toMatchObject({ kind: "timeout" });
   });
 
   it("gives up on a response larger than the limit", async () => {
@@ -146,6 +147,7 @@ describe("Fetcher redirects", () => {
     const { fetcher, requests } = setup({ "https://example.org/old": redirect("http://127.0.0.1:8080/admin") });
     await expect(fetcher.get("https://example.org/old")).rejects.toThrow(FetchError);
     await expect(fetcher.get("https://example.org/old")).rejects.toThrow(/destination not allowed: http:\/\/127\.0\.0\.1:8080\/admin/);
+    await expect(fetcher.get("https://example.org/old")).rejects.toMatchObject({ kind: "blocked" });
     expect(requests.every((request) => request.url === "https://example.org/old")).toBe(true);
   });
 

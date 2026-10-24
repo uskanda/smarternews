@@ -74,6 +74,7 @@ import {
   type FeedFetchResult,
   type FeedPoller,
   type Fetcher,
+  type FullContentWorker,
   type ProviderStatus,
   type RunQueue,
   type SummaryWorker,
@@ -96,6 +97,8 @@ export interface AppDeps {
   translation: TranslationService;
   /** Writes the summaries of feed articles. Woken when a reader opens an article that waits for one. */
   summarizer: SummaryWorker;
+  /** Fetches the full content of feed articles, one at a time; an article a reader asks for goes first. */
+  fullContent: FullContentWorker;
   tokens: { api: string; feed: string };
   version: string;
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
@@ -137,7 +140,7 @@ function idParam(c: Context, what: string): number {
 }
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation, summarizer } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent } = deps;
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -255,6 +258,8 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ status: "queued" });
   });
   api.post("/articles/:id/translation", async (c) => c.json(await translation.translateArticle(idParam(c, "article"))));
+  // Answers once the page is fetched: no model is waited for, only the site and the interval per host.
+  api.post("/articles/:id/full-content", async (c) => c.json(await fullContent.fetchFor(idParam(c, "article"))));
   api.get("/translation", (c) => c.json(translation.status()));
 
   // subscribed feeds

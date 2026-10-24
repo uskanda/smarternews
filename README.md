@@ -65,7 +65,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 - The search box at the top of the left pane finds articles by words, read ones included, and marks the matching words in the list and the article. The result narrows to a category, a feed or unread articles, and its URL keeps the words.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, `/` moves to the search box, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `w` fetches the full content of a feed article or switches between it and what the feed delivered, `Shift+F10` opens the menu of a category or feed, `/` moves to the search box, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
@@ -79,6 +79,7 @@ In the drawer, a long press on a category or a feed picks it up; drag it to reor
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 
+- The button on top of a feed article fetches its full content, and switches between it and what the feed delivered once it is there.
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
 - The drawer on the left lists the same views, categories and subscribed feeds as the web app, with unread counts.
 - The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds and filters are edited in the web app, which the settings screen opens in the browser.
@@ -131,7 +132,9 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
 - "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.
-- For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. The page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
+- For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. Unless the feed fetches full content, the page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
+- "全文を取得する" in the form of a feed fetches the page of each article the feed delivers from then on, and keeps its text as the full content. It is off by default. The article shows the full content in place of what the feed delivered, says where it comes from, and offers to switch back. Pages are fetched one at a time after the articles are stored, obeying `robots.txt` and the interval per host, and no model is called for it. An article read before its turn is skipped, and a fetch that fails is not tried again by itself; the article then says why.
+- Any article of a feed can have its full content fetched from the article itself, whatever the setting: the "全文を取得" button in the web app, the `w` key, or the button on top in the Android app. Text shorter than what the feed delivered, such as a notice to subscribe, is not kept. With full content, a summary is written from it without a second request for the page, and translation translates it. The full content is never in the RSS output.
 - "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and filters are matched against it.
 - Translation sends the titles and contents of that feed's articles to Google's translation API, or to the model provider you configured, and sends nothing else. Titles are translated when articles arrive, by the API only. The content is translated when you first open an article, and the first 20,000 characters of it. Articles the feed already had are translated when you open them.
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day.

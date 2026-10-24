@@ -381,7 +381,10 @@ describe("the summary of a feed article", () => {
     await within(pane).findByText("New words.");
     expect(summaryOf(pane)).toBeNull();
     expect(pane).not.toHaveTextContent(WAITING);
-    expect(within(pane).getByRole("link", { name: "元のページを開く" }).parentElement!.nextElementSibling).toHaveClass("article-body");
+    // Between the two, only the way to fetch the full content.
+    const next = within(pane).getByRole("link", { name: "元のページを開く" }).parentElement!.nextElementSibling!;
+    expect(within(next as HTMLElement).getByRole("button", { name: "全文を取得" })).toBeInTheDocument();
+    expect(next.nextElementSibling).toHaveClass("article-body");
   });
 
   it("says that the page could not be read when it was written from what the feed delivered", async () => {

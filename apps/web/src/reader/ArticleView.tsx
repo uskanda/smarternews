@@ -1,7 +1,7 @@
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
+import { ApiError, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { listPathOf } from "../lib/paths.ts";
@@ -77,6 +77,57 @@ function TranslatedBody({ translation, terms }: { translation: ArticleTranslatio
   );
 }
 
+/** What the reader can do with the full content of a feed article, and what is shown of it now. */
+export interface FullContentControl {
+  /** The page is being fetched for this article. */
+  fetching: boolean;
+  /** The last request for this article got no answer. */
+  requestFailed: boolean;
+  /** The reader switched to what the feed delivered. Held for this visit to the article only. */
+  showDelivered: boolean;
+  onFetch: () => void;
+  onToggle: () => void;
+}
+
+/**
+ * The line before the content of a feed article: which content is shown and the switch between the two, the
+ * fetch under way, or the way to fetch the full content with the reason an earlier fetch failed.
+ */
+function FullContentBar({ article, control }: { article: Article; control: FullContentControl }) {
+  if (article.fullContent !== null) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-md gap-y-xs">
+        <p className="type-label-sm text-on-surface-muted">
+          {control.showDelivered ? "配信された内容を表示しています。" : "元のページから取得した全文を表示しています。"}
+        </p>
+        <Button onClick={control.onToggle}>{control.showDelivered ? "全文を表示" : "配信された内容を表示"}</Button>
+      </div>
+    );
+  }
+  if (control.fetching) {
+    return (
+      <p role="status" className="type-label-sm text-on-surface-muted">
+        全文を取得しています。
+      </p>
+    );
+  }
+  const failure = control.requestFailed
+    ? "全文を取得できませんでした。通信に失敗しました。"
+    : article.fullContentError
+      ? `全文を取得できませんでした。${fullContentErrorLabel(article.fullContentError)}`
+      : null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs">
+      {failure ? (
+        <p role="status" className="type-body-md">
+          {failure}
+        </p>
+      ) : null}
+      <Button onClick={control.onFetch}>{failure ? "全文を取得し直す" : "全文を取得"}</Button>
+    </div>
+  );
+}
+
 /** What stands in the place of the summary while there is none yet. */
 const SUMMARY_NOTES = {
   waiting: "AIによる要約を作っています。",
@@ -94,6 +145,7 @@ export function ArticleView({
   articlePath,
   onToggleStar,
   onToggleRead,
+  fullContent,
   terms,
 }: {
   id: number;
@@ -105,6 +157,8 @@ export function ArticleView({
   articlePath: (id: number) => string;
   onToggleStar: (article: Article) => void;
   onToggleRead: (article: Article) => void;
+  /** The full content of a feed article: fetching it and switching to what the feed delivered. */
+  fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
   terms?: readonly string[];
 }) {
@@ -145,6 +199,8 @@ export function ArticleView({
   if (!article) return <Loading />;
   // A feed article is what another site delivered: no importance, no sources; the way to its page instead.
   const delivered = article.origin === "feed";
+  // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
+  const fullShown = article.fullContent !== null && !fullContent.showDelivered;
 
   return (
     <article aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
@@ -243,11 +299,13 @@ export function ArticleView({
             <Button onClick={() => void translating.refetch()}>翻訳をやり直す</Button>
           </div>
         ) : null}
-        {article.translation ? (
+        {delivered ? <FullContentBar article={article} control={fullContent} /> : null}
+        {article.translation && (fullShown || article.fullContent === null) ? (
+          // The translation is of the full content when there is one: what the feed delivered is then shown without one.
           <TranslatedBody translation={article.translation} terms={terms} />
         ) : (
           <div className="article-body type-body-lg">
-            <Markdown text={article.body} images={delivered} highlight={terms} />
+            <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} />
           </div>
         )}
         {previous ? (

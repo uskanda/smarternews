@@ -7,6 +7,7 @@ import {
   executeRun,
   FeedPoller,
   Fetcher,
+  FullContentWorker,
   getSettings,
   GoogleTranslator,
   LlmTranslator,
@@ -43,6 +44,8 @@ export interface Runtime {
   poller: FeedPoller;
   /** Summarises the feed articles that wait, apart from the fetching of feeds. */
   summarizer: SummaryWorker;
+  /** Fetches the full content of feed articles, apart from the fetching of feeds and from the summaries. */
+  fullContent: FullContentWorker;
   app: Hono;
   /** Token files this call created, to be announced once. */
   newTokenFiles: string[];
@@ -51,7 +54,7 @@ export interface Runtime {
    * as failed, and the runs that were waiting are put back in line. Says how many of each there were.
    */
   recover(): { closed: number; resumed: number };
-  /** Starts the scheduler, the fetching of feeds and the summaries. */
+  /** Starts the scheduler, the fetching of feeds, the full content and the summaries. */
   start(): void;
   close(): void;
 }
@@ -115,7 +118,9 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     maxCharsPerArticle: config.translation.maxCharsPerArticle,
   });
   const poller = new FeedPoller({ db, clock, fetcher, translation });
-  const summarizer = new SummaryWorker({ db, clock, fetcher, runner });
+  // Made before the summaries, which read a page through it when a feed fetches full content.
+  const fullContent = new FullContentWorker({ db, clock, fetcher });
+  const summarizer = new SummaryWorker({ db, clock, fetcher, runner, fullContent });
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
@@ -128,6 +133,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     poller,
     translation,
     summarizer,
+    fullContent,
     tokens: { api: api.token, feed: feed.token },
     version,
     webDir: join(import.meta.dirname, "../../web/dist"),
@@ -141,6 +147,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     scheduler,
     poller,
     summarizer,
+    fullContent,
     app,
     newTokenFiles: [...(api.created ? [paths.apiTokenFile] : []), ...(feed.created ? [paths.feedTokenFile] : [])],
     recover() {
@@ -152,11 +159,13 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     start() {
       scheduler.start();
       poller.start();
+      fullContent.start();
       summarizer.start();
     },
     close() {
       scheduler.stop();
       poller.stop();
+      fullContent.stop();
       summarizer.stop();
       db.close();
     },
