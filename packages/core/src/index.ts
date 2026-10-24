@@ -18,6 +18,7 @@ export * from "./db/topics.ts";
 export * from "./db/translations.ts";
 export * from "./feeds/content.ts";
 export * from "./filters/match.ts";
+export * from "./search/plain.ts";
 export * from "./feeds/discover.ts";
 export * from "./feeds/ingest.ts";
 export * from "./feeds/opml.ts";

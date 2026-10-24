@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { migrate, openDatabase, transaction } from "./database.ts";
 import { deleteUnstarredFeedArticlesBefore } from "./articles.ts";
 import { buildPendingFilterMatches, listFilters } from "./filters.ts";
+import { searchText } from "../search/plain.ts";
 
 function tableNames(db: ReturnType<typeof openDatabase>): string[] {
   return db
@@ -591,5 +592,73 @@ describe("the migration to read times", () => {
       { id: 1, is_read: 1, read_at: null },
       { id: 2, is_read: 0, read_at: null },
     ]);
+  });
+});
+
+describe("the search text function", () => {
+  it("is there before the migrations run, and gives the fields as search matches them", () => {
+    const db = openDatabase(":memory:");
+    const row = db
+      .prepare("SELECT sn_search_text('generated', 'ＡＩ', NULL, '要約', NULL, '[本文](https://example.org)', '', '影響', 'ホール') AS text")
+      .get();
+    expect(row?.text).toBe(
+      searchText({
+        origin: "generated",
+        title: "ＡＩ",
+        translatedTitle: null,
+        summary: "要約",
+        autoSummary: null,
+        body: "[本文](https://example.org)",
+        contentText: "",
+        impact: "影響",
+        venue: "ホール",
+      }),
+    );
+    expect(row?.text).toBe("ai\n要約\n本文\n影響\nホール");
+  });
+});
+
+describe("the migration to article search", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("makes the articles stored before it searchable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "012")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, content_text, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k1', 'news', 'Title', 's', 'b', '新しい電池の話', ?, ?, ?)`,
+    ).run(now, now, now);
+
+    for (const name of readdirSync(SHIPPED).filter((file) => file >= "012")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT rowid FROM article_search WHERE article_search MATCH '\"新しい\"'").all()).toEqual([{ rowid: 1 }]);
+    expect(db.prepare("SELECT text FROM article_search WHERE rowid = 1").get()).toEqual({ text: "title\ns\n新しい電池の話" });
+  });
+});
+
+describe("the shipped search index", () => {
+  it("has its three triggers and a row for every article", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const triggers = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'articles' AND name LIKE 'articles_search_%' ORDER BY name")
+      .all()
+      .map((row) => String(row.name));
+    expect(triggers).toEqual(["articles_search_delete", "articles_search_insert", "articles_search_update"]);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    const insert = db.prepare(
+      `INSERT INTO articles (origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES ('feed', 5, ?, 'news', 't', 's', 'b', ?, ?, ?)`,
+    );
+    for (const key of ["a", "b", "c"]) insert.run(key, now, now, now);
+    const count = (table: string) => Number(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n);
+    expect(count("article_search")).toBe(count("articles"));
+    expect(count("articles")).toBe(3);
   });
 });

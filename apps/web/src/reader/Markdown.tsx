@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import { rehypeSearchMatch } from "./highlight.tsx";
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 const SAFE_IMAGE = /^https:\/\//i;
@@ -32,8 +33,19 @@ function ArticleImage({ src, alt }: { src: string; alt: string }) {
  * HTTPS; everywhere else an image is shown as its description.
  * With `plainHeadings` a heading is drawn as a line of bold text: the original under a translated heading
  * must not be a second heading in the outline of the page.
+ * With `highlight`, the words of an article opened from search results are marked wherever they are in the text.
  */
-export function Markdown({ text, images = false, plainHeadings = false }: { text: string; images?: boolean; plainHeadings?: boolean }) {
+export function Markdown({
+  text,
+  images = false,
+  plainHeadings = false,
+  highlight,
+}: {
+  text: string;
+  images?: boolean;
+  plainHeadings?: boolean;
+  highlight?: readonly string[];
+}) {
   const plain = ({ children }: { children?: ReactNode }) => (
     <p>
       <strong>{children}</strong>
@@ -41,6 +53,7 @@ export function Markdown({ text, images = false, plainHeadings = false }: { text
   );
   return (
     <ReactMarkdown
+      rehypePlugins={highlight && highlight.length > 0 ? [rehypeSearchMatch(highlight)] : []}
       urlTransform={(url, key) => ((key === "src" ? SAFE_IMAGE : SAFE_LINK).test(url) ? url : "")}
       components={{
         a: ({ href, children }) =>

@@ -4,6 +4,9 @@ import type {
   ArticleList,
   ArticleListQuery,
   ArticleRef,
+  ArticleSearchHit,
+  ArticleSearchQuery,
+  ArticleSearchResult,
   ArticleSummary,
   ArticleUpdate,
   AutoSummarySource,
@@ -14,6 +17,8 @@ import type {
 } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
+import { searchBody } from "../search/plain.ts";
+import { charCount, excerptOf, parseSearchTerms, SHORT_TERM_CHARS } from "../search/text.ts";
 import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { findArticleTranslation } from "./translations.ts";
@@ -532,6 +537,75 @@ export function pageArticles(
   const page = rows.slice(0, limit);
   const last = page.at(-1);
   return { items: page.map(toSummary), nextCursor: rows.length > limit && last ? encodeCursor([str(last.updated_at), num(last.id)]) : null };
+}
+
+/** A term as an FTS5 phrase: in double quotes, a quote in it doubled, so that no sign or word is an operator. */
+function ftsPhrase(term: string): string {
+  return `"${term.replaceAll('"', '""')}"`;
+}
+
+/** A term as a LIKE pattern for a part of the text, its wildcards and the escape character escaped. */
+function likePattern(term: string): string {
+  return `%${term.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+/**
+ * A page of the articles that have every term of the query, newest first by last update, generated and
+ * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
+ * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
+ * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt.
+ */
+export function searchArticles(db: Database, query: ArticleSearchQuery): ArticleSearchResult {
+  const terms = parseSearchTerms(query.q);
+  const long = terms.filter((term) => charCount(term) > SHORT_TERM_CHARS);
+  const short = terms.filter((term) => charCount(term) <= SHORT_TERM_CHARS);
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+  if (long.length > 0) {
+    where.push("a.id IN (SELECT rowid FROM article_search WHERE article_search MATCH ?)");
+    params.push(long.map(ftsPhrase).join(" "));
+  }
+  for (const term of short) {
+    where.push("(SELECT s.text FROM article_search s WHERE s.rowid = a.id) LIKE ? ESCAPE '\\'");
+    params.push(likePattern(term));
+  }
+  where.push(`NOT ${hiddenByFilters("a")}`);
+  if (query.feed === undefined) where.push(`NOT ${hiddenDuplicate("a")}`);
+  if (query.category !== undefined) {
+    where.push("a.category_id = ?");
+    params.push(query.category);
+  }
+  if (query.feed !== undefined) {
+    where.push("a.feed_id = ?");
+    params.push(query.feed);
+  }
+  if (query.unread === "true") where.push("a.is_read = 0");
+  const page = pageArticles(db, where.join(" AND "), params, query);
+  const ids = page.items.map((item) => item.id);
+  const fields = new Map(
+    db
+      .prepare(
+        `SELECT id, origin, summary, auto_summary, body, content_text, impact, event_venue FROM articles
+          WHERE id IN (SELECT value FROM json_each(?))`,
+      )
+      .all(JSON.stringify(ids))
+      .map((row) => [num(row.id), row] as const),
+  );
+  const items = page.items.map((item): ArticleSearchHit => {
+    const row = fields.get(item.id)!;
+    const excerpt = excerptOf(
+      {
+        summary: str(row.summary),
+        autoSummary: strOrNull(row.auto_summary),
+        body: searchBody({ origin: str(row.origin), body: str(row.body), contentText: str(row.content_text) }),
+        impact: strOrNull(row.impact),
+        venue: strOrNull(row.event_venue),
+      },
+      terms,
+    );
+    return { ...item, excerpt };
+  });
+  return { items, nextCursor: page.nextCursor, terms };
 }
 
 /**

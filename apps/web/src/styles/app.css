@@ -175,6 +175,21 @@
     -webkit-box-decoration-break: clone;
   }
 
+  /*
+   * A word that matched the search: a fill of its own and a line under it, so that it stays apart from the
+   * importance mark even where the two overlap and for readers who cannot tell the colours apart.
+   */
+  mark.search-match {
+    background: var(--color-search-match);
+    color: inherit;
+    text-decoration-line: underline;
+    text-decoration-color: var(--color-search-match-line);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.2em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
   .article-body {
     display: flex;
     flex-direction: column;

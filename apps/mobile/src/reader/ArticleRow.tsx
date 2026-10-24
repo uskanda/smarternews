@@ -5,6 +5,7 @@ import { Pressable, View } from "react-native";
 import Swipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useTheme } from "../theme/theme";
 import { Txt } from "../ui/Txt";
+import { Highlighted } from "./highlight";
 
 export function Badge({ children, tone = "plain" }: { children: string; tone?: "plain" | "warning" }) {
   const theme = useTheme();
@@ -30,6 +31,10 @@ export interface ArticleRowProps {
   onOpen: (article: ArticleSummary) => void;
   onToggleRead: (article: ArticleSummary) => void;
   onLongPress: (article: ArticleSummary) => void;
+  /** In search results: the text around the match, shown in place of the summary when there is one. */
+  excerpt?: string | null;
+  /** In search results: the words to mark in the headline and the excerpt. */
+  terms?: readonly string[];
 }
 
 /**
@@ -38,7 +43,18 @@ export interface ArticleRowProps {
  *
  * Drawn again only when its own article changes: a list redraws for many reasons, and a row holds a gesture.
  */
-export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZone, now, time: shownTime = "updated", onOpen, onToggleRead, onLongPress }: ArticleRowProps) {
+export const ArticleRow = memo(function ArticleRow({
+  article,
+  sourceName,
+  timeZone,
+  now,
+  time: shownTime = "updated",
+  onOpen,
+  onToggleRead,
+  onLongPress,
+  excerpt = null,
+  terms,
+}: ArticleRowProps) {
   const theme = useTheme();
   const swipeable = useRef<SwipeableMethods>(null);
   // A feed article has no importance, and so no mark; it has its page instead of counted sources.
@@ -48,7 +64,7 @@ export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZo
   const spoken = [
     marked ? `重要度${article.importance}` : null,
     article.translatedTitle ?? article.title,
-    article.summary,
+    excerpt ?? article.summary,
     sourceName,
     time,
     generated ? `出典${article.refCount}件` : null,
@@ -127,10 +143,10 @@ export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZo
               article.importance === 5 ? { backgroundColor: theme.colors["mark-fill"], alignSelf: "flex-start" } : null,
             ]}
           >
-            {article.translatedTitle ?? article.title}
+            {terms ? <Highlighted text={article.translatedTitle ?? article.title} terms={terms} /> : (article.translatedTitle ?? article.title)}
           </Txt>
-          <Txt variant="body-md" color="on-surface-muted" numberOfLines={2}>
-            {article.summary}
+          <Txt testID={excerpt !== null ? `excerpt-${article.id}` : undefined} variant="body-md" color="on-surface-muted" numberOfLines={2}>
+            {terms ? <Highlighted text={excerpt ?? article.summary} terms={terms} /> : article.summary}
           </Txt>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: theme.spacing.md, rowGap: theme.spacing.xs }}>
             <Txt variant="label-sm" color="on-surface-muted">

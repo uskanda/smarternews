@@ -8,6 +8,7 @@ import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, Loading } from "../ui/controls";
 import { Txt } from "../ui/Txt";
 import { Badge } from "./ArticleRow";
+import { Highlighted } from "./highlight";
 import { Markdown } from "./Markdown";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
@@ -43,7 +44,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * original right under it, smaller and quieter. The pairs come from the server as they are shown. A segment
  * without a translation, and one whose translation is the same text, is shown once as content.
  */
-function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
+function TranslatedBody({ translation, terms }: { translation: ArticleTranslation; terms?: readonly string[] }) {
   const theme = useTheme();
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -52,11 +53,11 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
         <View key={index} style={{ gap: theme.spacing.lg }}>
           {segment.translated !== null && segment.translated.trim() !== segment.original.trim() ? (
             <View style={{ gap: theme.spacing.xs }}>
-              <Markdown text={segment.translated} images />
-              <Markdown text={segment.original} images quiet />
+              <Markdown text={segment.translated} images highlight={terms} />
+              <Markdown text={segment.original} images quiet highlight={terms} />
             </View>
           ) : (
-            <Markdown text={segment.original} images />
+            <Markdown text={segment.original} images highlight={terms} />
           )}
           {translation.truncated && index === lastTranslated ? (
             <Txt variant="label-sm" color="on-surface-muted">
@@ -80,6 +81,8 @@ export interface ArticlePageProps {
   onOpenArticle: (id: number) => void;
   /** Opens the copy of the article that another feed delivered, with that feed's list behind it. */
   onOpenCopy: (copy: Article["otherFeeds"][number]) => void;
+  /** The words of the search the article was opened from, marked in its headline and text. */
+  terms?: readonly string[];
 }
 
 /** One article: what the story is, what it means for the reader, the text, and where it came from. */
@@ -90,7 +93,7 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
-export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle, onOpenCopy }: ArticlePageProps) {
+export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle, onOpenCopy, terms }: ArticlePageProps) {
   const theme = useTheme();
   const timeZone = useTimeZone();
   const categories = useCategories();
@@ -164,12 +167,12 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
       </View>
       <View style={{ gap: theme.spacing.xs }}>
         <Txt variant="headline-lg" heading>
-          {article.translatedTitle ?? article.title}
+          {terms ? <Highlighted text={article.translatedTitle ?? article.title} terms={terms} /> : (article.translatedTitle ?? article.title)}
         </Txt>
         {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
           // The title as the site wrote it, read out in its own language where the system can.
           <Txt testID="original-title" variant="body-md" color="on-surface-muted" accessibilityLanguage={article.sourceLanguage ?? undefined}>
-            {article.title}
+            {terms ? <Highlighted text={article.title} terms={terms} /> : article.title}
           </Txt>
         ) : null}
       </View>
@@ -186,7 +189,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Txt variant="label-sm" color="on-surface-muted">
             読み手への影響
           </Txt>
-          <Txt variant="body-md">{article.impact}</Txt>
+          <Txt variant="body-md">{terms ? <Highlighted text={article.impact} terms={terms} /> : article.impact}</Txt>
         </View>
       ) : null}
       {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
@@ -231,7 +234,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Txt variant="label-sm" color="on-surface-muted" heading>
             AIによる要約
           </Txt>
-          <Txt variant="body-md">{article.autoSummary.text}</Txt>
+          <Txt variant="body-md">{terms ? <Highlighted text={article.autoSummary.text} terms={terms} /> : article.autoSummary.text}</Txt>
           {article.autoSummary.source === "feed" ? (
             <Txt variant="label-sm" color="on-surface-muted">
               元のページを読めなかったため、配信された内容だけをもとにしています。
@@ -255,7 +258,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Button label="翻訳をやり直す" onPress={() => void translating.refetch()} />
         </View>
       ) : null}
-      {article.translation ? <TranslatedBody translation={article.translation} /> : <Markdown text={article.body} images={delivered} />}
+      {article.translation ? <TranslatedBody translation={article.translation} terms={terms} /> : <Markdown text={article.body} images={delivered} highlight={terms} />}
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">

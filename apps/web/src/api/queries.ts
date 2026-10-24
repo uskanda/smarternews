@@ -1,4 +1,4 @@
-import type { Article, ArticleList, ArticleListQuery, ArticleSummary } from "@smarternews/core/api";
+import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useApp } from "../app/context.ts";
@@ -61,6 +61,21 @@ export function useArticleList(filter: ArticleListQuery, enabled = true) {
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     refetchInterval: REFRESH_MS,
+    enabled,
+  });
+}
+
+/**
+ * Search results, a page at a time. Kept under "articles", so that a change of an article's flags reaches
+ * them as it reaches the lists. Not fetched again by itself: results do not move while the reader goes through them.
+ */
+export function useArticleSearch(query: Omit<ArticleSearchQuery, "limit" | "cursor">, enabled = true) {
+  const { api } = useApp();
+  return useInfiniteQuery({
+    queryKey: ["articles", "search", query],
+    queryFn: ({ pageParam }) => api.search({ ...query, limit: PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
     enabled,
   });
 }

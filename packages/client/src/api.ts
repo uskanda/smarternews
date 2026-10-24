@@ -2,6 +2,7 @@
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
   articleListSchema,
+  articleSearchResultSchema,
   articleSchema,
   articleTranslationSchema,
   summaryRequestResultSchema,
@@ -26,6 +27,8 @@ import {
   type Article,
   type ArticleList,
   type ArticleListQuery,
+  type ArticleSearchQuery,
+  type ArticleSearchResult,
   type ArticleTranslation,
   type SummaryRequestResult,
   type ArticleUpdate,
@@ -192,6 +195,12 @@ export function createApi(options: ApiOptions) {
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>
       json(articleListSchema, `/articles${query(filter as Record<string, string | number | undefined>)}`),
+    /** The articles that have every term of `q`, newest first, a page at a time, with excerpts and the terms matched. */
+    search: (params: ArticleSearchQuery): Promise<ArticleSearchResult> =>
+      json(
+        articleSearchResultSchema,
+        `/search${query({ q: params.q, category: params.category, feed: params.feed, unread: params.unread, cursor: params.cursor, limit: params.limit })}`,
+      ),
     article: (id: number): Promise<Article> => json(articleSchema, `/articles/${id}`),
     updateArticle: (id: number, patch: ArticleUpdate): Promise<Article> =>
       json(articleSchema, `/articles/${id}`, body("PATCH", patch)),

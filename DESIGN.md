@@ -17,6 +17,8 @@ colors:
   selected: "#E8EDF7"
   mark: "#FFD84A"
   mark-fill: "#FFE98A"
+  search-match: "#CBEEDD"
+  search-match-line: "#1D6B4C"
   warning: "#8A5200"
   error: "#A1260D"
   on-error: "#FFFFFF"
@@ -31,6 +33,8 @@ colors:
   selected-darkblue: "#212B3A"
   mark-darkblue: "#E9C13A"
   mark-fill-darkblue: "#5C4B12"
+  search-match-darkblue: "#1E4A3B"
+  search-match-line-darkblue: "#7FD8AE"
   warning-darkblue: "#F0B45C"
   error-darkblue: "#FFA08F"
   on-error-darkblue: "#10151B"
@@ -140,6 +144,9 @@ components:
     backgroundColor: "{colors.mark-fill}"
     textColor: "{colors.on-surface}"
     typography: "{typography.label-md}"
+  search-match:
+    backgroundColor: "{colors.search-match}"
+    textColor: "{colors.on-surface}"
   badge-warning:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.warning}"
@@ -184,11 +191,12 @@ components:
 - `primary`（`#24418F`）は、リンク、押せる部品の文字と枠、フォーカスの枠に使う。主となるボタンは地をこの色にする。
 - `selected`（`#E8EDF7`）は、選択中の行と項目の地に使う。
 - `mark`（`#FFD84A`）と `mark-fill`（`#FFE98A`）は、重要度の印だけに使う。`mark` は見出しの左の線と、読み手への影響の左の線。`mark-fill` は見出しの文字の下半分に重ねる。文字の色には使わない。
+- `search-match`（`#CBEEDD`）と `search-match-line`（`#1D6B4C`）は、検索で一致した語の強調だけに使う。`search-match` を語の地に塗り、`search-match-line` で語の下に線を引く。`mark` を使わないのは、`mark` が重要度の印だからである。緑みの色にしたのは、重要度の黄色とも、選択中の行の青みの灰色とも色相を離すためである。語の色付け（#54）の色とも分ける。
 - `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。
 - `error`（`#A1260D`）は、失敗の表示と、削除を確定するボタンに使う。
 
 暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-darkblue`（`#5C4B12`）を重ね、文字は `on-surface` の暗い配色の値のままにする。
-印の色（`mark`、`mark-fill`、`warning`、`error`）は、「ダーク」の値を定義しない。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
+印の色（`mark`、`mark-fill`、`search-match`、`search-match-line`、`warning`、`error`）は、「ダーク」の値を定義しない。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
 
 ## Typography
 
@@ -250,6 +258,8 @@ components:
 - ドラッグ中の購読フィードが上にあるカテゴリは、配下の項目ごと3pxの枠で囲む。フォーカスの枠（2px）より太くして、置く先の候補であることを示す。
 - 枠の色は、まだ置けない間は `outline-strong` とし、置けるようになったら `primary` へ変える。別のカテゴリが置けるようになった瞬間は、枠を2回点滅させる。動きを減らす設定の端末では点滅させず、色の変化だけで示す。
 - 項目のメニューは、`surface` の地に `outline-strong` の枠で、角は `md` にする。影は付けない。選んでいる行は地を `selected` にし、選べない行は文字を `on-surface-muted` にする。購読フィードの「登録を解除」は、罫線で区切って最後に置く。
+- `search-match` は、検索の結果の一覧の見出しと抜粋、結果から開いた記事の見出しと本文で、一致した語に重ねる。地の色に加えて、`search-match-line` の2pxの下線を引く。重要度5の見出しの `headline-mark` と重なっても、色を見分けられない利用者にも線の形で分かるようにするためである。角は付けず、文字の太さと大きさは周りのまま変えない。
+- 検索の結果の1行は、要約1行の代わりに、一致した箇所の抜粋を2行まで出す。抜粋は一致した語の前に40字ほどを含むので、1行では語が幅から外れることがあるからである。抜粋がないときは、いつもの要約を1行で出す。
 - `badge-warning` は「未確認」の印。「更新」の印は同じ形で、文字を `on-surface-muted` にする。
 - `banner-error` は失敗の表示。何ができなかったかと、次にできる操作を1つ並べる。
 - フォーカスのある部品は、`primary` の2pxの枠を2px外側に出す。

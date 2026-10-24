@@ -63,8 +63,9 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - Marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed. "「すべて既読にする」のあと、未読のある次の項目へ移る" in the global settings switches this off.
 - The settings pages edit categories, topics, subscribed feeds, filters, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
+- The search box at the top of the left pane finds articles by words, read ones included, and marks the matching words in the list and the article. The result narrows to a category, a feed or unread articles, and its URL keeps the words.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, `/` moves to the search box, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
@@ -198,6 +199,8 @@ The server counts the characters it sends per month and sends nothing beyond `mo
 [examples/smarternews.service](examples/smarternews.service) is a systemd user unit. The comments at its top give the install commands.
 
 After an upgrade that changes the database, the server copies the database file before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copy once the new version works for you.
+
+Change the articles in the database only through the server. Search keeps its index with triggers that call a function the server registers, so another connection, such as the `sqlite3` command, can read the database but fails when it writes articles.
 
 To read from other devices, set `listen` in `config.yaml` to an address those devices can reach, for example the Tailscale address of the machine. The server has no TLS and one fixed token, so it belongs on a private network. Do not expose the port to the internet.
 

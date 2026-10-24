@@ -2,11 +2,10 @@
 // may load them too. No model is involved: a filter is a plain comparison of text.
 import type { FilterCondition, FilterField } from "../api.ts";
 import type { FieldError } from "../errors.ts";
+import { normalizeForMatch } from "../search/text.ts";
 
-/** The form in which values and texts are compared: full-width and half-width alike, upper and lower case alike. */
-export function normalizeForMatch(text: string): string {
-  return text.normalize("NFKC").toLowerCase();
-}
+// The same normalization as article search, so that a filter and a search treat a text alike.
+export { normalizeForMatch };
 
 /** The value a condition stores to compare with: NFKC, and lower case for a part of the text. */
 export function normalizedValue(condition: Pick<FilterCondition, "match" | "value">): string {

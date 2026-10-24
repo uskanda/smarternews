@@ -4,9 +4,9 @@
 
 動機はproposal.mdの「Why」にある。決定はgrilling.mdにあり、ここでは作り方だけを決める。
 
-- 生成記事と配信記事は、どちらも `articles` の表にある。配信記事の `body` はMarkdownに変換した内容で、`content_text` はその内容からMarkdownの記法とリンク先を除いた文字列である。ストップワードの照合は `content_text` を使う。
+- 生成記事と配信記事は、どちらも `articles` の表にある。配信記事の `body` はMarkdownに変換した内容で、`content_text` はその内容からMarkdownの記法とリンク先を除いた文字列である。フィルターの照合は `content_text` を使う。
 - 生成記事の `body` は、LLMが書いたMarkdownである。リンクを含むことがある。
-- ストップワードの照合は、`normalizeForMatch`（NFKCで正規化して小文字にする）を使う。検索も同じ規則にする（round 2 Q1）。
+- フィルターの「含む」の照合は、`normalizeForMatch`（NFKCで正規化して小文字にする）を使う。検索も同じ規則にする（round 2 Q1）。
 - 保存は `node:sqlite` で、版はSQLite 3.53である。FTS5の `trigram` が使える。`DatabaseSync` の `function()` で、JavaScriptの関数をSQLの関数として登録できる。
 - `trigram` は3文字以上の語にしか索引を使えない。2文字以下の語の `LIKE` は、表の中身を順に読む。
 - 記事の削除は3つの経路で起きる。生成記事の180日の削除、配信記事の保存期間の削除、購読フィードの削除による `ON DELETE CASCADE` である。
@@ -79,16 +79,21 @@
 ### D5：問い合わせの形と並び
 
 ```sql
-SELECT <一覧の列> FROM articles a JOIN article_search s ON s.rowid = a.id
-WHERE [s.article_search MATCH ?] [AND s.text LIKE ? ESCAPE '\' ...]
-  AND NOT (a.stop_word_id IS NOT NULL AND a.starred = 0)
+SELECT <一覧の列> FROM articles a
+WHERE [a.id IN (SELECT rowid FROM article_search WHERE article_search MATCH ?)]
+  [AND (SELECT s.text FROM article_search s WHERE s.rowid = a.id) LIKE ? ESCAPE '\' ...]
+  AND NOT <hiddenByFilters(a)>
+  [AND NOT <hiddenDuplicate(a)>]
   [AND a.category_id = ?] [AND a.feed_id = ?] [AND a.is_read = 0]
   [AND (a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))]
 ORDER BY a.updated_at DESC, a.id DESC LIMIT ?
 ```
 
 - 由来の条件は付けない。生成記事と配信記事の両方が対象だからである（round 1 Q1）。AGENTS.mdの「生成記事だけを対象にする問い合わせ」には当たらない。
-- 隠した配信記事の条件は、記事の一覧と同じ式を使う。スターのある配信記事は隠れないので、結果に出る。
+- 隠した配信記事の条件は、記事の一覧と同じ式（`hiddenByFilters`）を使う。スターのある配信記事は隠れないので、結果に出る。
+- 隠した重複の条件（`hiddenDuplicate`）は、購読フィードを指定しないときだけ付ける。記事の一覧の、購読フィードを指定しない一覧と同じ扱いである。
+- 記事の一覧の続きの取得は `pageArticles` が受け持つ。検索はこの関数に条件を渡す。
+- 実装では、`MATCH` と `LIKE` を記事の表との結合でなく副問い合わせに置いた。条件の意味は結合と同じである。
 - 続きの値は、記事の一覧と同じ（最終更新の時刻と識別子）にする。
 - 終了したイベントの記事も結果に含める。記事の一覧が終了したイベントを除くのは、未読を読み終えるための既定である。検索は過去の記事を探す操作であり、既読を含める決定（round 1 Q6）と同じ考え方を取る。
 
@@ -101,7 +106,8 @@ ORDER BY a.updated_at DESC, a.id DESC LIMIT ?
 ### D7：一致の範囲を求める処理を1つにする
 
 元の文字列と語の一覧から、一致した範囲を元の文字列の位置で返す関数を、Nodeの機能に依存しないモジュールとして `packages/core` に置く。`@smarternews/core/api` から使えるようにする。
-サーバーは抜粋を作るときに、WebとアプリはD9の強調に、同じ関数を使う。`normalizeForMatch` もこのモジュールへ移し、ストップワードの処理はそこから使う。
+置き場所は `packages/core/src/search/` である。`text.ts` は正規化、語の分け方、一致の範囲、抜粋を持ち、`@smarternews/core/api` から使える。`plain.ts` はMarkdownの記法を除く処理と索引の文字列を持ち、`marked` を使うのでサーバーだけが使う。
+サーバーは抜粋を作るときに、WebとアプリはD9の強調に、同じ関数を使う。`normalizeForMatch` もこのモジュールへ移し、フィルターの処理はそこから使う。
 
 元の文字列を、基本の文字と、それに続く結合文字（`\p{M}`）と半角の濁点と半濁点（U+FF9E、U+FF9F）のまとまりに分ける。まとまりごとにNFKCと小文字化をして、正規化した文字列と、元の位置への対応表を作る。
 まとまりごとに正規化するのは、半角のカタカナの「カ」と半角の濁点の並びのように、文字ごとに正規化すると結果が変わる並びを1つにするためである。
@@ -116,6 +122,7 @@ ORDER BY a.updated_at DESC, a.id DESC LIMIT ?
 ### D9：強調の表示
 
 - Web：一覧の見出し（訳したタイトルを出すときはその文字列）と抜粋を、D7の範囲で `<mark>` に分けて描く。本文は `react-markdown` にrehypeのプラグインを足し、文字の部分の一致を `<mark>` に包む。コードの中も対象にする。
+- Web：抜粋は2行まで出す。抜粋は一致した語の前に約40文字を含むので、1行では語が幅から外れることがあるからである。
 - アプリ：一覧の見出しと抜粋は、`Text` の入れ子で強調する。本文は、`marked` の字句から文字を描く箇所で、同じ範囲を強調の `Text` にする。
 - 強調する語は、APIの応答の `terms` を使う。画面の側で語を正規化し直さない。
 - 見た目は、`DESIGN.md` に新しい色（たとえば `search-match`）を足して決める。`mark` と `mark-fill` は重要度の印だけに使う決まりなので使わない。色のほかに下線を付け、重要度5の見出しの塗りと重なっても見分けられるようにする。語の色付け（#54）が足す色とも分ける。#54も同じ時期に `DESIGN.md` へ色を足すので、実装のときに並べて確かめる。

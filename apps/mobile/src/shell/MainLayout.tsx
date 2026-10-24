@@ -25,6 +25,7 @@ export function MainLayout() {
       }}
     >
       <Drawer.Screen name="list/[key]" />
+      <Drawer.Screen name="search" />
     </Drawer>
   );
 }

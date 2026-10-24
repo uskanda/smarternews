@@ -5,6 +5,7 @@ import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@
 import { useArticle, useArticleTranslation, useSummaryRequest } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { listPathOf } from "../lib/paths.ts";
+import { Highlighted } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
@@ -44,7 +45,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * original right under it. The pairs come from the server as they are shown; nothing is matched up here.
  * A segment without a translation, and one whose translation says the same in the same words, is shown once.
  */
-function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
+function TranslatedBody({ translation, terms }: { translation: ArticleTranslation; terms?: readonly string[] }) {
   const lang = translation.sourceLanguage ?? undefined;
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -54,14 +55,14 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
         const shown = paired ? (
           <div key={index} className="segment">
             <div>
-              <Markdown text={segment.translated!} images />
+              <Markdown text={segment.translated!} images highlight={terms} />
             </div>
             <div className="segment-original" lang={lang}>
-              <Markdown text={segment.original} images plainHeadings />
+              <Markdown text={segment.original} images plainHeadings highlight={terms} />
             </div>
           </div>
         ) : (
-          <Markdown key={index} text={segment.original} images />
+          <Markdown key={index} text={segment.original} images highlight={terms} />
         );
         return translation.truncated && index === lastTranslated
           ? [
@@ -93,6 +94,7 @@ export function ArticleView({
   articlePath,
   onToggleStar,
   onToggleRead,
+  terms,
 }: {
   id: number;
   categoryName: (categoryId: number | null) => string;
@@ -103,6 +105,8 @@ export function ArticleView({
   articlePath: (id: number) => string;
   onToggleStar: (article: Article) => void;
   onToggleRead: (article: Article) => void;
+  /** The words of the search the article was opened from, marked in its headline and text. */
+  terms?: readonly string[];
 }) {
   const query = useArticle(id);
   const article = query.data;
@@ -166,12 +170,12 @@ export function ArticleView({
         </div>
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
-            {article.translatedTitle ?? article.title}
+            <Highlighted text={article.translatedTitle ?? article.title} terms={terms} />
           </h2>
           {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
             // The title as the site wrote it, marked with its language so that it is read out in that language.
             <p lang={article.sourceLanguage ?? undefined} className="type-body-md text-on-surface-muted">
-              {article.title}
+              <Highlighted text={article.title} terms={terms} />
             </p>
           ) : null}
         </div>
@@ -184,7 +188,9 @@ export function ArticleView({
         {article.impact ? (
           <section aria-label="読み手への影響" className="border-l-4 border-mark pl-md">
             <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
-            <p className="type-body-md">{article.impact}</p>
+            <p className="type-body-md">
+              <Highlighted text={article.impact} terms={terms} />
+            </p>
           </section>
         ) : null}
         {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
@@ -215,7 +221,9 @@ export function ArticleView({
           // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
           <section aria-label="AIによる要約" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
             <h3 className="type-label-sm text-on-surface-muted">AIによる要約</h3>
-            <p className="break-words whitespace-pre-line type-body-md">{article.autoSummary.text}</p>
+            <p className="break-words whitespace-pre-line type-body-md">
+              <Highlighted text={article.autoSummary.text} terms={terms} />
+            </p>
             {article.autoSummary.source === "feed" ? (
               <p className="type-label-sm text-on-surface-muted">元のページを読めなかったため、配信された内容だけをもとにしています。</p>
             ) : null}
@@ -236,10 +244,10 @@ export function ArticleView({
           </div>
         ) : null}
         {article.translation ? (
-          <TranslatedBody translation={article.translation} />
+          <TranslatedBody translation={article.translation} terms={terms} />
         ) : (
           <div className="article-body type-body-lg">
-            <Markdown text={article.body} images={delivered} />
+            <Markdown text={article.body} images={delivered} highlight={terms} />
           </div>
         )}
         {previous ? (

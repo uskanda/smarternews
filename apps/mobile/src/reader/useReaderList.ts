@@ -14,17 +14,54 @@ import {
 import type { ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
-import { useArticleFlags, useArticleList, useCategories, useFeeds } from "../api/queries";
+import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds } from "../api/queries";
 import { advanceCheckedAt } from "../notifications/store";
 import { useReaderSession } from "./session";
 
 export type View = ListTarget["type"];
+
+/** The key of the search results, which are no list of the drawer. */
+export const SEARCH_KEY = "search";
+
+/** A search: the words, and the narrowing to a category, a feed or unread articles. */
+export interface SearchRef {
+  q: string;
+  category?: number;
+  feed?: number;
+  unread: boolean;
+}
 
 export interface ListRef {
   /** The key of a list, as `listKey` of the shared client writes it: "unread", "category-3", "feed-7" and so on. */
   key: string;
   includeRead: boolean;
   importantOnly: boolean;
+  /** Set for the search results, whose key is `SEARCH_KEY`. */
+  search?: SearchRef;
+}
+
+const idParam = (value: string | undefined) => (value !== undefined && /^\d{1,15}$/.test(value) ? Number(value) : undefined);
+
+/** The list a screen shows, from the key of the list and the search parameters of the screen. */
+export function listRefOf(
+  key: string,
+  params: { read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string },
+): ListRef {
+  return {
+    key,
+    includeRead: params.read === "1",
+    importantOnly: params.min === "4",
+    ...(key === SEARCH_KEY
+      ? {
+          search: {
+            q: (params.q ?? "").trim(),
+            ...(idParam(params.category) !== undefined ? { category: idParam(params.category) } : {}),
+            ...(idParam(params.feed) !== undefined ? { feed: idParam(params.feed) } : {}),
+            unread: params.unread === "true",
+          },
+        }
+      : {}),
+  };
 }
 
 const TITLES: Record<Exclude<View, "category" | "feed">, string> = {
@@ -39,6 +76,10 @@ const EMPTY: ArticleSummary[] = [];
 
 /** The search parameters that carry a list's filters from the list screen to the article screen and back. */
 export function listParams(ref: ListRef): Record<string, string> {
+  if (ref.search) {
+    const { q, category, feed, unread } = ref.search;
+    return { q, ...(category !== undefined ? { category: String(category) } : {}), ...(feed !== undefined ? { feed: String(feed) } : {}), ...(unread ? { unread: "true" } : {}) };
+  }
   return { ...(ref.includeRead ? { read: "1" } : {}), ...(ref.importantOnly ? { min: "4" } : {}) };
 }
 
@@ -55,17 +96,20 @@ export function useReaderList(ref: ListRef) {
 
   // A key that names no list is read as the unread list, where the app starts.
   const target = useMemo<ListTarget>(() => parseListKey(ref.key) ?? { type: "unread" }, [ref.key]);
+  const search = ref.search;
+  const isSearch = search !== undefined;
   const view: View = target.type;
   const category: Category | undefined = target.type === "category" ? categories.data?.find((entry) => entry.id === target.categoryId) : undefined;
   const feed: Feed | undefined = target.type === "feed" ? feeds.data?.find((entry) => entry.id === target.feedId) : undefined;
   const isEvents = target.type === "category" && !target.generatedOnly && category?.kind === "event";
-  const readToggle = hasReadToggle(target) && !isEvents;
-  const listControls = hasListControls(target);
+  const readToggle = !isSearch && hasReadToggle(target) && !isEvents;
+  // Search results never offer marking everything read: they are found articles, not a list to finish.
+  const listControls = !isSearch && hasListControls(target);
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const importantOnly = importanceFilter && ref.importantOnly;
   /** True when the list names a category or a feed that does not exist. */
-  const missing = (target.type === "category" && categories.isSuccess && !category) || (target.type === "feed" && feeds.isSuccess && !feed);
+  const missing = !isSearch && ((target.type === "category" && categories.isSuccess && !category) || (target.type === "feed" && feeds.isSuccess && !feed));
 
   const filter = useMemo<ArticleListQuery>(() => {
     if (isEvents) return { category: category!.id, kind: "event" };
@@ -75,13 +119,31 @@ export function useReaderList(ref: ListRef) {
       ...(readToggle && !ref.includeRead ? { unread: "true" as const } : {}),
     };
   }, [target, category, isEvents, readToggle, ref.includeRead, importantOnly]);
-  const unreadOnly = filter.unread === "true";
+  const searchQuery = useMemo(
+    () => ({
+      q: search?.q ?? "",
+      ...(search?.category !== undefined ? { category: search.category } : {}),
+      ...(search?.feed !== undefined ? { feed: search.feed } : {}),
+      ...(search?.unread ? { unread: "true" as const } : {}),
+    }),
+    [search?.q, search?.category, search?.feed, search?.unread],
+  );
+  const unreadOnly = isSearch ? searchQuery.unread === "true" : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
-  const recentlyRead = filter.recentlyRead === "true";
-  const listKey = JSON.stringify(filter);
+  const recentlyRead = !isSearch && filter.recentlyRead === "true";
+  const listKey = JSON.stringify(isSearch ? { search: searchQuery } : filter);
 
-  const list = useArticleList(filter, !missing);
-  const fetched = useMemo(() => list.data?.pages.flatMap((page) => page.items) ?? EMPTY, [list.data]);
+  const articleList = useArticleList(filter, !missing && !isSearch);
+  const results = useArticleSearch(searchQuery, isSearch && searchQuery.q.length > 0);
+  const list = isSearch ? results : articleList;
+  const fetched = useMemo<ArticleSummary[]>(
+    () => (isSearch ? results.data?.pages.flatMap((page) => page.items) : articleList.data?.pages.flatMap((page) => page.items)) ?? EMPTY,
+    [isSearch, results.data, articleList.data],
+  );
+  const excerpts = useMemo(
+    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item.excerpt] as const)) ?? []),
+    [results.data],
+  );
   // What was listed on screen has been seen: the periodic check does not notify it later. Only generated
   // articles are ever notified, so only they move the mark: a newer feed article must not hide from the
   // check a generated article that is in another list.
@@ -90,7 +152,7 @@ export function useReaderList(ref: ListRef) {
     if (newest !== "") void advanceCheckedAt(newest);
   }, [fetched]);
   const kept = session.keptFor(listKey);
-  const items = useMemo(() => mergeKept(fetched, kept, sortKeyFor(target)), [fetched, kept, target]);
+  const items = useMemo(() => mergeKept(fetched, kept, isSearch ? undefined : sortKeyFor(target)), [fetched, kept, target, isSearch]);
 
   const setRead = useCallback(
     (target: { id: number }, isRead: boolean) => {
@@ -114,8 +176,11 @@ export function useReaderList(ref: ListRef) {
 
   const categoryName = (categoryId: number | null) => categories.data?.find((entry) => entry.id === categoryId)?.name ?? "";
   const feedName = (feedId: number | null) => feeds.data?.find((entry) => entry.id === feedId)?.title ?? "";
-  const title =
-    target.type === "category"
+  const title = isSearch
+    ? searchQuery.q.length > 0
+      ? `「${searchQuery.q}」の検索結果`
+      : "検索"
+    : target.type === "category"
       ? category
         ? target.generatedOnly
           ? `${category.name}の${GENERATED_LABEL}`
@@ -128,6 +193,12 @@ export function useReaderList(ref: ListRef) {
   return {
     view,
     target,
+    /** True for the search results. */
+    isSearch,
+    /** The words the server matched, normalized: what a search result marks. Undefined outside the search results. */
+    terms: isSearch ? results.data?.pages[0]?.terms : undefined,
+    /** The excerpt of a search result, or null when only its title matched or it is no search result. */
+    excerptOf: (id: number) => excerpts.get(id) ?? null,
     title,
     category,
     missing,

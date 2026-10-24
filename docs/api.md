@@ -116,6 +116,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
+| `GET /api/v1/search` | Search the articles by words |
 | `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
 | `POST /api/v1/articles/:id/translation` | The translation of a feed article's content, made and stored when there is none yet |
 | `GET /api/v1/translation` | How much the translation API was used this month |
@@ -209,6 +210,29 @@ The detail adds these:
 | `translation` | The stored translation of the content, in the shape `POST /api/v1/articles/:id/translation` returns. `null` until the article is translated |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
 | `otherFeeds` | The other feeds that delivered a feed article: one entry per copy recorded as its duplicate, with `articleId` (the copy), `feedId` and `feedTitle`, in the order the copies were stored. Empty for an article without duplicates |
+
+### Search
+
+`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event. It does not match source URLs or the targets of links. Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
+
+| Parameter | Effect |
+|---|---|
+| `q` | Required. Words separated by spaces, a full-width space included. At most 200 characters; empty or longer gets 400 |
+| `category` | Category id: its generated articles and the articles of its feeds |
+| `feed` | Feed id; only the articles of that subscribed feed |
+| `unread` | `true` for unread articles only |
+| `limit` | 1 to 200, default 50 |
+| `cursor` | The `nextCursor` of the previous page |
+
+Words are compared in the form the filters use: full-width and half-width alike, upper and lower case alike. Hiragana and katakana stay different. Every word is a part of the text to find, and signs and words such as `OR` or `NOT` are matched as they are; there is no phrase or exclusion syntax. A word of three or more characters uses the trigram index; a search with only one- and two-character words reads the articles one by one, newest first, and can be slow on a large database.
+
+The response has `items`, `nextCursor` and `terms`. Each item has the fields of an article in the list and `excerpt`: about 120 characters around the first match in the summary, automatic summary, body, impact or venue, without Markdown, with `…` where it was cut. `excerpt` is `null` when only the title matches. `terms` are the words as they were matched, normalized and each once, for marking the matches.
+
+```bash
+curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "q=battery factory" "$API/api/v1/search"
+```
+
+The search index is kept by triggers that call a function the server registers when it opens the database. A connection without that function, such as the `sqlite3` command, can read the database but cannot insert, change or delete articles.
 
 Generated articles without a star are deleted 180 days after their last update, feed articles without a star 90 days after the time they sort by. Starred articles are kept.
 

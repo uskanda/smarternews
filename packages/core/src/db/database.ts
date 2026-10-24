@@ -1,13 +1,41 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { searchText } from "../search/plain.ts";
 
 export type Database = DatabaseSync;
 
 const SHIPPED_MIGRATIONS = join(import.meta.dirname, "migrations");
 
+const text = (value: unknown): string => (value === null || value === undefined ? "" : String(value));
+const textOrNull = (value: unknown): string | null => (value === null || value === undefined ? null : String(value));
+
+/**
+ * Registers `sn_search_text`, which the triggers on `articles` call to keep the search index. It takes
+ * origin, title, translated_title, summary, auto_summary, body, content_text, impact and event_venue, and
+ * returns the text the index holds. Every connection that writes articles must have it: without it, the
+ * triggers fail.
+ */
+function registerFunctions(db: Database): void {
+  db.function("sn_search_text", { deterministic: true }, (origin, title, translatedTitle, summary, autoSummary, body, contentText, impact, venue) =>
+    searchText({
+      origin: text(origin),
+      title: text(title),
+      translatedTitle: textOrNull(translatedTitle),
+      summary: text(summary),
+      autoSummary: textOrNull(autoSummary),
+      body: text(body),
+      contentText: text(contentText),
+      impact: textOrNull(impact),
+      venue: textOrNull(venue),
+    }),
+  );
+}
+
 export function openDatabase(path: string): Database {
   const db = new DatabaseSync(path);
+  // Before any migration: the one that builds the search index fills it with this function.
+  registerFunctions(db);
   db.exec("PRAGMA foreign_keys = ON");
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   return db;

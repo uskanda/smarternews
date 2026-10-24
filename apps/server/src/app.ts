@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   articleListQuerySchema,
+  articleSearchQuerySchema,
   articleUpdateSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
@@ -49,6 +50,7 @@ import {
   renderRss,
   requestAutoSummary,
   requestInterpretation,
+  searchArticles,
   setArticleFlags,
   settingsUpdateSchema,
   filterArticlesQuerySchema,
@@ -237,6 +239,8 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/articles/mark-unread", async (c) =>
     c.json({ updated: markArticlesUnread(db, parse(markUnreadSchema, await jsonBody(c)).ids) }),
   );
+  // Plain matching against the search index: no model and no translation is involved.
+  api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()))));
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
   api.get("/articles/:id", (c) => c.json(getArticle(db, idParam(c, "article"))));
   api.patch("/articles/:id", async (c) =>

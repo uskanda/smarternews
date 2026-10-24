@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getArticle, insertArticle, listArticles, setArticleFlags } from "../db/articles.ts";
+import { getArticle, insertArticle, listArticles, searchArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
@@ -198,6 +198,21 @@ describe("fetchFeed", () => {
 
     const [after] = s.list();
     expect(after).toMatchObject({ id: before!.id, title: "A (corrected)", summary: "Better words.", isRead: true, updatedAt: before!.updatedAt });
+  });
+
+  it("makes a stored item searchable, and a rewrite replaces what search finds", async () => {
+    const s = setup([{ title: "Battery news", key: "a", content: "<p>新しい<a href=\"https://example.org/x\">電池</a>の工場。</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const found = (q: string) => searchArticles(s.db, { q }).items.map((item) => item.title);
+    expect(found("電池")).toEqual(["Battery news"]);
+    expect(found("example")).toEqual([]);
+    s.clock.advance(HOUR);
+    s.serve([{ title: "Battery news", key: "a", content: "<p>新しい工場。</p>", published: s.clock().toISOString() }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(found("電池")).toEqual([]);
+    expect(found("工場")).toEqual(["Battery news"]);
   });
 
   it("sorts an item by its published time, or by the fetch time when that is missing or in the future", async () => {

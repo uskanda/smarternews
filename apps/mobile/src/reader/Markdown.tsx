@@ -3,6 +3,7 @@ import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Image, Text, View } from "react-native";
 import { isWebLink, openSource } from "../lib/links";
 import { useTheme, type Theme } from "../theme/theme";
+import { Highlighted } from "./highlight";
 
 // An article body is Markdown: written by a model that read web pages, or rewritten from what a feed
 // delivered. It is drawn from the parsed tokens with the app's own text components: HTML inside it is shown as
@@ -10,6 +11,14 @@ import { useTheme, type Theme } from "../theme/theme";
 // loaded only for the content of a feed article, and only over HTTPS.
 
 const HTTPS = /^https:\/\//i;
+
+/** The theme, and the words of a search to mark in the text when the article was opened from search results. */
+type Drawing = Theme & { terms?: readonly string[] };
+
+/** A run of text, with the words of the search marked when there are any. */
+function words(text: string, theme: Drawing, key?: string): ReactNode {
+  return theme.terms && theme.terms.length > 0 ? <Highlighted key={key} text={text} terms={theme.terms} /> : text;
+}
 
 /**
  * An image of a feed article, as wide as the text. The device asks the other site for it. Its height follows
@@ -42,7 +51,7 @@ function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Th
  * The tokens of a paragraph as blocks: an image stands on its own, between the runs of text around it.
  * Without `images`, everything stays one run and an image is shown as its description.
  */
-function paragraphBlocks(tokens: Token[] | undefined, theme: Theme, key: string, images: boolean): ReactNode[] {
+function paragraphBlocks(tokens: Token[] | undefined, theme: Drawing, key: string, images: boolean): ReactNode[] {
   const blocks: ReactNode[] = [];
   let run: Token[] = [];
   const flush = () => {
@@ -68,7 +77,7 @@ function paragraphBlocks(tokens: Token[] | undefined, theme: Theme, key: string,
   return blocks;
 }
 
-function inline(tokens: Token[] | undefined, theme: Theme, prefix: string): ReactNode {
+function inline(tokens: Token[] | undefined, theme: Drawing, prefix: string): ReactNode {
   return (tokens ?? []).map((token, index) => {
     const key = `${prefix}${index}`;
     switch (token.type) {
@@ -84,7 +93,7 @@ function inline(tokens: Token[] | undefined, theme: Theme, prefix: string): Reac
       case "codespan":
         return (
           <Text key={key} style={{ fontFamily: "monospace", fontSize: theme.type["body-md"].fontSize }}>
-            {(token as Tokens.Codespan).text}
+            {words((token as Tokens.Codespan).text, theme)}
           </Text>
         );
       case "br":
@@ -100,16 +109,16 @@ function inline(tokens: Token[] | undefined, theme: Theme, prefix: string): Reac
         );
       }
       case "image":
-        return (token as Tokens.Image).text;
+        return words((token as Tokens.Image).text, theme, key);
       case "text": {
         const text = token as Tokens.Text;
-        return text.tokens ? <Fragment key={key}>{inline(text.tokens, theme, `${key}.`)}</Fragment> : unescape(text.text);
+        return text.tokens ? <Fragment key={key}>{inline(text.tokens, theme, `${key}.`)}</Fragment> : words(unescape(text.text), theme, key);
       }
       case "escape":
-        return (token as Tokens.Escape).text;
+        return words((token as Tokens.Escape).text, theme, key);
       default:
         // Includes "html": the raw characters are shown.
-        return token.raw;
+        return words(token.raw, theme, key);
     }
   });
 }
@@ -123,7 +132,7 @@ function Paragraph({ children, theme }: { children: ReactNode; theme: Theme }) {
   return <Text style={[theme.type["body-lg"], { color: theme.colors["on-surface"] }]}>{children}</Text>;
 }
 
-function block(token: Token, theme: Theme, key: string, images: boolean): ReactNode {
+function block(token: Token, theme: Drawing, key: string, images: boolean): ReactNode {
   switch (token.type) {
     case "space":
     case "hr":
@@ -158,7 +167,7 @@ function block(token: Token, theme: Theme, key: string, images: boolean): ReactN
     case "code":
       return (
         <Text key={key} style={{ fontFamily: "monospace", fontSize: theme.type["body-md"].fontSize, color: theme.colors["on-surface"] }}>
-          {(token as Tokens.Code).text}
+          {words((token as Tokens.Code).text, theme)}
         </Text>
       );
     case "text": {
@@ -166,7 +175,7 @@ function block(token: Token, theme: Theme, key: string, images: boolean): ReactN
       if (text.tokens) return <Fragment key={key}>{paragraphBlocks(text.tokens, theme, key, images)}</Fragment>;
       return (
         <Paragraph key={key} theme={theme}>
-          {unescape(text.text)}
+          {words(unescape(text.text), theme)}
         </Paragraph>
       );
     }
@@ -174,7 +183,7 @@ function block(token: Token, theme: Theme, key: string, images: boolean): ReactN
       // Includes "html" and tables: shown as the characters that were written.
       return (
         <Paragraph key={key} theme={theme}>
-          {token.raw.trim()}
+          {words(token.raw.trim(), theme)}
         </Paragraph>
       );
   }
@@ -182,12 +191,16 @@ function block(token: Token, theme: Theme, key: string, images: boolean): ReactN
 
 /**
  * `quiet` draws the text one size smaller and in the muted colour: the original under its translation.
+ * `highlight` marks the words of the search an article was opened from, wherever they are in the text.
  */
-export function Markdown({ text, images = false, quiet = false }: { text: string; images?: boolean; quiet?: boolean }) {
+export function Markdown({ text, images = false, quiet = false, highlight }: { text: string; images?: boolean; quiet?: boolean; highlight?: readonly string[] }) {
   const base = useTheme();
-  const theme = useMemo<Theme>(
-    () => (quiet ? ({ ...base, type: { ...base.type, "body-lg": base.type["body-md"] }, colors: { ...base.colors, "on-surface": base.colors["on-surface-muted"] } } as unknown as Theme) : base),
-    [base, quiet],
+  const theme = useMemo<Drawing>(
+    () => ({
+      ...(quiet ? ({ ...base, type: { ...base.type, "body-lg": base.type["body-md"] }, colors: { ...base.colors, "on-surface": base.colors["on-surface-muted"] } } as unknown as Theme) : base),
+      terms: highlight,
+    }),
+    [base, quiet, highlight],
   );
   const tokens = useMemo(() => marked.lexer(text, { gfm: true }), [text]);
   return <View style={{ gap: theme.spacing.lg }}>{tokens.map((token, index) => block(token, theme, String(index), images))}</View>;

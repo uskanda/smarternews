@@ -184,6 +184,27 @@ describe("the API client", () => {
   });
 });
 
+describe("searching articles", () => {
+  it("sends the query and the narrowing that is given, and reads the result with its terms", async () => {
+    const { server, api, seen } = setup();
+    const category = server.category();
+    const id = server.article(category.id, { title: "電池の話" });
+
+    const result = await api.search({ q: "電池" });
+    expect(seen.at(-1)!.url).toBe(`/api/v1/search?q=${encodeURIComponent("電池")}`);
+    expect(result).toMatchObject({ items: [{ id, excerpt: null }], nextCursor: null, terms: ["電池"] });
+
+    // The server refuses a cursor it did not issue; what matters here is what was sent.
+    await api.search({ q: "電池 工場", category: 3, feed: 4, unread: "true", cursor: "c", limit: 20 }).catch(() => undefined);
+    expect(seen.at(-1)!.url).toBe("/api/v1/search?q=%E9%9B%BB%E6%B1%A0+%E5%B7%A5%E5%A0%B4&category=3&feed=4&unread=true&cursor=c&limit=20");
+  });
+
+  it("fails as invalid for an empty query", async () => {
+    const { api } = setup();
+    await expect(api.search({ q: " " })).rejects.toMatchObject({ kind: "invalid", fields: [{ path: "q", message: "is empty" }] });
+  });
+});
+
 describe("moving categories and feeds", () => {
   it("moves a category and a feed, and reads the move-on setting", async () => {
     const { server, api } = setup();

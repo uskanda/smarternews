@@ -2,6 +2,9 @@
 // so that browser and React Native bundles can load it.
 import { z } from "zod";
 
+// Normalizing and matching search terms: the apps mark matches as the server finds them.
+export * from "./search/text.ts";
+
 export const kindSchema = z.enum(["news", "event"]);
 export type Kind = z.infer<typeof kindSchema>;
 
@@ -280,6 +283,38 @@ export const articleListSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ArticleList = z.infer<typeof articleListSchema>;
+
+/**
+ * A search of the articles. Without narrowing it covers every article, generated and delivered, read or not,
+ * ended events included; what filters hide is left out, and so are hidden duplicates unless a feed is named.
+ */
+export const articleSearchQuerySchema = z.object({
+  /** The terms, separated by spaces. Checked by `parseSearchTerms`: not empty, at most 200 characters. */
+  q: z.string(),
+  category: z.coerce.number().int().optional(),
+  feed: z.coerce.number().int().optional(),
+  unread: z.enum(["true"]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+});
+export type ArticleSearchQuery = z.infer<typeof articleSearchQuerySchema>;
+
+export const articleSearchHitSchema = articleSummarySchema.extend({
+  /**
+   * The text around the first match in the summary, automatic summary, body, impact or venue, on one line and
+   * without Markdown. Null when only the title matches.
+   */
+  excerpt: z.string().nullable(),
+});
+export type ArticleSearchHit = z.infer<typeof articleSearchHitSchema>;
+
+export const articleSearchResultSchema = z.object({
+  items: z.array(articleSearchHitSchema),
+  nextCursor: z.string().nullable(),
+  /** The terms as they were matched: normalized, each once. A screen marks them with `matchRanges`. */
+  terms: z.array(z.string()),
+});
+export type ArticleSearchResult = z.infer<typeof articleSearchResultSchema>;
 
 export const articleUpdateSchema = z.object({ isRead: z.boolean().optional(), starred: z.boolean().optional() });
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { filterCreateSchema, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
+import {
+  articleSearchQuerySchema,
+  articleSearchResultSchema, filterCreateSchema, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
 
 const condition = { fields: ["title"], match: "contains", value: "特売" } as const;
 
@@ -72,5 +74,50 @@ describe("filters in the settings file", () => {
     const file = settingsFileSchema.parse({ version: 1, stopWords: [{ text: "広告" }, { text: "提供", scope: "title_and_content" }] });
     expect(file.stopWords).toEqual([{ text: "広告" }, { text: "提供", scope: "title_and_content" }]);
     expect(file.filters).toEqual([]);
+  });
+});
+
+describe("the shape of a search", () => {
+  const summary = {
+    id: 1,
+    categoryId: null,
+    origin: "feed",
+    feedId: 2,
+    author: null,
+    kind: "news",
+    title: "電池の話",
+    translatedTitle: null,
+    summary: "s",
+    impact: null,
+    importance: null,
+    unconfirmed: false,
+    firstPublishedAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    revision: 0,
+    isRead: false,
+    readAt: null,
+    starred: false,
+    primaryUrl: null,
+    refCount: 0,
+    event: null,
+  } as const;
+
+  it("gives each article of the list an excerpt, and the result its terms", () => {
+    const result = articleSearchResultSchema.parse({ items: [{ ...summary, excerpt: "…電池…" }, { ...summary, id: 2, excerpt: null }], nextCursor: null, terms: ["電池"] });
+    expect(result.items.map((item) => item.excerpt)).toEqual(["…電池…", null]);
+    expect(result.terms).toEqual(["電池"]);
+    expect(articleSearchResultSchema.safeParse({ items: [summary], nextCursor: null, terms: [] }).success).toBe(false);
+    expect(articleSearchResultSchema.safeParse({ items: [], nextCursor: null }).success).toBe(false);
+  });
+
+  it("takes the query and narrowing from a query string", () => {
+    expect(articleSearchQuerySchema.parse({ q: "電池", category: "3", feed: "4", unread: "true", limit: "20" })).toEqual({
+      q: "電池",
+      category: 3,
+      feed: 4,
+      unread: "true",
+      limit: 20,
+    });
+    expect(articleSearchQuerySchema.safeParse({}).success).toBe(false);
   });
 });

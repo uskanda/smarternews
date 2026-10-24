@@ -12,7 +12,7 @@ import { IconButton } from "../ui/controls";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { Txt } from "../ui/Txt";
 import { ArticlePage } from "./ArticlePage";
-import { listParams, useReaderList } from "./useReaderList";
+import { listParams, listRefOf, SEARCH_KEY, useReaderList } from "./useReaderList";
 
 /**
  * The article the user opened, as one page among the articles of the list it was opened from: swiping left or
@@ -23,11 +23,12 @@ export function ArticleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string }>();
+  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string }>();
   const openedId = Number(params.id);
-  const ref = { key: params.list ?? "unread", includeRead: params.read === "1", importantOnly: params.min === "4" };
+  // Opened from search results, the pages follow the results and mark the words of the search.
+  const ref = listRefOf(params.list ?? "unread", params);
   const reader = useReaderList(ref);
-  const back = useBack({ pathname: "/list/[key]", params: { key: ref.key, ...listParams(ref) } });
+  const back = useBack(ref.key === SEARCH_KEY ? { pathname: "/search", params: listParams(ref) } : { pathname: "/list/[key]", params: { key: ref.key, ...listParams(ref) } });
 
   // The pages keep the order the list had when the article was opened. A refresh in the background must not
   // move what the user is reading.
@@ -132,6 +133,7 @@ export function ArticleScreen() {
               onRead={onRead}
               onOpenArticle={openArticle}
               onOpenCopy={openCopy}
+              terms={reader.terms}
             />
           ) : (
             <View key={id} style={{ width }} />
