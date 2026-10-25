@@ -13,6 +13,14 @@ const press = async (name: string | RegExp) => userEvent.setup().press(await scr
 const isRead = async (server: TestServer, id: number) => (await server.core<{ isRead: boolean }>("getArticle", id)).isRead;
 /** The device's back, as the stack takes it. */
 const goBack = () => act(() => router.back());
+/**
+ * The page of the article with this headline. The pager is drawn again once the list arrives, with the
+ * neighbouring articles beside it, so this waits for that and looks inside the one page.
+ */
+async function pageOf(title: string) {
+  await screen.findByLabelText(/^\d+件のうち\d+件目$/);
+  return screen.getAllByLabelText("記事").find((page) => within(page).queryByRole("header", { name: title }))!;
+}
 
 /** Article X with names, a feed article and an older generated article that share a name, and one without names. */
 async function seeded() {
@@ -36,9 +44,9 @@ describe("the names below the body", () => {
   it("are grouped by kind, organizations before places, each kind in stored order", async () => {
     const { server, ids } = await seeded();
     await renderApp({ server, url: `/article/${ids.x}?list=all` });
-    await screen.findByRole("header", { name: "利上げの記事" });
+    const page = await pageOf("利上げの記事");
 
-    const section = await screen.findByTestId("mentions");
+    const section = within(page).getByTestId("mentions");
     expect(within(section).getAllByRole("header").map((node) => node.props.children)).toEqual(["組織", "地名"]);
     expect(within(section).getAllByRole("link").map((node) => node.props.accessibilityLabel)).toEqual(["組織、日本銀行", "組織、財務省", "地名、東京"]);
   });
@@ -46,15 +54,15 @@ describe("the names below the body", () => {
   it("are not there for an article without names", async () => {
     const { server, ids } = await seeded();
     await renderApp({ server, url: `/article/${ids.plain}?list=all` });
-    await screen.findByRole("header", { name: "名前のない記事" });
-    expect(screen.queryByTestId("mentions")).toBeNull();
-    expect(screen.queryByRole("header", { name: "組織" })).toBeNull();
+    const page = await pageOf("名前のない記事");
+    expect(within(page).queryByTestId("mentions")).toBeNull();
+    expect(within(page).queryByRole("header", { name: "組織" })).toBeNull();
   });
 
   it("say the kind with the name, as a link, to a screen reader", async () => {
     const { server, ids } = await seeded();
     await renderApp({ server, url: `/article/${ids.x}?list=all` });
-    const link = await screen.findByRole("link", { name: "組織、日本銀行" });
+    const link = within(await pageOf("利上げの記事")).getByRole("link", { name: "組織、日本銀行" });
     expect(link.props.accessibilityRole).toBe("link");
   });
 
