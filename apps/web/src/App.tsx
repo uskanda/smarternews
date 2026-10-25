@@ -43,6 +43,7 @@ const routes: RouteObject[] = [
       { path: "c/:slug/:articleId?", element: <ReaderPage view="category" /> },
       { path: "f/:feedId/:articleId?", element: <ReaderPage view="feed" /> },
       { path: "search/:articleId?", element: <ReaderPage view="search" /> },
+      { path: "mentions/:articleId?", element: <ReaderPage view="mention" /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
       { path: "settings/feeds", element: <FeedsPage /> },

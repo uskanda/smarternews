@@ -27,8 +27,34 @@ const openAiCompatibleSchema = z.strictObject({
   structuredOutput: z.enum(["json_schema", "prompt"]).default("json_schema"),
 });
 
-const providerSchema = z.discriminatedUnion("adapter", [claudeCliSchema, openAiCompatibleSchema]);
+const price = z.number().min(0);
+
+/** US dollars a million tokens, and a web search. Each field set here replaces the shipped price of the model. */
+const pricingSchema = z.strictObject({
+  inputPerMTok: price.optional(),
+  outputPerMTok: price.optional(),
+  cacheReadPerMTok: price.optional(),
+  cacheWritePerMTok: price.optional(),
+  webSearchPerSearch: price.optional(),
+});
+export type PricingConfig = z.infer<typeof pricingSchema>;
+
+const anthropicSchema = z.strictObject({
+  adapter: z.literal("anthropic"),
+  model: z.string().min(1),
+  /** Name of the environment variable that holds the key. The key itself never goes into the file. */
+  apiKeyEnv: z.string().min(1).default("ANTHROPIC_API_KEY"),
+  /** How much the model thinks. Left out, the model's own default applies. */
+  effort: z.enum(["low", "medium", "high"]).optional(),
+  /** Web searches one call of the search task may make. */
+  maxWebSearches: z.number().int().min(1).max(20).default(5),
+  pricing: pricingSchema.optional(),
+});
+
+const providerSchema = z.discriminatedUnion("adapter", [claudeCliSchema, openAiCompatibleSchema, anthropicSchema]);
 export type ProviderConfig = z.infer<typeof providerSchema>;
+
+const newsEngineSchema = z.enum(["google-news", "bing-news"]);
 
 const tasksSchema = z.strictObject({
   default: z.string(),
@@ -39,6 +65,7 @@ const tasksSchema = z.strictObject({
   write: z.string().optional(),
   summarize: z.string().optional(),
   translate: z.string().optional(),
+  proposeSelectors: z.string().optional(),
 });
 
 const configSchema = z.strictObject({
@@ -51,13 +78,22 @@ const configSchema = z.strictObject({
   limits: z
     .strictObject({
       llmCallsPerRun: z.number().int().min(1).default(40),
-      llmCallsPerDay: z.number().int().min(1).default(300),
+      /** Every call but the summaries: the calls of runs and the proposals of selectors. */
+      llmCallsPerDay: z.number().int().min(1).default(350),
       /** Summaries of feed articles, counted apart from the calls of runs. */
       summariesPerDay: z.number().int().min(1).default(100),
+      /** Proposals of selectors for web feeds, counted in `llmCallsPerDay` as well. 0 leaves them to the program. */
+      selectorProposalsPerDay: z.number().int().min(0).default(50),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */
       runRetries: z.number().int().min(0).max(3).default(2),
+      /** US dollars the providers that cost money may use in one budget period. */
+      monthlyBudgetUsd: z.number().min(0).default(100),
+      /** The share of the budget at which the screens warn. */
+      budgetWarnRatio: z.number().gt(0).max(1).default(0.8),
+      /** The day of the month on which a budget period starts, at midnight UTC. */
+      budgetResetDay: z.number().int().min(1).max(31).default(1),
     })
     .prefault({}),
   llm: z
@@ -99,9 +135,20 @@ const configSchema = z.strictObject({
     .prefault({}),
   newsSearch: z
     .strictObject({
-      engine: z.enum(["google-news", "bing-news"]).default("google-news"),
+      /** The older way to name a single engine. Read as a list of one; nothing else reads it. */
+      engine: newsEngineSchema.optional(),
+      engines: z
+        .array(newsEngineSchema)
+        .min(1)
+        .refine((engines) => new Set(engines).size === engines.length, "name each engine once")
+        .optional(),
       maxResultsPerQuery: z.number().int().min(1).max(100).default(10),
     })
+    .refine((search) => search.engine === undefined || search.engines === undefined, "write either engine or engines, not both")
+    .transform(({ engine, engines, maxResultsPerQuery }) => ({
+      engines: engines ?? [engine ?? ("google-news" as const)],
+      maxResultsPerQuery,
+    }))
     .prefault({}),
 });
 
@@ -158,6 +205,17 @@ export function translationApiKey(config: Config, env: Record<string, string | u
 const CHEAP_PROVIDER = "fast";
 const CHEAP_TASKS: readonly TaskName[] = ["summarize", "translate"];
 
+/** A proposal of selectors reads a long page once, and is asked for seldom: it goes to this provider when there is one. */
+const CAPABLE_PROVIDER = "smart";
+const CAPABLE_TASKS: readonly TaskName[] = ["proposeSelectors"];
+
+/** The provider of a task without an assignment. */
+function fallbackFor(task: TaskName, config: Config): string {
+  if (CHEAP_TASKS.includes(task) && CHEAP_PROVIDER in config.providers) return CHEAP_PROVIDER;
+  if (CAPABLE_TASKS.includes(task) && CAPABLE_PROVIDER in config.providers) return CAPABLE_PROVIDER;
+  return config.tasks.default;
+}
+
 /** Which provider runs each task. Throws when an assignment names a provider that is not configured. */
 export function resolveAssignment(config: Config): Record<TaskName, string> {
   const assignment = {} as Record<TaskName, string>;
@@ -166,8 +224,7 @@ export function resolveAssignment(config: Config): Record<TaskName, string> {
     problems.push(`tasks.default names the provider "${config.tasks.default}", which is not configured`);
   }
   for (const task of TASK_NAMES) {
-    const fallback = CHEAP_TASKS.includes(task) && CHEAP_PROVIDER in config.providers ? CHEAP_PROVIDER : config.tasks.default;
-    const name = config.tasks[task] ?? fallback;
+    const name = config.tasks[task] ?? fallbackFor(task, config);
     if (config.tasks[task] !== undefined && !(name in config.providers)) {
       problems.push(`the task "${task}" is assigned to the provider "${name}", which is not configured`);
     }

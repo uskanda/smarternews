@@ -835,3 +835,82 @@ describe("list views in the settings file", () => {
     expect(getListView(other, "unread").sort).toBe("newest");
   });
 });
+
+describe("web feeds in the settings file", () => {
+  const SELECTORS = { item: "ul.news > li", title: "h3", date: "time" };
+
+  function withWebFeed() {
+    const db = createTestDb();
+    const a = createCategory(db, { name: "A", slug: "a", kind: "news" }, clock);
+    insertFeed(db, { url: "https://atom.example.org/feed.xml", title: "Atom", categoryId: a.id }, clock);
+    insertFeed(db, { url: "https://town.example.org/news", title: "Town", categoryId: a.id, format: "page", selectors: SELECTORS, fetchFullContent: true }, clock);
+    return db;
+  }
+
+  it("writes a web feed under its category with its selectors, and a feed without", () => {
+    const file = parse(exportSettings(withWebFeed()));
+    expect(file.categories[0].subscriptions).toEqual([
+      { url: "https://atom.example.org/feed.xml", title: "Atom", enabled: true },
+      { url: "https://town.example.org/news", title: "Town", enabled: true, fetchFullContent: true, selectors: SELECTORS },
+    ]);
+  });
+
+  it("registers a web feed on an empty server without fetching it, and writes the same file again", () => {
+    const text = exportSettings(withWebFeed());
+    const empty = createTestDb();
+    const result = importSettings(empty, text, clock);
+    expect(result.feedsCreated).toBe(2);
+    expect(listFeeds(empty)).toEqual([
+      expect.objectContaining({ url: "https://atom.example.org/feed.xml", format: "feed", selectors: null }),
+      expect.objectContaining({ url: "https://town.example.org/news", format: "page", selectors: SELECTORS, lastFetchedAt: null }),
+    ]);
+    expect(exportSettings(empty)).toBe(text);
+  });
+
+  it("takes new selectors for a known web feed", () => {
+    const db = withWebFeed();
+    const file = parse(exportSettings(db));
+    file.categories[0].subscriptions[1].selectors = { item: "article" };
+    importSettings(db, JSON.stringify(file), clock);
+    expect(listFeeds(db)[1]!.selectors).toEqual({ item: "article" });
+  });
+
+  it("refuses selectors for a known feed, and a known web feed without them, naming the entry and storing nothing", () => {
+    const db = withWebFeed();
+    const before = exportSettings(db);
+    const file = parse(before);
+    file.categories.push({ name: "B", slug: "b", kind: "news" });
+    file.categories[0].subscriptions[0].selectors = { item: "li" };
+    let error: unknown;
+    try {
+      importSettings(db, JSON.stringify(file), clock);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({ code: "invalid", fields: [{ path: "categories.0.subscriptions.0" }] });
+    expect(exportSettings(db)).toBe(before);
+
+    const second = parse(before);
+    delete second.categories[0].subscriptions[1].selectors;
+    expect(() => importSettings(db, JSON.stringify(second), clock)).toThrow(/web feed/);
+    expect(exportSettings(db)).toBe(before);
+  });
+
+  it("refuses a selector that is not a CSS selector, naming its place, and stores nothing of the file", () => {
+    const db = createTestDb();
+    const file = {
+      version: 1,
+      categories: [{ name: "B", slug: "b", kind: "news", subscriptions: [{ url: "https://atom.example.org/feed.xml" }] }],
+      subscriptions: [{ url: "https://town.example.org/news", selectors: { item: "div[" } }],
+    };
+    let error: unknown;
+    try {
+      importSettings(db, JSON.stringify(file), clock);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({ code: "invalid", fields: [{ path: "subscriptions.0.selectors.item", message: "not a CSS selector" }] });
+    expect(listCategories(db)).toEqual([]);
+    expect(listFeeds(db)).toEqual([]);
+  });
+});

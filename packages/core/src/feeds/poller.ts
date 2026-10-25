@@ -1,4 +1,5 @@
 import { dueFeeds, getFeed } from "../db/feeds.ts";
+import { PageFetcher } from "../fetch/pages.ts";
 import { fetchFeed, type FeedDeps, type FetchOutcome } from "./ingest.ts";
 
 /**
@@ -11,6 +12,8 @@ export class FeedPoller {
   #tail: Promise<void> = Promise.resolve();
   #roundPending = false;
   #timer: NodeJS.Timeout | undefined;
+  #pages: PageFetcher | undefined;
+  #pagesDay = "";
 
   constructor(deps: FeedDeps) {
     this.#deps = deps;
@@ -36,8 +39,25 @@ export class FeedPoller {
     const { db, clock } = this.#deps;
     for (const feed of dueFeeds(db, clock())) {
       // `fetchFeed` records a failure on the feed and does not throw; the next feed is fetched either way.
-      await fetchFeed(this.#deps, feed.id);
+      await fetchFeed(this.#withPages(), feed.id);
     }
+  }
+
+  /**
+   * The fetcher of the pages of web feeds: the rules of full content fetching, robots.txt included. It is
+   * replaced once a day, so that a changed robots.txt is read again.
+   */
+  pageFetcher(): PageFetcher {
+    const today = this.#deps.clock().toISOString().slice(0, 10);
+    if (!this.#pages || this.#pagesDay !== today) {
+      this.#pages = new PageFetcher(this.#deps.fetcher, { pagesPerRun: Number.POSITIVE_INFINITY, remember: false });
+      this.#pagesDay = today;
+    }
+    return this.#pages;
+  }
+
+  #withPages(): FeedDeps {
+    return { ...this.#deps, pages: this.pageFetcher() };
   }
 
   /**
@@ -57,7 +77,7 @@ export class FeedPoller {
   /** Fetches one feed without waiting for its interval, behind whatever is being fetched now. */
   async fetchNow(feedId: number): Promise<FetchOutcome> {
     getFeed(this.#deps.db, feedId);
-    return this.exclusive(() => fetchFeed(this.#deps, feedId));
+    return this.exclusive(() => fetchFeed(this.#withPages(), feedId));
   }
 
   /** Resolves when everything queued so far has been fetched. */

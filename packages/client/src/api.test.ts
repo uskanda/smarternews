@@ -1,14 +1,15 @@
+import { replaceMentions } from "@smarternews/core";
 import { API_TOKEN, testServer } from "@smarternews/server/testing";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, createApi } from "./api.ts";
 
-function setup(token: string | null = API_TOKEN) {
-  const server = testServer();
+function setup(token: string | null = API_TOKEN, options: Parameters<typeof testServer>[1] = {}) {
+  const server = testServer(undefined, options);
   const onUnauthorized = vi.fn();
-  const seen: Array<{ url: string; authorization: string | null }> = [];
+  const seen: Array<{ url: string; authorization: string | null; body: unknown }> = [];
   const api = createApi({
     fetchImpl: (input, init) => {
-      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), body: init?.body });
       return server.app.request(String(input), init);
     },
     getToken: () => token,
@@ -204,6 +205,31 @@ describe("the API client", () => {
 
     expect(await api.feedStats(feed.id)).toMatchObject({ received: 1, opened: 0, starred: 0, hiddenByFilters: 0, hiddenAsDuplicates: 0 });
     expect(seen.at(-1)!.url).toBe(`/api/v1/feeds/${feed.id}/stats`);
+  });
+
+  it("asks for candidates and a preview of a page, and subscribes to it and changes its selectors, on the paths of web feeds", async () => {
+    const proposal = { candidates: [{ item: "li.post", title: null, link: null, date: "time" }] };
+    const { api, server, seen } = setup(API_TOKEN, { proposeSelectors: () => proposal });
+    const page = "https://town.example.org/news";
+    server.site.set(page, () =>
+      new Response('<html><head><title>Town</title></head><body><ul><li class="post"><a href="/1">One story</a><time datetime="2026-03-01T09:00:00Z">x</time></li></ul></body></html>', {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const sent = () => ({ url: seen.at(-1)!.url, body: JSON.parse(String(seen.at(-1)!.body)) });
+
+    const candidates = await api.pageCandidates(page);
+    expect(sent()).toEqual({ url: "/api/v1/feeds/page/candidates", body: { url: page } });
+    expect(candidates).toMatchObject({ usedModel: true, fallback: null, candidates: [{ selectors: { item: "li.post", date: "time" }, preview: { count: 1 } }] });
+
+    const preview = await api.pagePreview(page, { item: "li.post" });
+    expect(sent()).toEqual({ url: "/api/v1/feeds/page/preview", body: { url: page, selectors: { item: "li.post" } } });
+    expect(preview).toEqual({ count: 1, items: [{ title: "One story", url: "https://town.example.org/1", publishedAt: null }] });
+
+    const feed = await api.createFeed({ url: page, format: "page", selectors: { item: "li.post" }, fetchFullContent: true });
+    expect(sent().body).toEqual({ url: page, format: "page", selectors: { item: "li.post" }, fetchFullContent: true });
+    expect(feed).toMatchObject({ format: "page", selectors: { item: "li.post" } });
+    expect((await api.updateFeed(feed.id, { selectors: { item: "li.post", date: "time" } })).selectors).toEqual({ item: "li.post", date: "time" });
   });
 
   it("downloads the subscribed feeds as OPML and uploads the document back", async () => {
@@ -465,5 +491,35 @@ describe("annotations", () => {
       onUnauthorized: () => {},
     });
     await expect(api.addHighlight(1, anchor)).rejects.toThrow();
+  });
+});
+
+describe("the articles of a name", () => {
+  it("sends the name, the limit and the cursor, and reads a page in the shape of the article list", async () => {
+    const { server, api, seen } = setup();
+    const id = server.article(server.category().id, { title: "金融政策" });
+    replaceMentions(server.db, id, [{ name: "日本銀行", kind: "organization" }]);
+
+    const page = await api.mentionArticles({ name: "日本銀行" });
+    expect(seen.at(-1)!.url).toBe(`/api/v1/mentions/articles?name=${encodeURIComponent("日本銀行")}`);
+    expect(page).toMatchObject({ items: [{ id, origin: "generated" }], nextCursor: null });
+    expect((await api.article(id)).mentions).toEqual([{ name: "日本銀行", kind: "organization" }]);
+
+    await api.mentionArticles({ name: "日本銀行", cursor: "c", limit: 20 }).catch(() => undefined);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/mentions/articles?name=${encodeURIComponent("日本銀行")}&cursor=c&limit=20`);
+  });
+
+  it("fails as invalid for a name of spaces only", async () => {
+    const { api } = setup();
+    await expect(api.mentionArticles({ name: " " })).rejects.toMatchObject({ kind: "invalid", fields: [{ path: "name", message: "is empty" }] });
+  });
+
+  it("refuses an answer outside the shape", async () => {
+    const api = createApi({
+      fetchImpl: async () => new Response(JSON.stringify({ items: [{ id: 1 }], nextCursor: null, asOf: "x" }), { headers: { "content-type": "application/json" } }),
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    await expect(api.mentionArticles({ name: "日本銀行" })).rejects.toBeInstanceOf(Error);
   });
 });

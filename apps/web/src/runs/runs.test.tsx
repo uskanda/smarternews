@@ -1,4 +1,4 @@
-import { createRun, createTopic, finishRun, insertCandidate, setRetry, startRun, type RetrySkipped, type RunOutcome } from "@smarternews/core";
+import { createRun, createTopic, finishRun, insertCandidate, resolvePricing, setRetry, startRun, type RetrySkipped, type RunOutcome } from "@smarternews/core";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -143,11 +143,19 @@ describe("one run", () => {
 
   it("explains a run that stopped at the limit of model calls", async () => {
     const server = makeServer();
+    const id = finished(server, server.category().id, { status: "stopped_by_limit", stoppedBy: "run", articlesCreated: 1, llmCalls: 40 });
+    renderApp({ server, route: `/runs/${id}` });
+
+    expect(await screen.findByText(/1回の実行のLLMの呼び出し回数が上限に達したため/)).toBeInTheDocument();
+    expect(screen.getByText(/完成した記事は保存済み/)).toBeInTheDocument();
+  });
+
+  it("explains a run stopped at a limit before the server kept which one, as it did then", async () => {
+    const server = makeServer();
     const id = finished(server, server.category().id, { status: "stopped_by_limit", articlesCreated: 1, llmCalls: 40 });
     renderApp({ server, route: `/runs/${id}` });
 
-    expect(await screen.findByText(/LLMの呼び出し回数の上限に達したため/)).toBeInTheDocument();
-    expect(screen.getByText(/完成した記事は保存済み/)).toBeInTheDocument();
+    expect(await screen.findByText(/^LLMの呼び出し回数が上限に達したため/)).toHaveTextContent("完成した記事は保存済み");
   });
 
   function withRejections() {
@@ -330,5 +338,76 @@ describe("providers", () => {
 
     const providers = await screen.findByRole("region", { name: "プロバイダー" });
     await waitFor(() => expect(providers).toHaveTextContent("280 / 300"));
+  });
+});
+
+describe("the monthly budget", () => {
+  /** A server whose providers cost money, in the budget period from 10 October to 9 November. */
+  function billed(spent: Array<[task: string, provider: string, cost: number | null]>) {
+    const server = makeServer("2026-10-25T12:00:00.000Z", {
+      pricing: resolvePricing("claude-sonnet-5-5")!,
+      budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 10 },
+    });
+    const insert = server.db.prepare(
+      "INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (?, ?, 10, 1, '2026-10-20T00:00:00.000Z', ?, 1)",
+    );
+    for (const [task, provider, cost] of spent) insert.run(task, provider, cost);
+    return server;
+  }
+
+  it("shows the budget period, what it spent of the budget, and the money by task and by provider", async () => {
+    const server = billed([
+      ["judge", "judge", 1.2],
+      ["write", "write", 3.4],
+      ["interpret", "interpret", 7.74],
+    ]);
+    renderApp({ server, route: "/settings" });
+
+    const providers = await screen.findByRole("region", { name: "プロバイダー" });
+    const budget = await within(providers).findByRole("group", { name: "月の予算" });
+    expect(budget).toHaveTextContent("10月10日から11月9日まで");
+    expect(budget).toHaveTextContent("$12.34 / $100.00");
+    const byTask = within(providers).getByRole("table", { name: "タスクの割り当てと金額" });
+    expect(within(byTask).getByRole("row", { name: /判定/ })).toHaveTextContent("$1.20");
+    expect(within(byTask).getByRole("row", { name: /本文の生成/ })).toHaveTextContent("$3.40");
+    expect(within(byTask).getByRole("row", { name: /要約/ })).toHaveTextContent("$0.00");
+    const table = within(providers).getByRole("table", { name: "プロバイダーの一覧" });
+    expect(within(table).getByRole("row", { name: /^judge/ })).toHaveTextContent("$1.20");
+    expect(within(table).getByRole("row", { name: /^write/ })).toHaveTextContent("$3.40");
+    expect(within(providers).queryByText(/金額のわからない呼び出し/)).not.toBeInTheDocument();
+    expect(within(providers).queryByRole("status", { name: "予算の警告" })).not.toBeInTheDocument();
+  });
+
+  it("warns in words and numbers once the period spent the warning share of the budget", async () => {
+    renderApp({ server: billed([["write", "write", 85]]), route: "/settings" });
+
+    const providers = await screen.findByRole("region", { name: "プロバイダー" });
+    const warning = await within(providers).findByRole("status", { name: "予算の警告" });
+    expect(warning).toHaveTextContent("月の予算の85%を使いました");
+  });
+
+  it("says that the providers that cost money are not called until the next period once the budget is reached", async () => {
+    renderApp({ server: billed([["write", "write", 100.04]]), route: "/settings" });
+
+    const providers = await screen.findByRole("region", { name: "プロバイダー" });
+    const warning = await within(providers).findByRole("status", { name: "予算の警告" });
+    expect(warning).toHaveTextContent("月の予算に達しました");
+    expect(warning).toHaveTextContent("11月10日まで、金額のかかるプロバイダーを呼び出しません");
+  });
+
+  it("says how many calls have an unknown cost, and that the total may be short by them", async () => {
+    renderApp({ server: billed([["judge", "judge", null], ["judge", "judge", null]]), route: "/settings" });
+
+    const providers = await screen.findByRole("region", { name: "プロバイダー" });
+    expect(await within(providers).findByText(/金額のわからない呼び出しが2件/)).toHaveTextContent("合計は実際より少ない");
+  });
+
+  it("explains a run stopped by the monthly budget, with the day the next period starts", async () => {
+    const server = billed([["write", "write", 100]]);
+    const id = finished(server, server.category().id, { status: "stopped_by_limit", stoppedBy: "budget", articlesCreated: 1 });
+    renderApp({ server, route: `/runs/${id}` });
+
+    expect(await screen.findByText(/月の予算に達したため、途中で止まりました/)).toHaveTextContent("11月10日");
+    expect(screen.getByText(/月の予算に達したため/)).toHaveTextContent("完成した記事は保存済み");
   });
 });

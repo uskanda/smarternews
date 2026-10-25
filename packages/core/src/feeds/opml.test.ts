@@ -161,3 +161,19 @@ describe("exportOpml", () => {
     expect(exportOpml(target)).toBe(exported);
   });
 });
+
+describe("exportOpml and web feeds", () => {
+  it("writes the Atom feed of a category and leaves its web feed out", () => {
+    const db = createTestDb();
+    const a = createCategory(db, { name: "A", kind: "news" }, clock);
+    insertFeed(db, { url: "https://atom.example.org/feed.xml", title: "Atom", categoryId: a.id }, clock);
+    insertFeed(db, { url: "https://page.example.org/news", title: "Page", categoryId: a.id, format: "page", selectors: { item: "li" } }, clock);
+    insertFeed(db, { url: "https://loose.example.org/news", title: "Loose", format: "page", selectors: { item: "li" } }, clock);
+
+    const written = exportOpml(db);
+    expect(written).toContain('xmlUrl="https://atom.example.org/feed.xml"');
+    expect(written).not.toContain("page.example.org");
+    expect(written).not.toContain("loose.example.org");
+    expect(parseOpml(written)).toEqual([{ url: "https://atom.example.org/feed.xml", title: "Atom", folder: "A" }]);
+  });
+});

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  feedCreateSchema,
+  feedUpdateSchema,
+  pageSelectorsSchema,
+  MAX_SELECTOR_CHARS,
+  articleSchema,
+  mentionArticlesQuerySchema,
+  mentionSchema,
   markReadBodySchema,
   MAX_MARK_SEEN,
   articleSearchQuerySchema,
@@ -242,5 +249,65 @@ describe("the shape of annotations", () => {
   it("takes the page of the annotation list from a query string", () => {
     expect(annotationListQuerySchema.parse({ limit: "50", cursor: "abc" })).toEqual({ limit: 50, cursor: "abc" });
     expect(annotationListQuerySchema.safeParse({ limit: "0" }).success).toBe(false);
+  });
+});
+
+describe("the shapes of mentions", () => {
+  it("gives the names of an article detail as names with one of four kinds", () => {
+    expect(mentionSchema.safeParse({ name: "日本銀行", kind: "organization" }).success).toBe(true);
+    expect(mentionSchema.safeParse({ name: "日本銀行", kind: "event" }).success).toBe(false);
+    expect(articleSchema.shape.mentions.safeParse([{ name: "植田和男", kind: "person" }]).success).toBe(true);
+  });
+
+  it("takes a name, a limit and a cursor for the articles of a name", () => {
+    expect(mentionArticlesQuerySchema.parse({ name: "日本銀行", limit: "20", cursor: "abc" })).toEqual({ name: "日本銀行", limit: 20, cursor: "abc" });
+    expect(mentionArticlesQuerySchema.safeParse({}).success).toBe(false);
+  });
+
+  it("refuses a name of spaces only, and a name longer than 100 characters once normalized", () => {
+    expect(issuesOf(mentionArticlesQuerySchema.safeParse({ name: " 　 " }))).toEqual([{ path: "name", message: "is empty" }]);
+    expect(issuesOf(mentionArticlesQuerySchema.safeParse({ name: "あ".repeat(101) }))).toEqual([
+      { path: "name", message: "is too long: at most 100 characters" },
+    ]);
+    expect(mentionArticlesQuerySchema.safeParse({ name: "あ".repeat(100) }).success).toBe(true);
+    // Spaces around the name and inside it count only as normalized.
+    expect(mentionArticlesQuerySchema.safeParse({ name: `  ${"あ".repeat(50)}    ${"い".repeat(49)}  ` }).success).toBe(true);
+  });
+});
+
+describe("the selectors of a web feed", () => {
+  it("needs an item selector and leaves the other three out when they are not given", () => {
+    expect(pageSelectorsSchema.parse({ item: "li.post" })).toEqual({ item: "li.post" });
+    expect(issuesOf(pageSelectorsSchema.safeParse({ title: "h2" }))).toEqual([{ path: "item", message: expect.any(String) }]);
+  });
+
+  it("refuses a value that is not a CSS selector, naming the field", () => {
+    expect(issuesOf(pageSelectorsSchema.safeParse({ item: "div[" }))).toEqual([{ path: "item", message: "not a CSS selector" }]);
+    expect(issuesOf(pageSelectorsSchema.safeParse({ item: "li", date: "time[" }))).toEqual([{ path: "date", message: "not a CSS selector" }]);
+    expect(pageSelectorsSchema.safeParse({ item: "ul > li:not(.ad)", title: "h2 a", link: "a[href]", date: "time" }).success).toBe(true);
+  });
+
+  it("holds at most 300 characters a selector", () => {
+    expect(pageSelectorsSchema.safeParse({ item: "a".repeat(MAX_SELECTOR_CHARS) }).success).toBe(true);
+    expect(pageSelectorsSchema.safeParse({ item: "a".repeat(MAX_SELECTOR_CHARS + 1) }).success).toBe(false);
+  });
+
+  it("reads a subscription without a format as a feed, as before", () => {
+    expect(feedCreateSchema.parse({ url: "https://example.org/feed.xml" })).toEqual({ url: "https://example.org/feed.xml" });
+    expect(feedCreateSchema.parse({ url: "https://example.org/news", format: "page", selectors: { item: "li" } })).toMatchObject({
+      format: "page",
+      selectors: { item: "li" },
+    });
+    expect(issuesOf(feedCreateSchema.safeParse({ url: "https://example.org/news", format: "page" }))).toEqual([
+      { path: "selectors", message: "a web feed needs selectors" },
+    ]);
+    expect(issuesOf(feedCreateSchema.safeParse({ url: "https://example.org/feed.xml", selectors: { item: "li" } }))).toEqual([
+      { path: "selectors", message: "only a web feed has selectors" },
+    ]);
+  });
+
+  it("lets a change give selectors but not a format", () => {
+    expect(feedUpdateSchema.parse({ selectors: { item: "article" } })).toEqual({ selectors: { item: "article" } });
+    expect(feedUpdateSchema.parse({ format: "page" })).toEqual({});
   });
 });

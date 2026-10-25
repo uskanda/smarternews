@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseConfig } from "../config.ts";
 import { getTopic, updateTopic } from "../db/topics.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
@@ -313,5 +314,97 @@ describe("run history", () => {
       { task: "judge", calls: 1, ok: 1 },
       { task: "write", calls: 2, ok: 1 },
     ]);
+  });
+});
+
+describe("news search with several engines", () => {
+  const BOTH = { engines: ["google-news" as const, "bing-news" as const] };
+  const searchHosts = (urls: string[]) => urls.filter((url) => url.includes("/news/search") || url.includes("/rss/search")).map((url) => new URL(url).host);
+
+  it("asks every engine with each query and takes the results of both", async () => {
+    const h = pipelineHarness({ newsSearch: BOTH });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "From Google [skip]", link: "https://example.org/google" }] });
+    h.news({ rust: [{ title: "From Bing [skip]", link: "https://example.org/bing" }] });
+
+    const run = await h.run();
+
+    expect(searchHosts(h.urls())).toEqual(["news.google.com", "www.bing.com"]);
+    expect(h.candidates(run.id).map((candidate) => candidate.url).sort()).toEqual(["https://example.org/bing", "https://example.org/google"]);
+  });
+
+  it("makes one candidate of a page that both engines find", async () => {
+    const h = pipelineHarness({ newsSearch: BOTH });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "Rust 2.0 [skip]", link: "https://example.org/rust-2?utm_source=gn" }] });
+    h.news({ rust: [{ title: "Rust 2.0 [skip]", link: "https://example.org/rust-2" }] });
+
+    const run = await h.run();
+
+    expect(h.candidates(run.id).map((candidate) => candidate.url)).toEqual(["https://example.org/rust-2"]);
+  });
+
+  it("takes the newest results up to the limit from each engine", async () => {
+    const h = pipelineHarness({ newsSearch: { ...BOTH, maxResultsPerQuery: 2 } });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    const results = (engine: string) =>
+      [1, 2, 3].map((hour) => ({ title: `${engine} ${hour} [skip]`, link: `https://example.org/${engine}-${hour}`, published: `2026-03-01T0${hour}:00:00Z` }));
+    h.googleNews({ rust: results("google") });
+    h.news({ rust: results("bing") });
+
+    const run = await h.run();
+
+    expect(h.candidates(run.id).map((candidate) => candidate.url).sort()).toEqual([
+      "https://example.org/bing-2",
+      "https://example.org/bing-3",
+      "https://example.org/google-2",
+      "https://example.org/google-3",
+    ]);
+  });
+
+  it("asks Google News alone when the configuration names no engine", async () => {
+    const h = pipelineHarness({ newsSearch: parseConfig(null).newsSearch });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({});
+    h.news({});
+
+    await h.run();
+
+    expect(searchHosts(h.urls())).toEqual(["news.google.com"]);
+  });
+
+  it("asks the one engine that the older setting names", async () => {
+    const h = pipelineHarness({ newsSearch: parseConfig("newsSearch:\n  engine: bing-news\n").newsSearch });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({});
+    h.news({});
+
+    await h.run();
+
+    expect(searchHosts(h.urls())).toEqual(["www.bing.com"]);
+  });
+
+  it("takes the results of the other engine when one does not answer in time", async () => {
+    const h = pipelineHarness({ newsSearch: BOTH });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.routes["https://news.google.com/rss/search"] = () => "hang";
+    h.news({ rust: [{ title: "From Bing", link: "https://example.org/bing" }] });
+
+    const run = await h.run();
+
+    expect(h.articles().map((article) => article.title)).toEqual(["From Bing"]);
+    expect(run.status).toBe("partial");
+  });
+
+  it("records which engine failed with the query, and counts each engine as a source of its own", async () => {
+    const h = pipelineHarness({ newsSearch: BOTH });
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({});
+    h.routes["https://www.bing.com/news/search"] = () => new Response("oops", { status: 500 });
+
+    const run = await h.run();
+
+    expect(run.failures).toEqual([{ stage: "news-search", target: "bing-news: rust", message: expect.stringContaining("500") }]);
+    expect(run.status).not.toBe("failed");
   });
 });

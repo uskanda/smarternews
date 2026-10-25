@@ -24,6 +24,7 @@ function Screens() {
         <Stack.Screen name="index" />
         <Stack.Screen name="(main)" />
         <Stack.Screen name="article/[id]" />
+        <Stack.Screen name="mention" />
         <Stack.Screen name="settings/index" />
         <Stack.Screen name="settings/reader-info" />
       </Stack.Protected>

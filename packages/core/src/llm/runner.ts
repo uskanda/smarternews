@@ -1,25 +1,36 @@
 import { z } from "zod";
-import type { TaskName } from "../api.ts";
+import type { BudgetStatus, TaskName } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import type { Database } from "../db/database.ts";
 import { num } from "../db/rows.ts";
-import { startOfLocalDay } from "../time.ts";
-import type { LlmAdapter } from "./adapter.ts";
-import { tasks, type TaskDefinition, type TaskIo } from "./tasks.ts";
+import { budgetPeriod, startOfLocalDay } from "../time.ts";
+import { LlmCallError, type LlmAdapter, type LlmCompletion, type LlmUsage } from "./adapter.ts";
+import { costOf, type ModelPricing } from "./pricing.ts";
+import { TASK_NAMES, tasks, type TaskDefinition, type TaskIo } from "./tasks.ts";
 
 export interface Provider {
   name: string;
   adapterKind: string;
   model: string;
+  /** The prices of a provider that costs money; null for one that does not, whose calls the budget ignores. */
+  pricing: ModelPricing | null;
   adapter: LlmAdapter;
 }
 
+export type LimitScope = "run" | "day" | "budget";
+
+const LIMIT_MESSAGE: Record<LimitScope, string> = {
+  run: "the run reached its limit of model calls",
+  day: "the day reached its limit of model calls",
+  budget: "the budget period used up its monthly budget",
+};
+
 /** The model was not called because an allowance is used up. */
 export class LlmLimitError extends Error {
-  readonly scope: "run" | "day";
+  readonly scope: LimitScope;
 
-  constructor(scope: "run" | "day") {
-    super(scope === "run" ? "the run reached its limit of model calls" : "the day reached its limit of model calls");
+  constructor(scope: LimitScope) {
+    super(LIMIT_MESSAGE[scope]);
     this.name = "LlmLimitError";
     this.scope = scope;
   }
@@ -44,23 +55,38 @@ export interface CallBudget {
 
 /** Summaries of feed articles a day, unless the configuration says otherwise. */
 const SUMMARIES_PER_DAY = 100;
+/** Proposals of selectors a day, unless the configuration says otherwise. */
+const SELECTOR_PROPOSALS_PER_DAY = 50;
 
 export interface TaskLimits {
   llmCallsPerRun: number;
-  /** Calls for runs. Summaries of feed articles are not counted here. */
+  /** Calls for runs and proposals of selectors. Summaries of feed articles are not counted here. */
   llmCallsPerDay: number;
   /** Calls that summarise feed articles. The calls of runs are not counted here. */
   summariesPerDay: number;
+  /** Calls that propose selectors for a web feed. They count towards `llmCallsPerDay` as well. */
+  selectorProposalsPerDay: number;
 }
+
+/** The money the providers that cost money may use, and when its period starts again. */
+export interface BudgetLimits {
+  monthlyBudgetUsd: number;
+  warnRatio: number;
+  /** The day of the month on which a period starts, at midnight UTC. */
+  resetDay: number;
+}
+
+const DEFAULT_BUDGET: BudgetLimits = { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 1 };
 
 export interface TaskRunnerOptions {
   db: Database;
   clock: Clock;
   providers: Map<string, Provider>;
   assignment: Record<TaskName, string>;
-  limits: Omit<TaskLimits, "summariesPerDay"> & { summariesPerDay?: number };
+  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay"> & { summariesPerDay?: number; selectorProposalsPerDay?: number };
   timeouts: { defaultMs: number; searchMs: number };
   timeZone: () => string;
+  budget?: BudgetLimits;
 }
 
 export class TaskRunner {
@@ -71,7 +97,7 @@ export class TaskRunner {
   }
 
   get limits(): TaskLimits {
-    return { summariesPerDay: SUMMARIES_PER_DAY, ...this.#options.limits };
+    return { summariesPerDay: SUMMARIES_PER_DAY, selectorProposalsPerDay: SELECTOR_PROPOSALS_PER_DAY, ...this.#options.limits };
   }
 
   providerFor(task: TaskName): Provider {
@@ -79,16 +105,64 @@ export class TaskRunner {
   }
 
   /** Providers and assignments for display. Holds no credentials. */
-  describe(): { providers: Array<{ name: string; adapter: string; model: string; webSearch: boolean }>; tasks: Record<TaskName, string> } {
+  describe(): {
+    providers: Array<{ name: string; adapter: string; model: string; webSearch: boolean; billable: boolean }>;
+    tasks: Record<TaskName, string>;
+  } {
     return {
       providers: [...this.#options.providers.values()].map((provider) => ({
         name: provider.name,
         adapter: provider.adapterKind,
         model: provider.model,
         webSearch: provider.adapter.capabilities.webSearch,
+        billable: provider.pricing !== null,
       })),
       tasks: { ...this.#options.assignment },
     };
+  }
+
+  get budget(): BudgetLimits {
+    return this.#options.budget ?? DEFAULT_BUDGET;
+  }
+
+  #period() {
+    return budgetPeriod(this.#options.clock(), this.budget.resetDay);
+  }
+
+  /** US dollars the providers that cost money used in the current budget period. */
+  spentThisPeriod(): number {
+    const { start, end } = this.#period();
+    return num(
+      this.#options.db
+        .prepare("SELECT coalesce(sum(cost_usd), 0) AS n FROM llm_calls WHERE billable = 1 AND created_at >= ? AND created_at < ?")
+        .get(start.toISOString(), end.toISOString())!.n,
+    );
+  }
+
+  budgetStatus(): BudgetStatus {
+    const { db } = this.#options;
+    const { start, end, firstDay, lastDay } = this.#period();
+    const range = [start.toISOString(), end.toISOString()];
+    const byTask = Object.fromEntries(TASK_NAMES.map((task) => [task, 0])) as Record<TaskName, number>;
+    const byProvider = Object.fromEntries([...this.#options.providers.keys()].map((name) => [name, 0]));
+    const rows = db
+      .prepare(
+        `SELECT task, provider, sum(cost_usd) AS cost FROM llm_calls
+          WHERE billable = 1 AND cost_usd IS NOT NULL AND created_at >= ? AND created_at < ? GROUP BY task, provider`,
+      )
+      .all(...range);
+    let spentUsd = 0;
+    for (const row of rows) {
+      const cost = Number(row.cost);
+      spentUsd += cost;
+      byTask[String(row.task) as TaskName] = (byTask[String(row.task) as TaskName] ?? 0) + cost;
+      byProvider[String(row.provider)] = (byProvider[String(row.provider)] ?? 0) + cost;
+    }
+    const unknown = db
+      .prepare("SELECT count(*) AS n FROM llm_calls WHERE billable = 1 AND cost_usd IS NULL AND created_at >= ? AND created_at < ?")
+      .get(...range)!.n;
+    const { monthlyBudgetUsd, warnRatio } = this.budget;
+    return { periodStart: firstDay, periodEnd: lastDay, spentUsd, monthlyBudgetUsd, warnRatio, unknownCostCalls: num(unknown), byTask, byProvider };
   }
 
   canSearch(): boolean {
@@ -96,8 +170,8 @@ export class TaskRunner {
   }
 
   /**
-   * Model calls made for runs since the start of the current day in the configured time zone. Summaries of
-   * feed articles have an allowance of their own, so that neither uses up the other's.
+   * Model calls made for runs and proposals of selectors since the start of the current day in the configured
+   * time zone. Summaries of feed articles have an allowance of their own, so that neither uses up the other's.
    */
   callsToday(): number {
     return this.#countToday("task <> 'summarize'");
@@ -113,6 +187,17 @@ export class TaskRunner {
     return this.summariesToday() < this.limits.summariesPerDay;
   }
 
+  /** Calls that proposed selectors since the start of the current day, a second attempt included. */
+  selectorProposalsToday(): number {
+    return this.#countToday("task = 'proposeSelectors'");
+  }
+
+  /** False once the day has used its allowance of proposals, or its allowance of calls. */
+  canProposeSelectors(): boolean {
+    const limits = this.limits;
+    return this.selectorProposalsToday() < limits.selectorProposalsPerDay && this.callsToday() < limits.llmCallsPerDay;
+  }
+
   #countToday(condition: string): number {
     const { db, clock, timeZone } = this.#options;
     const since = startOfLocalDay(clock(), timeZone()).toISOString();
@@ -124,46 +209,49 @@ export class TaskRunner {
     const provider = this.providerFor(name);
     const { system, prompt } = definition.build(input);
     // The dialect marker is dropped: the claude command refuses a schema that carries it.
-    const { $schema: _dialect, ...outputSchema } = z.toJSONSchema(definition.output) as Record<string, unknown>;
+    const { $schema: _dialect, ...outputSchema } = z.toJSONSchema(definition.wire ?? definition.output) as Record<string, unknown>;
     const timeoutMs = name === "search" ? this.#options.timeouts.searchMs : this.#options.timeouts.defaultMs;
 
     let problem = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      this.#spend(name, budget);
+      this.#spend(name, budget, provider);
       const started = Date.now();
-      let raw: unknown;
+      let completion: LlmCompletion;
       try {
-        raw = await this.#call(provider, { system, prompt, outputSchema, webSearch: name === "search", timeoutMs });
+        completion = await this.#call(provider, { system, prompt, outputSchema, webSearch: name === "search", timeoutMs });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.#record(budget, name, provider, Date.now() - started, message);
+        const usage = error instanceof LlmCallError ? error.usage : null;
+        this.#record(budget, name, provider, Date.now() - started, message, usage);
         throw new TaskFailedError(name, message);
       }
-      const parsed = definition.output.safeParse(raw);
+      const parsed = definition.output.safeParse(completion.answer);
       problem = parsed.success
         ? (definition.check?.(input, parsed.data) ?? "")
         : parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
-      this.#record(budget, name, provider, Date.now() - started, problem.length > 0 ? `invalid output: ${problem}` : null);
+      this.#record(budget, name, provider, Date.now() - started, problem.length > 0 ? `invalid output: ${problem}` : null, completion.usage);
       if (parsed.success && problem.length === 0) return parsed.data;
     }
     throw new TaskFailedError(name, `the output did not match the schema twice (${problem})`);
   }
 
-  #spend(task: TaskName, budget: CallBudget): void {
+  #spend(task: TaskName, budget: CallBudget, provider: Provider): void {
     if (task === "summarize") {
       if (!this.canSummarize()) throw new LlmLimitError("day");
-      budget.calls += 1;
-      return;
+    } else {
+      if (task === "proposeSelectors" && this.selectorProposalsToday() >= this.limits.selectorProposalsPerDay) throw new LlmLimitError("day");
+      if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
+      if (this.callsToday() >= this.#options.limits.llmCallsPerDay) throw new LlmLimitError("day");
     }
-    if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
-    if (this.callsToday() >= this.#options.limits.llmCallsPerDay) throw new LlmLimitError("day");
+    // Judged on what was spent before the call: one call can take the period a little past its budget.
+    if (provider.pricing && this.spentThisPeriod() >= this.budget.monthlyBudgetUsd) throw new LlmLimitError("budget");
     budget.calls += 1;
   }
 
   async #call(
     provider: Provider,
     request: { system: string; prompt: string; outputSchema: Record<string, unknown>; webSearch: boolean; timeoutMs: number },
-  ): Promise<unknown> {
+  ): Promise<LlmCompletion> {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -180,9 +268,29 @@ export class TaskRunner {
     }
   }
 
-  #record(budget: CallBudget, task: TaskName, provider: Provider, durationMs: number, error: string | null): void {
+  #record(budget: CallBudget, task: TaskName, provider: Provider, durationMs: number, error: string | null, usage: LlmUsage | null): void {
+    const cost = provider.pricing && usage ? costOf(provider.pricing, usage) : null;
     this.#options.db
-      .prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(budget.runId, task, provider.name, durationMs, error === null ? 1 : 0, error, this.#options.clock().toISOString());
+      .prepare(
+        `INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, error, created_at,
+                                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, billable)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        budget.runId,
+        task,
+        provider.name,
+        durationMs,
+        error === null ? 1 : 0,
+        error,
+        this.#options.clock().toISOString(),
+        usage?.inputTokens ?? null,
+        usage?.outputTokens ?? null,
+        usage?.cacheReadTokens ?? null,
+        usage?.cacheWriteTokens ?? null,
+        usage?.webSearches ?? null,
+        cost,
+        provider.pricing ? 1 : 0,
+      );
   }
 }

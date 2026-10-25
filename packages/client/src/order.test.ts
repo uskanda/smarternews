@@ -20,6 +20,8 @@ const category = (id: number, name: string, kind: Category["kind"] = "news"): Ca
 const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   id,
   url: `https://f${id}.example.org/feed.xml`,
+  format: "feed",
+  selectors: null,
   title,
   siteUrl: null,
   categoryId,

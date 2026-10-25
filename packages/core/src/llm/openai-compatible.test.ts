@@ -2,6 +2,25 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpenAiCompatibleAdapter } from "./openai-compatible.ts";
+import { z } from "zod";
+import type { TaskName } from "../api.ts";
+import { createTestDb, fakeClock } from "../testing/db.ts";
+import type { LlmAdapter } from "./adapter.ts";
+import { TaskRunner } from "./runner.ts";
+import { TASK_NAMES, tasks } from "./tasks.ts";
+
+/** A task runner that sends every task to the adapter under test. */
+function runnerWith(adapter: LlmAdapter): TaskRunner {
+  return new TaskRunner({
+    db: createTestDb(),
+    clock: fakeClock("2026-03-01T12:00:00.000Z"),
+    providers: new Map([["p", { name: "p", adapterKind: "test", model: "m", pricing: null, adapter }]]),
+    assignment: Object.fromEntries(TASK_NAMES.map((task) => [task, "p"])) as Record<TaskName, string>,
+    limits: { llmCallsPerRun: 40, llmCallsPerDay: 300 },
+    timeouts: { defaultMs: 5000, searchMs: 5000 },
+    timeZone: () => "UTC",
+  });
+}
 
 interface Seen {
   url: string;
@@ -56,7 +75,7 @@ describe("the OpenAI-compatible adapter", () => {
     const { baseUrl, seen } = await server(() => completion('{"ok": true}'));
     const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "some-model", apiKey: "k-123", structuredOutput: "json_schema" });
 
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: true });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: true }, usage: null });
     expect(seen[0]!.url).toBe("/v1/chat/completions");
     expect(seen[0]!.authorization).toBe("Bearer k-123");
     expect(seen[0]!.body).toMatchObject({
@@ -73,7 +92,7 @@ describe("the OpenAI-compatible adapter", () => {
     const { baseUrl, seen } = await server(() => completion('```json\n{"ok": false}\n```'));
     const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "m", apiKey: null, structuredOutput: "prompt" });
 
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: false });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: false }, usage: null });
     expect(seen[0]!.body.response_format).toBeUndefined();
     expect(seen[0]!.authorization).toBeUndefined();
     const system = (seen[0]!.body.messages as Array<{ content: string }>)[0]!.content;
@@ -109,5 +128,18 @@ describe("the OpenAI-compatible adapter", () => {
   it("says that it cannot search", () => {
     const adapter = createOpenAiCompatibleAdapter({ baseUrl: "http://127.0.0.1:1/v1", model: "m", apiKey: null, structuredOutput: "json_schema" });
     expect(adapter.capabilities.webSearch).toBe(false);
+  });
+});
+
+describe("the OpenAI-compatible adapter under the task runner", () => {
+  it("receives the schema made from the wire schema of the summarize task as the response format", async () => {
+    const answer = { summary: "要約。", mentions: [{ name: "日本銀行", kind: "organization" }] };
+    const { baseUrl, seen } = await server(() => completion(JSON.stringify(answer)));
+    const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "m", apiKey: null, structuredOutput: "json_schema" });
+    const runner = runnerWith(adapter);
+
+    await expect(runner.run("summarize", { outputLanguage: "ja", title: "Headline", text: "Text." }, { runId: null, calls: 0 })).resolves.toEqual(answer);
+    const { $schema: _dialect, ...wire } = z.toJSONSchema(tasks.summarize.wire!) as Record<string, unknown>;
+    expect(seen[0]!.body).toMatchObject({ response_format: { type: "json_schema", json_schema: { strict: true, schema: wire } } });
   });
 });

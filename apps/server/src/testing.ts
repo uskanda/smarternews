@@ -15,6 +15,7 @@ import {
   type ArticleContent,
   type Category,
   type Kind,
+  type ModelPricing,
   type Translator,
 } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm, fakeTranslator, type FakeHandler } from "@smarternews/core/testing";
@@ -50,6 +51,12 @@ export function testServer(
     monthlyChars?: number;
     llmCallsPerDay?: number;
     summariesPerDay?: number;
+    /** Answers the task that proposes selectors for a web feed. Without it, a call of the task fails the test. */
+    proposeSelectors?: FakeHandler;
+    selectorProposalsPerDay?: number;
+    /** Makes every provider one that costs money, at these prices. */
+    pricing?: ModelPricing;
+    budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
   } = {},
 ) {
   const db = createTestDb();
@@ -57,12 +64,25 @@ export function testServer(
   const llm = fakeLlm(
     db,
     clock,
-    { ...(options.summarize ? { summarize: options.summarize } : {}), ...(options.translate ? { translate: options.translate } : {}) },
+    {
+      ...(options.summarize ? { summarize: options.summarize } : {}),
+      ...(options.translate ? { translate: options.translate } : {}),
+      ...(options.proposeSelectors ? { proposeSelectors: options.proposeSelectors } : {}),
+    },
     {
       webSearch: options.webSearch,
-      ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined
+      pricing: options.pricing,
+      budget: options.budget,
+      ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined && options.selectorProposalsPerDay === undefined
         ? {}
-        : { limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay ?? 300, ...(options.summariesPerDay === undefined ? {} : { summariesPerDay: options.summariesPerDay }) } }),
+        : {
+            limits: {
+              llmCallsPerRun: 40,
+              llmCallsPerDay: options.llmCallsPerDay ?? 300,
+              ...(options.summariesPerDay === undefined ? {} : { summariesPerDay: options.summariesPerDay }),
+              ...(options.selectorProposalsPerDay === undefined ? {} : { selectorProposalsPerDay: options.selectorProposalsPerDay }),
+            },
+          }),
     },
   );
   const google = options.google === undefined ? fakeTranslator() : options.google;

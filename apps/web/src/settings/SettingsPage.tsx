@@ -1,8 +1,8 @@
-import type { Category, Settings } from "@smarternews/core/api";
+import type { Category, ProviderStatus, Settings } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
-import { ApiError, THEME_CHOICES, THEME_LABEL } from "@smarternews/client";
+import { useEffect, useId, useState, type FormEvent } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
+import { ApiError, budgetWarningLabel, formatUsd, periodDayLabel, THEME_CHOICES, THEME_LABEL } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
@@ -12,7 +12,16 @@ import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messa
 import { ConnectCode } from "./ConnectCode.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
-const TASK_LABEL = { interpret: "解釈", search: "検索", judge: "判定", cluster: "集約", write: "本文の生成" } as const;
+const TASK_LABEL = {
+  interpret: "解釈",
+  search: "検索",
+  judge: "判定",
+  cluster: "集約",
+  write: "本文の生成",
+  summarize: "要約",
+  translate: "翻訳",
+  proposeSelectors: "セレクターの提案",
+} as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const STALE_RANGE = "1から365までの日数を入れてください。";
 
@@ -391,11 +400,55 @@ function SettingsFile() {
   );
 }
 
+/** What the budget period spent, against the monthly budget, with the warning once it passes the warning share. */
+function Budget({ status }: { status: ProviderStatus }) {
+  const { budget } = status;
+  const warning = budgetWarningLabel(budget);
+  const billable = status.providers.some((provider) => provider.billable);
+  return (
+    <div role="group" aria-label="月の予算" className="flex max-w-measure flex-col gap-sm">
+      <h3 className="type-label-md">月の予算</h3>
+      <p className="type-body-md">
+        {periodDayLabel(budget.periodStart)}から{periodDayLabel(budget.periodEnd)}まで（UTC）{" "}
+        <span className="tabular-nums type-label-md">
+          {formatUsd(budget.spentUsd)} / {formatUsd(budget.monthlyBudgetUsd)}
+        </span>
+        <span className="pl-md text-on-surface-muted">警告は{Math.round(budget.warnRatio * 100)}%から</span>
+      </p>
+      {warning ? (
+        <p role="status" aria-label="予算の警告" className="rounded-md border border-warning px-lg py-sm type-body-md text-warning">
+          {warning}
+        </p>
+      ) : null}
+      {budget.unknownCostCalls > 0 ? (
+        <p className="type-label-sm text-on-surface-muted">
+          金額のわからない呼び出しが{budget.unknownCostCalls}件あります。時間切れなどで応答が届かなかった呼び出しで、その分だけ、合計は実際より少ないことがあります。
+        </p>
+      ) : null}
+      <p className="type-label-sm text-on-surface-muted">
+        {billable
+          ? "金額は、APIが返したトークン数とモデルの単価からサーバーが計算した見込みです。請求の額とは一致しないことがあります。"
+          : "金額のかかるプロバイダー（アダプターが anthropic のもの）はありません。月の予算には、その呼び出しだけを数えます。"}
+      </p>
+    </div>
+  );
+}
+
+/** Opens the section a link points at, such as /settings#providers from the warning at the top of the screen. */
+function useScrollToHash(ready: boolean) {
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!ready || hash.length < 2) return;
+    document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: "start" });
+  }, [hash, ready]);
+}
+
 function Providers() {
   const providers = useProviders();
   const status = providers.data;
+  useScrollToHash(status !== undefined);
   return (
-    <section aria-label="プロバイダー" className={SECTION}>
+    <section id="providers" aria-label="プロバイダー" className={SECTION}>
       <h2 className="type-headline-md">プロバイダー</h2>
       {providers.isError ? <ErrorNotice error={providers.error} onRetry={() => void providers.refetch()} /> : null}
       {status ? (
@@ -407,14 +460,16 @@ function Providers() {
             </span>
             <span className="pl-md text-on-surface-muted">1回の実行の上限 {status.limits.llmCallsPerRun}</span>
           </p>
+          <Budget status={status} />
           <div className="max-w-measure overflow-x-auto">
-            <table className="w-full text-left type-body-md">
+            <table aria-label="プロバイダーの一覧" className="w-full text-left type-body-md">
               <thead className="type-label-sm text-on-surface-muted">
                 <tr>
                   <th className="py-xs pr-lg font-normal">名前</th>
                   <th className="py-xs pr-lg font-normal">アダプター</th>
                   <th className="py-xs pr-lg font-normal">モデル</th>
-                  <th className="py-xs font-normal">Webの検索</th>
+                  <th className="py-xs pr-lg font-normal">Webの検索</th>
+                  <th className="py-xs text-right font-normal">期間の金額</th>
                 </tr>
               </thead>
               <tbody>
@@ -423,22 +478,39 @@ function Providers() {
                     <td className="py-xs pr-lg">{provider.name}</td>
                     <td className="py-xs pr-lg">{provider.adapter}</td>
                     <td className="py-xs pr-lg">{provider.model}</td>
-                    <td className="py-xs">{provider.webSearch ? "できる" : "できない"}</td>
+                    <td className="py-xs pr-lg">{provider.webSearch ? "できる" : "できない"}</td>
+                    <td className="py-xs text-right tabular-nums">
+                      {provider.billable ? formatUsd(status.budget.byProvider[provider.name] ?? 0) : "かからない"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <dl className="grid max-w-measure grid-cols-[auto_1fr] gap-x-lg gap-y-xs type-body-md">
-            {(Object.keys(TASK_LABEL) as Array<keyof typeof TASK_LABEL>).map((task) => (
-              <div key={task} className="contents">
-                <dt className="text-on-surface-muted">{TASK_LABEL[task]}</dt>
-                <dd>{status.tasks[task]}</dd>
-              </div>
-            ))}
-          </dl>
+          <div className="max-w-measure overflow-x-auto">
+            <table aria-label="タスクの割り当てと金額" className="w-full text-left type-body-md">
+              <thead className="type-label-sm text-on-surface-muted">
+                <tr>
+                  <th className="py-xs pr-lg font-normal">タスク</th>
+                  <th className="py-xs pr-lg font-normal">プロバイダー</th>
+                  <th className="py-xs text-right font-normal">期間の金額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(Object.keys(TASK_LABEL) as Array<keyof typeof TASK_LABEL>).map((task) => (
+                  <tr key={task} className="border-t border-outline">
+                    <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
+                      {TASK_LABEL[task]}
+                    </th>
+                    <td className="py-xs pr-lg">{status.tasks[task]}</td>
+                    <td className="py-xs text-right tabular-nums">{formatUsd(status.budget.byTask[task] ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="max-w-measure type-label-sm text-on-surface-muted">
-            プロバイダーと割り当ては、サーバーの <code>config.yaml</code> で変更します。この画面からは変更できません。
+            プロバイダー、割り当て、月の予算は、サーバーの <code>config.yaml</code> で変更します。この画面からは変更できません。
           </p>
         </>
       ) : null}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getFeed, insertFeed, updateFeed } from "../db/feeds.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
-import { fakeFetch, xml } from "../testing/http.ts";
+import { fakeFetch, html, xml } from "../testing/http.ts";
 import { FeedPoller } from "./poller.ts";
 
 const START = "2026-03-01T12:00:00.000Z";
@@ -214,5 +214,85 @@ describe("FeedPoller", () => {
     s.add("a");
     await s.round();
     expect(s.db.prepare("SELECT (SELECT count(*) FROM llm_calls) AS calls, (SELECT count(*) FROM runs) AS runs").get()).toEqual({ calls: 0, runs: 0 });
+  });
+});
+
+describe("FeedPoller and web feeds", () => {
+  const PAGE = "https://w.example.org/news";
+  const listing = (keys: string[]) => `<html><head><title>W</title></head><body><ul>${keys.map((key) => `<li><a href="/${key}">${key}</a></li>`).join("")}</ul></body></html>`;
+  const counts = (db: ReturnType<typeof createTestDb>) => db.prepare("SELECT (SELECT count(*) FROM llm_calls) AS calls, (SELECT count(*) FROM runs) AS runs").get();
+
+  it("waits twice as long after each fetch that finds no item element, as after any failure", async () => {
+    let body = listing(["a1"]);
+    const s = setup({ [PAGE]: () => html(body) });
+    const feed = insertFeed(s.db, { url: PAGE, title: "W", format: "page", selectors: { item: "li" }, intervalMinutes: 30 }, s.clock);
+    await s.round();
+    expect(getFeed(s.db, feed.id)).toMatchObject({ failureCount: 0, articleCount: 1 });
+    const pageRequests = () => s.urls().filter((url) => url === PAGE).length;
+
+    body = "<html><body><div>Redesigned</div></body></html>";
+    s.clock.advance(30 * MINUTE);
+    await s.round(); // first failure: next try in 60 minutes
+    s.clock.advance(60 * MINUTE);
+    await s.round(); // second: next in 120
+    s.clock.advance(120 * MINUTE);
+    await s.round(); // third: next in 240
+    expect(pageRequests()).toBe(4);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ failureCount: 3, lastError: "no element matches the item selector" });
+
+    s.clock.advance(239 * MINUTE);
+    await s.round();
+    expect(pageRequests()).toBe(4);
+    s.clock.advance(MINUTE);
+    await s.round();
+    expect(pageRequests()).toBe(5);
+    expect(counts(s.db)).toEqual({ calls: 0, runs: 0 });
+  });
+
+  it("goes on fetching a stale web feed without calling a model", async () => {
+    const s = setup({ [PAGE]: () => html(listing(["a1"])) });
+    const feed = insertFeed(s.db, { url: PAGE, title: "W", format: "page", selectors: { item: "li" } }, s.clock);
+    await s.round();
+    for (let day = 0; day < 61; day += 1) {
+      s.clock.advance(24 * 60 * MINUTE);
+      await s.round();
+    }
+    expect(getFeed(s.db, feed.id, s.clock())).toMatchObject({ stale: true, enabled: true });
+    const before = s.urls().length;
+
+    s.clock.advance(30 * MINUTE);
+    await s.round();
+    expect(s.urls().length).toBeGreaterThan(before);
+    expect(getFeed(s.db, feed.id, s.clock())).toMatchObject({ stale: true, lastSucceededAt: s.clock().toISOString() });
+    expect(counts(s.db)).toEqual({ calls: 0, runs: 0 });
+  });
+
+  it("is marked stale besides failing when no item element is found for longer than the stale days", async () => {
+    let body = listing(["a1"]);
+    const s = setup({ [PAGE]: () => html(body) });
+    const feed = insertFeed(s.db, { url: PAGE, title: "W", format: "page", selectors: { item: "li" } }, s.clock);
+    await s.round();
+    body = "<html><body><div>Redesigned</div></body></html>";
+    for (let day = 0; day < 61; day += 1) {
+      s.clock.advance(24 * 60 * MINUTE);
+      await s.round();
+    }
+    expect(getFeed(s.db, feed.id, s.clock())).toMatchObject({ stale: true, lastError: "no element matches the item selector" });
+    expect(counts(s.db)).toEqual({ calls: 0, runs: 0 });
+  });
+
+  it("reads robots.txt again on a new day", async () => {
+    let robots = "";
+    const s = setup({ "https://w.example.org/robots.txt": () => new Response(robots, { status: 200 }), [PAGE]: () => html(listing(["a1"])) });
+    const feed = insertFeed(s.db, { url: PAGE, title: "W", format: "page", selectors: { item: "li" }, intervalMinutes: 60 }, s.clock);
+    await s.round();
+    robots = "User-agent: *\nDisallow: /";
+    s.clock.advance(60 * MINUTE);
+    await s.round();
+    expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: null });
+
+    s.clock.advance(24 * 60 * MINUTE);
+    await s.round();
+    expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: "robots.txt forbids" });
   });
 });

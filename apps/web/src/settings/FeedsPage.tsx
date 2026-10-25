@@ -1,4 +1,4 @@
-import type { Category, Feed, FeedStats, Settings } from "@smarternews/core/api";
+import type { Category, Feed, FeedStats, PageCandidates, PageSelectors, Settings } from "@smarternews/core/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
@@ -9,6 +9,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { feedDeletionText } from "./feed-deletion.ts";
+import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -76,14 +77,45 @@ function Translate({ id, checked, onChange }: { id: string; checked: boolean; on
  * The switch for full content. That the page of every article is fetched, and only for articles still to come,
  * is said beside it, before it is chosen.
  */
-function FetchFullContent({ id, checked, onChange }: { id: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function FetchFullContent({ id, checked, onChange, page = false }: { id: string; checked: boolean; onChange: (checked: boolean) => void; page?: boolean }) {
   return (
     <div className="flex flex-col gap-xs">
       <Checkbox label="全文を取得する" checked={checked} onChange={(event) => onChange(event.target.checked)} aria-describedby={id} />
       <p id={id} className="type-label-sm text-on-surface-muted">
         記事ごとに元のページを取得して、本文を保存します。これから届く記事だけが対象です。
+        {/* A web feed takes only the title, the link and the date out of its page: without this, its articles have no text. */}
+        {page ? "ページから得るのは記事のタイトル、リンク、日時だけです。本文は、全文の取得で得ます。" : ""}
       </p>
     </div>
+  );
+}
+
+/** Subscribing to a page without a feed: candidates for its selectors, or selectors written by hand. */
+function PageChoice({
+  url,
+  candidates,
+  chosen,
+  onChoose,
+  manual,
+  onManualChange,
+  onTested,
+}: {
+  url: string;
+  candidates: ReturnType<typeof useCandidates>["state"];
+  chosen: number;
+  onChoose: (index: number) => void;
+  manual: SelectorTexts;
+  onManualChange: (value: SelectorTexts) => void;
+  onTested: (selectors: PageSelectors | null) => void;
+}) {
+  return (
+    <section aria-label="記事の見つけ方" className="flex flex-col gap-md">
+      <CandidateStatus state={candidates} />
+      {candidates.status === "ready" ? <CandidateChoice result={candidates.result} chosen={chosen} onChoose={onChoose} /> : null}
+      {candidates.status === "ready" && candidates.result.candidates.length === 0 ? (
+        <SelectorEditor url={url} value={manual} onChange={onManualChange} onTested={onTested} />
+      ) : null}
+    </section>
   );
 }
 
@@ -100,6 +132,13 @@ function AddFeed({ categories }: { categories: Category[] }) {
   const [fetchFullContent, setFetchFullContent] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A page without a feed: offered once discovery finds none, and subscribed to as a web feed once chosen.
+  const [noFeed, setNoFeed] = useState<string | null>(null);
+  const [page, setPage] = useState<string | null>(null);
+  const candidates = useCandidates();
+  const [chosenCandidate, setChosenCandidate] = useState(0);
+  const [manual, setManual] = useState<SelectorTexts>(textsOf(null));
+  const [tested, setTested] = useState<PageSelectors | null>(null);
   const firstChoice = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (found) firstChoice.current?.focus();
@@ -109,11 +148,43 @@ function AddFeed({ categories }: { categories: Category[] }) {
     if (error instanceof ApiError && error.kind === "conflict") return conflictLabel(error.message);
     const reason = fieldError(error, "url");
     if (reason) return `このURLを取得できませんでした。URLを確かめてください（${reason}）`;
+    if (fieldError(error, "selectors")) return "このセレクターではページから記事を抜き出せませんでした。見本を確かめてください。";
     return messageFor(error);
   }
 
-  async function subscribe(feedUrl: string) {
-    const created = await api.createFeed({ url: feedUrl, categoryId: category === NO_CATEGORY ? null : Number(category), autoSummarize, translate, fetchFullContent });
+  function leavePage() {
+    setNoFeed(null);
+    setPage(null);
+    candidates.reset();
+    setChosenCandidate(0);
+    setManual(textsOf(null));
+    setTested(null);
+  }
+
+  /** The selectors the page is subscribed with: the chosen candidate, or those written by hand and tried. */
+  function pageSelectors(result: PageCandidates | null): PageSelectors | null {
+    if (result === null) return null;
+    return result.candidates.length > 0 ? (result.candidates[chosenCandidate]?.selectors ?? null) : tested;
+  }
+
+  async function choosePage(pageUrl: string) {
+    setPage(pageUrl);
+    setProblem(null);
+    // The page gives titles, links and dates only: the text comes from full content, so it starts switched on.
+    setFetchFullContent(true);
+    const result = await candidates.ask(pageUrl);
+    if (result && result.candidates.length > 0) setChosenCandidate(0);
+  }
+
+  async function subscribe(feedUrl: string, selectors?: PageSelectors) {
+    const created = await api.createFeed({
+      url: feedUrl,
+      ...(selectors ? { format: "page" as const, selectors } : {}),
+      categoryId: category === NO_CATEGORY ? null : Number(category),
+      autoSummarize,
+      translate,
+      fetchFullContent,
+    });
     refresh("feeds", "counts", "articles");
     toast({ message: `「${created.title}」を追加しました` });
     setUrl("");
@@ -122,6 +193,7 @@ function AddFeed({ categories }: { categories: Category[] }) {
     setAutoSummarize(false);
     setTranslate(false);
     setFetchFullContent(false);
+    leavePage();
   }
 
   async function run(action: () => Promise<void>) {
@@ -139,11 +211,17 @@ function AddFeed({ categories }: { categories: Category[] }) {
   function add(event: FormEvent) {
     event.preventDefault();
     void run(async () => {
+      if (page !== null) {
+        const selectors = pageSelectors(candidates.state.status === "ready" ? candidates.state.result : null);
+        return selectors ? subscribe(page, selectors) : undefined;
+      }
       if (found !== null && chosen) return subscribe(chosen);
       // The URL may be a feed or a page that points to feeds; the server tells which.
       const { feeds } = await api.discoverFeeds(url.trim());
       if (feeds.length === 0) {
         setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
+        // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
+        setNoFeed(url.trim());
         return;
       }
       if (feeds.length === 1) return subscribe(feeds[0]!.url);
@@ -165,6 +243,7 @@ function AddFeed({ categories }: { categories: Category[] }) {
           onChange={(event) => {
             setUrl(event.target.value);
             setFound(null);
+            leavePage();
           }}
           hint="サイトのURLを入れると、そのページが案内しているフィードを探します。"
         />
@@ -176,7 +255,7 @@ function AddFeed({ categories }: { categories: Category[] }) {
         </div>
         <AutoSummarize id="add-feed-summarize-hint" checked={autoSummarize} onChange={setAutoSummarize} />
         <Translate id="add-feed-translate-hint" checked={translate} onChange={setTranslate} />
-        <FetchFullContent id="add-feed-full-content-hint" checked={fetchFullContent} onChange={setFetchFullContent} />
+        <FetchFullContent id="add-feed-full-content-hint" checked={fetchFullContent} onChange={setFetchFullContent} page={page !== null} />
         {found ? (
           // The legend names the group and says what happened; the focus moves here, so it is read out.
           <fieldset className="flex flex-col gap-sm type-body-md">
@@ -204,10 +283,43 @@ function AddFeed({ categories }: { categories: Category[] }) {
             {problem}
           </p>
         ) : null}
+        {noFeed !== null && page === null ? (
+          <div className="flex flex-col gap-xs">
+            <div>
+              <Button onClick={() => void choosePage(noFeed)} aria-describedby="add-feed-page-hint">
+                このページを購読する
+              </Button>
+            </div>
+            <p id="add-feed-page-hint" className="type-label-sm text-on-surface-muted">
+              フィードのないページから、記事のタイトルとリンクを抜き出して購読します。記事の見つけ方の候補を出すときに、LLMを1回使います。
+            </p>
+          </div>
+        ) : null}
+        {page !== null ? (
+          <PageChoice
+            url={page}
+            candidates={candidates.state}
+            chosen={chosenCandidate}
+            onChoose={setChosenCandidate}
+            manual={manual}
+            onManualChange={setManual}
+            onTested={setTested}
+          />
+        ) : null}
         <div>
-          <Button type="submit" variant="primary" disabled={busy || url.trim().length === 0}>
-            {found ? "選んだフィードを追加" : "フィードを追加"}
-          </Button>
+          {page !== null ? (
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || pageSelectors(candidates.state.status === "ready" ? candidates.state.result : null) === null}
+            >
+              このページを追加
+            </Button>
+          ) : (
+            <Button type="submit" variant="primary" disabled={busy || url.trim().length === 0}>
+              {found ? "選んだフィードを追加" : "フィードを追加"}
+            </Button>
+          )}
         </div>
       </form>
     </section>
@@ -286,6 +398,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [autoSummarize, setAutoSummarize] = useState(feed.autoSummarize);
   const [translate, setTranslate] = useState(feed.translate);
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
+  const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   // The form takes the place of the buttons that opened it, so the focus is carried into it.
@@ -301,9 +414,12 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       setIntervalError(RANGE);
       return;
     }
+    const chosenSelectors = feed.format === "page" ? selectorsOf(selectors) : null;
     try {
       await api.updateFeed(feed.id, {
         ...(title.trim() !== feed.title ? { title: title.trim() } : {}),
+        // Only a web feed has selectors; they are sent when they changed, and apply from the next fetch.
+        ...(chosenSelectors !== null && JSON.stringify(chosenSelectors) !== JSON.stringify(feed.selectors) ? { selectors: chosenSelectors } : {}),
         categoryId: category === NO_CATEGORY ? null : Number(category),
         intervalMinutes,
         enabled: !paused,
@@ -360,15 +476,66 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       <Checkbox label="取得を一時停止する" checked={paused} onChange={(event) => setPaused(event.target.checked)} />
       <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
-      <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} />
+      <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
+      {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
       {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
-        <Button type="submit" variant="primary" disabled={title.trim().length === 0}>
+        <Button type="submit" variant="primary" disabled={title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}>
           保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * The selectors of a web feed: written by hand and tried on the page, or taken from candidates asked for again,
+ * for a page whose structure changed. What is chosen is saved with the rest of the form.
+ */
+function PageSelectorsSection({ feed, value, onChange, error }: { feed: Feed; value: SelectorTexts; onChange: (value: SelectorTexts) => void; error: unknown }) {
+  const candidates = useCandidates();
+  const [chosen, setChosen] = useState<number | null>(null);
+  // The fields are made again when a candidate fills them, so that the preview of the old values goes.
+  const [generation, setGeneration] = useState(0);
+  const id = `feed-${feed.id}-selectors`;
+
+  function choose(index: number) {
+    if (candidates.state.status !== "ready") return;
+    const candidate = candidates.state.result.candidates[index];
+    if (!candidate) return;
+    setChosen(index);
+    onChange(textsOf(candidate.selectors));
+    setGeneration((value) => value + 1);
+  }
+
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-md rounded-md border border-outline px-lg py-md">
+      <h3 id={id} className="type-label-md">
+        記事の見つけ方
+      </h3>
+      <p className="type-label-sm text-on-surface-muted">ページの中の記事を、CSSセレクターで抜き出します。変えたセレクターは、次の取得から使います。</p>
+      <SelectorEditor key={generation} url={feed.url} value={value} onChange={onChange} error={error} />
+      <div className="flex flex-col gap-xs">
+        <div>
+          <Button
+            onClick={() => {
+              setChosen(null);
+              void candidates.ask(feed.url);
+            }}
+            disabled={candidates.state.status === "loading"}
+            aria-describedby={`${id}-again-hint`}
+          >
+            候補を出し直す
+          </Button>
+        </div>
+        <p id={`${id}-again-hint`} className="type-label-sm text-on-surface-muted">
+          ページの作りが変わって記事が見つからないときに使います。候補を出すときに、LLMを1回使います。選んだ候補は、保存するまで使いません。
+        </p>
+      </div>
+      <CandidateStatus state={candidates.state} />
+      {candidates.state.status === "ready" ? <CandidateChoice result={candidates.state.result} chosen={chosen ?? -1} onChoose={choose} /> : null}
+    </section>
   );
 }
 

@@ -190,6 +190,16 @@ components:
     textColor: "{colors.on-surface}"
     typography: "{typography.label-sm}"
     rounded: "{rounded.sm}"
+  mention-link:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.primary}"
+    typography: "{typography.body-md}"
+    rounded: "{rounded.lg}"
+    padding: "{spacing.xs}"
+  mention-heading:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.on-surface-muted}"
+    typography: "{typography.label-sm}"
   badge-warning:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.warning}"
@@ -198,6 +208,12 @@ components:
   banner-error:
     backgroundColor: "{colors.error}"
     textColor: "{colors.on-error}"
+    typography: "{typography.body-md}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.sm}"
+  banner-warning:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.warning}"
     typography: "{typography.body-md}"
     rounded: "{rounded.md}"
     padding: "{spacing.sm}"
@@ -239,7 +255,7 @@ components:
 - `term-<色>-fill` と `term-<色>` は、語の色付けだけに使う。色は `green`、`purple`、`pink`、`orange` の4つで、利用者が語のまとまりごとに選ぶ。`term-<色>-fill` を一致した箇所と一覧の行の印の地に塗り、`term-<色>` で下線と印の左の線を引く。文字は `on-surface` のままにする。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。線は `surface` に対して3対1以上を保つ。黄色と青は使わない。黄色は重要度の印と、青はリンクの藍色と見分けられなくなるからである。緑は、検索の `search-match` の青みのある緑から色相を黄の側へ離す。
 - `annotation-fill`（`#CFE6FA`）と `annotation`（`#1F69A3`）は、利用者が本文に付けたハイライトだけに使う。`annotation-fill` をハイライトした文字の地に塗り、`annotation` でメモの印のアイコンを描く。色相は空色にする。重要度の黄色、検索の青みのある緑、語の色付けの4色から離し、リンクの藍色の文字とも見分けられるようにするためである。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。アイコンは `surface` に対して3対1以上を保つ。
 - `text-selection`（`#C5CDD8`）は、本文の中で文字を選んでいる間の地の色に使う。ブラウザーの既定の選択の色は青く、ハイライトの空色と見分けにくいからである。色相を持たない灰色にして、ハイライトと区別する。文字は `on-surface` のままにする。
-- `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。
+- `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。月の予算の警告にも使い、`banner-warning` は `surface` の地に `warning` の文字と枠で描く。失敗ではなく、利用者が設定を見直す時機を伝える表示だからである。
 - `error`（`#A1260D`）は、失敗の表示と、削除を確定するボタンに使う。
 
 暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-darkblue`（`#5C4B12`）を重ね、文字は `on-surface` の暗い配色の値のままにする。
@@ -314,6 +330,9 @@ components:
 - 文字を選んだときのメニューは、選んだ範囲の下に、項目のメニューと同じ見た目（`surface` の地、`outline-strong` の枠、角は `md`）で、ボタンを横に並べる。
 - 注釈の一覧の1行は、記事のタイトル、ハイライトした文字列、メモ、付けた時刻の順に並べる。ハイライトした文字列は2行までで、左に `annotation` の2pxの線を引く。メモは2行までの `body-md`、時刻は `label-sm` の大きさと `on-surface-muted` の色にする。記事全体へのメモの行は、ハイライトした文字列の位置に「記事へのメモ」を `label-sm` で出す。
 - `term-badge` は、一覧の行の補足の最後に並べる、一致した語のまとまりの印である。まとまりの名前を `label-sm` の文字で書き、地を `term-<色>-fill`、左に `term-<色>` の2pxの線を引き、角は `sm` にする。図の `term-badge` は `green` の例である。名前は文字として読み上げる。幅が足りないときは、名前の末尾を省略する。
+- 記事に出てくる名前（抜き出した名前）は、本文の末尾（出典の前）に区画として置く。区画の上には `outline` の罫線を引き、罫線の下を `lg` 空ける。名前は種類ごとに分け、「人」「組織」「製品」「地名」の順に並べる。種類の見出しは `mention-heading`（`label-sm` の大きさと `on-surface-muted` の色）にする。名前のない種類は見出しも出さない。
+- `mention-link` は、抜き出した名前の1つで、その名前の記事の一覧へのリンクである。名前を `body-md` の文字と `primary` の色で書き、`outline-strong` の1pxの枠で四方を囲み、角は `lg` にする。内側の余白は上下を `xs`、左右を `sm` にする。地は塗らない。名前どうしは横に並べ、間隔は `xs` にし、幅が足りなければ折り返す。語の色付けの `term-badge` と形で見分けられるようにするため、色付けの地の色と左の線は使わない。`term-badge` は左の線と色の地を持つ小さな印で、`mention-link` は地のない枠で囲んだ押せる部品である。リンクなので、マウスを載せたときに下線を引く。指で操作する端末とAndroidアプリでは、高さを `touch` と `touch-android` 以上にする。
+- 名前の記事の一覧の上部には、名前を見出しとして出す。一括の既読、既読を含める切り替え、重要度4以上の切り替え、並び順のメニューは出さない。
 - 検索の結果の1行は、要約1行の代わりに、一致した箇所の抜粋を2行まで出す。抜粋は一致した語の前に40字ほどを含むので、1行では語が幅から外れることがあるからである。抜粋がないときは、いつもの要約を1行で出す。
 - `badge-warning` は「未確認」の印。「更新」の印は同じ形で、文字を `on-surface-muted` にする。
 - `banner-error` は失敗の表示。何ができなかったかと、次にできる操作を1つ並べる。

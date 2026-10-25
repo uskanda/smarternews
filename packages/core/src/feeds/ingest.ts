@@ -1,7 +1,8 @@
 // Fetching a subscribed feed and storing what it delivers as feed articles. No model is involved anywhere
 // here: the items are stored as they come, with their content rewritten as Markdown. The titles of a feed
-// that translates go to the translation API after they are stored, and to nothing else.
-import type { Feed, FeedCreate } from "../api.ts";
+// that translates go to the translation API after they are stored, and to nothing else. A web feed is read
+// from its page with its selectors (`page.ts`); from then on it is stored the way a feed is.
+import type { Feed, FeedCreate, PageSelectors } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { transaction, type Database } from "../db/database.ts";
 import {
@@ -21,10 +22,12 @@ import { applyFilters } from "../db/filters.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
+import { PageFetcher } from "../fetch/pages.ts";
 import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent } from "./content.ts";
+import { extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
 const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, */*";
@@ -42,6 +45,16 @@ export interface FeedDeps {
   fetcher: Fetcher;
   /** Translates the titles of what a feed that translates delivers. Without it nothing is translated. */
   translation?: TranslationService;
+  /**
+   * Fetches the pages of web feeds by the rules of full content fetching, robots.txt included. Without it each
+   * fetch of a page makes one of its own.
+   */
+  pages?: PageFetcher;
+}
+
+/** The fetcher of pages for one fetch of a web feed. */
+export function pageFetcherOf(deps: Pick<FeedDeps, "fetcher" | "pages">): PageFetcher {
+  return deps.pages ?? new PageFetcher(deps.fetcher, { pagesPerRun: Number.POSITIVE_INFINITY, remember: false });
 }
 
 export interface FetchOutcome {
@@ -247,12 +260,26 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   return { parsed: parseSubscription(response.text), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
 }
 
+/**
+ * Fetches the page of a web feed and reads its articles with the feed's selectors. No condition is sent: the
+ * page fetcher has no way to, and a page that lists articles seldom answers one. Throws why the page could not
+ * be had, or that no element matches the item selector.
+ */
+async function downloadPage(deps: FeedDeps, url: string, selectors: PageSelectors) {
+  const page = await pageFetcherOf(deps).fetchPage(url);
+  if (!page.ok) throw new Error(pageFailureReason(page, url));
+  return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined };
+}
+
 /** Fetches one subscribed feed and stores what is new. A failure is recorded on the feed, never thrown. */
 export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOutcome> {
   const { db, clock } = deps;
   const feed = getFeed(db, feedId);
   try {
-    const result = await download(deps, feed.url, fetchConditions(db, feedId));
+    const result =
+      feed.format === "page" && feed.selectors !== null
+        ? await downloadPage(deps, feed.url, feed.selectors)
+        : await download(deps, feed.url, fetchConditions(db, feedId));
     const now = clock();
     // The feed may have been deleted while the request was under way.
     if (!findFeed(db, feedId)) return { status: "failed", created: 0, error: "the feed was deleted" };
@@ -287,6 +314,27 @@ function refuse(message: string): DomainError {
   return new DomainError("invalid", message, [{ path: "url", message }]);
 }
 
+async function firstFeed(deps: FeedDeps, url: string) {
+  try {
+    return (await download(deps, url, { etag: null, lastModified: null }))!;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw refuse(/not a feed/.test(message) ? `the document at ${url} is not a feed` : `the feed could not be fetched: ${message}`);
+  }
+}
+
+/** The first fetch of a web feed: refused unless at least one article can be taken out of the page. */
+async function firstPage(deps: FeedDeps, url: string, selectors: PageSelectors) {
+  const page = await pageFetcherOf(deps).fetchPage(url);
+  if (!page.ok) throw refuse(`the page could not be fetched: ${pageFailureReason(page, url)}`);
+  const extracted = extractPage(page.html, page.url, selectors, getSettings(deps.db).timeZone);
+  if (extracted.items.length === 0) {
+    const message = "no article could be taken out of the page with these selectors";
+    throw new DomainError("invalid", message, [{ path: "selectors.item", message }]);
+  }
+  return { parsed: { title: extracted.title, siteUrl: page.url, items: extracted.items }, etag: undefined, lastModified: undefined };
+}
+
 /**
  * Subscribes to a feed: fetches the URL once, and stores the feed only when the answer is a feed. Every
  * item it delivers now becomes an unread article.
@@ -297,13 +345,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
   if (findFeedByUrl(db, url)) throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   checkFeedCategory(db, input.categoryId);
 
-  let result: NonNullable<Awaited<ReturnType<typeof download>>>;
-  try {
-    result = (await download(deps, url, { etag: null, lastModified: null }))!;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw refuse(/not a feed/.test(message) ? `the document at ${url} is not a feed` : `the feed could not be fetched: ${message}`);
-  }
+  const result = input.format === "page" && input.selectors !== undefined ? await firstPage(deps, url, input.selectors) : await firstFeed(deps, url);
   const now = clock();
   const stored = transaction(db, () => {
     const feed = insertFeed(
@@ -312,6 +354,8 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         url,
         title: input.title ?? (result.parsed.title || new URL(url).host),
         titleSetByUser: input.title !== undefined,
+        format: input.format,
+        selectors: input.selectors,
         siteUrl: result.parsed.siteUrl,
         categoryId: input.categoryId,
         intervalMinutes: input.intervalMinutes,

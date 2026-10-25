@@ -418,3 +418,45 @@ describe("the stats of a feed", () => {
     expect(() => feedStats(db, 999, NOW)).toThrow(expect.objectContaining({ code: "not_found" }));
   });
 });
+
+describe("a web feed", () => {
+  it("stores its format and selectors and reads them back", () => {
+    const { db, clock } = setup();
+    const page = insertFeed(
+      db,
+      { url: "https://example.org/news", title: "News", format: "page", selectors: { item: "li.post", title: "h2", date: "time" } },
+      clock,
+    );
+    expect(page).toMatchObject({ format: "page", selectors: { item: "li.post", title: "h2", date: "time" } });
+    expect(getFeed(db, page.id).selectors).toEqual({ item: "li.post", title: "h2", date: "time" });
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Feed" }, clock);
+    expect(feed).toMatchObject({ format: "feed", selectors: null });
+  });
+
+  it("takes new selectors at a change, and a feed refuses them", () => {
+    const { db, clock } = setup();
+    const page = insertFeed(db, { url: "https://example.org/news", title: "News", format: "page", selectors: { item: "li" } }, clock);
+    expect(updateFeed(db, page.id, { selectors: { item: "article", link: "a.more" } }, clock).selectors).toEqual({ item: "article", link: "a.more" });
+
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Feed" }, clock);
+    expect(() => updateFeed(db, feed.id, { selectors: { item: "li" }, title: "Renamed" }, clock)).toThrow(/has no selectors/);
+    expect(getFeed(db, feed.id)).toMatchObject({ title: "Feed", selectors: null });
+  });
+
+  it("refuses a selector the engine that reads pages cannot use, naming the field", () => {
+    const { db, clock } = setup();
+    expect(() => insertFeed(db, { url: "https://example.org/news", title: "News", format: "page", selectors: { item: "li:frobnicate" } }, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "selectors.item" })] }),
+    );
+    const page = insertFeed(db, { url: "https://example.org/news", title: "News", format: "page", selectors: { item: "li" } }, clock);
+    expect(() => updateFeed(db, page.id, { selectors: { item: "li", date: "time:frobnicate" } }, clock)).toThrow(
+      expect.objectContaining({ fields: [expect.objectContaining({ path: "selectors.date" })] }),
+    );
+    expect(getFeed(db, page.id).selectors).toEqual({ item: "li" });
+  });
+
+  it("refuses to be stored without selectors", () => {
+    const { db, clock } = setup();
+    expect(() => insertFeed(db, { url: "https://example.org/news", title: "News", format: "page" }, clock)).toThrow(/needs selectors/);
+  });
+});

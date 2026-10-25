@@ -14,6 +14,19 @@ providers:
   smart:
     adapter: claude-cli
     model: sonnet
+  # Anthropic's Messages API, billed per token. Its calls count towards limits.monthlyBudgetUsd.
+  # api:
+  #   adapter: anthropic
+  #   model: claude-sonnet-5-5         # the full model ID; the aliases of the claude command do not work
+  #   apiKeyEnv: ANTHROPIC_API_KEY     # name of an environment variable; the key never goes in this file
+  #   effort: medium                   # low | medium | high; left out, the model's own default
+  #   maxWebSearches: 5                # web searches (and page fetches) one call of the search task may make
+  #   pricing:                         # US dollars per million tokens and per search; replaces the shipped prices
+  #     inputPerMTok: 2
+  #     outputPerMTok: 10
+  #     cacheReadPerMTok: 0.1
+  #     cacheWritePerMTok: 2.5
+  #     webSearchPerSearch: 0.01
   # An OpenAI-compatible server (Ollama, LM Studio, OpenRouter, ...). It cannot run the search task.
   # local:
   #   adapter: openai-compatible
@@ -22,13 +35,15 @@ providers:
   #   apiKeyEnv: LOCAL_LLM_API_KEY     # name of an environment variable; the key never goes in this file
   #   structuredOutput: json_schema    # or "prompt" for servers without response_format support
 
-# Which provider runs each task. A task that is not listed uses `default`; `summarize` and `translate` use `fast` when they are not listed.
+# Which provider runs each task. A task that is not listed uses `default`; `summarize` and `translate` use `fast`,
+# and `proposeSelectors` uses `smart`, when they are not listed.
 tasks:
   default: smart
   judge: fast
   cluster: fast
   summarize: fast         # summaries of the subscribed feeds that have them switched on
   translate: fast         # translation of feed articles when the translation API cannot be used
+  proposeSelectors: smart # selectors for a web feed, when you ask for candidates
 
 # Translation of the subscribed feeds that have it switched on. Without `google`, the model translates.
 translation:
@@ -39,11 +54,15 @@ translation:
 
 limits:
   llmCallsPerRun: 40      # a run stops, and is recorded as stopped_by_limit, when it reaches this
-  llmCallsPerDay: 300     # calls of runs, counted from midnight in the configured time zone
+  llmCallsPerDay: 350     # calls of runs and proposals of selectors, counted from midnight in the configured time zone
   summariesPerDay: 100    # summaries of feed articles, counted apart from the calls of runs
+  selectorProposalsPerDay: 50   # proposals of selectors for web feeds; they count towards llmCallsPerDay too
   judgeBatchSize: 30      # candidates judged per model call
   pagesPerRun: 20         # article pages fetched per run
   runRetries: 2           # retries of a scheduled run that failed, 0 to 3; 0 switches them off
+  monthlyBudgetUsd: 100   # US dollars one budget period may spend on providers that cost money (adapter: anthropic)
+  budgetWarnRatio: 0.8    # the screens warn once the period has spent this share of the budget
+  budgetResetDay: 1       # the day of the month a budget period starts on, at midnight UTC; 1 to 31
 
 llm:
   timeoutMs: 180000
@@ -65,5 +84,5 @@ images:
   cacheMaxBytes: 1000000000  # beyond this total, the oldest images are deleted
 
 newsSearch:
-  engine: google-news     # or bing-news
-  maxResultsPerQuery: 10  # newest results taken per query
+  engines: [google-news]  # or [bing-news], or [google-news, bing-news] to ask both
+  maxResultsPerQuery: 10  # newest results taken per query from each engine

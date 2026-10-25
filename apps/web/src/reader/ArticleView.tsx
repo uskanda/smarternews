@@ -8,6 +8,7 @@ import { listPathOf } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { Mentions } from "./Mentions.tsx";
 
 /** The attribute that makes an element an original part of the body, in which a selection can be highlighted. */
 const segmentAttribute = (index: number) => ({ [SEGMENT_ATTRIBUTE]: String(index) });
@@ -347,6 +348,8 @@ export function ArticleView({
             )
           }
         />
+        {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
+        <Mentions article={article} />
         {previous ? (
           <p className="type-body-md">
             <span className="text-on-surface-muted">この話題の前の記事 </span>

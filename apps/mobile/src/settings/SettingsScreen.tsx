@@ -1,4 +1,4 @@
-import { formatFull, messageFor, NOTIFY_SETTING_LABEL, stageLabel, STATUS_LABEL, THEME_CHOICES, THEME_LABEL, type NotifySetting } from "@smarternews/client";
+import { formatFull, messageFor, NOTIFY_SETTING_LABEL, stageLabel, STATUS_LABEL, stopLimitLabel, THEME_CHOICES, THEME_LABEL, type NotifySetting } from "@smarternews/client";
 import type { Category, Run } from "@smarternews/core/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Constants from "expo-constants";
@@ -98,7 +98,7 @@ function CategoryRun({ category, run, timeZone }: { category: Category; run: Run
       {start.isError ? <Notice tone="error">{messageFor(start.error)}</Notice> : null}
       {run?.status === "stopped_by_limit" ? (
         <Txt variant="label-sm" color="on-surface-muted">
-          LLMの呼び出し回数が上限に達したため、途中で止まりました。
+          {stopLimitLabel(run.stoppedBy)}
         </Txt>
       ) : null}
       {open

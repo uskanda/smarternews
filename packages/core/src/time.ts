@@ -62,3 +62,41 @@ export function addDays(date: string, days: number): string {
   next.setUTCDate(next.getUTCDate() + days);
   return next.toISOString().slice(0, 10);
 }
+
+export interface BudgetPeriod {
+  /** Midnight UTC of the first day. */
+  start: Date;
+  /** Midnight UTC of the first day of the next period: the period ends just before it. */
+  end: Date;
+  /** YYYY-MM-DD */
+  firstDay: string;
+  /** YYYY-MM-DD */
+  lastDay: string;
+}
+
+/** Midnight UTC of the reset day in the month, or of the month's last day when it has no such day. */
+function resetIn(year: number, month: number, resetDay: number): Date {
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(resetDay, daysInMonth)));
+}
+
+/** The budget period that holds the instant: from a reset day at midnight UTC to the next one. */
+export function budgetPeriod(now: Date, resetDay: number): BudgetPeriod {
+  let year = now.getUTCFullYear();
+  let month = now.getUTCMonth();
+  if (now < resetIn(year, month, resetDay)) {
+    month -= 1;
+    if (month < 0) {
+      month = 11;
+      year -= 1;
+    }
+  }
+  const start = resetIn(year, month, resetDay);
+  const end = resetIn(month === 11 ? year + 1 : year, (month + 1) % 12, resetDay);
+  return {
+    start,
+    end,
+    firstDay: start.toISOString().slice(0, 10),
+    lastDay: new Date(end.getTime() - 86_400_000).toISOString().slice(0, 10),
+  };
+}

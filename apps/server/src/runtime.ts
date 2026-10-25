@@ -119,9 +119,15 @@ export function createRuntime(options: { env: Record<string, string | undefined>
       llmCallsPerRun: config.limits.llmCallsPerRun,
       llmCallsPerDay: config.limits.llmCallsPerDay,
       summariesPerDay: config.limits.summariesPerDay,
+      selectorProposalsPerDay: config.limits.selectorProposalsPerDay,
     },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,
+    budget: {
+      monthlyBudgetUsd: config.limits.monthlyBudgetUsd,
+      warnRatio: config.limits.budgetWarnRatio,
+      resetDay: config.limits.budgetResetDay,
+    },
   });
   const { crawl: fetcher, images: imageFetcher } = buildFetchers(config, version);
   const imageCache = new ImageCache({

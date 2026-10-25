@@ -1,5 +1,6 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
+import { resolvePricing } from "@smarternews/core";
 import { API_TOKEN, FEED_TOKEN, testServer } from "./testing.ts";
 
 describe("categories", () => {
@@ -204,9 +205,32 @@ describe("providers", () => {
   it("shows which provider runs each of the tasks, and no credentials", async () => {
     const s = testServer();
     const body = await (await s.get("/api/v1/providers")).json();
-    expect(Object.keys(body.tasks).sort()).toEqual(["cluster", "interpret", "judge", "search", "summarize", "translate", "write"]);
-    expect(body.providers[0]).toEqual({ name: "interpret", adapter: "fake", model: "fake", webSearch: true });
+    expect(Object.keys(body.tasks).sort()).toEqual(["cluster", "interpret", "judge", "proposeSelectors", "search", "summarize", "translate", "write"]);
+    expect(body.providers[0]).toEqual({ name: "interpret", adapter: "fake", model: "fake", webSearch: true, billable: false });
     expect(body).toMatchObject({ llmCallsToday: 0, summariesToday: 0, limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100 } });
+    expect(JSON.stringify(body)).not.toMatch(/key|token|secret/i);
+  });
+
+  it("shows the budget period, what it used by task and by provider, and the calls of unknown cost", async () => {
+    const s = testServer("2026-10-25T12:00:00.000Z", {
+      pricing: resolvePricing("claude-sonnet-5-5")!,
+      budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 10 },
+    });
+    const seed = s.db.prepare(
+      "INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (?, ?, 1, ?, ?, ?, 1)",
+    );
+    seed.run("judge", "judge", 1, "2026-10-12T00:00:00.000Z", 1.2);
+    seed.run("write", "write", 1, "2026-10-13T00:00:00.000Z", 3.4);
+    seed.run("judge", "judge", 0, "2026-10-14T00:00:00.000Z", null);
+    seed.run("judge", "judge", 0, "2026-10-15T00:00:00.000Z", null);
+
+    const body = await (await s.get("/api/v1/providers")).json();
+
+    expect(body.providers[0]).toMatchObject({ name: "interpret", billable: true });
+    expect(body.budget).toMatchObject({ periodStart: "2026-10-10", periodEnd: "2026-11-09", monthlyBudgetUsd: 100, warnRatio: 0.8, unknownCostCalls: 2 });
+    expect(body.budget.spentUsd).toBeCloseTo(4.6, 8);
+    expect(body.budget.byTask).toMatchObject({ judge: 1.2, write: 3.4, interpret: 0 });
+    expect(body.budget.byProvider).toMatchObject({ judge: 1.2, write: 3.4, summarize: 0 });
     expect(JSON.stringify(body)).not.toMatch(/key|token|secret/i);
   });
 });
