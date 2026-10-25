@@ -225,7 +225,7 @@ To read from other devices, set `listen` in `config.yaml` to an address those de
 - Articles contain the model's own summary and links to the sources. The server does not republish the text of the pages it read, and deletes its copy of that text after 30 days.
 - Subscribed feeds are fetched no more often than every five minutes, and every 30 minutes by default. The request carries the `ETag` and `Last-Modified` of the last answer, so an unchanged feed is answered without a body. What a feed delivers is shown to you only, and never served on.
 
-News search uses the RSS output of Google News by default, and of Bing News as an alternative. Both publishers allow that output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
+News search uses the RSS output of Google News by default. `newsSearch.engines` in `config.yaml` lists the engines to ask: `[bing-news]` for Bing News instead, or `[google-news, bing-news]` for both. With both, every query goes to each engine, `maxResultsPerQuery` applies to each engine on its own, and a page that both find becomes one candidate. Expect more candidates, and so more calls to the judge task. A configuration that still names a single `engine` keeps working. Both publishers allow their RSS output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
 
 ## Images
 

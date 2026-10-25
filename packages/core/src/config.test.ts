@@ -92,7 +92,7 @@ describe("the example configuration", () => {
     const { join } = await import("node:path");
     const config = parseConfig(readFileSync(join(import.meta.dirname, "../../../examples/config.example.yaml"), "utf8"));
     expect(resolveAssignment(config)).toMatchObject({ judge: "fast", write: "smart" });
-    expect(config.newsSearch).toEqual({ engine: "google-news", maxResultsPerQuery: 10 });
+    expect(config.newsSearch).toEqual({ engines: ["google-news"], maxResultsPerQuery: 10 });
     expect(config.images).toEqual({ cacheDays: 7, cacheMaxBytes: 1_000_000_000 });
   });
 
@@ -198,6 +198,31 @@ describe("the number of retries of a failed run", () => {
     expect(() => parseConfig("limits:\n  runRetries: 4\n")).toThrow(/limits\.runRetries/);
     expect(() => parseConfig("limits:\n  runRetries: -1\n")).toThrow(/limits\.runRetries/);
     expect(() => parseConfig("limits:\n  runRetries: 1.5\n")).toThrow(/limits\.runRetries/);
+  });
+});
+
+describe("the news engines", () => {
+  it("are Google News alone when the file names none", () => {
+    expect(parseConfig(null).newsSearch).toEqual({ engines: ["google-news"], maxResultsPerQuery: 10 });
+    expect(parseConfig("newsSearch:\n  maxResultsPerQuery: 5\n").newsSearch).toEqual({ engines: ["google-news"], maxResultsPerQuery: 5 });
+  });
+
+  it("are the listed ones, in the order of the list", () => {
+    expect(parseConfig("newsSearch:\n  engines: [bing-news, google-news]\n").newsSearch.engines).toEqual(["bing-news", "google-news"]);
+  });
+
+  it("are the one engine of the older setting", () => {
+    expect(parseConfig("newsSearch:\n  engine: bing-news\n").newsSearch).toEqual({ engines: ["bing-news"], maxResultsPerQuery: 10 });
+  });
+
+  it("are refused when both the older and the newer setting are written", () => {
+    expect(() => parseConfig("newsSearch:\n  engine: google-news\n  engines: [bing-news]\n")).toThrow(/^config\.yaml is invalid:\n {2}newsSearch: /);
+  });
+
+  it("are refused as an empty list, a list that names an engine twice, and an unknown name", () => {
+    expect(() => parseConfig("newsSearch:\n  engines: []\n")).toThrow(/newsSearch\.engines: /);
+    expect(() => parseConfig("newsSearch:\n  engines: [bing-news, bing-news]\n")).toThrow(/newsSearch\.engines: /);
+    expect(() => parseConfig("newsSearch:\n  engines: [google-news, duckduckgo]\n")).toThrow(/newsSearch\.engines/);
   });
 });
 

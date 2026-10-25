@@ -39,7 +39,7 @@ import { reasonText, type ReasonCode } from "./reasons.ts";
 
 export interface PipelineConfig {
   limits: { judgeBatchSize: number; pagesPerRun: number };
-  newsSearch: { engine: NewsEngine; maxResultsPerQuery: number };
+  newsSearch: { engines: NewsEngine[]; maxResultsPerQuery: number };
 }
 
 export interface PipelineDeps {
@@ -141,10 +141,14 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     }
     if (topic.sources.newsSearch) {
       const locale = topic.search ?? ctx.settings.search;
+      const { engines, maxResultsPerQuery } = ctx.config.newsSearch;
       for (const query of topic.queries) {
-        await attempt(topic, "news-search", query, () =>
-          collectNews({ fetcher: ctx.fetcher, isSeen, ...ctx.config.newsSearch }, query, locale, window),
-        );
+        // Each engine is a source of its own, so one that fails leaves the results of the others.
+        for (const engine of engines) {
+          await attempt(topic, "news-search", `${engine}: ${query}`, () =>
+            collectNews({ fetcher: ctx.fetcher, isSeen, engine, maxResultsPerQuery }, query, locale, window),
+          );
+        }
       }
     }
     if (topic.sources.llmSearch) {

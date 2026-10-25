@@ -54,6 +54,8 @@ const anthropicSchema = z.strictObject({
 const providerSchema = z.discriminatedUnion("adapter", [claudeCliSchema, openAiCompatibleSchema, anthropicSchema]);
 export type ProviderConfig = z.infer<typeof providerSchema>;
 
+const newsEngineSchema = z.enum(["google-news", "bing-news"]);
+
 const tasksSchema = z.strictObject({
   default: z.string(),
   interpret: z.string().optional(),
@@ -129,9 +131,20 @@ const configSchema = z.strictObject({
     .prefault({}),
   newsSearch: z
     .strictObject({
-      engine: z.enum(["google-news", "bing-news"]).default("google-news"),
+      /** The older way to name a single engine. Read as a list of one; nothing else reads it. */
+      engine: newsEngineSchema.optional(),
+      engines: z
+        .array(newsEngineSchema)
+        .min(1)
+        .refine((engines) => new Set(engines).size === engines.length, "name each engine once")
+        .optional(),
       maxResultsPerQuery: z.number().int().min(1).max(100).default(10),
     })
+    .refine((search) => search.engine === undefined || search.engines === undefined, "write either engine or engines, not both")
+    .transform(({ engine, engines, maxResultsPerQuery }) => ({
+      engines: engines ?? [engine ?? ("google-news" as const)],
+      maxResultsPerQuery,
+    }))
     .prefault({}),
 });
 

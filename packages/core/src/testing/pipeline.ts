@@ -10,7 +10,6 @@ import type { LlmRequest } from "../llm/adapter.ts";
 import type { ModelPricing } from "../llm/pricing.ts";
 import type { JudgeOutput, WriteOutput } from "../llm/tasks.ts";
 import { executeRun, type PipelineConfig } from "../pipeline/run.ts";
-import type { NewsEngine } from "../sources/news-search.ts";
 import { createTestDb, fakeClock } from "./db.ts";
 import { fakeFetch, html, xml } from "./http.ts";
 import { fakeLlm, materialLines, type FakeHandler } from "./llm.ts";
@@ -60,6 +59,34 @@ export function bingDocument(items: FeedItemSpec[], defaultPublished: string): s
     })
     .join("\n");
   return `<?xml version="1.0"?><rss version="2.0" xmlns:News="https://www.bing.com/news"><channel><title>Bing</title>${body}</channel></rss>`;
+}
+
+/**
+ * A Google News answer. Each link is a redirect whose article id is the item's link in base64url, which the
+ * harness's `googleNews` routes trade back for the link.
+ */
+export function googleDocument(items: FeedItemSpec[], defaultPublished: string): string {
+  const body = items
+    .map((item) => {
+      const published = item.published === undefined ? defaultPublished : item.published;
+      const link = `https://news.google.com/rss/articles/${Buffer.from(item.link).toString("base64url")}?oc=5`;
+      return [
+        "<item>",
+        `<title>${escapeXml(item.title)} - Example Outlet</title>`,
+        `<link>${escapeXml(link)}</link>`,
+        published === null ? "" : `<pubDate>${new Date(published).toUTCString()}</pubDate>`,
+        `<source url="https://outlet.example.org">Example Outlet</source>`,
+        "</item>",
+      ].join("");
+    })
+    .join("\n");
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Google News</title>${body}</channel></rss>`;
+}
+
+/** The article id that a Google News redirect resolution asks about, read from the request body. */
+function googleArticleId(body: string | null): string {
+  const outer = JSON.parse(decodeURIComponent((body ?? "").replace(/^f\.req=/, ""))) as [[[string, string]]];
+  return (JSON.parse(outer[0][0][1]) as unknown[])[2] as string;
 }
 
 /** A page long enough for the extractor, with the given sentence in its article text. */
@@ -135,7 +162,8 @@ export interface HarnessOptions {
   search?: SearchLocale;
   now?: string;
   config?: Partial<PipelineConfig["limits"]>;
-  engine?: NewsEngine;
+  /** Bing News alone unless given: its links need no second request to resolve. */
+  newsSearch?: Partial<PipelineConfig["newsSearch"]>;
   llmLimits?: { llmCallsPerRun: number; llmCallsPerDay: number };
   webSearch?: boolean;
   /** Makes every provider one that costs money, at these prices. */
@@ -161,7 +189,7 @@ export function pipelineHarness(options: HarnessOptions = {}) {
   const llm = fakeLlm(db, clock, handlers, { limits: options.llmLimits, webSearch: options.webSearch, pricing: options.llmPricing });
   const config: PipelineConfig = {
     limits: { judgeBatchSize: 30, pagesPerRun: 20, ...options.config },
-    newsSearch: { engine: options.engine ?? "bing-news", maxResultsPerQuery: 20 },
+    newsSearch: { engines: ["bing-news"], maxResultsPerQuery: 20, ...options.newsSearch },
   };
 
   return {
@@ -205,6 +233,22 @@ export function pipelineHarness(options: HarnessOptions = {}) {
       routes["https://www.bing.com/news/search"] = (request) => {
         const query = new URL(request.url).searchParams.get("q") ?? "";
         return xml(bingDocument(resultsByQuery[query] ?? [], new Date(clock().getTime() - 3_600_000).toISOString()));
+      };
+    },
+    /** Serves Google News results keyed by the query text, and resolves their redirect links to the items' links. */
+    googleNews(resultsByQuery: Record<string, FeedItemSpec[]>): void {
+      routes["https://news.google.com/rss/search"] = (request) => {
+        const query = (new URL(request.url).searchParams.get("q") ?? "").replace(/ when:\S+$/, "");
+        return xml(googleDocument(resultsByQuery[query] ?? [], new Date(clock().getTime() - 3_600_000).toISOString()));
+      };
+      routes["https://news.google.com/rss/articles/"] = (request) => {
+        const id = new URL(request.url).pathname.split("/").pop() ?? "";
+        return html(`<html><body><div data-n-a-sg="${id}" data-n-a-ts="1700000000"></div></body></html>`);
+      };
+      routes["https://news.google.com/_/DotsSplashUi/data/batchexecute"] = (request) => {
+        const link = Buffer.from(googleArticleId(request.body), "base64url").toString();
+        const payload = JSON.stringify(JSON.stringify(["garturlres", link, 1]));
+        return new Response(`)]}'\n\n[["wrb.fr","Fbv4je",${payload},null,null,null,"generic"]]`, { status: 200 });
       };
     },
     page(url: string, sentence: string, published?: string): void {
