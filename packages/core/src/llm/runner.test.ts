@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { TaskName } from "../api.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
-import type { LlmAdapter, LlmRequest } from "./adapter.ts";
+import { LlmCallError, type LlmAdapter, type LlmRequest, type LlmUsage } from "./adapter.ts";
+import { resolvePricing, type ModelPricing } from "./pricing.ts";
 import { LlmLimitError, TaskFailedError, TaskRunner, type Provider } from "./runner.ts";
 
 const interpretInput = { topicText: "Rust releases", kind: "news" as const, search: { language: "en", region: "US" } };
@@ -10,6 +11,21 @@ const validInterpretation = {
   criteria: "official releases",
   suggestedSources: { newsSearch: true, llmSearch: false },
 };
+
+/** An answer that comes with what the call used. */
+class Billed {
+  readonly answer: unknown;
+  readonly usage: LlmUsage;
+
+  constructor(answer: unknown, usage: LlmUsage) {
+    this.answer = answer;
+    this.usage = usage;
+  }
+}
+
+/** What a call used: half a million input tokens cost $1 at the prices of Sonnet 5.5. */
+const used = (inputTokens = 500_000): LlmUsage => ({ inputTokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 });
+const SONNET = resolvePricing("claude-sonnet-5-5")!;
 
 /** An adapter that answers from a queue and remembers what it was asked. */
 function scripted(answers: Array<unknown | Error | "hang">, webSearch = false) {
@@ -25,14 +41,15 @@ function scripted(answers: Array<unknown | Error | "hang">, webSearch = false) {
         });
       }
       if (answer instanceof Error) return Promise.reject(answer);
-      return Promise.resolve(answer);
+      if (answer instanceof Billed) return Promise.resolve({ answer: answer.answer, usage: answer.usage });
+      return Promise.resolve({ answer, usage: null });
     },
   };
   return { adapter, requests };
 }
 
-function provider(name: string, adapter: LlmAdapter): Provider {
-  return { name, adapterKind: "fake", model: "m", adapter };
+function provider(name: string, adapter: LlmAdapter, pricing: ModelPricing | null = null): Provider {
+  return { name, adapterKind: "fake", model: "m", pricing, adapter };
 }
 
 function setup(options: {
@@ -41,6 +58,7 @@ function setup(options: {
   limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number };
   timeoutMs?: number;
   timeZone?: string;
+  budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
 }) {
   const db = createTestDb();
   const clock = fakeClock("2026-03-01T12:00:00.000Z");
@@ -63,6 +81,7 @@ function setup(options: {
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
     timeouts: { defaultMs: options.timeoutMs ?? 1000, searchMs: options.timeoutMs ?? 1000 },
     timeZone: () => options.timeZone ?? "UTC",
+    budget: options.budget,
   });
   const calls = () => db.prepare("SELECT task, provider, ok, error FROM llm_calls ORDER BY id").all();
   return { db, clock, runner, calls };
@@ -374,5 +393,115 @@ describe("the allowance of selector proposals", () => {
     expect(runner.canProposeSelectors()).toBe(false);
     await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe("TaskRunner and the money the calls cost", () => {
+  const costs = (db: ReturnType<typeof createTestDb>) =>
+    db
+      .prepare("SELECT task, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, billable FROM llm_calls ORDER BY id")
+      .all();
+
+  it("keeps the tokens, the searches and the cost of each call, retries included", async () => {
+    const usage = { inputTokens: 10_000, outputTokens: 1_000, cacheReadTokens: 3, cacheWriteTokens: 4, webSearches: 2 };
+    const { adapter } = scripted([new Billed({ queries: ["x"] }, usage), new Billed(validInterpretation, usage)]);
+    const { runner, db } = setup({ providers: [provider("smart", adapter, SONNET)] });
+
+    await runner.run("interpret", interpretInput, { runId: null, calls: 0 });
+
+    const row = { task: "interpret", provider: "smart", input_tokens: 10_000, output_tokens: 1_000, cache_read_tokens: 3, cache_write_tokens: 4, web_searches: 2, billable: 1 };
+    expect(costs(db)).toEqual([
+      { ...row, cost_usd: expect.closeTo(0.0500103, 10) as number },
+      { ...row, cost_usd: expect.closeTo(0.0500103, 10) as number },
+    ]);
+  });
+
+  it("keeps the cost of a call that answered with something unusable", async () => {
+    const { adapter } = scripted([new LlmCallError("the model declined to answer", used())]);
+    const { runner, db } = setup({ providers: [provider("smart", adapter, SONNET)] });
+
+    await expect(runner.run("interpret", interpretInput, { runId: null, calls: 0 })).rejects.toBeInstanceOf(TaskFailedError);
+
+    expect(costs(db)).toMatchObject([{ input_tokens: 500_000, cost_usd: 1, billable: 1 }]);
+  });
+
+  it("leaves the cost of a call that timed out unknown, and that of a provider that costs nothing empty", async () => {
+    const paid = setup({ providers: [provider("smart", scripted(["hang"]).adapter, SONNET)], timeoutMs: 20 });
+    const cli = setup({ providers: [provider("cli", scripted([validInterpretation]).adapter)] });
+
+    await expect(paid.runner.run("interpret", interpretInput, { runId: null, calls: 0 })).rejects.toBeInstanceOf(TaskFailedError);
+    await cli.runner.run("interpret", interpretInput, { runId: null, calls: 0 });
+
+    expect(costs(paid.db)).toMatchObject([{ provider: "smart", input_tokens: null, cost_usd: null, billable: 1 }]);
+    expect(costs(cli.db)).toMatchObject([{ provider: "cli", input_tokens: null, cost_usd: null, billable: 0 }]);
+  });
+});
+
+describe("TaskRunner and the monthly budget", () => {
+  const seedCost = (db: ReturnType<typeof createTestDb>, at: string, cost: number, task = "write", provider = "smart") =>
+    db
+      .prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (NULL, ?, ?, 1, 1, ?, ?, 1)")
+      .run(task, provider, at, cost);
+
+  it("still calls at $99.99 of $100, and refuses the call after it", async () => {
+    const { adapter, requests } = scripted([new Billed(validInterpretation, used(25_000)), validInterpretation]);
+    const { runner, db } = setup({ providers: [provider("smart", adapter, SONNET)], budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 1 } });
+    seedCost(db, "2026-03-01T01:00:00.000Z", 99.99);
+
+    await runner.run("interpret", interpretInput, { runId: null, calls: 0 });
+    const error = await runner.run("interpret", interpretInput, { runId: null, calls: 0 }).catch((caught: unknown) => caught);
+
+    expect(requests).toHaveLength(1);
+    expect(error).toBeInstanceOf(LlmLimitError);
+    expect((error as LlmLimitError).scope).toBe("budget");
+    expect(runner.budgetStatus().spentUsd).toBeCloseTo(100.04, 8);
+  });
+
+  it("keeps calling a provider that costs nothing once the budget is used up", async () => {
+    const paid = scripted([]);
+    const free = scripted([validInterpretation]);
+    const { runner, db } = setup({
+      providers: [provider("smart", paid.adapter, SONNET), provider("cli", free.adapter)],
+      assignment: { interpret: "cli" },
+    });
+    seedCost(db, "2026-03-01T01:00:00.000Z", 100);
+
+    await expect(runner.run("interpret", interpretInput, { runId: null, calls: 0 })).resolves.toEqual(validInterpretation);
+    await expect(runner.run("summarize", { outputLanguage: "ja", title: "t", text: "x" }, { runId: null, calls: 0 })).rejects.toMatchObject({
+      scope: "budget",
+    });
+  });
+
+  it("calls again once the next budget period has started", async () => {
+    const { adapter } = scripted([validInterpretation]);
+    const { runner, db, clock } = setup({ providers: [provider("smart", adapter, SONNET)], budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 10 } });
+    clock.set("2026-03-09T23:00:00.000Z");
+    seedCost(db, "2026-03-09T22:00:00.000Z", 100);
+    await expect(runner.run("interpret", interpretInput, { runId: null, calls: 0 })).rejects.toBeInstanceOf(LlmLimitError);
+
+    clock.set("2026-03-10T00:00:00.000Z");
+    await expect(runner.run("interpret", interpretInput, { runId: null, calls: 0 })).resolves.toEqual(validInterpretation);
+  });
+
+  it("reports the period, the total, and the money by task and by provider, with the calls of unknown cost", () => {
+    const { adapter } = scripted([]);
+    const { runner, db, clock } = setup({
+      providers: [provider("fast", adapter, SONNET), provider("smart", adapter, SONNET), provider("cli", adapter)],
+      budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 10 },
+    });
+    clock.set("2026-10-25T12:00:00.000Z");
+    seedCost(db, "2026-10-12T00:00:00.000Z", 1.2, "judge", "fast");
+    seedCost(db, "2026-10-13T00:00:00.000Z", 3.4, "write", "smart");
+    seedCost(db, "2026-10-09T23:59:59.000Z", 50, "write", "smart");
+    db.prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, error, created_at, billable) VALUES ('judge', 'fast', 1, 0, 'timed out', ?, 1)").run(
+      "2026-10-14T00:00:00.000Z",
+    );
+
+    const status = runner.budgetStatus();
+
+    expect(status).toMatchObject({ periodStart: "2026-10-10", periodEnd: "2026-11-09", monthlyBudgetUsd: 100, warnRatio: 0.8, unknownCostCalls: 1 });
+    expect(status.spentUsd).toBeCloseTo(4.6, 8);
+    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0, proposeSelectors: 0 });
+    expect(status.byProvider).toEqual({ fast: 1.2, smart: 3.4, cli: 0 });
   });
 });

@@ -930,19 +930,49 @@ describe("the migration to annotations", () => {
   });
 });
 
+describe("the migration to model costs", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the calls that exist without a cost and outside the budget, and the runs without a limit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "018")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const at = "2026-10-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'c', 'c', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(at);
+    db.prepare("INSERT INTO runs (id, category_id, trigger, status, queued_at) VALUES (1, 1, 'manual', 'stopped_by_limit', ?)").run(at);
+    db.prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at) VALUES (1, 'judge', 'fast', 10, 1, ?)").run(at);
+
+    copyFileSync(join(SHIPPED, "018_llm_costs.sql"), join(dir, "018_llm_costs.sql"));
+    migrate(db, dir);
+
+    expect(
+      db
+        .prepare("SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, billable FROM llm_calls")
+        .get(),
+    ).toEqual({ input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null, web_searches: null, cost_usd: null, billable: 0 });
+    expect(db.prepare("SELECT stopped_by FROM runs").get()).toEqual({ stopped_by: null });
+    db.prepare("UPDATE runs SET stopped_by = 'budget'").run();
+    expect(() => db.prepare("UPDATE runs SET stopped_by = 'week'").run()).toThrow();
+  });
+});
+
 describe("the migration to mentions", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 
-  function before018() {
+  function before019() {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "018")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "019")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     return { db, dir };
   }
 
   it("leaves the articles and the search results as they were, and gives no article a name", () => {
-    const { db, dir } = before018();
+    const { db, dir } = before019();
     const now = "2026-01-01T00:00:00.000Z";
     db.prepare(
       `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
@@ -964,7 +994,7 @@ describe("the migration to mentions", () => {
     });
     const earlier = rows();
 
-    copyFileSync(join(SHIPPED, "018_mentions.sql"), join(dir, "018_mentions.sql"));
+    copyFileSync(join(SHIPPED, "019_mentions.sql"), join(dir, "019_mentions.sql"));
     migrate(db, dir);
 
     expect(rows()).toEqual(earlier);
@@ -1003,16 +1033,16 @@ describe("the migration to mentions", () => {
 describe("the migration to web feeds", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 
-  function before019() {
+  function before020() {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "019")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "020")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     return { db, dir };
   }
 
   it("makes every subscribed feed a feed without selectors and keeps its articles", () => {
-    const { db, dir } = before019();
+    const { db, dir } = before020();
     const now = "2026-01-01T00:00:00.000Z";
     db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
     db.prepare(
@@ -1021,7 +1051,7 @@ describe("the migration to web feeds", () => {
     ).run(now, now, now);
     const articles = db.prepare("SELECT * FROM articles").all();
 
-    const file = readdirSync(SHIPPED).find((name) => name.startsWith("019"))!;
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("020"))!;
     copyFileSync(join(SHIPPED, file), join(dir, file));
     migrate(db, dir);
 

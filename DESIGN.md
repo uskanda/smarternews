@@ -211,6 +211,12 @@ components:
     typography: "{typography.body-md}"
     rounded: "{rounded.md}"
     padding: "{spacing.sm}"
+  banner-warning:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.warning}"
+    typography: "{typography.body-md}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.sm}"
 ---
 
 # smarternews design system
@@ -249,7 +255,7 @@ components:
 - `term-<色>-fill` と `term-<色>` は、語の色付けだけに使う。色は `green`、`purple`、`pink`、`orange` の4つで、利用者が語のまとまりごとに選ぶ。`term-<色>-fill` を一致した箇所と一覧の行の印の地に塗り、`term-<色>` で下線と印の左の線を引く。文字は `on-surface` のままにする。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。線は `surface` に対して3対1以上を保つ。黄色と青は使わない。黄色は重要度の印と、青はリンクの藍色と見分けられなくなるからである。緑は、検索の `search-match` の青みのある緑から色相を黄の側へ離す。
 - `annotation-fill`（`#CFE6FA`）と `annotation`（`#1F69A3`）は、利用者が本文に付けたハイライトだけに使う。`annotation-fill` をハイライトした文字の地に塗り、`annotation` でメモの印のアイコンを描く。色相は空色にする。重要度の黄色、検索の青みのある緑、語の色付けの4色から離し、リンクの藍色の文字とも見分けられるようにするためである。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。アイコンは `surface` に対して3対1以上を保つ。
 - `text-selection`（`#C5CDD8`）は、本文の中で文字を選んでいる間の地の色に使う。ブラウザーの既定の選択の色は青く、ハイライトの空色と見分けにくいからである。色相を持たない灰色にして、ハイライトと区別する。文字は `on-surface` のままにする。
-- `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。
+- `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。月の予算の警告にも使い、`banner-warning` は `surface` の地に `warning` の文字と枠で描く。失敗ではなく、利用者が設定を見直す時機を伝える表示だからである。
 - `error`（`#A1260D`）は、失敗の表示と、削除を確定するボタンに使う。
 
 暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-darkblue`（`#5C4B12`）を重ね、文字は `on-surface` の暗い配色の値のままにする。

@@ -970,6 +970,10 @@ export type RunFailure = z.infer<typeof runFailureSchema>;
 export const retrySkippedSchema = z.enum(["limit", "superseded", "disabled", "manual"]);
 export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
 
+/** The allowance that stopped a run: calls in one run, calls in one day, or the monthly budget. */
+export const stopLimitSchema = z.enum(["run", "day", "budget"]);
+export type StopLimit = z.infer<typeof stopLimitSchema>;
+
 export const runSchema = z.object({
   id: z.number().int(),
   categoryId: z.number().int(),
@@ -992,6 +996,8 @@ export const runSchema = z.object({
   /** When the retry of this failed run is due. Null when none is planned, and once the retry was queued. */
   retryAt: z.string().nullable(),
   retrySkipped: retrySkippedSchema.nullable(),
+  /** The allowance a run stopped by limit ran into. Null for every other run, and for runs stopped before it was kept. */
+  stoppedBy: stopLimitSchema.nullable(),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -1018,15 +1024,39 @@ export type Candidate = z.infer<typeof candidateSchema>;
 export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors"]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
+/** What the providers that cost money used in the current budget period, in US dollars. */
+export const budgetStatusSchema = z.object({
+  /** The first and the last day of the period, as YYYY-MM-DD. Periods start at midnight UTC. */
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  spentUsd: z.number(),
+  monthlyBudgetUsd: z.number(),
+  /** The share of the budget at which the screens warn. */
+  warnRatio: z.number(),
+  /** Calls that ended without an answer: what they cost is not known, and the total leaves them out. */
+  unknownCostCalls: z.number().int(),
+  byTask: z.record(taskNameSchema, z.number()),
+  byProvider: z.record(z.string(), z.number()),
+});
+export type BudgetStatus = z.infer<typeof budgetStatusSchema>;
+
 export const providerStatusSchema = z.object({
   providers: z.array(
-    z.object({ name: z.string(), adapter: z.string(), model: z.string(), webSearch: z.boolean() }),
+    z.object({
+      name: z.string(),
+      adapter: z.string(),
+      model: z.string(),
+      webSearch: z.boolean(),
+      /** True for a provider that costs money: its calls count towards the monthly budget. */
+      billable: z.boolean(),
+    }),
   ),
   tasks: z.record(taskNameSchema, z.string()),
   /** Calls made today for runs. Summaries of feed articles are counted apart. */
   llmCallsToday: z.number().int(),
   summariesToday: z.number().int(),
   limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int(), summariesPerDay: z.number().int() }),
+  budget: budgetStatusSchema,
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
 

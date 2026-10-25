@@ -15,7 +15,7 @@ function runnerWith(adapter: LlmAdapter): TaskRunner {
   return new TaskRunner({
     db: createTestDb(),
     clock: fakeClock("2026-03-01T12:00:00.000Z"),
-    providers: new Map([["p", { name: "p", adapterKind: "test", model: "m", adapter }]]),
+    providers: new Map([["p", { name: "p", adapterKind: "test", model: "m", pricing: null, adapter }]]),
     assignment: Object.fromEntries(TASK_NAMES.map((task) => [task, "p"])) as Record<TaskName, string>,
     limits: { llmCallsPerRun: 40, llmCallsPerDay: 300 },
     timeouts: { defaultMs: 5000, searchMs: 5000 },
@@ -90,7 +90,7 @@ const success = (structured: unknown) =>
 describe("the claude command adapter", () => {
   it("returns the structured output of the command", async () => {
     const { adapter } = fake({ FAKE_OUTPUT: success({ ok: true }) });
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: true });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: true }, usage: null });
   });
 
   it("sends the prompt on standard input and the schema, system prompt and model as arguments", async () => {
@@ -134,7 +134,7 @@ describe("the claude command adapter", () => {
   it("parses the result text when the command gives no structured output", async () => {
     const output = JSON.stringify({ type: "result", subtype: "success", is_error: false, result: '```json\n{"ok": false}\n```' });
     const { adapter } = fake({ FAKE_OUTPUT: output });
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: false });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: false }, usage: null });
   });
 
   it("fails with the command's error text when it exits with an error", async () => {

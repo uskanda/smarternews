@@ -459,7 +459,13 @@ export function createApp(deps: AppDeps): Hono {
 
   // providers
   api.get("/providers", (c) => {
-    const status: ProviderStatus = { ...runner.describe(), llmCallsToday: runner.callsToday(), summariesToday: runner.summariesToday(), limits: runner.limits };
+    const status: ProviderStatus = {
+      ...runner.describe(),
+      llmCallsToday: runner.callsToday(),
+      summariesToday: runner.summariesToday(),
+      limits: runner.limits,
+      budget: runner.budgetStatus(),
+    };
     return c.json(status);
   });
 

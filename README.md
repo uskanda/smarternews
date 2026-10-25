@@ -15,7 +15,7 @@ This repository contains the server (the crawler, the API and the RSS feeds), a 
 ## Requirements
 
 - Linux or macOS with Node.js 24 or later and pnpm.
-- A model provider. The default is the [Claude Code](https://claude.com/claude-code) command `claude`, installed and logged in for the user that runs the server. An OpenAI-compatible server such as Ollama or LM Studio also works; see [docs/providers.md](docs/providers.md).
+- A model provider. The default is the [Claude Code](https://claude.com/claude-code) command `claude`, installed and logged in for the user that runs the server. Anthropic's API with a key, and an OpenAI-compatible server such as Ollama or LM Studio, also work; see [docs/providers.md](docs/providers.md).
 
 The server runs TypeScript directly with Node and needs no build. Only the web app is built, with one command.
 
@@ -227,7 +227,7 @@ To read from other devices, set `listen` in `config.yaml` to an address those de
 - Articles contain the model's own summary and links to the sources. The server does not republish the text of the pages it read, and deletes its copy of that text after 30 days.
 - Subscribed feeds are fetched no more often than every five minutes, and every 30 minutes by default. The request carries the `ETag` and `Last-Modified` of the last answer, so an unchanged feed is answered without a body. What a feed delivers is shown to you only, and never served on.
 
-News search uses the RSS output of Google News by default, and of Bing News as an alternative. Both publishers allow that output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
+News search uses the RSS output of Google News by default. `newsSearch.engines` in `config.yaml` lists the engines to ask: `[bing-news]` for Bing News instead, or `[google-news, bing-news]` for both. With both, every query goes to each engine, `maxResultsPerQuery` applies to each engine on its own, and a page that both find becomes one candidate. Expect more candidates, and so more calls to the judge task. A configuration that still names a single `engine` keeps working. Both publishers allow their RSS output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
 
 ## Images
 
@@ -267,6 +267,8 @@ Planned retries are stored, so they survive a restart; a retry that came due whi
 A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (350 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
 
 Summaries of feed articles are counted apart. Once the day has made `summariesPerDay` of them (100 by default), no more are made until the next day, which starts with the newest articles that still wait. Summaries do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `summariesPerDay`. The `summarize` task runs on the provider named `fast` unless `tasks` in `config.yaml` assigns another; see [docs/providers.md](docs/providers.md).
+
+Providers with the `anthropic` adapter cost money per call, and the server keeps what each call cost. Once a budget period has spent `monthlyBudgetUsd` (100 US dollars by default) on them, they are not called until the next period. A period starts on `budgetResetDay` at midnight UTC. A run stopped this way is recorded as stopped by the monthly budget. From `budgetWarnRatio` of the budget on (0.8 by default), the web app warns at the top of every page, and the page of the settings shows the money by task and by provider.
 
 Retries obey both limits like any other run. With two retries, a category that keeps failing uses up to three runs' worth of calls for one scheduled time.
 

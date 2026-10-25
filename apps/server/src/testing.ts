@@ -15,6 +15,7 @@ import {
   type ArticleContent,
   type Category,
   type Kind,
+  type ModelPricing,
   type Translator,
 } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm, fakeTranslator, type FakeHandler } from "@smarternews/core/testing";
@@ -53,6 +54,9 @@ export function testServer(
     /** Answers the task that proposes selectors for a web feed. Without it, a call of the task fails the test. */
     proposeSelectors?: FakeHandler;
     selectorProposalsPerDay?: number;
+    /** Makes every provider one that costs money, at these prices. */
+    pricing?: ModelPricing;
+    budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
   } = {},
 ) {
   const db = createTestDb();
@@ -67,6 +71,8 @@ export function testServer(
     },
     {
       webSearch: options.webSearch,
+      pricing: options.pricing,
+      budget: options.budget,
       ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined && options.selectorProposalsPerDay === undefined
         ? {}
         : {

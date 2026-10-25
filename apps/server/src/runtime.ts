@@ -123,6 +123,11 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,
+    budget: {
+      monthlyBudgetUsd: config.limits.monthlyBudgetUsd,
+      warnRatio: config.limits.budgetWarnRatio,
+      resetDay: config.limits.budgetResetDay,
+    },
   });
   const { crawl: fetcher, images: imageFetcher } = buildFetchers(config, version);
   const imageCache = new ImageCache({

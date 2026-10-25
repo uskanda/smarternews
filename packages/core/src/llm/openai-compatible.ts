@@ -51,7 +51,7 @@ export function createOpenAiCompatibleAdapter(options: OpenAiCompatibleOptions):
       const completion = (await response.json()) as ChatCompletion;
       const content = completion.choices?.[0]?.message?.content;
       if (typeof content !== "string") throw new Error("the provider answered without a message");
-      return parseJsonAnswer(content);
+      return { answer: parseJsonAnswer(content), usage: null };
     },
   };
 }

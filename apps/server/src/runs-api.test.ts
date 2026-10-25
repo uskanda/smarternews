@@ -103,6 +103,25 @@ describe("runs", () => {
     });
   });
 
+  it("says which allowance stopped a run, and names none for a run that was not stopped by one", async () => {
+    const s = testServer();
+    const category = s.category();
+    const outcome = { finishedAt: s.clock().toISOString(), collected: 0, rejected: 0, articlesCreated: 0, articlesUpdated: 0, llmCalls: 0, failures: [] };
+    const stopped = await (await s.post(`/api/v1/categories/${category.id}/runs`)).json();
+    finishRun(s.db, stopped.id, { ...outcome, status: "stopped_by_limit", stoppedBy: "budget" });
+    const other = s.category();
+    const succeeded = await (await s.post(`/api/v1/categories/${other.id}/runs`)).json();
+    finishRun(s.db, succeeded.id, { ...outcome, status: "succeeded" });
+
+    expect(await (await s.get(`/api/v1/runs/${stopped.id}`)).json()).toMatchObject({ status: "stopped_by_limit", stoppedBy: "budget" });
+    expect(await (await s.get("/api/v1/runs")).json()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: stopped.id, stoppedBy: "budget" }),
+        expect.objectContaining({ id: succeeded.id, stoppedBy: null }),
+      ]),
+    );
+  });
+
   it("answers 404 for a run or category that does not exist", async () => {
     const s = testServer();
     expect((await s.get("/api/v1/runs/55")).status).toBe(404);

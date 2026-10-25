@@ -1,4 +1,4 @@
-import { insertFeed, setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
+import { insertFeed, resolvePricing, setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -549,5 +549,50 @@ describe("times", () => {
 
     const row = await screen.findByRole("link", { name: /Morning story/ });
     expect(row).toHaveTextContent("05:00");
+  });
+});
+
+describe("the warning of the monthly budget", () => {
+  function spent(cost: number) {
+    const server = makeServer("2026-10-25T12:00:00.000Z", {
+      pricing: resolvePricing("claude-sonnet-5-5")!,
+      budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 10 },
+    });
+    server.db
+      .prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES ('write', 'write', 1, 1, '2026-10-20T00:00:00.000Z', ?, 1)")
+      .run(cost);
+    return server;
+  }
+  const warning = () => screen.queryByRole("status", { name: "月の予算の警告" });
+
+  it("shows on any screen once the period spent the warning share, and leads to the providers", async () => {
+    const { user, path } = renderApp({ server: spent(85), width: 1280 });
+
+    await waitFor(() => expect(warning()).toHaveTextContent("月の予算の85%を使いました"));
+    await user.click(within(warning()!).getByRole("link", { name: "プロバイダーの設定" }));
+
+    expect(path()).toMatch(/^\/settings/);
+    expect(await screen.findByRole("region", { name: "プロバイダー" })).toBeInTheDocument();
+  });
+
+  it("does not show below the warning share", async () => {
+    renderApp({ server: spent(50), width: 1280 });
+
+    expect(await screen.findByRole("region", { name: "記事の一覧" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("navigation", { name: "項目" })).toBeInTheDocument());
+    expect(warning()).not.toBeInTheDocument();
+  });
+
+  it("goes away when the next period starts and the screen reads the providers again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => void vi.useRealTimers());
+    const server = spent(85);
+    renderApp({ server, width: 1280 });
+    await waitFor(() => expect(warning()).toBeInTheDocument());
+
+    server.clock.set("2026-11-10T00:00:00.000Z");
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    await waitFor(() => expect(warning()).not.toBeInTheDocument());
   });
 });

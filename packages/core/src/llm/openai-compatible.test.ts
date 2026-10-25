@@ -14,7 +14,7 @@ function runnerWith(adapter: LlmAdapter): TaskRunner {
   return new TaskRunner({
     db: createTestDb(),
     clock: fakeClock("2026-03-01T12:00:00.000Z"),
-    providers: new Map([["p", { name: "p", adapterKind: "test", model: "m", adapter }]]),
+    providers: new Map([["p", { name: "p", adapterKind: "test", model: "m", pricing: null, adapter }]]),
     assignment: Object.fromEntries(TASK_NAMES.map((task) => [task, "p"])) as Record<TaskName, string>,
     limits: { llmCallsPerRun: 40, llmCallsPerDay: 300 },
     timeouts: { defaultMs: 5000, searchMs: 5000 },
@@ -75,7 +75,7 @@ describe("the OpenAI-compatible adapter", () => {
     const { baseUrl, seen } = await server(() => completion('{"ok": true}'));
     const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "some-model", apiKey: "k-123", structuredOutput: "json_schema" });
 
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: true });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: true }, usage: null });
     expect(seen[0]!.url).toBe("/v1/chat/completions");
     expect(seen[0]!.authorization).toBe("Bearer k-123");
     expect(seen[0]!.body).toMatchObject({
@@ -92,7 +92,7 @@ describe("the OpenAI-compatible adapter", () => {
     const { baseUrl, seen } = await server(() => completion('```json\n{"ok": false}\n```'));
     const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "m", apiKey: null, structuredOutput: "prompt" });
 
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: false });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: false }, usage: null });
     expect(seen[0]!.body.response_format).toBeUndefined();
     expect(seen[0]!.authorization).toBeUndefined();
     const system = (seen[0]!.body.messages as Array<{ content: string }>)[0]!.content;
