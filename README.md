@@ -6,7 +6,7 @@ smarternews is a self-hosted news crawler for one reader. You describe the topic
 
 It is also a feed reader. Subscribe to RSS and Atom feeds, and their articles appear beside the written ones, as the feeds deliver them.
 
-A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for seven tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, and summarising or translating the articles of the subscribed feeds you chose. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
+A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for eight tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, summarising or translating the articles of the subscribed feeds you chose, and proposing selectors for a web page feed when you ask for candidates. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
 
 ## Status
 
