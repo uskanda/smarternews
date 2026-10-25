@@ -999,3 +999,34 @@ describe("the migration to mentions", () => {
     expect(db.prepare("SELECT count(*) AS n FROM article_mentions").get()).toEqual({ n: 0 });
   });
 });
+
+describe("the migration to web feeds", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  function before019() {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "019")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    return { db, dir };
+  }
+
+  it("makes every subscribed feed a feed without selectors and keeps its articles", () => {
+    const { db, dir } = before019();
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k1', 'news', 't', 's', 'b', ?, ?, ?)`,
+    ).run(now, now, now);
+    const articles = db.prepare("SELECT * FROM articles").all();
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("019"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT format, page_selectors FROM feeds").all()).toEqual([{ format: "feed", page_selectors: null }]);
+    expect(db.prepare("SELECT * FROM articles").all()).toEqual(articles);
+    expect(() => db.prepare("UPDATE feeds SET format = 'html' WHERE id = 5").run()).toThrow();
+  });
+});

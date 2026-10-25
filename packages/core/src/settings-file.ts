@@ -44,6 +44,8 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     ...(feed.autoSummarize ? { autoSummarize: true } : {}),
     ...(feed.translate ? { translate: true } : {}),
     ...(feed.fetchFullContent ? { fetchFullContent: true } : {}),
+    // OPML cannot hold them: the settings file is where a web feed is carried to another server.
+    ...(feed.selectors !== null ? { selectors: feed.selectors } : {}),
   };
 }
 
@@ -154,6 +156,16 @@ function importSubscriptions(
   subscriptions.forEach((entry, index) => {
     try {
       const existing = findFeedByUrl(db, entry.url);
+      const format = entry.selectors === undefined ? "feed" : "page";
+      if (existing && existing.format !== format) {
+        // A file never changes what a subscription is.
+        throw new DomainError(
+          "invalid",
+          existing.format === "page"
+            ? `${entry.url} is a web feed on this server and needs its selectors`
+            : `${entry.url} is a feed on this server and takes no selectors: only a web feed has them`,
+        );
+      }
       if (existing) {
         listed.push(existing.id);
         updateFeed(
@@ -170,6 +182,7 @@ function importSubscriptions(
             ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
             // Likewise full content: only articles stored from now on have it fetched.
             ...(entry.fetchFullContent !== undefined ? { fetchFullContent: entry.fetchFullContent } : {}),
+            ...(entry.selectors !== undefined ? { selectors: entry.selectors } : {}),
           },
           clock,
         );
@@ -188,6 +201,8 @@ function importSubscriptions(
           autoSummarize: entry.autoSummarize,
           translate: entry.translate,
           fetchFullContent: entry.fetchFullContent,
+          format,
+          selectors: entry.selectors,
         },
         clock,
       );

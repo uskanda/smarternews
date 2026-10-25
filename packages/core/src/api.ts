@@ -1,5 +1,6 @@
 // Shapes shared by the server, the web app and the mobile app. This module must stay free of Node imports
 // so that browser and React Native bundles can load it.
+import { parse as parseCssSelector } from "css-what";
 import { z } from "zod";
 
 import { MAX_MENTION_NAME_CHARS, mentionKey, mentionSchema } from "./mentions.ts";
@@ -637,9 +638,50 @@ export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 const feedUrlSchema = z.url({ protocol: /^https?$/ }).max(2000);
 const feedTitleSchema = z.string().trim().min(1).max(200);
 
+/** The longest value one selector of a web feed holds. */
+export const MAX_SELECTOR_CHARS = 300;
+
+/** Whether a string reads as a CSS selector. Checked by its syntax, the same way on the server and in the apps. */
+export function isCssSelector(value: string): boolean {
+  try {
+    parseCssSelector(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const cssSelectorSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_SELECTOR_CHARS)
+  .refine((value) => isCssSelector(value), { message: "not a CSS selector" });
+
+/**
+ * How a web feed takes its articles out of its page: `item` finds the elements that repeat once an article;
+ * `title`, `link` and `date` find the parts of an article inside one of them. Without `title` the text of the
+ * link is the title; without `link` the first link of the item is the link.
+ */
+export const pageSelectorsSchema = z.object({
+  item: cssSelectorSchema,
+  title: cssSelectorSchema.optional(),
+  link: cssSelectorSchema.optional(),
+  date: cssSelectorSchema.optional(),
+});
+export type PageSelectors = z.infer<typeof pageSelectorsSchema>;
+
+/** A feed: RSS, Atom or RDF. A page: a web page without a feed, whose articles are taken out with selectors. */
+export const feedFormatSchema = z.enum(["feed", "page"]);
+export type FeedFormat = z.infer<typeof feedFormatSchema>;
+
 export const feedSchema = z.object({
   id: z.number().int(),
   url: z.string(),
+  /** Whether the subscription is a feed or a web page; it never changes. */
+  format: feedFormatSchema,
+  /** The selectors of a web feed. Null for a feed. */
+  selectors: pageSelectorsSchema.nullable(),
   title: z.string(),
   siteUrl: z.string().nullable(),
   categoryId: z.number().int().nullable(),
@@ -696,7 +738,7 @@ export const feedStatsSchema = z.object({
 });
 export type FeedStats = z.infer<typeof feedStatsSchema>;
 
-export const feedCreateSchema = z.object({
+const feedFields = z.object({
   url: feedUrlSchema,
   title: feedTitleSchema.optional(),
   categoryId: z.number().int().nullable().optional(),
@@ -706,9 +748,22 @@ export const feedCreateSchema = z.object({
   translate: z.boolean().optional(),
   fetchFullContent: z.boolean().optional(),
 });
+
+/** A subscription. Without `format` it is a feed; a web feed (`format: "page"`) comes with its selectors. */
+export const feedCreateSchema = feedFields
+  .extend({ format: feedFormatSchema.optional(), selectors: pageSelectorsSchema.optional() })
+  .superRefine((input, context) => {
+    if (input.format === "page" && input.selectors === undefined) {
+      context.addIssue({ code: "custom", path: ["selectors"], message: "a web feed needs selectors" });
+    }
+    if (input.format !== "page" && input.selectors !== undefined) {
+      context.addIssue({ code: "custom", path: ["selectors"], message: "only a web feed has selectors" });
+    }
+  });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
-export const feedUpdateSchema = feedCreateSchema.omit({ url: true });
+/** A change to a subscription. The format never changes; selectors are taken only by a web feed. */
+export const feedUpdateSchema = feedFields.omit({ url: true }).extend({ selectors: pageSelectorsSchema.optional() });
 export type FeedUpdate = z.infer<typeof feedUpdateSchema>;
 
 /** Where a category goes: before another one, or last. */
@@ -722,6 +777,39 @@ export type FeedMove = z.infer<typeof feedMoveSchema>;
 export const feedDiscoverSchema = z.object({ url: feedUrlSchema });
 export const feedDiscoveryResultSchema = z.object({ feeds: z.array(z.object({ url: z.string(), title: z.string() })) });
 export type FeedDiscoveryResult = z.infer<typeof feedDiscoveryResultSchema>;
+
+/** The articles of a page the preview shows at most. */
+export const SELECTOR_PREVIEW_ITEMS = 10;
+
+/** What a set of selectors takes out of a page: how many articles, and the first `SELECTOR_PREVIEW_ITEMS` of them. */
+export const selectorPreviewSchema = z.object({
+  count: z.number().int(),
+  items: z.array(z.object({ title: z.string(), url: z.string(), publishedAt: z.string().nullable() })),
+});
+export type SelectorPreview = z.infer<typeof selectorPreviewSchema>;
+
+export const pageCandidatesRequestSchema = z.object({ url: feedUrlSchema });
+export type PageCandidatesRequest = z.infer<typeof pageCandidatesRequestSchema>;
+
+export const pagePreviewRequestSchema = z.object({ url: feedUrlSchema, selectors: pageSelectorsSchema });
+export type PagePreviewRequest = z.infer<typeof pagePreviewRequestSchema>;
+
+/**
+ * Why the candidates are the server's own guess: the day reached a limit, the model failed or ran out of time,
+ * or none of its candidates took an article out of the page.
+ */
+export const selectorFallbackSchema = z.enum(["limit", "failed", "empty"]);
+export type SelectorFallback = z.infer<typeof selectorFallbackSchema>;
+
+/** Candidates for the selectors of a page, each with its preview. Every candidate takes at least one article out. */
+export const pageCandidatesSchema = z.object({
+  candidates: z.array(z.object({ selectors: pageSelectorsSchema, preview: selectorPreviewSchema })),
+  /** True when the candidates are the model's proposal. */
+  usedModel: z.boolean(),
+  /** Why the model's proposal was not used. Null when it was. */
+  fallback: selectorFallbackSchema.nullable(),
+});
+export type PageCandidates = z.infer<typeof pageCandidatesSchema>;
 
 /** What one fetch of a feed did, and the feed as it is afterwards. */
 export const feedFetchResultSchema = z.object({
@@ -927,7 +1015,7 @@ export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate"]);
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors"]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
 export const providerStatusSchema = z.object({
@@ -977,6 +1065,8 @@ const settingsFileSubscriptionSchema = z.object({
   translate: z.boolean().optional(),
   /** Left out, a new feed does not fetch full content and a known one keeps what it has. */
   fetchFullContent: z.boolean().optional(),
+  /** The selectors of a web feed. Written for a web feed only: a subscription without them is a feed. */
+  selectors: pageSelectorsSchema.optional(),
 });
 export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
 

@@ -28,6 +28,7 @@ export * from "./feeds/full-content.ts";
 export * from "./feeds/ingest.ts";
 export * from "./feeds/opml.ts";
 export * from "./feeds/poller.ts";
+export * from "./feeds/propose.ts";
 export * from "./feeds/summarize.ts";
 export * from "./fetch/http.ts";
 export * from "./llm/adapter.ts";

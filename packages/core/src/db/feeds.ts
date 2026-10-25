@@ -1,7 +1,8 @@
-import { FEED_STATS_DAYS, type Feed, type FeedMove, type FeedStats, type FeedUpdate } from "../api.ts";
+import { FEED_STATS_DAYS, pageSelectorsSchema, type Feed, type FeedFormat, type FeedMove, type FeedStats, type FeedUpdate, type PageSelectors } from "../api.ts";
 import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
+import { checkSelectorsUsable } from "../feeds/page.ts";
 import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
@@ -67,11 +68,21 @@ function feedContext(db: Database, now: Date): FeedContext {
   return { baseMinutes: settings.feedIntervalMinutes, staleDays: settings.staleFeedDays, now };
 }
 
+/** The selectors stored for a web feed, or null. A stored value that no longer reads as selectors is none. */
+function selectorsOf(row: Row): PageSelectors | null {
+  const stored = strOrNull(row.page_selectors);
+  if (stored === null) return null;
+  const parsed = pageSelectorsSchema.safeParse(JSON.parse(stored));
+  return parsed.success ? parsed.data : null;
+}
+
 function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
   const enabled = bool(row.enabled);
   return {
     id: num(row.id),
     url: str(row.url),
+    format: str(row.format) === "page" ? "page" : "feed",
+    selectors: selectorsOf(row),
     title: str(row.title),
     siteUrl: strOrNull(row.site_url),
     categoryId: numOrNull(row.category_id),
@@ -227,6 +238,9 @@ export function moveFeed(db: Database, id: number, to: FeedMove): Feed {
 export interface NewFeed {
   url: string;
   title: string;
+  /** A feed unless said otherwise. A web feed comes with its selectors. */
+  format?: FeedFormat;
+  selectors?: PageSelectors;
   /** True when the user chose the title; the feed's own title then never replaces it. */
   titleSetByUser?: boolean;
   siteUrl?: string | null;
@@ -248,13 +262,18 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   }
   checkFeedCategory(db, input.categoryId);
+  const format = input.format ?? "feed";
+  checkSelectorsFit(format, input.selectors);
+  if (format === "page" && input.selectors === undefined) {
+    throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors" }]);
+  }
   const now = clock().toISOString();
   const result = db
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
-          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -271,8 +290,20 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.translate ? 1 : 0,
       input.fetchFullContent ? 1 : 0,
       input.fetchFullContent ? now : null,
+      format,
+      input.selectors ? JSON.stringify(input.selectors) : null,
     );
   return getFeed(db, num(result.lastInsertRowid), clock());
+}
+
+/** Only a web feed has selectors: a feed refuses them, and a web feed refuses selectors the engine cannot use. */
+function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefined): void {
+  if (format === "feed" && selectors !== undefined) {
+    throw new DomainError("invalid", "this feed has no selectors: only a web feed takes them", [
+      { path: "selectors", message: "this feed has no selectors: only a web feed takes them" },
+    ]);
+  }
+  if (selectors !== undefined) checkSelectorsUsable(selectors);
 }
 
 /**
@@ -282,7 +313,10 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
 export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
+  checkSelectorsFit(current.format, patch.selectors);
   transaction(db, () => {
+    // Used from the next fetch on; the articles stored before stay as they are.
+    if (patch.selectors !== undefined) db.prepare("UPDATE feeds SET page_selectors = ? WHERE id = ?").run(JSON.stringify(patch.selectors), id);
     if (patch.title !== undefined) db.prepare("UPDATE feeds SET title = ?, title_set_by_user = 1 WHERE id = ?").run(patch.title, id);
     if (patch.intervalMinutes !== undefined) db.prepare("UPDATE feeds SET interval_minutes = ? WHERE id = ?").run(patch.intervalMinutes, id);
     if (patch.enabled !== undefined) db.prepare("UPDATE feeds SET enabled = ? WHERE id = ?").run(patch.enabled ? 1 : 0, id);

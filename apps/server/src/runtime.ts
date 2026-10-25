@@ -119,6 +119,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
       llmCallsPerRun: config.limits.llmCallsPerRun,
       llmCallsPerDay: config.limits.llmCallsPerDay,
       summariesPerDay: config.limits.summariesPerDay,
+      selectorProposalsPerDay: config.limits.selectorProposalsPerDay,
     },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,

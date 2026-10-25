@@ -15,7 +15,7 @@ export function fakeLlm(
   db: Database,
   clock: Clock,
   handlers: Partial<Record<TaskName, FakeHandler>>,
-  options: { webSearch?: boolean; limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number }; timeZone?: string } = {},
+  options: { webSearch?: boolean; limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number }; timeZone?: string; timeoutMs?: number } = {},
 ) {
   const requests = Object.fromEntries(TASK_NAMES.map((task) => [task, [] as LlmRequest[]])) as Record<TaskName, LlmRequest[]>;
   const providers = new Map<string, Provider>(
@@ -43,7 +43,7 @@ export function fakeLlm(
     providers,
     assignment: Object.fromEntries(TASK_NAMES.map((task) => [task, task])) as Record<TaskName, string>,
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
-    timeouts: { defaultMs: 2000, searchMs: 2000 },
+    timeouts: { defaultMs: options.timeoutMs ?? 2000, searchMs: options.timeoutMs ?? 2000 },
     timeZone: () => options.timeZone ?? "UTC",
   });
   return { runner, requests };

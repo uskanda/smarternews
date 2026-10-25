@@ -63,6 +63,10 @@ import {
   moveFeed,
   categoryMoveSchema,
   feedMoveSchema,
+  pageCandidatesRequestSchema,
+  pagePreviewRequestSchema,
+  previewSelectors,
+  proposeSelectors,
   markArticlesUnread,
   markReadBodySchema,
   markSeenArticlesRead,
@@ -360,7 +364,18 @@ export function createApp(deps: AppDeps): Hono {
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
-    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation }, input)), 201);
+    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, input)), 201);
+  });
+  // Candidates for the selectors of a page without a feed. The one place a web feed calls a model, and only when
+  // the day has room; otherwise the server's own guess. Waits for the model, up to its time limit. Stores nothing.
+  api.post("/feeds/page/candidates", async (c) => {
+    const { url } = parse(pageCandidatesRequestSchema, await jsonBody(c));
+    return c.json(await proposeSelectors({ db, runner, pages: poller.pageFetcher() }, url));
+  });
+  // What a set of selectors takes out of a page. No model is called and nothing is stored.
+  api.post("/feeds/page/preview", async (c) => {
+    const { url, selectors } = parse(pagePreviewRequestSchema, await jsonBody(c));
+    return c.json(await previewSelectors({ db, pages: poller.pageFetcher() }, url, selectors));
   });
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));

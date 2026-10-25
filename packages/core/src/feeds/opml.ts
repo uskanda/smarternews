@@ -114,9 +114,10 @@ function xmlAttribute(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-/** Every subscribed feed as OPML 2.0, with the categories that hold feeds as folders. */
+/** Every subscribed feed but the web feeds as OPML 2.0, with the categories that hold feeds as folders. */
 export function exportOpml(db: Database): string {
-  const feeds = listFeeds(db);
+  // A web feed is left out: OPML has no way to say its selectors. The settings file has.
+  const feeds = listFeeds(db).filter((feed) => feed.format === "feed");
   const line = (feed: (typeof feeds)[number], indent: string) =>
     `${indent}<outline type="rss" text="${xmlAttribute(feed.title)}" title="${xmlAttribute(feed.title)}" xmlUrl="${xmlAttribute(feed.url)}"` +
     `${feed.siteUrl ? ` htmlUrl="${xmlAttribute(feed.siteUrl)}"` : ""}/>`;

@@ -39,6 +39,7 @@ const tasksSchema = z.strictObject({
   write: z.string().optional(),
   summarize: z.string().optional(),
   translate: z.string().optional(),
+  proposeSelectors: z.string().optional(),
 });
 
 const configSchema = z.strictObject({
@@ -51,9 +52,12 @@ const configSchema = z.strictObject({
   limits: z
     .strictObject({
       llmCallsPerRun: z.number().int().min(1).default(40),
-      llmCallsPerDay: z.number().int().min(1).default(300),
+      /** Every call but the summaries: the calls of runs and the proposals of selectors. */
+      llmCallsPerDay: z.number().int().min(1).default(350),
       /** Summaries of feed articles, counted apart from the calls of runs. */
       summariesPerDay: z.number().int().min(1).default(100),
+      /** Proposals of selectors for web feeds, counted in `llmCallsPerDay` as well. 0 leaves them to the program. */
+      selectorProposalsPerDay: z.number().int().min(0).default(50),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */
@@ -158,6 +162,17 @@ export function translationApiKey(config: Config, env: Record<string, string | u
 const CHEAP_PROVIDER = "fast";
 const CHEAP_TASKS: readonly TaskName[] = ["summarize", "translate"];
 
+/** A proposal of selectors reads a long page once, and is asked for seldom: it goes to this provider when there is one. */
+const CAPABLE_PROVIDER = "smart";
+const CAPABLE_TASKS: readonly TaskName[] = ["proposeSelectors"];
+
+/** The provider of a task without an assignment. */
+function fallbackFor(task: TaskName, config: Config): string {
+  if (CHEAP_TASKS.includes(task) && CHEAP_PROVIDER in config.providers) return CHEAP_PROVIDER;
+  if (CAPABLE_TASKS.includes(task) && CAPABLE_PROVIDER in config.providers) return CAPABLE_PROVIDER;
+  return config.tasks.default;
+}
+
 /** Which provider runs each task. Throws when an assignment names a provider that is not configured. */
 export function resolveAssignment(config: Config): Record<TaskName, string> {
   const assignment = {} as Record<TaskName, string>;
@@ -166,8 +181,7 @@ export function resolveAssignment(config: Config): Record<TaskName, string> {
     problems.push(`tasks.default names the provider "${config.tasks.default}", which is not configured`);
   }
   for (const task of TASK_NAMES) {
-    const fallback = CHEAP_TASKS.includes(task) && CHEAP_PROVIDER in config.providers ? CHEAP_PROVIDER : config.tasks.default;
-    const name = config.tasks[task] ?? fallback;
+    const name = config.tasks[task] ?? fallbackFor(task, config);
     if (config.tasks[task] !== undefined && !(name in config.providers)) {
       problems.push(`the task "${task}" is assigned to the provider "${name}", which is not configured`);
     }

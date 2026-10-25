@@ -12,8 +12,8 @@ module.exports = {
   globalSetup: "<rootDir>/src/testing/global-setup.js",
   globalTeardown: "<rootDir>/src/testing/global-teardown.js",
   setupFilesAfterEnv: ["<rootDir>/src/testing/setup.tsx"],
-  // jest-expo's own list of packages that go through Babel, plus `marked`, which ships ES modules only.
+  // jest-expo's own list of packages that go through Babel, plus `marked` and `css-what`, which ship ES modules only.
   transformIgnorePatterns: [
-    ...require("jest-expo/jest-preset").transformIgnorePatterns.map((pattern, index) => (index === 0 ? pattern.replace("(?!(", "(?!(marked|") : pattern)),
+    ...require("jest-expo/jest-preset").transformIgnorePatterns.map((pattern, index) => (index === 0 ? pattern.replace("(?!(", "(?!(marked|css-what|") : pattern)),
   ],
 };

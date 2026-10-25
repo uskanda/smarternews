@@ -22,13 +22,15 @@ providers:
   #   apiKeyEnv: LOCAL_LLM_API_KEY     # name of an environment variable; the key never goes in this file
   #   structuredOutput: json_schema    # or "prompt" for servers without response_format support
 
-# Which provider runs each task. A task that is not listed uses `default`; `summarize` and `translate` use `fast` when they are not listed.
+# Which provider runs each task. A task that is not listed uses `default`; `summarize` and `translate` use `fast`,
+# and `proposeSelectors` uses `smart`, when they are not listed.
 tasks:
   default: smart
   judge: fast
   cluster: fast
   summarize: fast         # summaries of the subscribed feeds that have them switched on
   translate: fast         # translation of feed articles when the translation API cannot be used
+  proposeSelectors: smart # selectors for a web feed, when you ask for candidates
 
 # Translation of the subscribed feeds that have it switched on. Without `google`, the model translates.
 translation:
@@ -39,8 +41,9 @@ translation:
 
 limits:
   llmCallsPerRun: 40      # a run stops, and is recorded as stopped_by_limit, when it reaches this
-  llmCallsPerDay: 300     # calls of runs, counted from midnight in the configured time zone
+  llmCallsPerDay: 350     # calls of runs and proposals of selectors, counted from midnight in the configured time zone
   summariesPerDay: 100    # summaries of feed articles, counted apart from the calls of runs
+  selectorProposalsPerDay: 50   # proposals of selectors for web feeds; they count towards llmCallsPerDay too
   judgeBatchSize: 30      # candidates judged per model call
   pagesPerRun: 20         # article pages fetched per run
   runRetries: 2           # retries of a scheduled run that failed, 0 to 3; 0 switches them off

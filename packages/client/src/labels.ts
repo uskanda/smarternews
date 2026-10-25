@@ -55,6 +55,9 @@ export function feedErrorLabel(error: string): string {
   if (status) return `サイトがエラーを返しました（HTTP ${status}）`;
   if (/timed out/.test(error)) return "時間内に応答がありませんでした";
   if (/not a feed/.test(error)) return "フィードとして読めない内容が返りました";
+  if (/no element matches the item selector/.test(error)) return "ページに記事が見つかりませんでした。ページの作りが変わった可能性があります";
+  if (/robots\.txt forbids/.test(error)) return "サイトのrobots.txtが取得を禁じています";
+  if (/not a web page/.test(error)) return "Webページとして読めない内容が返りました";
   if (/destination not allowed/.test(error)) return "取得先の制限に当たるため、取得していません";
   if (/larger than/.test(error)) return "応答が大きすぎました";
   if (/redirect/.test(error)) return "転送が繰り返されました";

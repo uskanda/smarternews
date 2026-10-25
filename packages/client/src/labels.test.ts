@@ -21,6 +21,12 @@ describe("feedErrorLabel", () => {
     expect(feedErrorLabel("request failed: https://example.org/: getaddrinfo ENOTFOUND")).toBe("サイトに接続できませんでした");
   });
 
+  it("says why the page of a web feed gave no articles", () => {
+    expect(feedErrorLabel("no element matches the item selector")).toBe("ページに記事が見つかりませんでした。ページの作りが変わった可能性があります");
+    expect(feedErrorLabel("robots.txt forbids")).toBe("サイトのrobots.txtが取得を禁じています");
+    expect(feedErrorLabel("the answer is not a web page: application/pdf")).toBe("Webページとして読めない内容が返りました");
+  });
+
   it("shows a reason it does not know as it is", () => {
     expect(feedErrorLabel("something new")).toBe("something new");
   });

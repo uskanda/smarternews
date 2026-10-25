@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getArticle, insertArticle, listArticles, saveFullContent, searchArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { replaceMentions } from "../db/mentions.ts";
-import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
+import { getFeed, insertFeed, listFeeds, updateFeed } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
 import { createFilter } from "../db/filters.ts";
 import { Fetcher } from "../fetch/http.ts";
@@ -828,5 +828,148 @@ describe("when a feed last listed a new item", () => {
     s.serve(() => new Response(null, { status: 304 }));
     expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "not_modified" });
     expect(lastNew(s, feed.id)).toBe(START);
+  });
+});
+
+describe("a web feed", () => {
+  const PAGE = "https://news.example.org/list/";
+  const ROBOTS = "https://news.example.org/robots.txt";
+  const SELECTORS = { item: "li.post", date: "time" };
+
+  const post = (n: number, date?: string) =>
+    `<li class="post"><a href="/posts/${n}">Post ${n}</a>${date ? `<time datetime="${date}">${date}</time>` : ""}<p>Excerpt ${n}</p></li>`;
+  const page = (posts: string[], title = "Example News") =>
+    `<!doctype html><html><head><title>${title}</title></head><body><nav><a href="/">Home</a></nav><ul>${posts.join("")}</ul></body></html>`;
+
+  function pageSetup(initial: string) {
+    const db = createTestDb();
+    const clock = fakeClock(START);
+    let body = initial;
+    let robots: string | null = null;
+    const fake = fakeFetch(
+      {
+        [ROBOTS]: () => (robots === null ? new Response("", { status: 404 }) : new Response(robots, { status: 200 })),
+        [PAGE]: () => html(body),
+      },
+      clock,
+    );
+    const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+    const llm = fakeLlm(db, clock, {});
+    return {
+      db,
+      clock,
+      deps: { db, clock, fetcher },
+      requests: fake.requests,
+      pageRequests: () => fake.requests.filter((request) => request.url === PAGE),
+      llmCalls: () => Object.values(llm.requests).flat().length + Number(db.prepare("SELECT count(*) AS n FROM llm_calls").get()!.n),
+      serve(next: string) {
+        body = next;
+      },
+      forbid(rules: string) {
+        robots = rules;
+      },
+      list: () => listArticles(db, {}, clock().toISOString()).items,
+    };
+  }
+
+  it("stores the page under its title, with every article it lists as an unread article", async () => {
+    const s = pageSetup(page(Array.from({ length: 10 }, (_unused, n) => post(n + 1, "2026-02-28T09:00:00Z"))));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+
+    expect(feed).toMatchObject({ title: "Example News", format: "page", selectors: SELECTORS, siteUrl: PAGE, lastError: null });
+    const articles = s.list();
+    expect(articles).toHaveLength(10);
+    expect(articles.every((article) => !article.isRead && article.feedId === feed.id)).toBe(true);
+    expect(articles[0]).toMatchObject({ title: "Post 1", summary: "", primaryUrl: "https://news.example.org/posts/1" });
+    expect(getArticle(s.db, articles[0]!.id).body).toBe("");
+    expect(s.llmCalls()).toBe(0);
+  });
+
+  it("refuses a page none of whose elements the item selector matches, and stores nothing", async () => {
+    const s = pageSetup(page([post(1)]));
+    await expect(subscribe(s.deps, { url: PAGE, format: "page", selectors: { item: "article.entry" } })).rejects.toThrow(/no article could be taken out/);
+    expect(listFeeds(s.db)).toEqual([]);
+  });
+
+  it("refuses a page robots.txt forbids without asking for the page", async () => {
+    const s = pageSetup(page([post(1)]));
+    s.forbid("User-agent: *\nDisallow: /list/");
+    await expect(subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS })).rejects.toThrow(/robots\.txt forbids/);
+    expect(s.pageRequests()).toEqual([]);
+    expect(listFeeds(s.db)).toEqual([]);
+  });
+
+  it("records robots.txt as the reason when it forbids the page after the subscription", async () => {
+    const s = pageSetup(page([post(1)]));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    s.forbid("User-agent: *\nDisallow: /");
+    s.clock.advance(HOUR);
+
+    const outcome = await fetchFeed(s.deps, feed.id);
+    expect(outcome).toMatchObject({ status: "failed", error: "robots.txt forbids" });
+    expect(s.pageRequests()).toHaveLength(1);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: "robots.txt forbids", failureCount: 1 });
+  });
+
+  it("sorts an article without a date by the fetch that found it", async () => {
+    const s = pageSetup(page([post(1, "2026-02-28T09:00:00Z")]));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    s.clock.advance(HOUR);
+    s.serve(page([post(2), post(1, "2026-02-28T09:00:00Z")]));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 1 });
+    const newest = s.list()[0]!;
+    expect(newest).toMatchObject({ title: "Post 2", firstPublishedAt: s.clock().toISOString() });
+  });
+
+  it("records a fetch whose page has no item element as a failure, and keeps the times of the last success and the last new item", async () => {
+    const s = pageSetup(page([post(1)]));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    const before = getFeed(s.db, feed.id);
+    s.clock.advance(HOUR);
+    s.serve(page([], "Redesigned").replace("<ul></ul>", '<div class="cards"><a href="/posts/9">Post 9</a></div>'));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed", created: 0, error: "no element matches the item selector" });
+    const after = getFeed(s.db, feed.id);
+    expect(after).toMatchObject({
+      lastError: "no element matches the item selector",
+      lastFetchedAt: s.clock().toISOString(),
+      lastSucceededAt: before.lastSucceededAt,
+      lastNewItemAt: before.lastNewItemAt,
+      title: "Example News",
+    });
+    expect(s.list()).toHaveLength(1);
+
+    // New selectors that find the articles again: the reason goes, and the fetch is a success.
+    updateFeed(s.db, feed.id, { selectors: { item: "div.cards a" } });
+    s.clock.advance(HOUR);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 1 });
+    expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: null, failureCount: 0, lastSucceededAt: s.clock().toISOString() });
+    expect(s.list().map((article) => article.title)).toEqual(["Post 9", "Post 1"]);
+  });
+
+  it("sends no conditional request", async () => {
+    const s = pageSetup(page([post(1)]));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    s.clock.advance(HOUR);
+    await fetchFeed(s.deps, feed.id);
+    for (const request of s.pageRequests()) {
+      expect(request.headers["if-none-match"]).toBeUndefined();
+      expect(request.headers["if-modified-since"]).toBeUndefined();
+    }
+    expect(s.pageRequests()).toHaveLength(2);
+  });
+
+  it("calls no model to subscribe, to fetch, or to store, for three web feeds", async () => {
+    const s = pageSetup(page([post(1), post(2)]));
+    const feeds = [];
+    for (const query of ["", "?a", "?b"]) {
+      feeds.push(await subscribe(s.deps, { url: `${PAGE}${query}`, format: "page", selectors: SELECTORS }));
+    }
+    s.clock.advance(HOUR);
+    s.serve(page([post(3), post(1), post(2)]));
+    for (const feed of feeds) await fetchFeed(s.deps, feed.id);
+    expect(s.list().length).toBeGreaterThan(0);
+    expect(s.llmCalls()).toBe(0);
   });
 });

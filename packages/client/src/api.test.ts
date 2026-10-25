@@ -3,13 +3,13 @@ import { API_TOKEN, testServer } from "@smarternews/server/testing";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, createApi } from "./api.ts";
 
-function setup(token: string | null = API_TOKEN) {
-  const server = testServer();
+function setup(token: string | null = API_TOKEN, options: Parameters<typeof testServer>[1] = {}) {
+  const server = testServer(undefined, options);
   const onUnauthorized = vi.fn();
-  const seen: Array<{ url: string; authorization: string | null }> = [];
+  const seen: Array<{ url: string; authorization: string | null; body: unknown }> = [];
   const api = createApi({
     fetchImpl: (input, init) => {
-      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), body: init?.body });
       return server.app.request(String(input), init);
     },
     getToken: () => token,
@@ -205,6 +205,31 @@ describe("the API client", () => {
 
     expect(await api.feedStats(feed.id)).toMatchObject({ received: 1, opened: 0, starred: 0, hiddenByFilters: 0, hiddenAsDuplicates: 0 });
     expect(seen.at(-1)!.url).toBe(`/api/v1/feeds/${feed.id}/stats`);
+  });
+
+  it("asks for candidates and a preview of a page, and subscribes to it and changes its selectors, on the paths of web feeds", async () => {
+    const proposal = { candidates: [{ item: "li.post", title: null, link: null, date: "time" }] };
+    const { api, server, seen } = setup(API_TOKEN, { proposeSelectors: () => proposal });
+    const page = "https://town.example.org/news";
+    server.site.set(page, () =>
+      new Response('<html><head><title>Town</title></head><body><ul><li class="post"><a href="/1">One story</a><time datetime="2026-03-01T09:00:00Z">x</time></li></ul></body></html>', {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const sent = () => ({ url: seen.at(-1)!.url, body: JSON.parse(String(seen.at(-1)!.body)) });
+
+    const candidates = await api.pageCandidates(page);
+    expect(sent()).toEqual({ url: "/api/v1/feeds/page/candidates", body: { url: page } });
+    expect(candidates).toMatchObject({ usedModel: true, fallback: null, candidates: [{ selectors: { item: "li.post", date: "time" }, preview: { count: 1 } }] });
+
+    const preview = await api.pagePreview(page, { item: "li.post" });
+    expect(sent()).toEqual({ url: "/api/v1/feeds/page/preview", body: { url: page, selectors: { item: "li.post" } } });
+    expect(preview).toEqual({ count: 1, items: [{ title: "One story", url: "https://town.example.org/1", publishedAt: null }] });
+
+    const feed = await api.createFeed({ url: page, format: "page", selectors: { item: "li.post" }, fetchFullContent: true });
+    expect(sent().body).toEqual({ url: page, format: "page", selectors: { item: "li.post" }, fetchFullContent: true });
+    expect(feed).toMatchObject({ format: "page", selectors: { item: "li.post" } });
+    expect((await api.updateFeed(feed.id, { selectors: { item: "li.post", date: "time" } })).selectors).toEqual({ item: "li.post", date: "time" });
   });
 
   it("downloads the subscribed feeds as OPML and uploads the document back", async () => {

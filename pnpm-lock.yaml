@@ -443,6 +443,9 @@ importers:
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
+      css-what:
+        specifier: ^8.0.0
+        version: 8.0.0
       fast-xml-parser:
         specifier: ^5.11.2
         version: 5.11.2

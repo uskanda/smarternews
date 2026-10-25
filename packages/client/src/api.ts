@@ -23,6 +23,8 @@ import {
   feedFetchResultSchema,
   feedSchema,
   feedStatsSchema,
+  pageCandidatesSchema,
+  selectorPreviewSchema,
   importResultSchema,
   listViewSchema,
   listViewsSchema,
@@ -69,6 +71,9 @@ import {
   type MarkReadResult,
   type SeenArticle,
   type OpmlImportResult,
+  type PageCandidates,
+  type PageSelectors,
+  type SelectorPreview,
   type ProviderStatus,
   type Run,
   type Settings,
@@ -277,6 +282,11 @@ export function createApi(options: ApiOptions) {
     /** Subscribes to a feed. The server fetches the URL first, so this takes as long as that site does. */
     createFeed: (input: FeedCreate): Promise<Feed> => json(feedSchema, "/feeds", body("POST", input)),
     discoverFeeds: (url: string): Promise<FeedDiscoveryResult> => json(feedDiscoveryResultSchema, "/feeds/discover", body("POST", { url })),
+    /** Candidates for the selectors of a page without a feed. Waits for the model, which can take minutes. */
+    pageCandidates: (url: string): Promise<PageCandidates> => json(pageCandidatesSchema, "/feeds/page/candidates", body("POST", { url })),
+    /** What a set of selectors takes out of a page. */
+    pagePreview: (url: string, selectors: PageSelectors): Promise<SelectorPreview> =>
+      json(selectorPreviewSchema, "/feeds/page/preview", body("POST", { url, selectors })),
     updateFeed: (id: number, patch: FeedUpdate): Promise<Feed> => json(feedSchema, `/feeds/${id}`, body("PATCH", patch)),
     /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
     moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),

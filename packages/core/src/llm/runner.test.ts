@@ -38,7 +38,7 @@ function provider(name: string, adapter: LlmAdapter): Provider {
 function setup(options: {
   providers: Provider[];
   assignment?: Partial<Record<TaskName, string>>;
-  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number };
+  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number };
   timeoutMs?: number;
   timeZone?: string;
 }) {
@@ -57,6 +57,7 @@ function setup(options: {
       write: first,
       summarize: first,
       translate: first,
+      proposeSelectors: first,
       ...options.assignment,
     },
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
@@ -314,5 +315,64 @@ describe("mentions in the outputs of the write and summarize tasks", () => {
 
     await expect(runner.run("summarize", summarizeInput, fresh())).rejects.toBeInstanceOf(TaskFailedError);
     expect(calls().map((call) => call.ok)).toEqual([0, 0]);
+  });
+});
+
+describe("the allowance of selector proposals", () => {
+  const proposeInput = { url: "https://example.org/news", html: "<ul><li><a href='/1'>One</a></li></ul>" };
+  const proposal = { candidates: [{ item: "li", title: null, link: null, date: null }] };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("stops proposing once the day has used its allowance of proposals, and starts again the next day", async () => {
+    const { adapter, requests } = scripted([proposal, proposal, proposal]);
+    const { runner, clock } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, selectorProposalsPerDay: 2 } });
+
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    expect(runner.canProposeSelectors()).toBe(false);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(2);
+
+    clock.advance(24 * 60 * 60_000);
+    expect(runner.canProposeSelectors()).toBe(true);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).resolves.toBeDefined();
+  });
+
+  it("counts a proposal towards the calls of the day, and not towards the summaries", async () => {
+    const { adapter } = scripted([proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+    expect(runner.limits).toMatchObject({ selectorProposalsPerDay: 50 });
+
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    expect(runner.callsToday()).toBe(1);
+    expect(runner.summariesToday()).toBe(0);
+    expect(runner.selectorProposalsToday()).toBe(1);
+  });
+
+  it("does not propose once the calls of the day reach their allowance", async () => {
+    const { adapter, requests } = scripted([validInterpretation, proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    expect(runner.canProposeSelectors()).toBe(false);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("counts the second attempt after an invalid output as a call of its own", async () => {
+    const { adapter } = scripted([{ candidates: [{ item: "div[", title: null, link: null, date: null }] }, proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    expect(runner.selectorProposalsToday()).toBe(2);
+    expect(runner.callsToday()).toBe(2);
+  });
+
+  it("is used up by none when its allowance is 0", async () => {
+    const { adapter, requests } = scripted([proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, selectorProposalsPerDay: 0 } });
+    expect(runner.canProposeSelectors()).toBe(false);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(0);
   });
 });
