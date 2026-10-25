@@ -17,6 +17,8 @@ export interface RenderOptions {
   url?: string;
   /** Makes every request fail as if the server could not be reached, while it returns true. */
   offline?: () => boolean;
+  /** Makes the requests it returns true for, given as "POST /api/v1/...", answer with a server error. */
+  failing?: (request: string) => boolean;
 }
 
 /** Puts the device into the state the app starts from, without drawing anything: the periodic check needs no more. */
@@ -25,8 +27,12 @@ export async function prepareDevice(options: Omit<RenderOptions, "url"> = {}) {
   /** Every request the app made, with the server's own address cut off. A request elsewhere keeps its address. */
   const requests: string[] = [];
   const fetchImpl: Fetch = (input, init) => {
-    requests.push(`${init?.method ?? "GET"} ${input.replace(server.url, "")}`);
+    const request = `${init?.method ?? "GET"} ${input.replace(server.url, "")}`;
+    requests.push(request);
     if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
+    if (options.failing?.(request)) {
+      return Promise.resolve(new Response(JSON.stringify({ error: { code: "internal", message: "boom" } }), { status: 500, headers: { "content-type": "application/json" } }));
+    }
     return nodeFetch(input, init);
   };
   setEnvironment({ fetchImpl, now: server.now });

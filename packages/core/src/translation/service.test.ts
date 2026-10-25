@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { getArticle, listArticles } from "../db/articles.ts";
+import { getArticle, listArticles, saveFullContent } from "../db/articles.ts";
 import { updateFeed } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
-import { createStopWord } from "../db/stop-words.ts";
+import { createFilter } from "../db/filters.ts";
 import { translationCharsOf } from "../db/translations.ts";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import { fakeLlm, type FakeHandler } from "../testing/llm.ts";
@@ -259,16 +259,64 @@ describe("translating an article that is opened", () => {
   });
 });
 
-describe("stop words and translations", () => {
+describe("translating an article with full content", () => {
+  it("translates the full content in place of what the feed delivered", async () => {
+    const s = setup();
+    const id = seedFeedArticle(s.db, s.feedId, { title: "A title", body: "Only an excerpt." });
+    saveFullContent(s.db, id, { markdown: "Full one.\n\nFull two.", text: "Full one. Full two.", now: START });
+
+    const translation = await s.service.translateArticle(id);
+
+    expect(translation.segments.map((segment) => [segment.original, segment.translated])).toEqual([
+      ["Full one.", "訳:Full one."],
+      ["Full two.", "訳:Full two."],
+    ]);
+    expect(JSON.stringify(s.google.calls)).not.toContain("excerpt");
+  });
+
+  it("sends at most the first 20,000 characters of a long full content", async () => {
+    const s = setup();
+    const id = seedFeedArticle(s.db, s.feedId, { title: "T", body: "Only an excerpt." });
+    const paragraph = "word ".repeat(199) + "end.";
+    const markdown = Array.from({ length: 30 }, () => paragraph).join("\n\n");
+    saveFullContent(s.db, id, { markdown, text: markdown, now: START });
+
+    const translation = await s.service.translateArticle(id);
+
+    expect(translation.truncated).toBe(true);
+    const sentBody = s.google.calls.flatMap((call) => call.items).filter((item) => !("plain" in item && item.plain));
+    expect(sentBody.reduce((sum, item) => sum + item.text.length, 0)).toBeLessThanOrEqual(20_000);
+    expect(translation.segments).toHaveLength(30);
+  });
+
+  it("stores no translation when the full content is stored while the delivered content is being translated", async () => {
+    const s = setup();
+    const id = seedFeedArticle(s.db, s.feedId, { title: "A title", body: "Only an excerpt." });
+    const translate = s.google.translate.bind(s.google);
+    s.google.translate = async (items, target) => {
+      saveFullContent(s.db, id, { markdown: "Full one.", text: "Full one.", now: START });
+      return translate(items, target);
+    };
+
+    await expect(s.service.translateArticle(id)).rejects.toMatchObject({ code: "unavailable" });
+    expect(getArticle(s.db, id).translation).toBeNull();
+
+    s.google.translate = translate;
+    expect((await s.service.translateArticle(id)).segments.map((segment) => segment.original)).toEqual(["Full one."]);
+  });
+});
+
+describe("filters and translations", () => {
   it("are matched against the original only: a word that only the translation holds hides nothing", async () => {
     const s = setup();
     const id = seedFeedArticle(s.db, s.feedId, { title: "Plain title", body: "Plain content." });
     await s.service.translateArticle(id);
     expect(getArticle(s.db, id).translatedTitle).toBe("訳:Plain title");
 
-    const word = createStopWord(s.db, { text: "訳", scope: "title_and_content" }, s.clock);
-    expect(word.hiddenCount).toBe(0);
+    const hide = (value: string) =>
+      createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title", "content"], match: "contains", value }] }, s.clock);
+    expect(hide("訳").hiddenCount).toBe(0);
     expect(listArticles(s.db, {}, START).items.map((article) => article.id)).toEqual([id]);
-    expect(createStopWord(s.db, { text: "plain" }, s.clock).hiddenCount).toBe(1);
+    expect(hide("plain").hiddenCount).toBe(1);
   });
 });

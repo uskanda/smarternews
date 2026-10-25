@@ -1,4 +1,4 @@
-import { insertFeed, listCategories, listFeeds } from "@smarternews/core";
+import { addHighlight, insertFeed, listCategories, listFeeds } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -167,13 +167,14 @@ describe("the menu of an entry", () => {
 describe("unsubscribing from the menu", () => {
   it("asks first, and removes the feed on yes", async () => {
     const { server, y } = seeded();
-    seedFeedArticle(server.db, y.id, { starred: true });
+    const starred = seedFeedArticle(server.db, y.id, { starred: true });
+    addHighlight(server.db, starred, { quote: "Content", prefix: "", suffix: "", position: 0, note: null }, server.clock().toISOString());
     const { user } = await ready({ server, route: "/all" });
 
     fireEvent.contextMenu(link("Y"));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
     const dialog = await screen.findByRole("alertdialog", { name: "購読フィードを削除しますか" });
-    expect(dialog).toHaveTextContent("「Y」と、その配信記事1件が消えます。うち1件にはスターが付いています。元に戻せません。");
+    expect(dialog).toHaveTextContent("「Y」と、その配信記事1件が消えます。うち1件にはスターが付いています。注釈のある1件も、注釈とともに消えます。元に戻せません。");
     await user.click(within(dialog).getByRole("button", { name: "削除する" }));
 
     await waitFor(() => expect(groupLines().slice(0, 4)).toEqual(["A", "  AI生成", "  X", "  Z"]));
@@ -320,6 +321,36 @@ describe("dragging an entry", () => {
     expect(nav().querySelector("[data-drop-over]")).toBeNull();
     expect(document.querySelector("[data-drag-ghost]")).toHaveTextContent("C");
     await release(mid("A") - 5);
+  });
+
+  it("starts no drag from 最近読んだ記事 or 注釈, and moves nothing above the categories in front of it", async () => {
+    const { server } = seeded();
+    const { path } = await ready({ server, route: "/all" });
+    layOut();
+    const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/\d+$/, ""));
+    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"];
+
+    const recent = within(nav()).getByRole("link", { name: "最近読んだ記事" });
+    fireEvent.pointerDown(recent, mouse(40));
+    await dragTo(mid("B"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    expect(nav().querySelector("[data-drop-line]")).not.toBeInTheDocument();
+    await release(mid("B"));
+    expect(views()).toEqual(ORDER);
+
+    const annotations = within(nav()).getByRole("link", { name: "注釈" });
+    fireEvent.pointerDown(annotations, mouse(40));
+    await dragTo(mid("B"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    await release(mid("B"));
+    expect(views()).toEqual(ORDER);
+
+    press("C");
+    await dragTo(mid("A") - 15);
+    await release(mid("A") - 15);
+    await waitFor(() => expect(listCategories(server.db).map((category) => category.name)).toEqual(["C", "A", "B", "Events"]));
+    expect(views()).toEqual(ORDER);
+    expect(path()).toBe("/all");
   });
 
   it("gives up on Escape", async () => {

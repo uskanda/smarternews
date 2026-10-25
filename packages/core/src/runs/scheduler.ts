@@ -39,11 +39,22 @@ export class Scheduler {
   #lastCheck: Date | null = null;
   #lastPurge = 0;
   #timer: NodeJS.Timeout | undefined;
+  readonly #purgeImages: () => void;
+  readonly #log: (message: string, error: unknown) => void;
 
-  constructor(options: { db: Database; clock: Clock; queue: RunQueue }) {
+  /** `purgeImages` deletes the relayed images past their period; it runs with the purge of the database. */
+  constructor(options: {
+    db: Database;
+    clock: Clock;
+    queue: RunQueue;
+    purgeImages?: () => void;
+    log?: (message: string, error: unknown) => void;
+  }) {
     this.#db = options.db;
     this.#clock = options.clock;
     this.#queue = options.queue;
+    this.#purgeImages = options.purgeImages ?? (() => {});
+    this.#log = options.log ?? ((message, error) => console.error(message, error));
   }
 
   /** Sets where checking starts. With `catchUp`, times missed in the last six hours count as still due. */
@@ -72,6 +83,12 @@ export class Scheduler {
     this.#queueDueRetries(now);
     if (now.getTime() - this.#lastPurge >= PURGE_INTERVAL_MS) {
       this.#lastPurge = now.getTime();
+      try {
+        this.#purgeImages();
+      } catch (error) {
+        // The images are tried again in an hour; the database is purged all the same.
+        this.#log("scheduler: purging relayed images failed:", error);
+      }
       purgeExpired(this.#db, this.#clock);
     }
   }

@@ -13,13 +13,16 @@ import { useBack } from "../lib/back";
 import { useNotify } from "../notifications/NotificationsBridge";
 import { stopNotifications } from "../notifications/setup";
 import { clearNotifyState } from "../notifications/store";
+import { chooseScrollRead, useScrollRead } from "./scroll-read";
 import { chooseTheme, useThemeChoice } from "../theme/store";
 import { useTheme } from "../theme/theme";
-import { Button, ErrorNotice, IconButton, Loading, Notice } from "../ui/controls";
+import { Button, ErrorNotice, IconButton, Loading, Notice, Toggle } from "../ui/controls";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { Section } from "../ui/Section";
 import { Sheet } from "../ui/Sheet";
 import { Txt } from "../ui/Txt";
+
+const SCROLL_READ_HINT = "記事の一覧を送ったとき、一覧の上端を越えた記事を既読にします。";
 
 const active = (run: Run | undefined) => run?.status === "queued" || run?.status === "running";
 
@@ -196,6 +199,7 @@ export function SettingsScreen() {
   const runs = useRuns();
   const { refused } = useNotify();
   const choice = useThemeChoice();
+  const scrollRead = useScrollRead();
   const [confirming, setConfirming] = useState(false);
 
   // The newest run of each category: the list comes newest first.
@@ -240,10 +244,17 @@ export function SettingsScreen() {
           {refused ? <Notice tone="warning">通知を出すには、端末の許可が必要です。端末の設定でこのアプリの通知を許可してから、もう一度選んでください。</Notice> : null}
         </Section>
 
-        <Section title="配色">
+        <Section title="この端末の設定">
+          <Txt variant="body-md" color="on-surface-muted">
+            この区画の設定は、この端末だけに保存し、サーバーには送りません。
+          </Txt>
           <Choice label="配色" options={THEME_CHOICES} labels={THEME_LABEL} value={choice} onChoose={(next) => void chooseTheme(next)} />
           <Txt variant="label-sm" color="on-surface-muted">
-            「端末に従う」は、端末が暗い配色のとき「ダークブルー」で表示します。選んだ配色は、この端末だけに保存します。
+            「端末に従う」は、端末が暗い配色のとき「ダークブルー」で表示します。
+          </Txt>
+          <Toggle label="スクロールした記事を既読にする" hint={SCROLL_READ_HINT} value={scrollRead} onChange={(next) => void chooseScrollRead(next)} />
+          <Txt variant="label-sm" color="on-surface-muted">
+            {SCROLL_READ_HINT}最近読んだ記事、検索の結果、イベントの一覧は対象にしません。
           </Txt>
         </Section>
 

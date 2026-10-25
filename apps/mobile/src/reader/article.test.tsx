@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, screen, userEvent, waitFor, within } from "@testing-library/react-native";
 import * as WebBrowser from "expo-web-browser";
 import { renderApp } from "../testing/app";
 import { eventually, MINUTE, rowTitles } from "../testing/queries";
@@ -88,7 +88,7 @@ describe("reading an article", () => {
     const server = await makeServer();
     const category = await server.category();
     const first = await server.article(category.id, { title: "First report" });
-    await server.core("setArticleFlags", first, { isRead: true });
+    await server.core("setArticleFlags", first, { isRead: true }, "$now");
     await server.advance(7 * 24 * 60 * MINUTE);
     const later = await server.article(category.id, { title: "Follow-up" });
     await server.sql("UPDATE articles SET previous_article_id = ? WHERE id = ?", first, later);
@@ -323,5 +323,146 @@ describe("sources and links", () => {
     expect(screen.queryByRole("link", { name: "that" })).toBeNull();
     await userEvent.setup().press(screen.getByText(/this/));
     expect(WebBrowser.openBrowserAsync).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an article that other feeds delivered too", () => {
+  /** Feed A keeps "Big news"; feeds B and C delivered it too, recorded as its duplicates. B has a post of its own. */
+  async function duplicated() {
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const [a, b, c] = [await server.feed("Feed A", tools.id), await server.feed("Feed B", tools.id), await server.feed("Feed C", tools.id)];
+    const kept = await server.feedArticle(a.id, { title: "Big news", at: "2026-03-01T10:00:00.000Z", url: "https://news.example.org/big" });
+    const copyB = await server.feedArticle(b.id, { title: "Big news in B", at: "2026-03-01T10:30:00.000Z", storedAt: "2026-03-01T11:00:00.000Z", duplicateOf: kept });
+    await server.feedArticle(c.id, { title: "Big news in C", at: "2026-03-01T10:40:00.000Z", storedAt: "2026-03-01T11:30:00.000Z", duplicateOf: kept });
+    await server.feedArticle(b.id, { title: "B post", at: "2026-03-01T09:00:00.000Z", url: "https://b.example.org/post" });
+    return { server, a, b, c, kept, copyB };
+  }
+
+  it("is listed once in the unread list", async () => {
+    const { server } = await duplicated();
+    await renderApp({ server });
+    await eventually(() => expect(rowTitles()).toEqual(["Big news", "B post"]));
+  });
+
+  it("is listed with every copy's own feed", async () => {
+    const { server, b } = await duplicated();
+    await renderApp({ server, url: `/list/feed-${b.id}` });
+    await eventually(() => expect(rowTitles()).toEqual(["Big news in B", "B post"]));
+  });
+
+  it("names the other feeds under the way to its page", async () => {
+    const { server, kept } = await duplicated();
+    await renderApp({ server, url: `/article/${kept}?list=unread` });
+    await screen.findByRole("header", { name: "Big news" });
+
+    const others = screen.getByTestId("other-feeds");
+    expect(within(others).getByText("ほかに配信した購読フィード")).toBeOnTheScreen();
+    expect(within(others).getAllByRole("link").map((link) => link.props.accessibilityLabel)).toEqual(["Feed B", "Feed C"]);
+    // Right under the way to the page. The pager draws the neighbouring articles too, so look beside the list only.
+    const parts = others.parent!.children.filter((child) => typeof child !== "string");
+    const before = parts[parts.indexOf(others) - 1]!;
+    expect(within(before).getByText("元のページを開く")).toBeOnTheScreen();
+  });
+
+  it("names no other feed for an article that only one feed delivered", async () => {
+    const { server, b } = await duplicated();
+    const own = (await server.core<{ items: Array<{ id: number; title: string }> }>("listArticles", { feed: b.id }, "2026-03-01T12:00:00.000Z")).items.find((item) => item.title === "B post")!;
+    await renderApp({ server, url: `/article/${own.id}?list=feed-${b.id}` });
+    await screen.findByRole("header", { name: "B post" });
+    expect(screen.queryByText("ほかに配信した購読フィード")).toBeNull();
+  });
+
+  it("opens the copy of another feed, and goes back to the article it came from", async () => {
+    const { server } = await duplicated();
+    await renderApp({ server });
+    await press(/Big news/);
+    await screen.findByRole("header", { name: "Big news" });
+
+    await userEvent.setup().press(await screen.findByRole("link", { name: "Feed B" }));
+    // The pager is drawn again once the copy's feed list arrives, so a header found earlier may already be gone.
+    await eventually(() => expect(screen.getByRole("header", { name: "Big news in B" })).toBeOnTheScreen());
+
+    await press("一覧へ戻る");
+    await eventually(() => expect(screen.getByRole("header", { name: "Big news" })).toBeOnTheScreen());
+  });
+});
+
+describe("swiping through a list oldest first", () => {
+  it("shows the next older article after a swipe to the left from the first", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    await articles(server, category.id, [{ title: "Oldest" }, { title: "Middle" }, { title: "Newest" }]);
+    await server.core("updateListView", `category-${category.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${category.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Oldest", "Middle", "Newest"]));
+
+    await press(/Oldest/);
+    await screen.findByRole("header", { name: "Oldest" });
+    await swipeTo(1, 3);
+
+    expect(await screen.findByRole("header", { name: "Middle" })).toBeOnTheScreen();
+    expect(screen.getByLabelText("3件のうち2件目")).toBeOnTheScreen();
+  });
+});
+
+describe("recording that an article was opened", () => {
+  const openedAt = async (server: TestServer, id: number) => (await server.core<{ openedAt: string | null }>("getArticle", id)).openedAt;
+  const opens = (requests: string[]) => requests.filter((request) => /^POST \/api\/v1\/articles\/\d+\/open$/.test(request));
+
+  it("records the article whose row is pressed, and not the neighbours loaded beside it", async () => {
+    const server = await makeServer();
+    const [third, second, first] = await articles(server, (await server.category()).id, [{ title: "Third" }, { title: "Second" }, { title: "First" }]);
+    const { requests } = await renderApp({ server });
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Second", "Third"]));
+
+    await press(/Second/);
+    await screen.findByRole("header", { name: "Second" });
+
+    await eventually(async () => expect(await openedAt(server, second!)).toBe(server.now().toISOString()));
+    expect(await isRead(server, second!)).toBe(true);
+    expect(await openedAt(server, first!)).toBeNull();
+    expect(await openedAt(server, third!)).toBeNull();
+    expect(opens(requests)).toEqual([`POST /api/v1/articles/${second}/open`]);
+  });
+
+  it("records the next article after a swipe", async () => {
+    const server = await makeServer();
+    const [older, newer] = await articles(server, (await server.category()).id, [{ title: "Older" }, { title: "Newer" }]);
+    await renderApp({ server });
+    await waitFor(() => expect(rowTitles()).toEqual(["Newer", "Older"]));
+
+    await press(/Newer/);
+    await screen.findByRole("header", { name: "Newer" });
+    await eventually(async () => expect(await openedAt(server, newer!)).not.toBeNull());
+    expect(await openedAt(server, older!)).toBeNull();
+    await swipeTo(1, 2);
+
+    expect(await screen.findByRole("header", { name: "Older" })).toBeOnTheScreen();
+    await eventually(async () => expect(await openedAt(server, older!)).not.toBeNull());
+  });
+
+  it("records an article opened from a notification", async () => {
+    const server = await makeServer();
+    const [, notified] = await articles(server, (await server.category()).id, [{ title: "Other" }, { title: "Notified" }]);
+    await renderApp({ server, url: `/article/${notified}` });
+    await screen.findByRole("header", { name: "Notified" });
+
+    await eventually(async () => expect(await openedAt(server, notified!)).not.toBeNull());
+  });
+
+  it("shows the article and marks it read without a word about it when the record fails", async () => {
+    const server = await makeServer();
+    const [id] = await articles(server, (await server.category()).id, [{ title: "First", body: "The body of the first." }]);
+    const { requests } = await renderApp({ server, failing: (request) => request.endsWith("/open") });
+
+    await press(/First/);
+
+    expect(await screen.findByText("The body of the first.")).toBeOnTheScreen();
+    await eventually(async () => expect(await isRead(server, id!)).toBe(true));
+    await waitFor(() => expect(opens(requests)).toHaveLength(1));
+    expect(await openedAt(server, id!)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/できませんでした|エラー/)).toBeNull();
   });
 });

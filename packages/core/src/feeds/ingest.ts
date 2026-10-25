@@ -17,11 +17,11 @@ import {
 } from "../db/feeds.ts";
 import { num, str } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
-import { applyStopWords } from "../db/stop-words.ts";
+import { applyFilters } from "../db/filters.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
-import { normalizeUrl } from "../fetch/url.ts";
+import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent } from "./content.ts";
@@ -30,6 +30,8 @@ const DAY = 86_400_000;
 const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, */*";
 const SUMMARY_CHARS = 300;
 const KEY_CHARS = 500;
+/** A feed article is compared with what other feeds delivered within this many days. */
+export const DUPLICATE_WINDOW_DAYS = 7;
 
 /** A bound against a feed that lists items without end, not a setting. */
 export const MAX_NEW_ITEMS = 200;
@@ -83,8 +85,28 @@ function setReference(db: Database, articleId: number, url: string | null, feedT
 interface Stored {
   /** Articles added. */
   created: number;
-  /** The articles whose title is new or was rewritten: the ones a feed that translates has translated. */
+  /**
+   * The articles whose title is new or was rewritten: the ones a feed that translates has translated.
+   * Duplicates that are hidden are left out; their title is translated when they are opened.
+   */
   titled: number[];
+}
+
+/**
+ * The article kept for a new one of the feed, when another feed delivered the same page or title within
+ * `DUPLICATE_WINDOW_DAYS`: of the articles kept for those matches, the one stored first. Articles stored
+ * before duplicate removal existed have neither value and match nothing.
+ */
+function findKept(db: Database, feedId: number, values: { url: string | null; title: string | null }, since: string): number | null {
+  if (values.url === null && values.title === null) return null;
+  const row = db
+    .prepare(
+      `SELECT k.id FROM articles a JOIN articles k ON k.id = coalesce(a.duplicate_of, a.id)
+        WHERE a.origin = 'feed' AND a.feed_id <> ? AND a.created_at >= ? AND (a.dedup_url = ? OR a.dedup_title = ?)
+        ORDER BY k.created_at, k.id LIMIT 1`,
+    )
+    .get(feedId, since, values.url, values.title);
+  return row ? num(row.id) : null;
 }
 
 /**
@@ -93,7 +115,8 @@ interface Stored {
  * changed. The caller wraps this in a transaction.
  */
 function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: Date): Stored {
-  const language = getSettings(db).outputLanguage;
+  const { outputLanguage: language, removeDuplicates } = getSettings(db);
+  const duplicatesSince = new Date(now.getTime() - DUPLICATE_WINDOW_DAYS * DAY).toISOString();
   const nowIso = now.toISOString();
   const cutoff = new Date(now.getTime() - FEED_RETENTION_DAYS * DAY);
   const feedTitle = feed.title;
@@ -107,7 +130,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const stored = new Map(
     db
       .prepare(
-        `SELECT a.id, a.item_key, a.title, a.body, a.author,
+        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
                 (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
            FROM articles a WHERE a.feed_id = ?`,
       )
@@ -121,10 +144,13 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const rewrite = db.prepare("UPDATE articles SET title = ?, summary = ?, body = ?, content_text = ?, author = ? WHERE id = ?");
 
   const forgetTitle = db.prepare("UPDATE articles SET translated_title = NULL WHERE id = ?");
+  // Only an article stored since duplicate removal exists has values to compare, and keeps having them.
+  const recompare = db.prepare("UPDATE articles SET dedup_url = ?, dedup_title = ? WHERE id = ? AND (dedup_url IS NOT NULL OR dedup_title IS NOT NULL)");
   const titled: number[] = [];
 
   const inDocument = new Set<string>();
   const fresh: Prepared[] = [];
+  let foundNew = false;
   for (const item of parsed.items) {
     const url = pageUrl(item, feed.url);
     const key = (item.key ?? url)?.slice(0, KEY_CHARS);
@@ -133,6 +159,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     markSeen.run(feed.id, key, nowIso);
 
     const known = stored.get(key);
+    // The feed never listed it: new, whether or not it is stored as an article below.
+    if (!known && !seenBefore.has(key)) foundNew = true;
     // An item whose article was purged is still listed by the feed; it must not come back as new.
     if (!known && seenBefore.has(key)) continue;
     if (!known && item.publishedAt && item.publishedAt < cutoff) continue;
@@ -147,36 +175,65 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       continue;
     }
     const id = num(known.id);
-    if (str(known.title) !== title || str(known.body) !== prepared.body || (known.author ?? null) !== prepared.author) {
+    const rewritten = str(known.title) !== title || str(known.body) !== prepared.body || (known.author ?? null) !== prepared.author;
+    if (rewritten) {
       rewrite.run(title, summaryOf(prepared.text), prepared.body, prepared.text, prepared.author, id);
-      applyStopWords(db, id);
       // A translation of what was rewritten no longer says what the article says.
       if (str(known.title) !== title) {
         forgetTitle.run(id);
-        titled.push(id);
+        // A hidden duplicate is not judged again, and its title waits until it is opened.
+        if (!(removeDuplicates && known.duplicate_of !== null)) titled.push(id);
       }
-      if (str(known.body) !== prepared.body) deleteArticleTranslation(db, id);
+      // The full content is what was translated when the article has one; it stays as it was.
+      if (str(known.body) !== prepared.body && known.full_content_status !== "fetched") deleteArticleTranslation(db, id);
     }
-    if ((known.url ?? null) !== url || str(known.title) !== title) setReference(db, id, url, feedTitle, title);
+    const moved = (known.url ?? null) !== url;
+    if (moved || str(known.title) !== title) {
+      setReference(db, id, url, feedTitle, title);
+      // What comes later is compared with what the article says now.
+      recompare.run(url, normalizeTitle(title), id);
+    }
+    // Matched after the reference is set: a condition may look at the URL.
+    if (rewritten || moved) applyFilters(db, id);
   }
 
   const insert = db.prepare(
     `INSERT INTO articles
        (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at,
-        created_at)
-     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, dedup_url, dedup_title, duplicate_of)
+     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Lists show the highest id first among articles of the same time, so the first item of the document goes in last.
   for (const item of fresh.reverse()) {
     // An item sorts by when it was published; one without a date, or dated in the future, by when it was fetched.
     const at = item.publishedAt && item.publishedAt <= now ? item.publishedAt.toISOString() : nowIso;
+    // Judged once, here, before the title is translated and before the summaries look for work.
+    const compared = { url: item.url, title: normalizeTitle(item.title) };
+    const kept = removeDuplicates ? findKept(db, feed.id, compared, duplicatesSince) : null;
     const id = num(
-      insert.run(feed.categoryId, feed.id, item.key, item.title, summaryOf(item.text), item.body, item.text, item.author, at, at, nowIso).lastInsertRowid,
+      insert.run(
+        feed.categoryId,
+        feed.id,
+        item.key,
+        item.title,
+        summaryOf(item.text),
+        item.body,
+        item.text,
+        item.author,
+        at,
+        at,
+        nowIso,
+        compared.url,
+        compared.title,
+        kept,
+      ).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
-    applyStopWords(db, id);
-    titled.push(id);
+    applyFilters(db, id);
+    if (kept === null) titled.push(id);
   }
+  // What tells a feed that stopped delivering from one that delivers what is too old to store.
+  if (foundNew) db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run(nowIso, feed.id);
   return { created: fresh.length, titled: feed.translate ? titled : [] };
 }
 
@@ -261,12 +318,13 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         enabled: input.enabled,
         autoSummarize: input.autoSummarize,
         translate: input.translate,
+        fetchFullContent: input.fetchFullContent,
       },
       clock,
     );
     const { titled } = storeItems(db, feed, result.parsed, now);
     recordFetchSuccess(db, feed.id, { now: now.toISOString(), etag: result.etag, lastModified: result.lastModified, siteUrl: result.parsed.siteUrl });
-    return { feed: getFeed(db, feed.id), titled };
+    return { feed: getFeed(db, feed.id, now), titled };
   });
   if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
   return stored.feed;

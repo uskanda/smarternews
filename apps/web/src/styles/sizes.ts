@@ -19,3 +19,13 @@ export const spacing = {
   touch: 44,
   "touch-android": 48,
 } as const;
+
+/** The line height of each type style, in pixels: how far one line of text reaches. */
+export const lineHeights = {
+  "headline-lg": 38,
+  "headline-md": 23,
+  "body-lg": 33,
+  "body-md": 22,
+  "label-md": 20,
+  "label-sm": 18,
+} as const;

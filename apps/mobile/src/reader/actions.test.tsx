@@ -1,7 +1,8 @@
 import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
 import * as WebBrowser from "expo-web-browser";
+import { chooseScrollRead } from "../settings/scroll-read";
 import { renderApp } from "../testing/app";
-import { eventually, MINUTE, rowTitles } from "../testing/queries";
+import { eventually, listData, MINUTE, rowTitles } from "../testing/queries";
 import { makeServer, type ArticleOverrides, type TestServer } from "../testing/server";
 
 async function articles(server: TestServer, categoryId: number, list: ArticleOverrides[]): Promise<number[]> {
@@ -34,7 +35,7 @@ describe("swiping a row", () => {
   it("puts a read article back to unread", async () => {
     const server = await makeServer();
     const id = await server.article((await server.category()).id, { title: "Again" });
-    await server.core("setArticleFlags", id, { isRead: true });
+    await server.core("setArticleFlags", id, { isRead: true }, "$now");
     await renderApp({ server, url: "/list/all" });
     await screen.findByText("Again");
 
@@ -135,7 +136,7 @@ describe("marking everything as read", () => {
     const server = await makeServer();
     const category = await server.category();
     const before = await server.article(category.id, { title: "Read before" });
-    await server.core("setArticleFlags", before, { isRead: true });
+    await server.core("setArticleFlags", before, { isRead: true }, "$now");
     const ids = await articles(server, category.id, [{ title: "One" }, { title: "Two" }]);
     await renderApp({ server });
     await screen.findByText("Two");
@@ -272,6 +273,8 @@ describe("moving on after marking all as read", () => {
     const y = await server.feed("Y", a.id);
     await server.feedArticle(x.id, { title: "From X" });
     await server.feedArticle(y.id, { title: "From Y" });
+    // The list is read a moment after the last article is stored, as it is on a server: marking it all covers them all.
+    await server.advance(1);
     return { server, a, c, x, y };
   }
 
@@ -313,5 +316,205 @@ describe("moving on after marking all as read", () => {
     await press("すべて既読にする");
     expect(await screen.findByText("4件を既読にしました")).toBeOnTheScreen();
     expect(screen.getByRole("header", { name: "未読" })).toBeOnTheScreen();
+  });
+});
+
+describe("putting back to unread in the recently read articles", () => {
+  /** Three articles of Tools read at 10:00 by mark all as read. */
+  async function readMistakenly() {
+    const server = await makeServer("2026-03-02T08:00:00.000Z");
+    const tools = await server.category("Tools");
+    const ids = await articles(server, tools.id, [{ title: "Tools 1" }, { title: "Tools 2" }, { title: "Tools 3" }]);
+    await server.advance(117 * MINUTE);
+    await server.core("markArticlesRead", { categoryId: tools.id, before: server.now().toISOString() }, "$now");
+    await renderApp({ server, url: "/list/recently-read" });
+    await screen.findByText("Tools 2");
+    return { server, ids };
+  }
+  const isUnread = (name: RegExp) => expect(label(name)).toMatch(/未読$/);
+  const pull = async () => {
+    const { refreshControl } = screen.getByTestId("article-list").props as { refreshControl: { props: { onRefresh: () => void } } };
+    await act(async () => refreshControl.props.onRefresh());
+  };
+  async function keptThenDropped(server: TestServer, id: number) {
+    await eventually(async () => expect((await article(server, id)).isRead).toBe(false));
+    await waitFor(() => isUnread(/Tools 2/));
+    expect(rowTitles()).toEqual(["Tools 3", "Tools 2", "Tools 1"]);
+    expect(label(/Tools 2/)).toContain("。10:00。");
+
+    await pull();
+    await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 1"]));
+  }
+
+  it("keeps a row swiped back to unread where it was until the list is pulled", async () => {
+    const { server, ids } = await readMistakenly();
+    await fireEvent(screen.getByTestId(`row-${ids[1]}`), "swipeableOpen", "right");
+    await keptThenDropped(server, ids[1]!);
+  });
+
+  it("keeps a row put back to unread from the long press menu", async () => {
+    const { server, ids } = await readMistakenly();
+    const user = userEvent.setup();
+    await user.longPress(screen.getByRole("button", { name: /Tools 2/ }));
+    await user.press(await screen.findByRole("button", { name: "未読に戻す" }));
+    await keptThenDropped(server, ids[1]!);
+  });
+
+  it("keeps a row put back to unread on the article screen", async () => {
+    const { server, ids } = await readMistakenly();
+    await press(/Tools 2/);
+    await screen.findByRole("header", { name: "Tools 2" });
+    await press("未読に戻す");
+    await eventually(async () => expect((await article(server, ids[1]!)).isRead).toBe(false));
+    await press("一覧へ戻る");
+    await keptThenDropped(server, ids[1]!);
+  });
+});
+
+describe("marking everything as read in a list oldest first", () => {
+  it("marks all 120 articles of which 50 are loaded, and not one that came after", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    for (let index = 0; index < 120; index += 1) {
+      await server.article(category.id, { title: `Story ${index}` });
+      await server.advance(MINUTE);
+    }
+    await server.core("updateListView", `category-${category.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${category.id}` });
+    await waitFor(() => expect(rowTitles()[0]).toBe("Story 0"));
+    expect(listData()).toHaveLength(50);
+    await server.advance(MINUTE);
+    const late = await server.article(category.id, { title: "Arrived late" });
+
+    await press("すべて既読にする");
+
+    expect(await screen.findByText("120件を既読にしました")).toBeOnTheScreen();
+    expect((await server.core<{ unread: number }>("getCounts", server.now().toISOString())).unread).toBe(1);
+    expect((await article(server, late)).isRead).toBe(false);
+  });
+});
+
+describe("an article put back to unread while the list marks read what it is scrolled past", () => {
+  type Row = { id: number; title: string; isRead: boolean };
+  const list = () => screen.getByTestId("article-list");
+  async function show(first: number) {
+    const rows = listData<Row>();
+    const viewableItems = rows.slice(first, first + 4).map((item, offset) => ({ item, key: String(item.id), index: first + offset, isViewable: true }));
+    await act(async () => list().props.onViewableItemsChanged({ viewableItems, changed: [] }));
+  }
+  const pull = async () => {
+    const { refreshControl } = list().props as { refreshControl: { props: { onRefresh: () => void } } };
+    await act(async () => refreshControl.props.onRefresh());
+  };
+
+  /** Four articles of Security, scrolled so that the first went past the top and was read. */
+  async function readByScrolling() {
+    await chooseScrollRead(true);
+    const server = await makeServer();
+    const security = await server.category("Security");
+    const tools = await server.category("Tools");
+    const ids = (await articles(server, security.id, [{ title: "Story 1" }, { title: "Story 2" }, { title: "Story 3" }, { title: "Story 4" }])).reverse();
+    await articles(server, tools.id, [{ title: "Tool news" }]);
+    await renderApp({ server, url: `/list/category-${security.id}` });
+    await screen.findByText("Story 1");
+    await show(0);
+    await show(1);
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(true));
+    return { server, ids };
+  }
+
+  async function passAgain(server: TestServer, ids: number[]) {
+    await show(0);
+    await show(2);
+    await eventually(async () => expect((await article(server, ids[1]!)).isRead).toBe(true));
+  }
+
+  it("stays unread when it was swiped back and the list is scrolled past it again", async () => {
+    const { server, ids } = await readByScrolling();
+    await fireEvent(screen.getByTestId(`row-${ids[0]}`), "swipeableOpen", "right");
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(false));
+
+    await passAgain(server, ids);
+
+    expect((await article(server, ids[0]!)).isRead).toBe(false);
+  });
+
+  it("stays unread when it was put back from the long press menu", async () => {
+    const { server, ids } = await readByScrolling();
+    const user = userEvent.setup();
+    await user.longPress(screen.getByRole("button", { name: /Story 4/ }));
+    await user.press(await screen.findByRole("button", { name: "未読に戻す" }));
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(false));
+
+    await passAgain(server, ids);
+
+    expect((await article(server, ids[0]!)).isRead).toBe(false);
+  });
+
+  it("stays unread when it was put back on the article screen", async () => {
+    const { server, ids } = await readByScrolling();
+    await press(/Story 4/);
+    await screen.findByRole("header", { name: "Story 4" });
+    await press("未読に戻す");
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(false));
+    await press("一覧へ戻る");
+    await screen.findByText("Story 1");
+
+    await passAgain(server, ids);
+
+    expect((await article(server, ids[0]!)).isRead).toBe(false);
+  });
+
+  it("is read again by scrolling once the list is pulled", async () => {
+    const { server, ids } = await readByScrolling();
+    await fireEvent(screen.getByTestId(`row-${ids[0]}`), "swipeableOpen", "right");
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(false));
+
+    await pull();
+    await show(0);
+    await show(1);
+
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(true));
+  });
+
+  it("is read again by scrolling after another list was open", async () => {
+    const { server, ids } = await readByScrolling();
+    await fireEvent(screen.getByTestId(`row-${ids[0]}`), "swipeableOpen", "right");
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(false));
+
+    await press("項目を開く");
+    await press(/^Tools/);
+    await screen.findByText("Tool news");
+    await press("項目を開く");
+    await press(/^Security/);
+    await screen.findByText("Story 1");
+    await show(0);
+    await show(1);
+
+    await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(true));
+  });
+});
+
+describe("marking read without opening", () => {
+  const opens = (requests: string[]) => requests.filter((request) => /\/articles\/\d+\/open$/.test(request));
+
+  it("records no opening when a row is swiped, when the long press marks it read, or when everything is marked read", async () => {
+    const server = await makeServer();
+    const [swiped, held, rest] = await articles(server, (await server.category()).id, [{ title: "Swiped" }, { title: "Held" }, { title: "Rest" }]);
+    const { requests } = await renderApp({ server });
+    await screen.findByText("Rest");
+    const user = userEvent.setup();
+
+    await fireEvent(screen.getByTestId(`row-${swiped}`), "swipeableOpen", "right");
+    await eventually(async () => expect((await article(server, swiped!)).isRead).toBe(true));
+    await user.longPress(screen.getByRole("button", { name: /Held/ }));
+    await user.press(await screen.findByRole("button", { name: "既読にする" }));
+    await eventually(async () => expect((await article(server, held!)).isRead).toBe(true));
+    await press("すべて既読にする");
+    await eventually(async () => expect((await article(server, rest!)).isRead).toBe(true));
+
+    const opened = await Promise.all([swiped!, held!, rest!].map(async (id) => (await server.core<{ openedAt: string | null }>("getArticle", id)).openedAt));
+    expect(opened).toEqual([null, null, null]);
+    expect(opens(requests)).toEqual([]);
   });
 });

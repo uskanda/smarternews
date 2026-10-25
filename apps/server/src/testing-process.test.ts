@@ -53,14 +53,15 @@ describe("the test server process", () => {
   });
 
   it("runs a function of the core package on the server's database", async () => {
-    const { id, url, apiToken } = (await control({ op: "create" })) as { id: string; url: string; apiToken: string };
+    const { id, url, apiToken } = (await control({ op: "create", start: "2026-03-01T12:00:00.000Z" })) as { id: string; url: string; apiToken: string };
     const category = (await control({ op: "category", id, args: [] })) as { id: number };
     const article = await control({ op: "article", id, args: [category.id] });
-    await control({ op: "core", id, name: "setArticleFlags", args: [article, { isRead: true }] });
+    // "$now" stands for the time on the server's clock.
+    await control({ op: "core", id, name: "setArticleFlags", args: [article, { isRead: true }, "$now"] });
 
     const response = await fetch(`${url}/api/v1/articles/${String(article)}`, { headers: { authorization: `Bearer ${apiToken}` } });
 
-    expect(await response.json()).toMatchObject({ isRead: true });
+    expect(await response.json()).toMatchObject({ isRead: true, readAt: "2026-03-01T12:00:00.000Z" });
   });
 
   it("moves the server's clock", async () => {

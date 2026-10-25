@@ -1,10 +1,14 @@
 // What the list of entries holds — the left pane of the web app, the drawer of the Android app — and which
 // articles each entry opens. Both apps draw this one model, so they cannot disagree.
-import type { ArticleListQuery, Category, Counts, Feed, MarkRead } from "@smarternews/core/api";
+import type { ArticleListQuery, Category, Counts, Feed, ListSort, ListView, MarkRead } from "@smarternews/core/api";
 
 /** A list of articles a reader can open. */
 export type ListTarget =
   | { type: "unread" | "all" | "starred" | "generated" | "uncategorized" }
+  /** The articles read in the last seven days, last read first. */
+  | { type: "recentlyRead" }
+  /** The reader's highlights and notes on every article, the last made first. The web app has it; the Android app does not. */
+  | { type: "annotations" }
   /** A category: everything in it, or only the articles the model wrote. */
   | { type: "category"; categoryId: number; generatedOnly: boolean }
   | { type: "feed"; feedId: number };
@@ -12,7 +16,10 @@ export type ListTarget =
 export interface NavEntry {
   target: ListTarget;
   label: string;
-  /** Unread articles behind the entry. Zero for "すべて" and "スター", which do not count unread articles. */
+  /**
+   * Unread articles behind the entry. Zero for "すべて", "スター", "最近読んだ記事" and "注釈", which do not count
+   * unread articles.
+   */
   unread: number;
 }
 
@@ -34,6 +41,8 @@ export interface NavModel {
 
 export const GENERATED_LABEL = "AI生成";
 export const UNCATEGORIZED_LABEL = "未分類";
+export const RECENTLY_READ_LABEL = "最近読んだ記事";
+export const ANNOTATIONS_LABEL = "注釈";
 
 export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts: Counts | undefined }): NavModel {
   const { categories, feeds, counts } = input;
@@ -72,6 +81,8 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
       { target: { type: "all" }, label: "すべて", unread: 0 },
       { target: { type: "starred" }, label: "スター", unread: 0 },
       { target: { type: "generated" }, label: GENERATED_LABEL, unread: counts?.generatedUnread ?? 0 },
+      { target: { type: "recentlyRead" }, label: RECENTLY_READ_LABEL, unread: 0 },
+      { target: { type: "annotations" }, label: ANNOTATIONS_LABEL, unread: 0 },
     ],
     groups,
     starred: counts?.starred ?? 0,
@@ -82,19 +93,29 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
 export function listKey(target: ListTarget): string {
   if (target.type === "category") return `category-${target.categoryId}${target.generatedOnly ? "-generated" : ""}`;
   if (target.type === "feed") return `feed-${target.feedId}`;
+  if (target.type === "recentlyRead") return "recently-read";
   return target.type;
 }
 
 export function parseListKey(key: string): ListTarget | null {
   if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { type: key };
+  if (key === "recently-read") return { type: "recentlyRead" };
+  if (key === "annotations") return { type: "annotations" };
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
   if (category) return { type: "category", categoryId: Number(category[1]), generatedOnly: category[2] !== undefined };
   const feed = /^feed-(\d{1,15})$/.exec(key);
   return feed ? { type: "feed", feedId: Number(feed[1]) } : null;
 }
 
-/** The part of the article list query that the target decides. */
-export function targetFilter(target: ListTarget): ArticleListQuery {
+/**
+ * The part of the article list query that the target decides, with the order of its list. Newest first is
+ * the server's default and is not sent.
+ */
+export function targetFilter(target: ListTarget, sort: ListSort = "newest"): ArticleListQuery {
+  return { ...filterOf(target), ...(sort === "oldest" ? { order: "oldest" as const } : {}) };
+}
+
+function filterOf(target: ListTarget): ArticleListQuery {
   switch (target.type) {
     case "unread":
       return { unread: "true" };
@@ -110,6 +131,11 @@ export function targetFilter(target: ListTarget): ArticleListQuery {
       return { category: target.categoryId, ...(target.generatedOnly ? { origin: "generated" as const } : {}) };
     case "feed":
       return { feed: target.feedId };
+    case "recentlyRead":
+      return { recentlyRead: "true" };
+    case "annotations":
+      // A list of annotations, not of articles: it is read with `annotations` of the API.
+      return {};
   }
 }
 
@@ -129,7 +155,39 @@ export function targetScope(target: ListTarget): Omit<MarkRead, "before" | "minI
   }
 }
 
+/** Whether the target is a category whose list holds events, ordered by start. */
+function isEventCategory(target: ListTarget, categories: Category[] | undefined): boolean {
+  return target.type === "category" && categories?.find((category) => category.id === target.categoryId)?.kind === "event";
+}
+
+/**
+ * Whether the list offers the menu of its order. Not the recently read articles, ordered by read time, nor an
+ * event category, ordered by start. Search results have no target and no menu either.
+ */
+export function hasSortMenu(target: ListTarget, categories: Category[] | undefined): boolean {
+  return target.type !== "recentlyRead" && target.type !== "annotations" && !isEventCategory(target, categories);
+}
+
+/**
+ * The order the list of the target is shown in: the one its list view keeps, newest first for an entry
+ * without one, and always newest first where the order cannot be chosen.
+ */
+export function listSortOf(target: ListTarget, views: ListView[] | undefined, categories: Category[] | undefined): ListSort {
+  if (!hasSortMenu(target, categories)) return "newest";
+  const key = listKey(target);
+  return views?.find((view) => view.key === key)?.sort ?? "newest";
+}
+
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */
 export function hasReadToggle(target: ListTarget): boolean {
-  return target.type !== "unread" && target.type !== "all" && target.type !== "starred";
+  return target.type !== "unread" && target.type !== "all" && target.type !== "starred" && target.type !== "recentlyRead" && target.type !== "annotations";
+}
+
+/**
+ * Whether the list may offer mark all as read and the toggle for importance 4 and above. Not the recently
+ * read articles: everything there is read already, and a lower bound on importance would hide every feed
+ * article in a list meant for finding what was read.
+ */
+export function hasListControls(target: ListTarget): boolean {
+  return target.type !== "recentlyRead" && target.type !== "annotations";
 }

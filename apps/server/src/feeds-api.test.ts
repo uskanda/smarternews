@@ -416,3 +416,67 @@ describe("the summary of an article", () => {
     expect(s.llmRequests.summarize).toEqual([]);
   });
 });
+
+describe("how up to date a feed is, and its stats", () => {
+  const DAY = 24 * HOUR;
+  const OTHER = "https://news.example.org/feed.xml";
+
+  it("lists whether each feed is stale, when its last new item came, and its articles of the last 30 days", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }, { key: "b" }]));
+    s.site.set(OTHER, rss("Other News", [{ key: "x" }]));
+    const stopped = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const subscribedAt = s.clock().toISOString();
+    s.clock.advance(60 * DAY);
+    const lively = await (await s.post("/api/v1/feeds", { url: OTHER })).json();
+    const freshAt = s.clock().toISOString();
+    s.clock.advance(DAY + HOUR);
+
+    const list = await (await s.get("/api/v1/feeds")).json();
+
+    expect(list).toEqual([
+      expect.objectContaining({ id: stopped.id, stale: true, lastNewItemAt: subscribedAt, recentArticleCount: 0 }),
+      expect.objectContaining({ id: lively.id, stale: false, lastNewItemAt: freshAt, recentArticleCount: 1 }),
+    ]);
+    expect(await (await s.get(`/api/v1/feeds/${stopped.id}`)).json()).toMatchObject({ stale: true });
+  });
+
+  it("answers the stats of the last 30 days, and 404 for a feed that does not exist", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }, { key: "b" }, { key: "c" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const subscribedAt = s.clock().toISOString();
+    const items = (await (await s.get(`/api/v1/articles?feed=${feed.id}`)).json()).items as Array<{ id: number }>;
+    await s.post(`/api/v1/articles/${items[0]!.id}/open`);
+    await s.patch(`/api/v1/articles/${items[1]!.id}`, { starred: true });
+    s.clock.advance(HOUR);
+
+    const response = await s.get(`/api/v1/feeds/${feed.id}/stats`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      since: new Date(s.clock().getTime() - 30 * DAY).toISOString(),
+      received: 3,
+      opened: 1,
+      starred: 1,
+      hiddenByFilters: 0,
+      hiddenAsDuplicates: 0,
+      lastNewItemAt: subscribedAt,
+    });
+    expect((await s.get("/api/v1/feeds/999/stats")).status).toBe(404);
+  });
+
+  it("calls no model to find new items, judge staleness or count the stats", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    s.site.set(FEED, rss("Example Blog", [{ key: "b" }, { key: "a" }]));
+    s.clock.advance(HOUR);
+    await s.post(`/api/v1/feeds/${feed.id}/fetch`);
+    await s.get(`/api/v1/feeds/${feed.id}/stats`);
+    await s.get("/api/v1/feeds");
+
+    expect(Object.values(s.llmRequests).flat()).toEqual([]);
+    expect((await (await s.get("/api/v1/providers")).json()).llmCallsToday).toBe(0);
+  });
+});

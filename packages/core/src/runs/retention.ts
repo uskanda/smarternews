@@ -11,7 +11,7 @@ export const ARTICLE_RETENTION_DAYS = 180;
 export const HISTORY_RETENTION_DAYS = 30;
 
 /**
- * Deletes what has outlived its retention period: articles without a star (generated ones after 180 days,
+ * Deletes what has outlived its retention period: articles without a star or an annotation (generated ones after 180 days,
  * feed articles after 90), and candidates (with the page text they hold), run history and model call
  * records. The list of settled URLs is kept on purpose.
  */

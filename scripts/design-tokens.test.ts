@@ -152,6 +152,10 @@ describe("renderWebSizes", () => {
     expect(text).toContain("  nav: 200,");
   });
 
+  it("gives the line height of each type style in pixels, rounded", () => {
+    expect(renderWebSizes(DESIGN)).toContain('  "body-lg": 33,');
+  });
+
   it("leaves out lengths that are not in pixels", () => {
     expect(renderWebSizes(DESIGN.replace("  nav: 200px", "  nav: 200px\n  measure: 36em"))).not.toContain("measure");
   });

@@ -180,8 +180,8 @@ export function renderNativeTokens(designMd: string): string {
 }
 
 /**
- * The pixel lengths of the spacing scale as numbers, for the code of the web app that computes with them:
- * the widths a pane may take cannot be worked out in CSS alone.
+ * The pixel lengths of the spacing scale and the line heights as numbers, for the code of the web app that
+ * computes with them: the widths a pane may take, and how far Space scrolls, cannot be worked out in CSS alone.
  */
 export function renderWebSizes(designMd: string): string {
   const tokens = frontMatter(designMd);
@@ -194,6 +194,15 @@ export function renderWebSizes(designMd: string): string {
       .map(([name, value]) => [name, pixels(value)] as const)
       .filter(([, value]) => value !== null)
       .map(([name, value]) => `  ${key(name)}: ${value},`),
+    "} as const;",
+    "",
+    "/** The line height of each type style, in pixels: how far one line of text reaches. */",
+    "export const lineHeights = {",
+    ...Object.entries(tokens.typography ?? {}).map(([name, type]) => {
+      const size = pixels(type.fontSize);
+      if (size === null) throw new Error(`typography.${name}: fontSize ${type.fontSize} is not in pixels`);
+      return `  ${key(name)}: ${Math.round(size * Number(type.lineHeight))},`;
+    }),
     "} as const;",
   ];
   return `${lines.join("\n")}\n`;

@@ -1,10 +1,16 @@
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
-import { useArticle, useArticleTranslation, useSummaryRequest } from "../api/queries.ts";
+import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
+import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { listPathOf } from "../lib/paths.ts";
+import { AnnotatedBody, ArticleNoteSection, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
+import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
+
+/** The attribute that makes an element an original part of the body, in which a selection can be highlighted. */
+const segmentAttribute = (index: number) => ({ [SEGMENT_ATTRIBUTE]: String(index) });
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
   const event = article.event!;
@@ -42,8 +48,19 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * The content of a translated feed article: segment by segment, the translation as the text to read and the
  * original right under it. The pairs come from the server as they are shown; nothing is matched up here.
  * A segment without a translation, and one whose translation says the same in the same words, is shown once.
+ * Only the originals carry the reader's highlights: `marksFor` gives each its marks.
  */
-function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
+function TranslatedBody({
+  translation,
+  terms,
+  groups,
+  marksFor,
+}: {
+  translation: ArticleTranslation;
+  terms?: readonly string[];
+  groups: TermMatcher;
+  marksFor: (index: number) => AnnotationMarks | undefined;
+}) {
   const lang = translation.sourceLanguage ?? undefined;
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -53,14 +70,16 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
         const shown = paired ? (
           <div key={index} className="segment">
             <div>
-              <Markdown text={segment.translated!} images />
+              <Markdown text={segment.translated!} images highlight={terms} groups={groups} />
             </div>
-            <div className="segment-original" lang={lang}>
-              <Markdown text={segment.original} images plainHeadings />
+            <div className="segment-original" lang={lang} {...segmentAttribute(index)}>
+              <Markdown text={segment.original} images plainHeadings highlight={terms} groups={groups} annotations={marksFor(index)} />
             </div>
           </div>
         ) : (
-          <Markdown key={index} text={segment.original} images />
+          <div key={index} className="segment-alone" {...segmentAttribute(index)}>
+            <Markdown text={segment.original} images highlight={terms} groups={groups} annotations={marksFor(index)} />
+          </div>
         );
         return translation.truncated && index === lastTranslated
           ? [
@@ -71,6 +90,57 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
             ]
           : [shown];
       })}
+    </div>
+  );
+}
+
+/** What the reader can do with the full content of a feed article, and what is shown of it now. */
+export interface FullContentControl {
+  /** The page is being fetched for this article. */
+  fetching: boolean;
+  /** The last request for this article got no answer. */
+  requestFailed: boolean;
+  /** The reader switched to what the feed delivered. Held for this visit to the article only. */
+  showDelivered: boolean;
+  onFetch: () => void;
+  onToggle: () => void;
+}
+
+/**
+ * The line before the content of a feed article: which content is shown and the switch between the two, the
+ * fetch under way, or the way to fetch the full content with the reason an earlier fetch failed.
+ */
+function FullContentBar({ article, control }: { article: Article; control: FullContentControl }) {
+  if (article.fullContent !== null) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-md gap-y-xs">
+        <p className="type-label-sm text-on-surface-muted">
+          {control.showDelivered ? "配信された内容を表示しています。" : "元のページから取得した全文を表示しています。"}
+        </p>
+        <Button onClick={control.onToggle}>{control.showDelivered ? "全文を表示" : "配信された内容を表示"}</Button>
+      </div>
+    );
+  }
+  if (control.fetching) {
+    return (
+      <p role="status" className="type-label-sm text-on-surface-muted">
+        全文を取得しています。
+      </p>
+    );
+  }
+  const failure = control.requestFailed
+    ? "全文を取得できませんでした。通信に失敗しました。"
+    : article.fullContentError
+      ? `全文を取得できませんでした。${fullContentErrorLabel(article.fullContentError)}`
+      : null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs">
+      {failure ? (
+        <p role="status" className="type-body-md">
+          {failure}
+        </p>
+      ) : null}
+      <Button onClick={control.onFetch}>{failure ? "全文を取得し直す" : "全文を取得"}</Button>
     </div>
   );
 }
@@ -92,6 +162,9 @@ export function ArticleView({
   articlePath,
   onToggleStar,
   onToggleRead,
+  fullContent,
+  terms,
+  focusAnnotation = null,
 }: {
   id: number;
   categoryName: (categoryId: number | null) => string;
@@ -102,12 +175,19 @@ export function ArticleView({
   articlePath: (id: number) => string;
   onToggleStar: (article: Article) => void;
   onToggleRead: (article: Article) => void;
+  /** The full content of a feed article: fetching it and switching to what the feed delivered. */
+  fullContent: FullContentControl;
+  /** The words of the search the article was opened from, marked in its headline and text. */
+  terms?: readonly string[];
+  /** The annotation chosen in the list of annotations: the body is brought to it. */
+  focusAnnotation?: number | null;
 }) {
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
   const translating = useArticleTranslation(article);
   const summaryState = useSummaryRequest(article);
+  const groups = useTermMatcher();
 
   // On a narrow screen the article replaces the list, and the link that was activated is gone:
   // the focus moves to the headline so that keyboard and screen reader users land in the article.
@@ -140,6 +220,9 @@ export function ArticleView({
   if (!article) return <Loading />;
   // A feed article is what another site delivered: no importance, no sources; the way to its page instead.
   const delivered = article.origin === "feed";
+  // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
+  const fullShown = article.fullContent !== null && !fullContent.showDelivered;
+  const translated = article.translation !== null && (fullShown || article.fullContent === null);
 
   return (
     <article aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
@@ -165,12 +248,12 @@ export function ArticleView({
         </div>
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
-            {article.translatedTitle ?? article.title}
+            <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
           </h2>
           {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
             // The title as the site wrote it, marked with its language so that it is read out in that language.
             <p lang={article.sourceLanguage ?? undefined} className="type-body-md text-on-surface-muted">
-              {article.title}
+              <Highlighted text={article.title} terms={terms} groups={groups} />
             </p>
           ) : null}
         </div>
@@ -183,7 +266,9 @@ export function ArticleView({
         {article.impact ? (
           <section aria-label="読み手への影響" className="border-l-4 border-mark pl-md">
             <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
-            <p className="type-body-md">{article.impact}</p>
+            <p className="type-body-md">
+              <Highlighted text={article.impact} terms={terms} />
+            </p>
           </section>
         ) : null}
         {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
@@ -194,11 +279,29 @@ export function ArticleView({
             </a>
           </p>
         ) : null}
+        {article.otherFeeds.length > 0 ? (
+          // The same story as other feeds delivered it; each name opens that copy in the list of its feed. That
+          // list includes read articles: the copy was most likely marked read with this article.
+          <section aria-label="ほかに配信した購読フィード" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">ほかに配信した購読フィード</h3>
+            <ul className="flex flex-wrap gap-x-md gap-y-xs type-body-md">
+              {article.otherFeeds.map((other) => (
+                <li key={other.articleId} className="min-w-0">
+                  <Link to={`${listPathOf({ type: "feed", feedId: other.feedId }, () => undefined)}/${other.articleId}?read=1`} className="tap break-words text-primary underline underline-offset-4">
+                    {other.feedTitle}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         {article.autoSummary ? (
           // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
           <section aria-label="AIによる要約" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
             <h3 className="type-label-sm text-on-surface-muted">AIによる要約</h3>
-            <p className="break-words whitespace-pre-line type-body-md">{article.autoSummary.text}</p>
+            <p className="break-words whitespace-pre-line type-body-md">
+              <Highlighted text={article.autoSummary.text} terms={terms} groups={groups} />
+            </p>
             {article.autoSummary.source === "feed" ? (
               <p className="type-label-sm text-on-surface-muted">元のページを読めなかったため、配信された内容だけをもとにしています。</p>
             ) : null}
@@ -218,13 +321,32 @@ export function ArticleView({
             <Button onClick={() => void translating.refetch()}>翻訳をやり直す</Button>
           </div>
         ) : null}
-        {article.translation ? (
-          <TranslatedBody translation={article.translation} />
-        ) : (
-          <div className="article-body type-body-lg">
-            <Markdown text={article.body} images={delivered} />
-          </div>
-        )}
+        {delivered ? <FullContentBar article={article} control={fullContent} /> : null}
+        <ArticleNoteSection article={article} />
+        {/* Highlights are on the full content when there is one: while what the feed delivered is shown instead, none is. */}
+        <AnnotatedBody
+          key={`${fullShown}-${translated ? "translated" : "original"}`}
+          article={article}
+          count={translated ? article.translation!.segments.length : 1}
+          enabled={article.fullContent === null || fullShown}
+          focusId={focusAnnotation}
+          render={(marksFor) =>
+            translated ? (
+              // The translation is of the full content when there is one: what the feed delivered is then shown without one.
+              <TranslatedBody translation={article.translation!} terms={terms} groups={groups} marksFor={marksFor} />
+            ) : (
+              <div className="article-body type-body-lg" {...segmentAttribute(0)}>
+                <Markdown
+                  text={fullShown ? article.fullContent!.body : article.body}
+                  images={delivered}
+                  highlight={terms}
+                  groups={groups}
+                  annotations={marksFor(0)}
+                />
+              </div>
+            )
+          }
+        />
         {previous ? (
           <p className="type-body-md">
             <span className="text-on-surface-muted">この話題の前の記事 </span>

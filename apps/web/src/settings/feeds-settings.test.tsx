@@ -1,4 +1,4 @@
-import { createStopWord, getFeed, getSettings, insertFeed, listFeeds, listStopWords, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
+import { addHighlight, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -20,15 +20,16 @@ function feedOf(server: TestServer, title: string, categoryId: number | null = n
 const rowOf = async (name: string) => (await within(await section("購読フィードの一覧")).findByText(name)).closest("li")!;
 
 describe("the way to the pages", () => {
-  it("leads from the settings to the feeds and the stop words", async () => {
+  it("leads from the settings to the feeds and the filters", async () => {
     const { user, path } = renderApp({ route: "/settings" });
     await user.click(await screen.findByRole("link", { name: "購読フィードを設定する" }));
     expect(await screen.findByRole("heading", { level: 1, name: "購読フィード" })).toBeInTheDocument();
     expect(path()).toBe("/settings/feeds");
 
     await user.click(screen.getByRole("link", { name: "設定へ戻る" }));
-    await user.click(await screen.findByRole("link", { name: "ストップワードを設定する" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "ストップワード" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("link", { name: "フィルターを設定する" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "フィルター" })).toBeInTheDocument();
+    expect(path()).toBe("/settings/filters");
   });
 });
 
@@ -277,12 +278,29 @@ describe("deleting a feed", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("配信記事40件が消えます");
     expect(dialog).toHaveTextContent("うち2件にはスターが付いています");
+    expect(dialog).not.toHaveTextContent("注釈");
     expect(listFeeds(server.db)).toHaveLength(1);
 
     await user.click(within(dialog).getByRole("button", { name: "削除する" }));
 
     expect(await screen.findByText("購読フィードを削除しました")).toBeInTheDocument();
     expect(listFeeds(server.db)).toEqual([]);
+  });
+
+  it("names how many articles with annotations go with their annotations", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const ids = Array.from({ length: 40 }, () => seedFeedArticle(server.db, feed.id));
+    const now = server.clock().toISOString();
+    for (const id of ids.slice(0, 3)) addHighlight(server.db, id, { quote: "Content", prefix: "", suffix: "", position: 0, note: null }, now);
+    saveArticleNote(server.db, ids[0]!, "メモ", now);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("「Blog」と、その配信記事40件が消えます。注釈のある3件も、注釈とともに消えます。元に戻せません。");
+    expect(listFeeds(server.db)).toHaveLength(1);
   });
 
   it("keeps the feed when the user backs out", async () => {
@@ -405,82 +423,6 @@ describe("OPML", () => {
 
     await waitFor(() => expect(blobs).toHaveLength(1));
     expect(await blobs[0]!.text()).toContain('xmlUrl="https://blog.example.org/feed.xml"');
-  });
-});
-
-describe("stop words", () => {
-  function withArticles() {
-    const server = makeServer();
-    const feed = feedOf(server, "Shop");
-    for (const title of ["春の特売", "夏の特売", "特売の予告", "新製品"]) seedFeedArticle(server.db, feed.id, { title });
-    return server;
-  }
-  const wordRow = async (text: string) => (await within(await section("ストップワードの一覧")).findByText(text)).closest("li")!;
-
-  it("explains, beside the form, what is hidden and what never is", async () => {
-    renderApp({ route: "/settings/stop-words" });
-    const form = await section("ストップワードの追加");
-    expect(form).toHaveTextContent("配信記事だけを隠します");
-    expect(form).toHaveTextContent("スターのある記事は隠しません");
-  });
-
-  it("adds a word and says how many stored articles it hides", async () => {
-    const server = withArticles();
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-
-    const form = await section("ストップワードの追加");
-    await user.type(within(form).getByLabelText("隠す語"), "特売");
-    await user.click(within(form).getByRole("button", { name: "ストップワードを追加" }));
-
-    expect(await screen.findByText("「特売」を追加しました。3件を隠しています。")).toBeInTheDocument();
-    const row = await wordRow("特売");
-    expect(row).toHaveTextContent("3件を隠しています");
-    expect(row).toHaveTextContent("タイトルだけ");
-    expect(listStopWords(server.db)).toMatchObject([{ text: "特売", scope: "title" }]);
-    expect(within(form).getByLabelText("隠す語")).toHaveValue("");
-  });
-
-  it("adds a word that covers the content too", async () => {
-    const server = withArticles();
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-    const form = await section("ストップワードの追加");
-    await user.type(within(form).getByLabelText("隠す語"), "提供");
-    await user.click(within(form).getByRole("radio", { name: "タイトルと内容" }));
-    await user.click(within(form).getByRole("button", { name: "ストップワードを追加" }));
-    await waitFor(() => expect(listStopWords(server.db)).toMatchObject([{ text: "提供", scope: "title_and_content" }]));
-  });
-
-  it("lists every word with what it covers and how many articles it hides", async () => {
-    const server = withArticles();
-    createStopWord(server.db, { text: "特売" }, server.clock);
-    createStopWord(server.db, { text: "広告", scope: "title_and_content" }, server.clock);
-    renderApp({ server, route: "/settings/stop-words" });
-    expect(await wordRow("特売")).toHaveTextContent("3件を隠しています");
-    const second = await wordRow("広告");
-    expect(second).toHaveTextContent("タイトルと内容");
-    expect(second).toHaveTextContent("隠している記事はありません");
-  });
-
-  it("says that the word is already there", async () => {
-    const server = withArticles();
-    createStopWord(server.db, { text: "特売" }, server.clock);
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-    const form = await section("ストップワードの追加");
-    await user.type(within(form).getByLabelText("隠す語"), "特売");
-    await user.click(within(form).getByRole("button", { name: "ストップワードを追加" }));
-    expect(await within(form).findByText("この語はすでに登録しています。")).toBeInTheDocument();
-  });
-
-  it("removes a word and says how many articles came back", async () => {
-    const server = withArticles();
-    createStopWord(server.db, { text: "特売" }, server.clock);
-    const { user } = renderApp({ server, route: "/settings/stop-words" });
-
-    await user.click(within(await wordRow("特売")).getByRole("button", { name: "特売を削除" }));
-
-    expect(await screen.findByText("「特売」を削除しました。3件が一覧に戻りました。")).toBeInTheDocument();
-    expect(listStopWords(server.db)).toEqual([]);
-    expect(await within(await section("ストップワードの一覧")).findByText("ストップワードはまだありません。")).toBeInTheDocument();
   });
 });
 
@@ -644,5 +586,195 @@ describe("translation of a feed", () => {
     const usage = await section("翻訳の利用状況");
     await waitFor(() => expect(usage).toHaveTextContent("翻訳のAPIキーが設定されていないため、LLMだけで翻訳します。"));
     expect(usage).not.toHaveTextContent("450,000");
+  });
+});
+
+describe("full content of a feed", () => {
+  const HINT = "記事ごとに元のページを取得して、本文を保存します。これから届く記事だけが対象です。";
+
+  it("is switched on in the edit form, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).not.toHaveTextContent("全文を取得");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "全文を取得する" });
+    expect(choice).not.toBeChecked();
+    expect(choice).toHaveAccessibleDescription(HINT);
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).fetchFullContent).toBe(true);
+    await waitFor(async () => expect(within(await rowOf("Blog")).getByText("全文を取得")).toBeInTheDocument());
+  });
+
+  it("can be switched on while a feed is added, with the same words beside it", async () => {
+    const server = makeServer();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const form = await section("購読フィードの追加");
+    const choice = within(form).getByRole("checkbox", { name: "全文を取得する" });
+    expect(choice).not.toBeChecked();
+    expect(choice).toHaveAccessibleDescription(HINT);
+    await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await user.click(choice);
+    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+
+    expect(within(await rowOf("Example Blog")).getByText("全文を取得")).toBeInTheDocument();
+    expect(listFeeds(server.db)).toMatchObject([{ url: FEED, fetchFullContent: true }]);
+  });
+});
+
+describe("stale feeds and the numbers of a feed", () => {
+  const DAY = 86_400_000;
+  const daysAgo = (server: TestServer, days: number) => new Date(server.clock().getTime() - days * DAY).toISOString();
+  /** Makes the feed subscribed 400 days ago, with its last new item the given days ago, or none. */
+  function age(server: TestServer, id: number, lastNewDays: number | null) {
+    server.db
+      .prepare("UPDATE feeds SET created_at = ?, last_new_item_at = ? WHERE id = ?")
+      .run(daysAgo(server, 400), lastNewDays === null ? null : daysAgo(server, lastNewDays), id);
+  }
+  const nav = () => screen.getByRole("navigation", { name: "項目" });
+  const navFeeds = (names: string[]) =>
+    within(nav())
+      .getAllByRole("link")
+      .map((link) => link.textContent!.replace(/\s+/g, " ").trim())
+      .filter((text) => names.some((name) => text.startsWith(name)))
+      .map((text) => names.find((name) => text.startsWith(name)));
+  const listOrder = async () =>
+    within(await section("購読フィードの一覧"))
+      .getAllByRole("listitem")
+      .map((item) => item.querySelector(".type-label-md")?.textContent);
+
+  it("marks a feed stale in words, and not a paused one", async () => {
+    const server = makeServer();
+    age(server, feedOf(server, "Old").id, 61);
+    const paused = feedOf(server, "Paused");
+    age(server, paused.id, 100);
+    updateFeed(server.db, paused.id, { enabled: false });
+    age(server, feedOf(server, "Fresh").id, 59);
+    renderApp({ server, route: "/settings/feeds" });
+
+    expect(await rowOf("Old")).toHaveTextContent("更新が止まっています");
+    const pausedRow = await rowOf("Paused");
+    expect(pausedRow).toHaveTextContent("一時停止中");
+    expect(pausedRow).not.toHaveTextContent("更新が止まっています");
+    expect(await rowOf("Fresh")).not.toHaveTextContent("更新が止まっています");
+  });
+
+  it("shows the articles of the last 30 days and when the last new item came, and no other numbers", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    for (let index = 0; index < 12; index += 1) seedFeedArticle(server.db, blog.id, { storedAt: daysAgo(server, 1), starred: index === 0 });
+    seedFeedArticle(server.db, blog.id, { storedAt: daysAgo(server, 40) });
+    server.db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run("2026-02-28T09:00:00.000Z", blog.id);
+    feedOf(server, "Empty");
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).toHaveTextContent("直近30日に12件");
+    expect(row).toHaveTextContent("最後の新着 2月28日 09:00");
+    expect(row).not.toHaveTextContent("開いた");
+    expect(row).not.toHaveTextContent("スター");
+    const empty = await rowOf("Empty");
+    expect(empty).toHaveTextContent("直近30日に0件");
+    expect(empty).toHaveTextContent("新着はまだありません");
+  });
+
+  it("puts stale and failing feeds first while the switch is on, in the order of the left pane, and forgets the switch", async () => {
+    const server = makeServer();
+    const [a, b, c, d] = ["Alpha", "Bravo", "Charlie", "Delta"].map((name) => feedOf(server, name));
+    for (const feed of [a!, c!, d!]) age(server, feed.id, 1);
+    age(server, b!.id, 61);
+    recordFetchFailure(server.db, d!.id, { now: server.clock().toISOString(), error: "HTTP status 500: x" });
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+    await rowOf("Alpha");
+    const names = ["Alpha", "Bravo", "Charlie", "Delta"];
+
+    const toggle = screen.getByRole("checkbox", { name: "問題のある購読フィードを先頭に並べる" });
+    expect(toggle).not.toBeChecked();
+    expect(await listOrder()).toEqual(names);
+    await user.click(toggle);
+    expect(await listOrder()).toEqual(["Bravo", "Delta", "Alpha", "Charlie"]);
+    expect(navFeeds(names)).toEqual(names);
+    await user.click(toggle);
+    expect(await listOrder()).toEqual(names);
+
+    await user.click(toggle);
+    await user.click(screen.getByRole("link", { name: "設定へ戻る" }));
+    await user.click(await screen.findByRole("link", { name: "購読フィードを設定する" }));
+    await rowOf("Alpha");
+    expect(screen.getByRole("checkbox", { name: "問題のある購読フィードを先頭に並べる" })).not.toBeChecked();
+    expect(await listOrder()).toEqual(names);
+  });
+
+  it("shows the stats of the last 30 days in the edit form, with the share opened and starred", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    const other = feedOf(server, "Other");
+    const kept = seedFeedArticle(server.db, other.id, { storedAt: daysAgo(server, 2) });
+    const ids = Array.from({ length: 10 }, (_unused, index) =>
+      seedFeedArticle(server.db, blog.id, { title: index < 2 ? `PR ${index}` : `News ${index}`, storedAt: daysAgo(server, 1), starred: index === 9, duplicateOf: index === 8 ? kept : undefined }),
+    );
+    for (const id of ids.slice(4, 8)) server.db.prepare("UPDATE articles SET opened_at = ? WHERE id = ?").run(server.clock().toISOString(), id);
+    await server.post("/api/v1/filters", { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "PR" }] });
+    server.db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run("2026-03-01T09:00:00.000Z", blog.id);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const stats = await within(row).findByRole("region", { name: "直近30日の統計" });
+    const value = async (term: string) => (await within(stats).findByText(term)).nextElementSibling!.textContent;
+    expect(await value("届いた記事")).toBe("10件");
+    expect(await value("開いた記事")).toBe("4件（40%）");
+    expect(await value("スターを付けた記事")).toBe("1件（10%）");
+    expect(await value("フィルターで隠した記事")).toBe("2件");
+    expect(await value("重複として隠した記事")).toBe("1件");
+    expect(await value("最後の新着")).toBe("3月1日 09:00");
+  });
+
+  it("rounds the share, and says that nothing came instead of a share", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    const ids = [0, 1, 2].map(() => seedFeedArticle(server.db, blog.id, { storedAt: daysAgo(server, 1) }));
+    server.db.prepare("UPDATE articles SET opened_at = ? WHERE id = ?").run(server.clock().toISOString(), ids[0]!);
+    feedOf(server, "Empty");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const stats = await within(row).findByRole("region", { name: "直近30日の統計" });
+    expect((await within(stats).findByText("開いた記事")).nextElementSibling).toHaveTextContent("1件（33%）");
+
+    const empty = await rowOf("Empty");
+    await user.click(within(empty).getByRole("button", { name: "Emptyを編集" }));
+    const none = await within(empty).findByRole("region", { name: "直近30日の統計" });
+    expect(await within(none).findByText("直近30日に届いた記事はありません。")).toBeInTheDocument();
+    expect(none).not.toHaveTextContent("%");
+  });
+
+  it("counts again after the feed is fetched now", async () => {
+    const server = makeServer();
+    server.site.set("https://blog.example.org/feed.xml", rss("Blog", ["a", "b"]));
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    let row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    let stats = await within(row).findByRole("region", { name: "直近30日の統計" });
+    expect((await within(stats).findByText("届いた記事")).nextElementSibling).toHaveTextContent("0件");
+    await user.click(within(row).getByRole("button", { name: "やめる" }));
+    await user.click(within(row).getByRole("button", { name: "Blogをいま取得" }));
+    expect(await screen.findByText("新しい記事を2件取得しました")).toBeInTheDocument();
+
+    row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    stats = await within(row).findByRole("region", { name: "直近30日の統計" });
+    await waitFor(() => expect(within(stats).getByText("届いた記事").nextElementSibling).toHaveTextContent("2件"));
+    expect(row).toHaveTextContent("直近30日に2件");
   });
 });

@@ -11,7 +11,7 @@ async function published() {
   h.feed(FEED, [{ title: "Flaw disclosed {flaw} [i4]", link: "https://example.org/disclosed" }]);
   await h.run();
   const [article] = h.articles();
-  setArticleFlags(h.db, article!.id, { isRead: true });
+  setArticleFlags(h.db, article!.id, { isRead: true }, "2026-03-01T12:00:00.000Z");
   return { h, article: article! };
 }
 

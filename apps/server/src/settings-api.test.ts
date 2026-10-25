@@ -137,6 +137,25 @@ describe("settings", () => {
     });
   });
 
+  it("reads and changes duplicate removal, on by default", async () => {
+    const s = testServer();
+    expect((await (await s.get("/api/v1/settings")).json()).removeDuplicates).toBe(true);
+    expect((await (await s.patch("/api/v1/settings", { removeDuplicates: false })).json()).removeDuplicates).toBe(false);
+    expect((await (await s.get("/api/v1/settings")).json()).removeDuplicates).toBe(false);
+  });
+
+  it("reads and changes the days after which a feed counts as stale, and refuses 0 and 30.5 with the field", async () => {
+    const s = testServer();
+    expect((await (await s.get("/api/v1/settings")).json()).staleFeedDays).toBe(60);
+    expect((await (await s.patch("/api/v1/settings", { staleFeedDays: 90 })).json()).staleFeedDays).toBe(90);
+    for (const days of [0, 30.5]) {
+      const response = await s.patch("/api/v1/settings", { staleFeedDays: days });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "staleFeedDays" })]);
+    }
+    expect((await (await s.get("/api/v1/settings")).json()).staleFeedDays).toBe(90);
+  });
+
   it("answers 400 for an unknown time zone and keeps the stored settings", async () => {
     const s = testServer();
     await s.patch("/api/v1/settings", { timeZone: "Asia/Tokyo" });
@@ -168,7 +187,7 @@ describe("settings file", () => {
       "version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n    topics:\n      - text: New models\n",
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ categoriesCreated: 1, categoriesUpdated: 0, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, stopWordsCreated: 0 });
+    expect(await response.json()).toEqual({ categoriesCreated: 1, categoriesUpdated: 0, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
     expect((await (await s.get("/api/v1/categories")).json())[0].slug).toBe("cars");
   });
 

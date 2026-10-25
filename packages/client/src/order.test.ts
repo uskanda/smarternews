@@ -1,7 +1,7 @@
 import type { Category, Feed } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
 import { buildNav, listKey, type ListTarget, type NavModel } from "./nav.ts";
-import { applyMove, dropAt, edgeScroll, groupAt, movableOf, nextTarget, stepMove, type Row } from "./order.ts";
+import { applyMove, dropAt, edgeScroll, groupAt, movableOf, nextEventCategory, nextTarget, stepMove, stepTarget, type Row } from "./order.ts";
 
 const category = (id: number, name: string, kind: Category["kind"] = "news"): Category => ({
   id,
@@ -27,6 +27,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   enabled: true,
   autoSummarize: false,
   translate: false,
+  fetchFullContent: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,
@@ -34,7 +35,11 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   nextFetchAt: null,
   articleCount: 0,
   starredCount: 0,
+  annotatedCount: 0,
   createdAt: "2026-03-01T00:00:00.000Z",
+  lastNewItemAt: null,
+  stale: false,
+  recentArticleCount: 0,
 });
 
 // A (feeds X, Y, Z), B (feed P), C (no feed), E (events), and the loose feed L.
@@ -249,5 +254,74 @@ describe("edgeScroll", () => {
     expect(edgeScroll({ ...list, y: 398, offset: 595 })).toBe(5);
     expect(edgeScroll({ ...list, y: 101, offset: 0 })).toBe(0);
     expect(edgeScroll({ ...list, y: 101, offset: 3 })).toBe(-3);
+  });
+});
+
+describe("stepTarget", () => {
+  const open = () => false;
+  const folded = (...keys: string[]) => (key: string) => keys.includes(key);
+  const views = (type: "unread" | "all" | "starred" | "generated"): ListTarget => ({ type });
+
+  it("goes down and up through the views at the top", () => {
+    expect(stepTarget(model(), views("unread"), 1, open)).toEqual(views("all"));
+    expect(stepTarget(model(), views("starred"), -1, open)).toEqual(views("all"));
+    expect(stepTarget(model(), { type: "recentlyRead" }, 1, open)).toEqual({ type: "annotations" });
+    expect(stepTarget(model(), { type: "annotations" }, 1, open)).toEqual(cat(1));
+    expect(stepTarget(model(), cat(1), -1, open)).toEqual({ type: "annotations" });
+    expect(stepTarget(model(), { type: "annotations" }, -1, open)).toEqual({ type: "recentlyRead" });
+  });
+
+  it("goes from a category into the entries below it, and on to the next category", () => {
+    expect(stepTarget(model(), cat(1), 1, open)).toEqual(cat(1, true));
+    expect(stepTarget(model(), cat(1, true), 1, open)).toEqual(fd(11));
+    expect(stepTarget(model(), fd(13), 1, open)).toEqual(cat(2));
+    expect(stepTarget(model(), cat(2), -1, open)).toEqual(fd(13));
+    expect(stepTarget(model(), cat(4), 1, open)).toEqual({ type: "uncategorized" });
+    expect(stepTarget(model(), { type: "uncategorized" }, 1, open)).toEqual(fd(91));
+  });
+
+  it("skips the entries below a folded category", () => {
+    expect(stepTarget(model(), cat(1), 1, folded("category-1"))).toEqual(cat(2));
+    expect(stepTarget(model(), cat(2), -1, folded("category-1"))).toEqual(cat(1));
+  });
+
+  it("moves from a folded category when an entry hidden below it is open", () => {
+    expect(stepTarget(model(), fd(12), 1, folded("category-1"))).toEqual(cat(2));
+    expect(stepTarget(model(), fd(12), -1, folded("category-1"))).toEqual({ type: "annotations" });
+  });
+
+  it("goes nowhere past the ends", () => {
+    expect(stepTarget(model(), fd(91), 1, open)).toBeNull();
+    expect(stepTarget(model(), views("unread"), -1, open)).toBeNull();
+    expect(stepTarget(model(), { type: "uncategorized" }, 1, folded("uncategorized"))).toBeNull();
+  });
+
+  it("opens the first entry going down and the last going up when nothing is current", () => {
+    expect(stepTarget(model(), null, 1, open)).toEqual(views("unread"));
+    expect(stepTarget(model(), null, -1, open)).toEqual(fd(91));
+    expect(stepTarget(model(), null, -1, folded("uncategorized"))).toEqual({ type: "uncategorized" });
+    expect(stepTarget(model(), fd(999), 1, open)).toEqual(views("unread"));
+  });
+});
+
+describe("nextEventCategory", () => {
+  const two = () => buildNav({ categories: [category(1, "A"), category(5, "E", "event"), category(2, "B"), category(6, "F", "event")], feeds: FEEDS, counts: undefined });
+
+  it("goes from an event category to the next one, and from the last back to the first", () => {
+    expect(nextEventCategory(two(), cat(5))).toEqual(cat(6));
+    expect(nextEventCategory(two(), cat(6))).toEqual(cat(5));
+  });
+
+  it("opens the first event category from anywhere else, or from nowhere", () => {
+    expect(nextEventCategory(two(), { type: "unread" })).toEqual(cat(5));
+    expect(nextEventCategory(two(), cat(1))).toEqual(cat(5));
+    expect(nextEventCategory(two(), fd(11))).toEqual(cat(5));
+    expect(nextEventCategory(two(), null)).toEqual(cat(5));
+  });
+
+  it("stays on the only event category, and opens nothing without one", () => {
+    expect(nextEventCategory(model(), cat(4))).toEqual(cat(4));
+    expect(nextEventCategory(model(), null)).toEqual(cat(4));
+    expect(nextEventCategory(buildNav({ categories: [category(1, "A")], feeds: [], counts: undefined }), null)).toBeNull();
   });
 });

@@ -13,6 +13,10 @@ const PATHS = {
   collapse: "M6 9l6 6 6-6",
   expand: "M9 6l6 6-6 6",
   camera: "M4 8h3l2-3h6l2 3h3v11H4zM12 17a3.5 3.5 0 100-7 3.5 3.5 0 000 7z",
+  // A page of text: the full content of a feed article.
+  fullText: "M6 3h8l4 4v14H6zM14 3v4h4M9 11h6M9 14h6M9 17h4",
+  // A note: a sheet with a folded corner and lines, after a highlight that has one.
+  note: "M5 4h10l4 4v12H5zM8 11h8M8 14h8M8 17h5",
 } as const;
 
 export type IconName = keyof typeof PATHS;

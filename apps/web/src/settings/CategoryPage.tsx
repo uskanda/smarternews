@@ -7,6 +7,7 @@ import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTopics } 
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
+import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { KIND_LABEL, refusal } from "./SettingsPage.tsx";
 
@@ -390,6 +391,7 @@ function DeleteCategory({ category, onLeave }: { category: Category; onLeave: ()
     void client.invalidateQueries({ queryKey: ["counts"] });
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["feeds"] });
+    void client.invalidateQueries({ queryKey: ["filters"] });
   }
   async function remove() {
     try {
@@ -438,6 +440,7 @@ function DeleteCategory({ category, onLeave }: { category: Category; onLeave: ()
           「{category.name}」と、トピック{topicCount ?? "…"}件と記事{articleCount ?? "…"}件が消えます。実行履歴も消え、元に戻せません。
         </p>
         {feedCount > 0 ? <p>購読フィード{feedCount}件は消えず、「未分類」へ移ります。その配信記事も残ります。</p> : null}
+        <ScopedFiltersNote target={{ categoryId: category.id }} />
         <p>記事を残したまま収集だけを止めるには、無効にしてください。</p>
       </ConfirmDialog>
     </section>

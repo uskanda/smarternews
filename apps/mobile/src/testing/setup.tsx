@@ -12,6 +12,8 @@ afterEach(() => {
   require("../shell/collapsed").resetCollapsedState();
   // So is the colour scheme; every test starts following the device.
   require("../theme/store").resetThemeState();
+  // So is the setting to mark read what the list is scrolled past; every test starts with it off.
+  require("../settings/scroll-read").resetScrollReadState();
 });
 
 jest.mock("@react-native-async-storage/async-storage", () => require("@react-native-async-storage/async-storage/jest/async-storage-mock"));

@@ -50,7 +50,7 @@ terms:
     aliases: ["クロール間隔", "ポーリング間隔"]
     en: "fetch interval"
   - term: "ストップワード"
-    definition: "タイトルまたは内容に含む配信記事を、一覧から隠すために登録する語。"
+    definition: "以前の版で配信記事を隠すために登録した語で、今はフィルターに置き換わった。移行の説明にだけ使う。"
     aliases: ["NGワード", "ミュート語"]
     en: "stop word"
   - term: "フォルダー"
@@ -302,3 +302,131 @@ terms:
     definition: "画面の上の位置を指して操作する入力装置。"
     aliases: []
     en: "mouse"
+  - term: "フィルター"
+    definition: "配信記事を一覧から隠すために登録する条件の組で、隠すフィルターと残すフィルターがある。"
+    aliases: []
+    en: "filter"
+  - term: "隠すフィルター"
+    definition: "条件に合う配信記事を一覧から隠すフィルター。"
+    aliases: ["除外フィルター"]
+    en: "hide filter"
+  - term: "残すフィルター"
+    definition: "条件に合わない配信記事を一覧から隠すフィルター。"
+    aliases: ["抽出フィルター", "ホワイトリスト"]
+    en: "keep filter"
+  - term: "全文"
+    definition: "配信記事の元のページから取り出してMarkdownに変換し、配信された内容とは別に保存した本文。"
+    aliases: ["フルテキスト", "完全な本文"]
+    en: "full content"
+  - term: "全文の自動の取得"
+    definition: "保存のあとに新しい配信記事の全文を取得する、購読フィードごとの設定。"
+    aliases: ["フルコンテンツ"]
+    en: "automatic full-content fetching"
+  - term: "最近読んだ記事"
+    definition: "既読の時刻が直近7日以内の記事を、その新しい順に集めた一覧。"
+    aliases: ["既読履歴", "閲覧履歴"]
+    en: "recently read"
+  - term: "既読の時刻"
+    definition: "記事が最後に未読から既読になった時刻で、未読に戻すと消える。"
+    aliases: ["既読日時", "読了時刻"]
+    en: "read time"
+  - term: "検索語"
+    definition: "記事を探すために利用者が入力する、空白で区切った1つ以上の語。"
+    aliases: []
+    en: "search terms"
+  - term: "索引"
+    definition: "記事の照合する欄を正規化して入れた、検索のための表。"
+    aliases: ["インデックス"]
+    en: "search index"
+  - term: "語の色付け"
+    definition: "登録した語を、記事の一覧と本文で色と下線を付けて目立たせる機能。"
+    aliases: ["スポットライト"]
+    en: "term highlights"
+  - term: "語のまとまり"
+    definition: "色付けの語を束ね、名前と1つの色を持つ単位。"
+    aliases: ["語のグループ"]
+    en: "term group"
+  - term: "色付けの語"
+    definition: "語の色付けのために、語のまとまりに登録する語。"
+    aliases: ["強調語"]
+    en: "highlighted term"
+  - term: "重複の除去"
+    definition: "複数の購読フィードが配信した同じ記事を、全体とカテゴリの一覧で1件だけ見せる機能。"
+    aliases: []
+    en: "duplicate removal"
+  - term: "画像の中継"
+    definition: "画面とアプリに出す画像をサーバーが取得先から取得し、署名付きのURLで返す仕組み。"
+    aliases: ["画像プロキシ"]
+    en: "image proxy"
+  - term: "中継のURL"
+    definition: "元の画像のURLと署名を含む、画像の中継を指すURL。"
+    aliases: ["プロキシURL"]
+    en: "proxy URL"
+  - term: "プロキシ"
+    definition: "利用者の代わりに外部へ要求を出し、その応答を返すサーバー。"
+    aliases: []
+    en: "proxy"
+  - term: "ニュースレター"
+    definition: "差出人が購読者へメールで定期的に送る記事。"
+    aliases: []
+    en: "newsletter"
+  - term: "サムネイル"
+    definition: "記事の内容を一覧で示すための小さな画像。"
+    aliases: []
+    en: "thumbnail"
+  - term: "ディスク"
+    definition: "サーバーがファイルを置く記憶装置。"
+    aliases: []
+    en: "disk"
+  - term: "トランザクション"
+    definition: "データベースへの複数の変更を、すべて反映するか、すべて取り消すかのどちらかにする単位。"
+    aliases: []
+    en: "transaction"
+  - term: "チェックボックス"
+    definition: "押すたびに選んだ状態と選んでいない状態が入れ替わる、画面の入力部品。"
+    aliases: []
+    en: "checkbox"
+  - term: "リファラー"
+    definition: "ブラウザーが要求に付けて送る、遷移元のページのURL。"
+    aliases: []
+    en: "referrer"
+  - term: "フラグ"
+    definition: "ある状態にあるかどうかを表す、真か偽の値。"
+    aliases: []
+    en: "flag"
+  - term: "ピクセル"
+    definition: "画像と画面を構成する最小の点。"
+    aliases: []
+    en: "pixel"
+  - term: "インスタンス"
+    definition: "同じプログラムから起動した、個々の実行中のサーバー。"
+    aliases: []
+    en: "instance"
+  - term: "セール"
+    definition: "商品を通常より安い値段で売る催し。"
+    aliases: []
+    en: "sale"
+  - term: "注釈"
+    definition: "利用者が記事に付ける、ハイライトと記事全体へのメモの総称。"
+    aliases: ["アノテーション"]
+    en: "annotation"
+  - term: "ハイライト"
+    definition: "利用者が記事の本文の原文から選んで印を付けた文字列で、注釈の1種類。"
+    aliases: ["マーカー", "傍線"]
+    en: "highlight"
+  - term: "記事全体へのメモ"
+    definition: "本文の範囲に結び付けずに、記事ごとに1つ書けるメモ。"
+    aliases: ["記事メモ"]
+    en: "article note"
+  - term: "開いた時刻"
+    definition: "記事の本文を初めて表示した時刻で、未読に戻しても消えない。"
+    aliases: ["初回閲覧時刻", "閲覧日時"]
+    en: "opened time"
+  - term: "更新の止まった購読フィード"
+    definition: "有効な購読フィードのうち、最後に新しい項目が現れてから、決めた日数が過ぎたもの。"
+    aliases: ["停止フィード", "休眠フィード"]
+    en: "stale feed"
+  - term: "この端末の設定"
+    definition: "設定の画面のうち、その端末（Webではブラウザー）にだけ保存する設定を集めた区画。"
+    aliases: ["端末設定", "ローカル設定"]
+    en: "settings on this device"

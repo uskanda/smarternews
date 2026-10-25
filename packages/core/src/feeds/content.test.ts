@@ -35,14 +35,16 @@ describe("convertContent", () => {
     expect(md(html)).toBe("[About](https://example.org/about) Bad Mail");
   });
 
-  it("keeps images served over HTTPS and removes the others", () => {
+  it("keeps images served over HTTP and HTTPS with their original URLs, and removes the others", () => {
+    // The server relays both; what is stored is the original, and the API names the relay.
     const html = `<p><img src="https://img.example.org/a.png" alt="A chart"><img src="http://img.example.org/b.png" alt="Plain"><img src="data:image/png;base64,AAAA" alt="Inline"></p>`;
     const result = md(html);
-    expect(result).toBe("![A chart](https://img.example.org/a.png)");
+    expect(result).toBe("![A chart](https://img.example.org/a.png)![Plain](http://img.example.org/b.png)");
   });
 
   it("removes one-pixel images, which only count readers", () => {
     expect(md(`<p>Text<img src="https://t.example.org/p.gif" width="1" height="1"></p>`)).toBe("Text");
+    expect(md(`<p>Text<img src="http://t.example.org/p.gif" width="1px" height="1px"></p>`)).toBe("Text");
   });
 
   it("shows a linked image as the image", () => {

@@ -443,3 +443,38 @@ describe("recoverInterruptedRuns", () => {
     });
   });
 });
+
+describe("the relayed images kept on disk", () => {
+  it("are purged at start-up and then once an hour, with the other purges", () => {
+    const db = createTestDb();
+    const clock = fakeClock("2026-03-01T05:00:00.000Z");
+    const queue = new RunQueue({ db, clock, execute: async () => {} });
+    const purges: string[] = [];
+    const scheduler = new Scheduler({ db, clock, queue, purgeImages: () => void purges.push(clock().toISOString()) });
+    scheduler.begin({ catchUp: true });
+    scheduler.tick();
+    expect(purges).toEqual(["2026-03-01T05:00:00.000Z"]);
+    clock.advance(30 * MINUTE);
+    scheduler.tick();
+    expect(purges).toHaveLength(1);
+    clock.advance(30 * MINUTE);
+    scheduler.tick();
+    expect(purges).toEqual(["2026-03-01T05:00:00.000Z", "2026-03-01T06:00:00.000Z"]);
+  });
+
+  it("do not stop the other purges when their purge fails", () => {
+    const db = createTestDb();
+    const clock = fakeClock("2026-03-01T05:00:00.000Z");
+    const queue = new RunQueue({ db, clock, execute: async () => {} });
+    const scheduler = new Scheduler({
+      db,
+      clock,
+      queue,
+      purgeImages: () => {
+        throw new Error("disk gone");
+      },
+      log: () => {},
+    });
+    expect(() => scheduler.tick()).not.toThrow();
+  });
+});

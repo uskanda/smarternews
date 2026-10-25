@@ -1,10 +1,11 @@
-import { formatShort } from "@smarternews/client";
-import type { ArticleSummary } from "@smarternews/core/api";
+import { formatShort, type TermMatcher } from "@smarternews/client";
+import type { ArticleSummary, TermGroup } from "@smarternews/core/api";
 import { memo, useRef } from "react";
 import { Pressable, View } from "react-native";
 import Swipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useTheme } from "../theme/theme";
 import { Txt } from "../ui/Txt";
+import { highlight } from "./highlight";
 
 export function Badge({ children, tone = "plain" }: { children: string; tone?: "plain" | "warning" }) {
   const theme = useTheme();
@@ -18,6 +19,28 @@ export function Badge({ children, tone = "plain" }: { children: string; tone?: "
   );
 }
 
+/** The badge of a term group a row matched: its name on the group's fill, with a line of its colour on the left. */
+function TermBadge({ group }: { group: TermGroup }) {
+  const theme = useTheme();
+  return (
+    <View
+      testID={`term-badge-${group.color}`}
+      style={{
+        flexShrink: 1,
+        paddingHorizontal: theme.spacing.xs,
+        borderLeftWidth: 2,
+        borderLeftColor: theme.colors[`term-${group.color}`],
+        borderRadius: theme.rounded.sm,
+        backgroundColor: theme.colors[`term-${group.color}-fill`],
+      }}
+    >
+      <Txt variant="label-sm" numberOfLines={1}>
+        {group.name}
+      </Txt>
+    </View>
+  );
+}
+
 export interface ArticleRowProps {
   article: ArticleSummary;
   /** The category of a generated article, the feed of a feed article. */
@@ -25,9 +48,19 @@ export interface ArticleRowProps {
   timeZone: string;
   /** The current time in milliseconds, the same for every row of one drawing of the list. */
   now: number;
+  /** Which time the row shows: when the article was last updated, or, in the recently read articles, when it was read. */
+  time?: "updated" | "read";
   onOpen: (article: ArticleSummary) => void;
   onToggleRead: (article: ArticleSummary) => void;
   onLongPress: (article: ArticleSummary) => void;
+  /** In search results: the text around the match, shown in place of the summary when there is one. */
+  excerpt?: string | null;
+  /** In search results: the excerpt was taken from a note of the reader's, which the row says before it. */
+  excerptFromNote?: boolean;
+  /** In search results: the words to mark in the headline and the excerpt. */
+  terms?: readonly string[];
+  /** The term groups to colour the headline and the summary by, and to show the badges of. */
+  groups?: TermMatcher | null;
 }
 
 /**
@@ -36,23 +69,41 @@ export interface ArticleRowProps {
  *
  * Drawn again only when its own article changes: a list redraws for many reasons, and a row holds a gesture.
  */
-export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZone, now, onOpen, onToggleRead, onLongPress }: ArticleRowProps) {
+export const ArticleRow = memo(function ArticleRow({
+  article,
+  sourceName,
+  timeZone,
+  now,
+  time: shownTime = "updated",
+  onOpen,
+  onToggleRead,
+  onLongPress,
+  excerpt = null,
+  excerptFromNote = false,
+  terms,
+  groups = null,
+}: ArticleRowProps) {
   const theme = useTheme();
   const swipeable = useRef<SwipeableMethods>(null);
   // A feed article has no importance, and so no mark; it has its page instead of counted sources.
   const marked = (article.importance ?? 0) >= 4;
   const generated = article.origin === "generated";
-  const time = formatShort(article.updatedAt, timeZone, new Date(now));
+  const headline = article.translatedTitle ?? article.title;
+  const line = excerpt ?? article.summary;
+  // Judged by what the row shows: a group whose terms are only in the body gets no badge.
+  const matched = groups ? groups.groupsIn([headline, line]) : [];
+  const time = formatShort(shownTime === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, new Date(now));
   const spoken = [
     marked ? `重要度${article.importance}` : null,
-    article.translatedTitle ?? article.title,
-    article.summary,
+    headline,
+    excerpt !== null && excerptFromNote ? `メモ、${line}` : line,
     sourceName,
     time,
     generated ? `出典${article.refCount}件` : null,
     article.revision > 0 ? "更新" : null,
     article.unconfirmed ? "未確認" : null,
     article.starred ? "スター" : null,
+    ...matched.map((group) => group.name),
     article.isRead ? "既読" : "未読",
   ]
     .filter((part): part is string => Boolean(part))
@@ -125,10 +176,15 @@ export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZo
               article.importance === 5 ? { backgroundColor: theme.colors["mark-fill"], alignSelf: "flex-start" } : null,
             ]}
           >
-            {article.translatedTitle ?? article.title}
+            {highlight(headline, terms, groups)}
           </Txt>
-          <Txt variant="body-md" color="on-surface-muted" numberOfLines={2}>
-            {article.summary}
+          <Txt testID={excerpt !== null ? `excerpt-${article.id}` : undefined} variant="body-md" color="on-surface-muted" numberOfLines={2}>
+            {excerpt !== null && excerptFromNote ? (
+              <Txt testID={`excerpt-note-${article.id}`} variant="label-sm" color="on-surface">
+                {"メモ "}
+              </Txt>
+            ) : null}
+            {highlight(line, terms, groups)}
           </Txt>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: theme.spacing.md, rowGap: theme.spacing.xs }}>
             <Txt variant="label-sm" color="on-surface-muted">
@@ -149,6 +205,9 @@ export const ArticleRow = memo(function ArticleRow({ article, sourceName, timeZo
                 スター
               </Txt>
             ) : null}
+            {matched.map((group) => (
+              <TermBadge key={group.id} group={group} />
+            ))}
           </View>
         </View>
       </Pressable>

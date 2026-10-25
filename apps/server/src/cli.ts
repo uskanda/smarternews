@@ -58,9 +58,15 @@ export function startServer(
   });
 }
 
+/** Names the files of tokens and keys that the runtime created. Their content is never written out. */
+export function announceNewFiles(runtime: Pick<Runtime, "newTokenFiles" | "newKeyFiles">, io: Pick<CliIo, "stdout">): void {
+  for (const file of runtime.newTokenFiles) io.stdout(`created a token file: ${file}\n`);
+  for (const file of runtime.newKeyFiles) io.stdout(`created the key that signs image URLs: ${file}\n`);
+}
+
 async function serveCommand(io: CliIo): Promise<number> {
   const runtime = createRuntime(io);
-  for (const file of runtime.newTokenFiles) io.stdout(`created a token file: ${file}\n`);
+  announceNewFiles(runtime, io);
   const { closed, resumed } = runtime.recover();
   if (closed > 0) io.stdout(`closed ${closed} run(s) that an earlier stop interrupted\n`);
   if (resumed > 0) io.stdout(`resumed ${resumed} run(s) that were waiting when the server stopped\n`);

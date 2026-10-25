@@ -4,7 +4,7 @@
 # Check after every edit: designmd lint DESIGN.md   (0 errors; read the warnings)
 version: alpha
 name: smarternews
-description: 記事の一覧は密度の高い道具として、本文は落ち着いて読む紙面として見せる。目立つ色は重要度の印だけにする。
+description: 記事の一覧は密度の高い道具として、本文は落ち着いて読む紙面として見せる。目立つ色は重要度の印と、利用者が選んだ語の色付けだけにする。
 colors:
   primary: "#24418F"
   on-primary: "#FFFFFF"
@@ -17,6 +17,19 @@ colors:
   selected: "#E8EDF7"
   mark: "#FFD84A"
   mark-fill: "#FFE98A"
+  search-match: "#CBEEDD"
+  search-match-line: "#1D6B4C"
+  term-green: "#3D7A16"
+  term-green-fill: "#DCEFC4"
+  term-purple: "#6E44A8"
+  term-purple-fill: "#E8DAF8"
+  term-pink: "#A8346C"
+  term-pink-fill: "#FADCE9"
+  term-orange: "#A4520E"
+  term-orange-fill: "#FFE2CC"
+  annotation: "#1F69A3"
+  annotation-fill: "#CFE6FA"
+  text-selection: "#C5CDD8"
   warning: "#8A5200"
   error: "#A1260D"
   on-error: "#FFFFFF"
@@ -31,6 +44,19 @@ colors:
   selected-darkblue: "#212B3A"
   mark-darkblue: "#E9C13A"
   mark-fill-darkblue: "#5C4B12"
+  search-match-darkblue: "#1E4A3B"
+  search-match-line-darkblue: "#7FD8AE"
+  term-green-darkblue: "#9CD46C"
+  term-green-fill-darkblue: "#253E19"
+  term-purple-darkblue: "#C4A8F0"
+  term-purple-fill-darkblue: "#3E2F5E"
+  term-pink-darkblue: "#F09EC4"
+  term-pink-fill-darkblue: "#58283F"
+  term-orange-darkblue: "#F2AE76"
+  term-orange-fill-darkblue: "#502F16"
+  annotation-darkblue: "#86C5F2"
+  annotation-fill-darkblue: "#1A3D5C"
+  text-selection-darkblue: "#3A4656"
   warning-darkblue: "#F0B45C"
   error-darkblue: "#FFA08F"
   on-error-darkblue: "#10151B"
@@ -43,6 +69,7 @@ colors:
   outline-dark: "#303030"
   outline-strong-dark: "#757575"
   selected-dark: "#2A2A2A"
+  text-selection-dark: "#3D3D3D"
   on-error-dark: "#121212"
 typography:
   headline-lg:
@@ -140,6 +167,29 @@ components:
     backgroundColor: "{colors.mark-fill}"
     textColor: "{colors.on-surface}"
     typography: "{typography.label-md}"
+  search-match:
+    backgroundColor: "{colors.search-match}"
+    textColor: "{colors.on-surface}"
+  term-match-green:
+    backgroundColor: "{colors.term-green-fill}"
+    textColor: "{colors.on-surface}"
+  term-match-purple:
+    backgroundColor: "{colors.term-purple-fill}"
+    textColor: "{colors.on-surface}"
+  term-match-pink:
+    backgroundColor: "{colors.term-pink-fill}"
+    textColor: "{colors.on-surface}"
+  term-match-orange:
+    backgroundColor: "{colors.term-orange-fill}"
+    textColor: "{colors.on-surface}"
+  annotation-mark:
+    backgroundColor: "{colors.annotation-fill}"
+    textColor: "{colors.on-surface}"
+  term-badge:
+    backgroundColor: "{colors.term-green-fill}"
+    textColor: "{colors.on-surface}"
+    typography: "{typography.label-sm}"
+    rounded: "{rounded.sm}"
   badge-warning:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.warning}"
@@ -162,6 +212,7 @@ components:
 この2つの役割の違いを、書体の違いで示す。一覧と操作はゴシック、本文と記事の見出しは明朝にする。
 
 画面の中で目立つ色は、重要度を示す黄色の印だけにする。蛍光ペンで見出しに線を引く見立てで、重要な記事だけが一覧の中で目に入る。
+例外は、利用者が登録した語の色付けと、利用者が本文に付けたハイライトである。利用者が自分で選んだ語と色なので、気になる語を見つける手がかりとして、薄い地の色と下線を許す。ハイライトも利用者が自分で付けた印なので、空色の薄い地の色を許す。
 それ以外は、青みのある灰色の濃淡と、操作を示す藍色だけで組み立てる。
 
 ## Colors
@@ -184,11 +235,15 @@ components:
 - `primary`（`#24418F`）は、リンク、押せる部品の文字と枠、フォーカスの枠に使う。主となるボタンは地をこの色にする。
 - `selected`（`#E8EDF7`）は、選択中の行と項目の地に使う。
 - `mark`（`#FFD84A`）と `mark-fill`（`#FFE98A`）は、重要度の印だけに使う。`mark` は見出しの左の線と、読み手への影響の左の線。`mark-fill` は見出しの文字の下半分に重ねる。文字の色には使わない。
+- `search-match`（`#CBEEDD`）と `search-match-line`（`#1D6B4C`）は、検索で一致した語の強調だけに使う。`search-match` を語の地に塗り、`search-match-line` で語の下に線を引く。`mark` を使わないのは、`mark` が重要度の印だからである。緑みの色にしたのは、重要度の黄色とも、選択中の行の青みの灰色とも色相を離すためである。語の色付け（#54）の色とも分ける。
+- `term-<色>-fill` と `term-<色>` は、語の色付けだけに使う。色は `green`、`purple`、`pink`、`orange` の4つで、利用者が語のまとまりごとに選ぶ。`term-<色>-fill` を一致した箇所と一覧の行の印の地に塗り、`term-<色>` で下線と印の左の線を引く。文字は `on-surface` のままにする。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。線は `surface` に対して3対1以上を保つ。黄色と青は使わない。黄色は重要度の印と、青はリンクの藍色と見分けられなくなるからである。緑は、検索の `search-match` の青みのある緑から色相を黄の側へ離す。
+- `annotation-fill`（`#CFE6FA`）と `annotation`（`#1F69A3`）は、利用者が本文に付けたハイライトだけに使う。`annotation-fill` をハイライトした文字の地に塗り、`annotation` でメモの印のアイコンを描く。色相は空色にする。重要度の黄色、検索の青みのある緑、語の色付けの4色から離し、リンクの藍色の文字とも見分けられるようにするためである。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。アイコンは `surface` に対して3対1以上を保つ。
+- `text-selection`（`#C5CDD8`）は、本文の中で文字を選んでいる間の地の色に使う。ブラウザーの既定の選択の色は青く、ハイライトの空色と見分けにくいからである。色相を持たない灰色にして、ハイライトと区別する。文字は `on-surface` のままにする。
 - `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。
 - `error`（`#A1260D`）は、失敗の表示と、削除を確定するボタンに使う。
 
 暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-darkblue`（`#5C4B12`）を重ね、文字は `on-surface` の暗い配色の値のままにする。
-印の色（`mark`、`mark-fill`、`warning`、`error`）は、「ダーク」の値を定義しない。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
+印の色は、「ダーク」の値を定義しない。`mark`、`mark-fill`、`search-match`、`search-match-line`、`term-<色>`、`term-<色>-fill`、`warning`、`error` である。`annotation` と `annotation-fill` も同じく扱う。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
 
 ## Typography
 
@@ -213,7 +268,7 @@ components:
 - Androidアプリでは、押せる部品の高さと幅を `touch-android`（48dp）以上にする。Androidの目安に合わせた値である。
 - Androidアプリは1ペインだけで、縦向きに固定する。項目の一覧は、左から出る引き出しに置く。左右の余白は `lg`（16dp）とする。
 - 間隔は `spacing` の `xs` から `2xl` までの6段だけを使う。行の中は `xs` と `sm`、行の上下は `md`、区画の間は `xl`、本文のまわりは `2xl`。
-- 一覧の行は、見出し、要約1行、補足1行の3段にそろえる。補足は左から、カテゴリ、時刻、出典の件数、印の順に並べる。
+- 一覧の行は、見出し、要約1行、補足1行の3段にそろえる。補足は左から、カテゴリ、時刻、出典の件数、印の順に並べ、語のまとまりの印を最後に置く。
 - 配信記事の行も同じ3段にする。補足は、購読フィードの名前、時刻の順に並べる。重要度の印と出典の件数は持たないので出さない。
 - 項目の一覧は2段までの木にする。カテゴリの下に「AI生成」と購読フィードを置き、`nav-indent`（16px）だけ字下げする。3段目は作らない。
 - 項目の名前が幅に収まらないときは、末尾を省略して1行に収める。未読数は省略せず、右端に残す。
@@ -250,6 +305,16 @@ components:
 - ドラッグ中の購読フィードが上にあるカテゴリは、配下の項目ごと3pxの枠で囲む。フォーカスの枠（2px）より太くして、置く先の候補であることを示す。
 - 枠の色は、まだ置けない間は `outline-strong` とし、置けるようになったら `primary` へ変える。別のカテゴリが置けるようになった瞬間は、枠を2回点滅させる。動きを減らす設定の端末では点滅させず、色の変化だけで示す。
 - 項目のメニューは、`surface` の地に `outline-strong` の枠で、角は `md` にする。影は付けない。選んでいる行は地を `selected` にし、選べない行は文字を `on-surface-muted` にする。購読フィードの「登録を解除」は、罫線で区切って最後に置く。
+- 一覧の並び順のメニューは、一覧の上部の切り替えの並びに置くボタンから開く。ボタンの文字は「並び順：新しい順」のように、いまの並び順を示す。Webのメニューの見た目は項目のメニューと同じにする。アプリでは、検索の絞り込みと同じく画面の下から出る区画に、2つの並び順をボタンとして並べる。どちらでも、いまの並び順の先頭に「✓」を付ける。選んでいる並び順を、色だけで示さないためである。
+- `search-match` は、検索の結果の一覧の見出しと抜粋、結果から開いた記事の見出しと本文で、一致した語に重ねる。地の色に加えて、`search-match-line` の2pxの下線を引く。重要度5の見出しの `headline-mark` と重なっても、色を見分けられない利用者にも線の形で分かるようにするためである。角は付けず、文字の太さと大きさは周りのまま変えない。
+- `term-match-<色>` は、語の色付けで一致した箇所に重ねる。一覧の行の見出しと抜粋、本文の見出しと本文、訳と原文、要約の区画が対象である。地を `term-<色>-fill` で塗り、`term-<色>` の2pxの下線を、文字から0.3emほど離して引く。リンクの下線より太く、遠くに引いて、リンクの文字と重なっても見分けられるようにする。色を見分けられない利用者にも、線の形で一致した箇所が分かる。角は付けず、文字の太さと大きさは周りのまま変えない。検索で一致した語と重なったところは、`search-match` を内側に重ねる。
+- `annotation-mark` は、利用者が本文に付けたハイライトである。地を `annotation-fill` で塗り、線は引かない。語の色付けと検索の強調は下線を引くので、線の有無で形の上でも見分けられる。重なったところでは、ハイライトを外側に、語の色付けと検索の強調を内側に重ねる。角は付けず、文字の太さと大きさは周りのまま変えない。メモのあるハイライトは、最後の文字のあとに、`annotation` の色でメモの印のアイコンを置く。メモがあることを、色だけでなく形で示すためである。重要度の印（`headline-mark`）は見出しにしか出ないので、本文の中では重ならない。
+- 本文の上部の記事全体へのメモは、本文の上に、見出し「メモ」を `label-sm` の大きさと `on-surface-muted` の色で書き、メモの文を `body-md` にした区画として置く。左に `annotation` の2pxの線を引く。利用者の書いた文であることを、配信元とLLMの文から見分けるためである。
+- 本文に見つからないハイライトは、本文の末尾（出典の前）に、見出し「元の本文にあった箇所」の区画として並べる。ハイライトした文字列は引用の形（左に `outline-strong` の線）で、メモはその下に `body-md` で出す。本文の中の箇所と見分けるため、ハイライトの地の色は付けない。
+- 文字を選んだときのメニューは、選んだ範囲の下に、項目のメニューと同じ見た目（`surface` の地、`outline-strong` の枠、角は `md`）で、ボタンを横に並べる。
+- 注釈の一覧の1行は、記事のタイトル、ハイライトした文字列、メモ、付けた時刻の順に並べる。ハイライトした文字列は2行までで、左に `annotation` の2pxの線を引く。メモは2行までの `body-md`、時刻は `label-sm` の大きさと `on-surface-muted` の色にする。記事全体へのメモの行は、ハイライトした文字列の位置に「記事へのメモ」を `label-sm` で出す。
+- `term-badge` は、一覧の行の補足の最後に並べる、一致した語のまとまりの印である。まとまりの名前を `label-sm` の文字で書き、地を `term-<色>-fill`、左に `term-<色>` の2pxの線を引き、角は `sm` にする。図の `term-badge` は `green` の例である。名前は文字として読み上げる。幅が足りないときは、名前の末尾を省略する。
+- 検索の結果の1行は、要約1行の代わりに、一致した箇所の抜粋を2行まで出す。抜粋は一致した語の前に40字ほどを含むので、1行では語が幅から外れることがあるからである。抜粋がないときは、いつもの要約を1行で出す。
 - `badge-warning` は「未確認」の印。「更新」の印は同じ形で、文字を `on-surface-muted` にする。
 - `banner-error` は失敗の表示。何ができなかったかと、次にできる操作を1つ並べる。
 - フォーカスのある部品は、`primary` の2pxの枠を2px外側に出す。

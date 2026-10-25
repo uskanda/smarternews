@@ -1,6 +1,17 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  addHighlight,
+  annotationListQuerySchema,
+  articleNoteUpdateSchema,
+  deleteArticleNote,
+  deleteHighlight,
+  highlightCreateSchema,
+  highlightUpdateSchema,
+  listAnnotations,
+  saveArticleNote,
+  updateHighlightNote,
   articleListQuerySchema,
+  articleSearchQuerySchema,
   articleUpdateSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
@@ -8,18 +19,24 @@ import {
   createTopic,
   deleteCategory,
   deleteFeed,
-  deleteStopWord,
+  deleteFilter,
   deleteTopic,
   discoverFeeds,
   DomainError,
-  createStopWord,
+  createFilter,
   exportOpml,
   exportSettings,
   feedCreateSchema,
   feedDiscoverSchema,
   feedUpdateSchema,
+  feedStats,
   findCategoryBySlug,
   getArticle,
+  ImageFetchError,
+  verifyImageProxyPath,
+  relayArticleImages,
+  relayFullContent,
+  relayTranslation,
   getCategory,
   getCounts,
   getFeed,
@@ -32,8 +49,11 @@ import {
   listCategories,
   listFeedArticles,
   listFeeds,
+  listListViews,
+  listViewUpdateSchema,
   listRunCandidates,
-  listStopWords,
+  listFilters,
+  listFilterArticles,
   listRuns,
   listTopics,
   markArticlesRead,
@@ -42,23 +62,41 @@ import {
   categoryMoveSchema,
   feedMoveSchema,
   markArticlesUnread,
-  markReadSchema,
+  markReadBodySchema,
+  markSeenArticlesRead,
   markUnreadSchema,
   notFound,
   renderRss,
   requestAutoSummary,
   requestInterpretation,
+  searchArticles,
   setArticleFlags,
   settingsUpdateSchema,
-  stopWordCreateSchema,
-  stopWordUpdateSchema,
+  filterArticlesQuerySchema,
+  filterCreateSchema,
+  filterPreviewSchema,
+  filterUpdateSchema,
+  previewFilter,
+  recordArticleOpened,
+  addHighlightTerm,
+  createTermGroup,
+  deleteHighlightTerm,
+  deleteTermGroup,
+  highlightTermCreateSchema,
+  listTermGroups,
+  moveTermGroup,
+  termGroupCreateSchema,
+  termGroupMoveSchema,
+  termGroupUpdateSchema,
+  updateTermGroup,
   subscribe,
   topicCreateSchema,
   topicUpdateSchema,
   updateCategory,
   updateFeed,
   updateSettings,
-  updateStopWord,
+  updateFilter,
+  updateListView,
   updateTopic,
   zodFieldErrors,
   type ApiError,
@@ -68,6 +106,8 @@ import {
   type FeedFetchResult,
   type FeedPoller,
   type Fetcher,
+  type FullContentWorker,
+  type ImageProxy,
   type ProviderStatus,
   type RunQueue,
   type SummaryWorker,
@@ -90,6 +130,10 @@ export interface AppDeps {
   translation: TranslationService;
   /** Writes the summaries of feed articles. Woken when a reader opens an article that waits for one. */
   summarizer: SummaryWorker;
+  /** Fetches the full content of feed articles, one at a time; an article a reader asks for goes first. */
+  fullContent: FullContentWorker;
+  /** The relay of images: the key that signs their URLs, and what fetches and keeps them. */
+  images: { key: Uint8Array; proxy: ImageProxy };
   tokens: { api: string; feed: string };
   version: string;
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
@@ -124,14 +168,19 @@ async function jsonBody(c: Context): Promise<unknown> {
 }
 
 /** A numeric identifier from the path. Anything else cannot name an existing object. */
-function idParam(c: Context, what: string): number {
-  const raw = c.req.param("id") ?? "";
+function idParam(c: Context, what: string, name = "id"): number {
+  const raw = c.req.param(name) ?? "";
   if (!/^\d{1,15}$/.test(raw)) throw notFound(what, raw);
   return Number(raw);
 }
 
+/** What every answer of the image relay carries: a body that is never taken for anything but what it says. */
+const RELAY_HEADERS = { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" };
+
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation, summarizer } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, images } = deps;
+  /** An article as it is answered: the images of a feed article's content load through the relay. */
+  const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -180,6 +229,25 @@ export function createApp(deps: AppDeps): Hono {
 
   api.get("/health", (c) => c.json({ status: "ok", version: deps.version }));
 
+  // An image element sends no token, so the signature of the URL stands in for it. A path that is not exactly
+  // a signature and an address is refused like a wrong signature.
+  api.get("/image-proxy/*", async (c) => {
+    const parts = new URL(c.req.url).pathname.split("/").slice(4);
+    const url = parts.length === 2 ? verifyImageProxyPath(images.key, parts[0]!, parts[1]!) : null;
+    if (url === null) return c.text("invalid image signature\n", 403, RELAY_HEADERS);
+    try {
+      const image = await images.proxy.get(url);
+      return c.body(image.bytes as Uint8Array<ArrayBuffer>, 200, {
+        ...RELAY_HEADERS,
+        "content-type": image.type,
+        "cache-control": `private, max-age=${Math.floor(images.proxy.maxAgeMs / 1000)}`,
+      });
+    } catch (error) {
+      if (error instanceof ImageFetchError) return c.text("the image could not be fetched\n", 502, RELAY_HEADERS);
+      throw error;
+    }
+  });
+
   api.use("*", async (c, next) => {
     const header = c.req.header("authorization");
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
@@ -227,17 +295,23 @@ export function createApp(deps: AppDeps): Hono {
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
   api.post("/articles/mark-read", async (c) => {
-    const ids = markArticlesRead(db, parse(markReadSchema, await jsonBody(c)));
+    const input = parse(markReadBodySchema, await jsonBody(c));
+    const now = clock().toISOString();
+    const ids = "articles" in input && input.articles ? markSeenArticlesRead(db, input.articles, now) : markArticlesRead(db, input, now);
     return c.json({ updated: ids.length, ids });
   });
   api.post("/articles/mark-unread", async (c) =>
     c.json({ updated: markArticlesUnread(db, parse(markUnreadSchema, await jsonBody(c)).ids) }),
   );
+  // Plain matching against the search index: no model and no translation is involved.
+  api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()), clock().toISOString())));
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
-  api.get("/articles/:id", (c) => c.json(getArticle(db, idParam(c, "article"))));
+  api.get("/articles/:id", (c) => c.json(answered(getArticle(db, idParam(c, "article")))));
   api.patch("/articles/:id", async (c) =>
-    c.json(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)))),
+    c.json(answered(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)), clock().toISOString()))),
   );
+  // Sent by a screen that shows the article's body; marking read is a separate request.
+  api.post("/articles/:id/open", (c) => c.json({ openedAt: recordArticleOpened(db, idParam(c, "article"), clock().toISOString()) }));
   // Translates the content when it has no translation yet, so the answer can take as long as that does.
   api.post("/articles/:id/summary", (c) => {
     if (!requestAutoSummary(db, idParam(c, "article"), clock().toISOString())) return c.json({ status: "none" });
@@ -246,11 +320,39 @@ export function createApp(deps: AppDeps): Hono {
     summarizer.tick();
     return c.json({ status: "queued" });
   });
-  api.post("/articles/:id/translation", async (c) => c.json(await translation.translateArticle(idParam(c, "article"))));
+  api.post("/articles/:id/translation", async (c) => c.json(relayTranslation(await translation.translateArticle(idParam(c, "article")), images.key)));
+  // Answers once the page is fetched: no model is waited for, only the site and the interval per host.
+  api.post("/articles/:id/full-content", async (c) => {
+    const result = await fullContent.fetchFor(idParam(c, "article"));
+    return c.json(result.status === "fetched" ? { ...result, fullContent: relayFullContent(result.fullContent, images.key) } : result);
+  });
   api.get("/translation", (c) => c.json(translation.status()));
 
+  // annotations: plain storage, no model and no translation is involved
+  api.get("/annotations", (c) => c.json(listAnnotations(db, parse(annotationListQuerySchema, c.req.query()))));
+  api.post("/articles/:id/highlights", async (c) => {
+    const id = idParam(c, "article");
+    return c.json(addHighlight(db, id, parse(highlightCreateSchema, await jsonBody(c)), clock().toISOString()), 201);
+  });
+  api.patch("/highlights/:id", async (c) => {
+    const id = idParam(c, "highlight");
+    return c.json(updateHighlightNote(db, id, parse(highlightUpdateSchema, await jsonBody(c)).note, clock().toISOString()));
+  });
+  api.delete("/highlights/:id", (c) => {
+    deleteHighlight(db, idParam(c, "highlight"));
+    return c.body(null, 204);
+  });
+  api.put("/articles/:id/note", async (c) => {
+    const id = idParam(c, "article");
+    return c.json(saveArticleNote(db, id, parse(articleNoteUpdateSchema, await jsonBody(c)).text, clock().toISOString()));
+  });
+  api.delete("/articles/:id/note", (c) => {
+    deleteArticleNote(db, idParam(c, "article"));
+    return c.body(null, 204);
+  });
+
   // subscribed feeds
-  api.get("/feeds", (c) => c.json(listFeeds(db)));
+  api.get("/feeds", (c) => c.json(listFeeds(db, clock())));
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
@@ -259,11 +361,13 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
-  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
+  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
+  // Counted from what the articles are now: no model is involved.
+  api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
   api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
-    return c.json(listFeeds(db));
+    return c.json(listFeeds(db, clock()));
   });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
@@ -272,17 +376,45 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/:id/fetch", async (c) => {
     const id = idParam(c, "feed");
     const outcome = await poller.fetchNow(id);
-    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id) };
+    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id, clock()) };
     return c.json(result);
   });
 
-  // stop words
-  api.get("/stop-words", (c) => c.json(listStopWords(db)));
-  api.post("/stop-words", async (c) => c.json(createStopWord(db, parse(stopWordCreateSchema, await jsonBody(c)), clock), 201));
-  api.patch("/stop-words/:id", async (c) =>
-    c.json(updateStopWord(db, idParam(c, "stop word"), parse(stopWordUpdateSchema, await jsonBody(c)))),
+  // filters
+  api.get("/filters", (c) => c.json(listFilters(db)));
+  api.post("/filters", async (c) => c.json(createFilter(db, parse(filterCreateSchema, await jsonBody(c)), clock), 201));
+  // Matches against the stored articles without saving anything. Before `/filters/:id`, which it is not.
+  api.post("/filters/preview", async (c) => c.json(previewFilter(db, parse(filterPreviewSchema, await jsonBody(c)))));
+  api.patch("/filters/:id", async (c) => c.json(updateFilter(db, idParam(c, "filter"), parse(filterUpdateSchema, await jsonBody(c)))));
+  api.delete("/filters/:id", (c) => c.json(deleteFilter(db, idParam(c, "filter"))));
+  api.get("/filters/:id/articles", (c) =>
+    c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
   );
-  api.delete("/stop-words/:id", (c) => c.json(deleteStopWord(db, idParam(c, "stop word"))));
+
+  // list views: how each entry of the left pane and the drawer orders its articles, shared by both apps
+  api.get("/list-views", (c) => c.json(listListViews(db)));
+  api.patch("/list-views/:key", async (c) =>
+    c.json(updateListView(db, c.req.param("key"), parse(listViewUpdateSchema, await jsonBody(c)))),
+  );
+
+  // term highlights: only stored and answered here; the apps match the terms against what they show
+  api.get("/term-groups", (c) => c.json(listTermGroups(db)));
+  api.post("/term-groups", async (c) => c.json(createTermGroup(db, parse(termGroupCreateSchema, await jsonBody(c)), clock), 201));
+  api.patch("/term-groups/:id", async (c) => c.json(updateTermGroup(db, idParam(c, "term group"), parse(termGroupUpdateSchema, await jsonBody(c)))));
+  api.delete("/term-groups/:id", (c) => {
+    deleteTermGroup(db, idParam(c, "term group"));
+    return c.body(null, 204);
+  });
+  api.post("/term-groups/:id/move", async (c) =>
+    c.json(moveTermGroup(db, idParam(c, "term group"), parse(termGroupMoveSchema, await jsonBody(c)).before)),
+  );
+  api.post("/term-groups/:id/terms", async (c) =>
+    c.json(addHighlightTerm(db, idParam(c, "term group"), parse(highlightTermCreateSchema, await jsonBody(c)), clock), 201),
+  );
+  api.delete("/term-groups/:id/terms/:termId", (c) => {
+    deleteHighlightTerm(db, idParam(c, "term group"), idParam(c, "term", "termId"));
+    return c.body(null, 204);
+  });
 
   // runs
   api.post("/categories/:id/runs", (c) => c.json(queue.enqueue(idParam(c, "category"), "manual", null), 202));
