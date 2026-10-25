@@ -61,16 +61,19 @@ export interface IconButtonProps {
   onPress: () => void;
   filled?: boolean;
   disabled?: boolean;
+  /** The state the button shows, read out after its name, such as which of two views is shown. */
+  value?: string;
 }
 
 /** A button that shows only a picture. 48dp square. */
-export function IconButton({ label, icon, onPress, filled = false, disabled = false }: IconButtonProps) {
+export function IconButton({ label, icon, onPress, filled = false, disabled = false, value }: IconButtonProps) {
   const theme = useTheme();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled }}
+      accessibilityValue={value === undefined ? undefined : { text: value }}
       disabled={disabled}
       onPress={onPress}
       android_ripple={{ color: theme.colors.selected, borderless: true }}

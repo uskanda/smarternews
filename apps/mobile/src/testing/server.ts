@@ -51,11 +51,17 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
     feed: (title: string, categoryId: number | null = null) =>
       core<{ id: number; title: string }>("insertFeed", { url: `https://${title.toLowerCase().replace(/\W+/g, "-")}.example.org/feed.xml`, title, categoryId }, "$clock"),
     /** An article of a subscribed feed. `at` is the time it sorts by; `body` is Markdown, as the server stores it. */
-    feedArticle: (feedId: number, options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string } = {}) =>
+    feedArticle: (
+      feedId: number,
+      options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string; storedAt?: string; duplicateOf?: number } = {},
+    ) =>
       core<number>("seedFeedArticle", feedId, options),
     core,
     /** Lets the translation API of a server made with `translation: "gated"` answer. */
     releaseTranslation: () => call<null>("releaseTranslation"),
+    /** A page of another site that the server can fetch. A gated page answers once `releasePage` lets it. */
+    page: (url: string, html: string, options: { gated?: boolean } = {}) => call<null>("page", { args: [url, html, options.gated ?? false] }),
+    releasePage: (url: string) => call<null>("releasePage", { args: [url] }),
     sql: <T = unknown>(query: string, ...args: unknown[]) => call<T>("sql", { query, args }),
   };
 }

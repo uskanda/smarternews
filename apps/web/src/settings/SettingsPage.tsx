@@ -141,6 +141,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
     region: settings.search.region,
   });
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
+  const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
+  const duplicatesHint = useId();
   const [error, setError] = useState<unknown>(null);
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
 
@@ -152,6 +154,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         timeZone: form.timeZone.trim(),
         search: { language: form.language.trim(), region: form.region.trim() },
         advanceAfterMarkAll: advance,
+        removeDuplicates,
       });
       client.setQueryData(["settings"], saved);
       setError(null);
@@ -193,6 +196,17 @@ function GlobalSettings({ settings }: { settings: Settings }) {
             checked={advance}
             onChange={(event) => setAdvance(event.target.checked)}
           />
+        </div>
+        <div className="flex flex-col gap-xs sm:col-span-2">
+          <Checkbox
+            label="ほかの購読フィードが先に配信した記事を、全体とカテゴリの一覧に出さない"
+            checked={removeDuplicates}
+            aria-describedby={duplicatesHint}
+            onChange={(event) => setRemoveDuplicates(event.target.checked)}
+          />
+          <p id={duplicatesHint} className="type-label-sm text-on-surface-muted">
+            7日以内に同じURLか同じタイトルで届いた記事を、先に届いた1件にまとめます。まとめた記事も、それぞれの購読フィードの一覧には出ます。
+          </p>
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
@@ -258,9 +272,10 @@ function SettingsFile() {
       const done = await api.importSettings(await file.text());
       setError(null);
       setResult(
-        `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。`,
+        `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。` +
+          `語のまとまりを${done.termGroupsCreated}件作成、語を${done.highlightTermsCreated}件追加。`,
       );
-      for (const key of ["categories", "topics", "settings", "counts", "feeds", "stop-words", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "articles", "term-groups"]) void client.invalidateQueries({ queryKey: [key] });
     } catch (caught) {
       setError(caught);
     }
@@ -270,7 +285,7 @@ function SettingsFile() {
     <section aria-label="設定ファイル" className={SECTION}>
       <h2 className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
-        カテゴリ、トピック、購読フィード、ストップワード、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
+        カテゴリ、トピック、購読フィード、フィルター、語の色付け、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
       </p>
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
@@ -286,7 +301,7 @@ function SettingsFile() {
           />
         </label>
         <p className="type-label-sm text-on-surface-muted">
-          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとストップワードも消えません。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
+          識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとフィルターも消えません。語の色付けは、名前が一致するまとまりの色を変え、ない語だけを足します。ファイルにないまとまりと語は消えません。以前のストップワードの形式のファイルも読み込め、各語は全体の隠すフィルターになります。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
         </p>
         <div>
           <Button type="submit" disabled={!file}>
@@ -381,7 +396,7 @@ export function SettingsPage() {
       <section aria-label="購読フィード" className={SECTION}>
         <h2 className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、ストップワードで隠せます。
+          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
         </p>
         <ul className="flex flex-col gap-xs type-body-md">
           <li>
@@ -390,11 +405,22 @@ export function SettingsPage() {
             </Link>
           </li>
           <li>
-            <Link to="/settings/stop-words" className="tap text-primary underline underline-offset-4">
-              ストップワードを設定する
+            <Link to="/settings/filters" className="tap text-primary underline underline-offset-4">
+              フィルターを設定する
             </Link>
           </li>
         </ul>
+      </section>
+      <section aria-label="語の色付け" className={SECTION}>
+        <h2 className="type-headline-md">語の色付け</h2>
+        <p className="max-w-measure type-body-md text-on-surface-muted">
+          登録した語を、生成記事と配信記事の両方の一覧と本文で色付けします。語はまとまりに分け、まとまりごとに色を選びます。色付けは記事を隠しません。
+        </p>
+        <div>
+          <Link to="/settings/term-highlights" className="tap type-body-md text-primary underline underline-offset-4">
+            語の色付けを設定する
+          </Link>
+        </div>
       </section>
       {settings.isError ? <ErrorNotice error={settings.error} onRetry={() => void settings.refetch()} /> : null}
       {settings.data ? (

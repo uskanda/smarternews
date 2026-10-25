@@ -59,6 +59,13 @@ describe("GoogleTranslator", () => {
     expect(output.texts).toEqual(["[二](https://b.example.org/2)と[一](https://a.example.org/1) ![図](https://img.example.org/p.png)"]);
   });
 
+  it("sends back an image over plain HTTP with its original URL", async () => {
+    const s = setup((sent) => Response.json({ data: { translations: sent.q.map(() => ({ translatedText: '訳 <img src="0" alt="図">' })) } }));
+    const output = await s.translator.translate([{ text: "Look ![pic](http://img.example.org/p.png)" }], "ja");
+    expect(s.sent()[0]!.q[0]).toBe('Look <img src="0" alt="pic">');
+    expect(output.texts).toEqual(["訳 ![図](http://img.example.org/p.png)"]);
+  });
+
   it("keeps the words of a link whose number does not come back as one it sent", async () => {
     const s = setup(() => Response.json({ data: { translations: [{ translatedText: '<a href="7">七</a>と<a href="https://evil.example.org/">外</a>と<a href="0">一</a>' }] } }));
     const output = await s.translator.translate([{ text: "[one](https://a.example.org/1)" }], "ja");

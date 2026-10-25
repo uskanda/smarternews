@@ -119,7 +119,8 @@ export class TranslationService {
   }
 
   /**
-   * The translation of a feed article's content, made and stored when there is none. The title is translated
+   * The translation of a feed article's content, made and stored when there is none. The content is the full
+   * content when the article has one, and what the feed delivered otherwise. The title is translated
    * with it when it has no translation yet. Refuses an article that is not of a feed that translates.
    */
   translateArticle(id: number): Promise<ArticleTranslation> {
@@ -139,7 +140,9 @@ export class TranslationService {
     if (article.translation !== null && article.translatedTitle !== null) return article.translation;
 
     const needsTitle = article.translatedTitle === null;
-    const split = article.translation === null ? splitSegments(article.body, maxCharsPerArticle) : null;
+    // The full content when there is one; what the feed delivered otherwise.
+    const source = article.fullContent?.body ?? article.body;
+    const split = article.translation === null ? splitSegments(source, maxCharsPerArticle) : null;
     const items: TranslationItem[] = [
       ...(needsTitle ? [{ text: article.title, plain: true }] : []),
       ...(split?.segments.filter((segment) => segment.translate).map((segment) => ({ text: segment.original })) ?? []),
@@ -150,9 +153,10 @@ export class TranslationService {
     const texts = [...output.texts];
     const title = needsTitle ? texts.shift()! : null;
     return transaction(db, () => {
-      // The feed may have rewritten the item while the translation was under way.
-      const now = db.prepare("SELECT title, body FROM articles WHERE id = ?").get(id);
-      if (!now || str(now.title) !== article.title || str(now.body) !== article.body) throw unavailable();
+      // The feed may have rewritten the item, or the full content may have arrived, while the translation was
+      // under way: what was translated must still be what the article shows.
+      const now = db.prepare("SELECT title, CASE WHEN full_content_status = 'fetched' THEN full_content ELSE body END AS source FROM articles WHERE id = ?").get(id);
+      if (!now || str(now.title) !== article.title || str(now.source) !== source) throw unavailable();
       if (title !== null) saveTranslatedTitle(db, id, { original: article.title, title, sourceLanguage: output.sourceLanguage });
       if (split !== null) {
         const segments: StoredSegment[] = split.segments.map((segment) => ({ original: segment.original, translated: segment.translate ? texts.shift()! : null }));

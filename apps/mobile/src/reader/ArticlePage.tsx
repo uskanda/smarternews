@@ -1,13 +1,14 @@
-import { ApiError, eventTime, formatDay, formatFull, registrationLabel } from "@smarternews/client";
+import { ApiError, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel, type TermMatcher } from "@smarternews/client";
 import type { Article, ArticleTranslation } from "@smarternews/core/api";
 import { memo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useArticle, useArticleTranslation, useCategories, useFeeds, useSummaryRequest, useTimeZone } from "../api/queries";
+import { useArticle, useArticleTranslation, useCategories, useFeeds, useSummaryRequest, useTermMatcher, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, Loading } from "../ui/controls";
 import { Txt } from "../ui/Txt";
 import { Badge } from "./ArticleRow";
+import { Highlighted, highlight } from "./highlight";
 import { Markdown } from "./Markdown";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
@@ -43,7 +44,7 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * original right under it, smaller and quieter. The pairs come from the server as they are shown. A segment
  * without a translation, and one whose translation is the same text, is shown once as content.
  */
-function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
+function TranslatedBody({ translation, terms, groups }: { translation: ArticleTranslation; terms?: readonly string[]; groups: TermMatcher }) {
   const theme = useTheme();
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -52,11 +53,11 @@ function TranslatedBody({ translation }: { translation: ArticleTranslation }) {
         <View key={index} style={{ gap: theme.spacing.lg }}>
           {segment.translated !== null && segment.translated.trim() !== segment.original.trim() ? (
             <View style={{ gap: theme.spacing.xs }}>
-              <Markdown text={segment.translated} images />
-              <Markdown text={segment.original} images quiet />
+              <Markdown text={segment.translated} images highlight={terms} groups={groups} />
+              <Markdown text={segment.original} images quiet highlight={terms} groups={groups} />
             </View>
           ) : (
-            <Markdown text={segment.original} images />
+            <Markdown text={segment.original} images highlight={terms} groups={groups} />
           )}
           {translation.truncated && index === lastTranslated ? (
             <Txt variant="label-sm" color="on-surface-muted">
@@ -78,6 +79,28 @@ export interface ArticlePageProps {
   sourceName: string;
   onRead: (article: Article) => void;
   onOpenArticle: (id: number) => void;
+  /** Opens the copy of the article that another feed delivered, with that feed's list behind it. */
+  onOpenCopy: (copy: Article["otherFeeds"][number]) => void;
+  /** The full content of this article is being fetched. */
+  fullContentFetching: boolean;
+  /** The last request for the full content of this article got no answer. */
+  fullContentRequestFailed: boolean;
+  /** The reader switched from the full content to what the feed delivered. */
+  deliveredShown: boolean;
+  /** The words of the search the article was opened from, marked in its headline and text. */
+  terms?: readonly string[];
+}
+
+/**
+ * The line before the content of a feed article: which content is shown, the fetch under way, or why the full
+ * content could not be had. The button on top of the screen fetches and switches.
+ */
+function fullContentNote(article: Article, fetching: boolean, requestFailed: boolean, deliveredShown: boolean): string | null {
+  if (article.fullContent !== null) return deliveredShown ? "配信された内容を表示しています。" : "元のページから取得した全文を表示しています。";
+  if (fetching) return "全文を取得しています。";
+  if (requestFailed) return "全文を取得できませんでした。通信に失敗しました。";
+  if (article.fullContentError) return `全文を取得できませんでした。${fullContentErrorLabel(article.fullContentError)}`;
+  return null;
 }
 
 /** One article: what the story is, what it means for the reader, the text, and where it came from. */
@@ -88,11 +111,24 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
-export const ArticlePage = memo(function ArticlePage({ id, active, width, sourceName, onRead, onOpenArticle }: ArticlePageProps) {
+export const ArticlePage = memo(function ArticlePage({
+  id,
+  active,
+  width,
+  sourceName,
+  onRead,
+  onOpenArticle,
+  onOpenCopy,
+  fullContentFetching,
+  fullContentRequestFailed,
+  deliveredShown,
+  terms,
+}: ArticlePageProps) {
   const theme = useTheme();
   const timeZone = useTimeZone();
   const categories = useCategories();
   const feeds = useFeeds();
+  const groups = useTermMatcher();
   const query = useArticle(id);
   const article = query.data;
   const previous = useArticle(article?.previousArticleId ?? null).data;
@@ -133,6 +169,9 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
 
   // A feed article is what another site delivered: no importance, no sources; the way to its page instead.
   const delivered = article.origin === "feed";
+  // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
+  const fullShown = article.fullContent !== null && !deliveredShown;
+  const note = delivered ? fullContentNote(article, fullContentFetching, fullContentRequestFailed, deliveredShown) : null;
   const meta = (
     delivered
       ? [
@@ -162,12 +201,12 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
       </View>
       <View style={{ gap: theme.spacing.xs }}>
         <Txt variant="headline-lg" heading>
-          {article.translatedTitle ?? article.title}
+          {highlight(article.translatedTitle ?? article.title, terms, groups)}
         </Txt>
         {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
           // The title as the site wrote it, read out in its own language where the system can.
           <Txt testID="original-title" variant="body-md" color="on-surface-muted" accessibilityLanguage={article.sourceLanguage ?? undefined}>
-            {article.title}
+            {highlight(article.title, terms, groups)}
           </Txt>
         ) : null}
       </View>
@@ -184,7 +223,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Txt variant="label-sm" color="on-surface-muted">
             読み手への影響
           </Txt>
-          <Txt variant="body-md">{article.impact}</Txt>
+          <Txt variant="body-md">{terms ? <Highlighted text={article.impact} terms={terms} /> : article.impact}</Txt>
         </View>
       ) : null}
       {article.event ? <EventDetails article={article} timeZone={timeZone} /> : null}
@@ -199,6 +238,27 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           </Txt>
         </Pressable>
       ) : null}
+      {article.otherFeeds.length > 0 ? (
+        // The same story as other feeds delivered it; each name opens that copy.
+        <View testID="other-feeds" style={{ gap: theme.spacing.xs }}>
+          <Txt variant="label-sm" color="on-surface-muted" heading>
+            ほかに配信した購読フィード
+          </Txt>
+          {article.otherFeeds.map((copy) => (
+            <Pressable
+              key={copy.articleId}
+              accessibilityRole="link"
+              accessibilityLabel={copy.feedTitle}
+              onPress={() => onOpenCopy(copy)}
+              style={{ minHeight: theme.spacing["touch-android"], justifyContent: "center", alignSelf: "flex-start" }}
+            >
+              <Txt variant="body-md" color="primary" style={{ textDecorationLine: "underline" }}>
+                {copy.feedTitle}
+              </Txt>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       {article.autoSummary ? (
         // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
         <View
@@ -208,7 +268,7 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Txt variant="label-sm" color="on-surface-muted" heading>
             AIによる要約
           </Txt>
-          <Txt variant="body-md">{article.autoSummary.text}</Txt>
+          <Txt variant="body-md">{highlight(article.autoSummary.text, terms, groups)}</Txt>
           {article.autoSummary.source === "feed" ? (
             <Txt variant="label-sm" color="on-surface-muted">
               元のページを読めなかったため、配信された内容だけをもとにしています。
@@ -232,7 +292,17 @@ export const ArticlePage = memo(function ArticlePage({ id, active, width, source
           <Button label="翻訳をやり直す" onPress={() => void translating.refetch()} />
         </View>
       ) : null}
-      {article.translation ? <TranslatedBody translation={article.translation} /> : <Markdown text={article.body} images={delivered} />}
+      {note ? (
+        <Txt variant="label-sm" color="on-surface-muted" accessibilityLiveRegion="polite">
+          {note}
+        </Txt>
+      ) : null}
+      {article.translation && (fullShown || article.fullContent === null) ? (
+        // The translation is of the full content when there is one: what the feed delivered is then shown without one.
+        <TranslatedBody translation={article.translation} terms={terms} groups={groups} />
+      ) : (
+        <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} groups={groups} />
+      )}
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">

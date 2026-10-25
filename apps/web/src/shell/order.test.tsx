@@ -322,6 +322,29 @@ describe("dragging an entry", () => {
     await release(mid("A") - 5);
   });
 
+  it("starts no drag from 最近読んだ記事, and moves nothing above the categories in front of it", async () => {
+    const { server } = seeded();
+    const { path } = await ready({ server, route: "/all" });
+    layOut();
+    const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/\d+$/, ""));
+    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事"];
+
+    const recent = within(nav()).getByRole("link", { name: "最近読んだ記事" });
+    fireEvent.pointerDown(recent, mouse(40));
+    await dragTo(mid("B"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    expect(nav().querySelector("[data-drop-line]")).not.toBeInTheDocument();
+    await release(mid("B"));
+    expect(views()).toEqual(ORDER);
+
+    press("C");
+    await dragTo(mid("A") - 15);
+    await release(mid("A") - 15);
+    await waitFor(() => expect(listCategories(server.db).map((category) => category.name)).toEqual(["C", "A", "B", "Events"]));
+    expect(views()).toEqual(ORDER);
+    expect(path()).toBe("/all");
+  });
+
   it("gives up on Escape", async () => {
     const { server } = seeded();
     await ready({ server, route: "/all" });

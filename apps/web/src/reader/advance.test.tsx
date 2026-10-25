@@ -60,6 +60,18 @@ describe("moving on after marking all as read", () => {
     expect(within(nav()).getByRole("button", { name: "Cの下の項目" })).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("moves on the same way after Shift+A", async () => {
+    const { server, a, c } = seeded();
+    const { user, path } = renderApp({ server, route: `/c/${a.slug}` });
+    await waitFor(() => expect(heading()).toBe("A"));
+    await screen.findByRole("button", { name: "すべて既読にする" });
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await waitFor(() => expect(path()).toBe(`/c/${c.slug}`));
+    expect(await screen.findByRole("status")).toHaveTextContent("3件を既読にしました。「C」を開きました");
+  });
+
   it("stays when nothing below is unread", async () => {
     const { server, c } = seeded();
     const { user, path } = renderApp({ server, route: `/c/${c.slug}` });

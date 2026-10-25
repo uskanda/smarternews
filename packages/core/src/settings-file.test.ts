@@ -1,11 +1,12 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { createCategory, findCategoryBySlug, listCategories, moveCategory } from "./db/categories.ts";
-import { nextArticleToSummarize } from "./db/articles.ts";
+import { nextArticleForFullContent, nextArticleToSummarize, recordFullContentFailure, saveFullContent } from "./db/articles.ts";
 import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
-import { createStopWord, listStopWords } from "./db/stop-words.ts";
+import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
+import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
 import { exportSettings, importSettings } from "./settings-file.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "./testing/db.ts";
 
@@ -40,6 +41,7 @@ describe("exportSettings", () => {
       search: { language: "ja", region: "JP" },
       feedIntervalMinutes: 30,
       advanceAfterMarkAll: true,
+      removeDuplicates: true,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -72,7 +74,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, stopWordsCreated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -148,7 +150,13 @@ categories:
   });
 });
 
-describe("subscribed feeds and stop words in the settings file", () => {
+const condition = (value: string, fields: Array<"title" | "content" | "author" | "url"> = ["title"], match: "contains" | "regex" = "contains") => ({
+  fields,
+  match,
+  value,
+});
+
+describe("subscribed feeds and filters in the settings file", () => {
   function withFeeds() {
     const db = seeded();
     const security = listCategories(db).find((category) => category.slug === "security")!;
@@ -156,34 +164,50 @@ describe("subscribed feeds and stop words in the settings file", () => {
     const loose = insertFeed(db, { url: "https://b.example.org/feed.xml", title: "B", enabled: false }, clock);
     seedFeedArticle(db, loose.id);
     updateSettings(db, { feedIntervalMinutes: 45 });
-    createStopWord(db, { text: "広告" }, clock);
-    createStopWord(db, { text: "提供", scope: "title_and_content" }, clock);
+    createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [condition("広告")] }, clock);
+    const keep = createFilter(
+      db,
+      { action: "keep", scope: { type: "feed", feedId: loose.id }, conditions: [condition("提供", ["title", "content"]), condition("^v\\d", ["title"], "regex")] },
+      clock,
+    );
+    createFilter(db, { action: "keep", scope: { type: "category", categoryId: security.id }, conditions: [condition("patch")] }, clock);
+    updateFilter(db, keep.id, { enabled: false });
     return db;
   }
 
-  it("writes the feeds under their category or at the top, the base interval and the stop words", () => {
+  it("writes the feeds under their category or at the top, the base interval and the filters", () => {
     const file = parse(exportSettings(withFeeds()));
     expect(file.settings.feedIntervalMinutes).toBe(45);
     expect(file.categories.find((category: { slug: string }) => category.slug === "security").subscriptions).toEqual([
       { url: "https://a.example.org/feed.xml", title: "A", intervalMinutes: 120, enabled: true },
     ]);
     expect(file.subscriptions).toEqual([{ url: "https://b.example.org/feed.xml", title: "B", enabled: false }]);
-    expect(file.stopWords).toEqual([
-      { text: "広告", scope: "title" },
-      { text: "提供", scope: "title_and_content" },
+    expect(file.filters).toEqual([
+      { action: "hide", scope: "all", conditions: [{ fields: ["title"], match: "contains", value: "広告" }] },
+      {
+        action: "keep",
+        scope: { feed: "https://b.example.org/feed.xml" },
+        enabled: false,
+        conditions: [
+          { fields: ["title", "content"], match: "contains", value: "提供" },
+          { fields: ["title"], match: "regex", value: "^v\\d" },
+        ],
+      },
+      { action: "keep", scope: { category: "security" }, conditions: [{ fields: ["title"], match: "contains", value: "patch" }] },
     ]);
+    expect(file.stopWords).toBeUndefined();
   });
 
   it("writes no article and no fetch state", () => {
     const text = exportSettings(withFeeds());
-    expect(text).not.toMatch(/Feed article|lastFetched|etag|articleCount/);
+    expect(text).not.toMatch(/Feed article|lastFetched|etag|articleCount|hiddenCount/);
   });
 
-  it("reproduces feeds, base interval and stop words on an empty server", () => {
+  it("reproduces feeds, base interval and filters on an empty server", () => {
     const exported = exportSettings(withFeeds());
     const target = createTestDb();
     const result = importSettings(target, exported, clock);
-    expect(result).toMatchObject({ feedsCreated: 2, feedsUpdated: 0, stopWordsCreated: 2 });
+    expect(result).toMatchObject({ feedsCreated: 2, feedsUpdated: 0, filtersCreated: 3 });
     expect(exportSettings(target)).toBe(exported);
   });
 
@@ -217,19 +241,106 @@ subscriptions:
     expect(db.prepare("SELECT category_id FROM articles WHERE id = ?").get(article)).toEqual({ category_id: tools.id });
   });
 
-  it("adds the stop words that are not registered yet, and hides what they match", () => {
+  it("adds the filters that are not registered yet, hides what they match, and takes the switch of the others", () => {
     const db = createTestDb();
-    createStopWord(db, { text: "広告" }, clock);
+    const known = createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [condition("広告")] }, clock);
+    updateFilter(db, known.id, { enabled: false });
     const feed = insertFeed(db, { url: "https://a.example.org/feed.xml", title: "A" }, clock);
     seedFeedArticle(db, feed.id, { title: "春の特売" });
+    const text = `version: 1
+filters:
+  - action: hide
+    scope: all
+    conditions:
+      - { fields: [title], match: contains, value: 広告 }
+  - action: hide
+    scope: all
+    conditions:
+      - { fields: [title], match: contains, value: 特売 }
+`;
+    const result = importSettings(db, text, clock);
 
-    const result = importSettings(db, "version: 1\nstopWords:\n  - text: 広告\n  - text: 特売\n", clock);
-
-    expect(result.stopWordsCreated).toBe(1);
-    expect(listStopWords(db).map((word) => [word.text, word.hiddenCount])).toEqual([
-      ["広告", 0],
-      ["特売", 1],
+    expect(result.filtersCreated).toBe(1);
+    expect(listFilters(db).map((filter) => [filter.conditions[0]!.value, filter.enabled, filter.hiddenCount])).toEqual([
+      ["広告", true, 0],
+      ["特売", true, 1],
     ]);
+  });
+
+  it("ties a scope to a feed the same file subscribes to", () => {
+    const db = createTestDb();
+    const text = `version: 1
+subscriptions:
+  - url: https://g.example.org/feed.xml
+filters:
+  - action: keep
+    scope: { feed: https://g.example.org/feed.xml }
+    conditions:
+      - { fields: [title], match: contains, value: release }
+`;
+    importSettings(db, text, clock);
+    const [feed] = listFeeds(db);
+    expect(listFilters(db)).toMatchObject([{ action: "keep", scope: { type: "feed", feedId: feed!.id } }]);
+  });
+
+  it("refuses a scope that is neither in the file nor on the server, and stores nothing", () => {
+    const db = createTestDb();
+    const text = `version: 1
+subscriptions:
+  - url: https://g.example.org/feed.xml
+filters:
+  - action: keep
+    scope: { feed: https://missing.example.org/feed.xml }
+    conditions:
+      - { fields: [title], match: contains, value: release }
+`;
+    expect(() => importSettings(db, text, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "filters.0.scope.feed" })] }),
+    );
+    expect(() => importSettings(db, text.replace("{ feed: https://missing.example.org/feed.xml }", "{ category: missing }"), clock)).toThrow(
+      expect.objectContaining({ fields: [expect.objectContaining({ path: "filters.0.scope.category" })] }),
+    );
+    expect(listFeeds(db)).toEqual([]);
+    expect(listFilters(db)).toEqual([]);
+  });
+
+  it("refuses a regular expression it cannot use, and stores nothing", () => {
+    const db = createTestDb();
+    const text = `version: 1
+subscriptions:
+  - url: https://g.example.org/feed.xml
+filters:
+  - action: hide
+    scope: all
+    conditions:
+      - { fields: [title], match: regex, value: "(sale" }
+`;
+    expect(() => importSettings(db, text, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "filters.0.conditions.0.value" })] }),
+    );
+    expect(listFeeds(db)).toEqual([]);
+  });
+
+  it("reads the stop words of an older file as hide filters over everything", () => {
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: "https://a.example.org/feed.xml", title: "A" }, clock);
+    seedFeedArticle(db, feed.id, { title: "新製品", body: "提供の記事" });
+
+    const result = importSettings(db, "version: 1\nstopWords:\n  - text: 広告\n  - text: 提供\n    scope: title_and_content\n", clock);
+
+    expect(result.filtersCreated).toBe(2);
+    expect(listFilters(db)).toMatchObject([
+      { action: "hide", scope: { type: "all" }, enabled: true, conditions: [{ fields: ["title"], match: "contains", value: "広告" }], hiddenCount: 0 },
+      { action: "hide", scope: { type: "all" }, enabled: true, conditions: [{ fields: ["title", "content"], match: "contains", value: "提供" }], hiddenCount: 1 },
+    ]);
+  });
+
+  it("adds no filter for a stop word that is registered already", () => {
+    const db = createTestDb();
+    createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [condition("広告")] }, clock);
+    const result = importSettings(db, "version: 1\nstopWords:\n  - text: 広告\n", clock);
+    expect(result.filtersCreated).toBe(0);
+    expect(listFilters(db)).toHaveLength(1);
   });
 
   it("refuses a feed under an event category, and stores nothing of the file", () => {
@@ -309,6 +420,23 @@ describe("order and the move-on setting in the settings file", () => {
     importSettings(db, "version: 1\nsettings:\n  advanceAfterMarkAll: true\n", clock);
     expect(getSettings(db).advanceAfterMarkAll).toBe(true);
   });
+
+  it("carries duplicate removal switched off to an empty server", () => {
+    const db = createTestDb();
+    updateSettings(db, { removeDuplicates: false });
+    const written = exportSettings(db);
+    expect(parse(written).settings.removeDuplicates).toBe(false);
+    const empty = createTestDb();
+    importSettings(empty, written, clock);
+    expect(getSettings(empty).removeDuplicates).toBe(false);
+  });
+
+  it("leaves duplicate removal alone when the file does not mention it", () => {
+    const db = createTestDb();
+    updateSettings(db, { removeDuplicates: false });
+    importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
+    expect(getSettings(db).removeDuplicates).toBe(false);
+  });
 });
 
 describe("the example settings file", () => {
@@ -324,8 +452,14 @@ describe("the example settings file", () => {
       topicsUpdated: 0,
       feedsCreated: 3,
       feedsUpdated: 0,
-      stopWordsCreated: 2,
+      filtersCreated: 2,
+      termGroupsCreated: 2,
+      highlightTermsCreated: 3,
     });
+    expect(listTermGroups(db).map((group) => [group.name, group.color, group.terms.map((term) => term.text)])).toEqual([
+      ["Rust", "orange", ["Rust", "cargo"]],
+      ["Standards", "purple", ["RFC"]],
+    ]);
     expect(getSettings(db)).toMatchObject({ timeZone: "America/Los_Angeles", feedIntervalMinutes: 30 });
     const tools = listCategories(db).find((category) => category.slug === "developer-tools")!;
     expect(listFeeds(db).map((feed) => [feed.categoryId, feed.intervalMinutes])).toEqual([
@@ -333,6 +467,7 @@ describe("the example settings file", () => {
       [tools.id, 360],
       [null, null],
     ]);
+    expect(listFeeds(db).map((feed) => feed.fetchFullContent)).toEqual([false, true, false]);
   });
 });
 
@@ -388,6 +523,71 @@ describe("summaries of feeds in the settings file", () => {
   });
 });
 
+describe("full content of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the setting for the feeds that fetch full content only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", fetchFullContent: true }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.fetchFullContent)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.fetchFullContent])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without the setting as not fetching full content, and leaves a known feed as it is", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { fetchFullContent: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(true);
+    importSettings(db, file("    fetchFullContent: false\n"), clock);
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(false);
+  });
+
+  it("fetches the full content of none of the articles a feed already has when the file switches it on", () => {
+    const local = fakeClock("2026-03-01T00:00:00.000Z");
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: A, title: "A" }, local);
+    seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    local.advance(60_000);
+
+    importSettings(db, file("    fetchFullContent: true\n"), local);
+
+    expect(listFeeds(db)[0]!.fetchFullContent).toBe(true);
+    expect(nextArticleForFullContent(db)).toBeNull();
+    local.advance(60_000);
+    const later = seedFeedArticle(db, feed.id, { at: local().toISOString() });
+    expect(nextArticleForFullContent(db)?.id).toBe(later);
+  });
+
+  it("writes neither the full content nor its state", () => {
+    const db = createTestDb();
+    const feed = insertFeed(db, { url: A, title: "A", fetchFullContent: true }, clock);
+    const id = seedFeedArticle(db, feed.id, { at: clock().toISOString() });
+    saveFullContent(db, id, { markdown: "Distinctive full text", text: "Distinctive full text", now: clock().toISOString() });
+    const failed = seedFeedArticle(db, feed.id, { at: clock().toISOString() });
+    recordFullContentFailure(db, failed, { reason: "http", detail: "404" });
+
+    const exported = exportSettings(db);
+    expect(exported).not.toContain("Distinctive");
+    expect(exported).not.toMatch(/fullContent|fetched|failed|404/);
+  });
+
+  it("refuses a setting that is not true or false", () => {
+    expect(() => importSettings(createTestDb(), file("    fetchFullContent: sometimes\n"), clock)).toThrow(/expected format/);
+  });
+});
+
 describe("translation of a feed in the settings file", () => {
   const clock = fakeClock("2026-03-01T00:00:00.000Z");
   const A = "https://a.example.org/feed.xml";
@@ -424,5 +624,82 @@ describe("translation of a feed in the settings file", () => {
     const db = createTestDb();
     insertFeed(db, { url: A, title: "A", translate: true }, clock);
     expect(exportSettings(db)).not.toMatch(/key/i);
+  });
+});
+
+describe("term groups in the settings file", () => {
+  type Db = ReturnType<typeof createTestDb>;
+  const add = (db: Db, name: string, color: "green" | "purple" | "pink" | "orange", ...terms: string[]) => {
+    const group = createTermGroup(db, { name, color }, clock);
+    for (const text of terms) addHighlightTerm(db, group.id, { text }, clock);
+    return group;
+  };
+  const groups = (db: Db) => listTermGroups(db).map((group) => [group.name, group.color, group.terms.map((term) => term.text)]);
+  const file = (termGroups: unknown) => `version: 1\ntermGroups: ${JSON.stringify(termGroups)}\n`;
+
+  it("are written in their order, with name, colour and terms", () => {
+    const db = createTestDb();
+    const a = add(db, "A", "green", "規制", "関税");
+    add(db, "B", "pink", "TSMC");
+    moveTermGroup(db, a.id, null);
+    expect(parse(exportSettings(db)).termGroups).toEqual([
+      { name: "B", color: "pink", terms: ["TSMC"] },
+      { name: "A", color: "green", terms: ["規制", "関税"] },
+    ]);
+  });
+
+  it("are not written when there are none", () => {
+    expect(parse(exportSettings(createTestDb()))).not.toHaveProperty("termGroups");
+  });
+
+  it("are matched by name: a known group takes the file's colour, a new one is registered", () => {
+    const db = createTestDb();
+    add(db, "A", "green");
+    const result = importSettings(db, file([{ name: "A", color: "purple" }, { name: "B", color: "orange", terms: ["関税"] }]), clock);
+    expect(groups(db)).toEqual([
+      ["A", "purple", []],
+      ["B", "orange", ["関税"]],
+    ]);
+    expect(result).toMatchObject({ termGroupsCreated: 1, highlightTermsCreated: 1 });
+  });
+
+  it("only add terms: a registered term is not added twice, and a term the file leaves out stays", () => {
+    const db = createTestDb();
+    add(db, "A", "green", "規制", "関税");
+    const result = importSettings(db, file([{ name: "A", color: "green", terms: ["規制", "補助金", "ＴＳＭＣ", "tsmc"] }]), clock);
+    expect(groups(db)).toEqual([["A", "green", ["規制", "関税", "補助金", "ＴＳＭＣ"]]]);
+    expect(result).toMatchObject({ termGroupsCreated: 0, highlightTermsCreated: 2 });
+  });
+
+  it("keep a group the file does not mention, with its terms, after those it does in the file's order", () => {
+    const db = createTestDb();
+    add(db, "A", "green");
+    add(db, "B", "green", "規制");
+    add(db, "C", "green");
+    importSettings(db, file([{ name: "C", color: "green" }, { name: "A", color: "green" }]), clock);
+    expect(listTermGroups(db).map((group) => group.name)).toEqual(["C", "A", "B"]);
+    expect(groups(db)[2]).toEqual(["B", "green", ["規制"]]);
+  });
+
+  it("refuse a colour outside the four, and store nothing of the file", () => {
+    const db = createTestDb();
+    const text = `version: 1\nsettings: { readerInfo: changed }\ntermGroups: [{ name: A, color: yellow }]\n`;
+    expect(() => importSettings(db, text, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "termGroups.0.color" })] }),
+    );
+    expect(listTermGroups(db)).toEqual([]);
+    expect(getSettings(db).readerInfo).not.toBe("changed");
+  });
+
+  it("make the same file again on an empty server", () => {
+    const db = createTestDb();
+    const a = add(db, "A", "green", "規制", "関税");
+    add(db, "B", "purple", "TSMC");
+    add(db, "C", "orange");
+    moveTermGroup(db, a.id, null);
+    const written = exportSettings(db);
+    const other = createTestDb();
+    importSettings(other, written, clock);
+    expect(exportSettings(other)).toBe(written);
   });
 });

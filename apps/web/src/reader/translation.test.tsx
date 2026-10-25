@@ -1,6 +1,7 @@
 import { insertFeed, saveArticleTranslation, saveTranslatedTitle, type TranslationItem } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { screen, waitFor, within } from "@testing-library/react";
+import { relayPath } from "@smarternews/server/testing";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { makeServer, renderApp } from "../testing/harness.tsx";
 
@@ -134,6 +135,29 @@ describe("opening an article of a feed that translates", () => {
     await within(pane).findByText("保存した訳。");
     expect(segments(pane)).toEqual(["translation: 保存した訳。", "original: Stored original."]);
     expect(posts(requests)).toEqual([]);
+  });
+
+  it("shows the images of the translation and of the original through the relay", async () => {
+    const { server, id, route } = seeded();
+    saveTranslatedTitle(server.db, id, { original: "Original title", title: "訳したタイトル", sourceLanguage: "en" });
+    saveArticleTranslation(server.db, id, {
+      segments: [
+        { original: "See ![Chart](http://img.example.org/c.png)", translated: "見て ![図](http://img.example.org/c.png)" },
+        { original: "![Photo](https://img.example.org/p.jpg)", translated: null },
+      ],
+      method: "google",
+      truncated: false,
+      now: AT,
+    });
+    renderApp({ server, route });
+    const pane = await opened();
+    expect(await within(pane).findByRole("img", { name: "図" })).toHaveAttribute("src", relayPath("http://img.example.org/c.png"));
+    expect(within(pane).getByRole("img", { name: "Chart" })).toHaveAttribute("src", relayPath("http://img.example.org/c.png"));
+    const photo = within(pane).getByRole("img", { name: "Photo" });
+    expect(photo).toHaveAttribute("src", relayPath("https://img.example.org/p.jpg"));
+    fireEvent.error(photo);
+    expect(within(pane).queryByRole("img", { name: "Photo" })).not.toBeInTheDocument();
+    expect(within(pane).getByText("Photo")).toBeInTheDocument();
   });
 
   it("asks for nothing and shows the content as before for an article of a feed that does not translate", async () => {

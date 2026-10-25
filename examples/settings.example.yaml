@@ -17,6 +17,9 @@ settings:
   feedIntervalMinutes: 30
   # After "mark all as read", open the next list that has unread articles.
   advanceAfterMarkAll: true
+  # Show an article that several feeds deliver once in the lists over everything and over categories.
+  # The copies stay in the list of their own feed.
+  removeDuplicates: true
 categories:
   - slug: security
     name: Security
@@ -51,8 +54,9 @@ categories:
       - url: https://www.typescriptlang.org/feed.xml
         title: TypeScript blog
         intervalMinutes: 360
-        autoSummarize: true   # a model summarises the articles this feed delivers from now on
-        translate: true       # titles and contents are translated into outputLanguage; they leave this server for that
+        autoSummarize: true    # a model summarises the articles this feed delivers from now on
+        translate: true        # titles and contents are translated into outputLanguage; they leave this server for that
+        fetchFullContent: true # the page of each new article is fetched and its text kept as the full content
   - slug: local-events
     name: Local events
     kind: event
@@ -66,9 +70,34 @@ categories:
 # Subscribed feeds that belong to no category.
 subscriptions:
   - url: https://www.rfc-editor.org/rfcrss.xml
-# Feed articles whose title contains one of these words are hidden. With `scope: title_and_content`
-# the content is searched too. Generated articles are never hidden.
-stopWords:
-  - text: sponsored
-  - text: giveaway
-    scope: title_and_content
+# Filters hide feed articles; generated articles and starred articles are never hidden. A hide filter hides
+# what meets all its conditions. A keep filter, for a category (by slug) or a feed (by URL), hides what meets
+# none of the keep filters there. A condition looks at one or more fields (title, content, author, url) and
+# matches its value as a part of the text (`contains`) or as a regular expression (`regex`); case and
+# full-width letters do not matter. `enabled: false` keeps a filter without applying it.
+filters:
+  - action: hide
+    scope: all
+    conditions:
+      - fields: [title, content]
+        match: contains
+        value: sponsored
+  - action: keep
+    scope: { feed: "https://www.rfc-editor.org/rfcrss.xml" }
+    enabled: false
+    conditions:
+      - fields: [title]
+        match: regex
+        value: "^RFC \\d+: (HTTP|TLS)"
+# Term groups colour their terms wherever they occur in the lists and the texts of articles, generated and
+# delivered alike; nothing is hidden. Each group has a name and one colour of four: green, purple, pink or
+# orange. Terms match as filters do: as a part of the text, whatever the case and the width. Where terms of two
+# groups match one place, the group listed first colours it. A group is matched by its name; terms are added,
+# never removed.
+termGroups:
+  - name: Rust
+    color: orange
+    terms: [Rust, cargo]
+  - name: Standards
+    color: purple
+    terms: [RFC]

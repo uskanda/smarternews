@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, screen, userEvent, waitFor, within } from "@testing-library/react-native";
 import * as WebBrowser from "expo-web-browser";
 import { renderApp } from "../testing/app";
 import { eventually, MINUTE, rowTitles } from "../testing/queries";
@@ -88,7 +88,7 @@ describe("reading an article", () => {
     const server = await makeServer();
     const category = await server.category();
     const first = await server.article(category.id, { title: "First report" });
-    await server.core("setArticleFlags", first, { isRead: true });
+    await server.core("setArticleFlags", first, { isRead: true }, "$now");
     await server.advance(7 * 24 * 60 * MINUTE);
     const later = await server.article(category.id, { title: "Follow-up" });
     await server.sql("UPDATE articles SET previous_article_id = ? WHERE id = ?", first, later);
@@ -323,5 +323,67 @@ describe("sources and links", () => {
     expect(screen.queryByRole("link", { name: "that" })).toBeNull();
     await userEvent.setup().press(screen.getByText(/this/));
     expect(WebBrowser.openBrowserAsync).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an article that other feeds delivered too", () => {
+  /** Feed A keeps "Big news"; feeds B and C delivered it too, recorded as its duplicates. B has a post of its own. */
+  async function duplicated() {
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const [a, b, c] = [await server.feed("Feed A", tools.id), await server.feed("Feed B", tools.id), await server.feed("Feed C", tools.id)];
+    const kept = await server.feedArticle(a.id, { title: "Big news", at: "2026-03-01T10:00:00.000Z", url: "https://news.example.org/big" });
+    const copyB = await server.feedArticle(b.id, { title: "Big news in B", at: "2026-03-01T10:30:00.000Z", storedAt: "2026-03-01T11:00:00.000Z", duplicateOf: kept });
+    await server.feedArticle(c.id, { title: "Big news in C", at: "2026-03-01T10:40:00.000Z", storedAt: "2026-03-01T11:30:00.000Z", duplicateOf: kept });
+    await server.feedArticle(b.id, { title: "B post", at: "2026-03-01T09:00:00.000Z", url: "https://b.example.org/post" });
+    return { server, a, b, c, kept, copyB };
+  }
+
+  it("is listed once in the unread list", async () => {
+    const { server } = await duplicated();
+    await renderApp({ server });
+    await eventually(() => expect(rowTitles()).toEqual(["Big news", "B post"]));
+  });
+
+  it("is listed with every copy's own feed", async () => {
+    const { server, b } = await duplicated();
+    await renderApp({ server, url: `/list/feed-${b.id}` });
+    await eventually(() => expect(rowTitles()).toEqual(["Big news in B", "B post"]));
+  });
+
+  it("names the other feeds under the way to its page", async () => {
+    const { server, kept } = await duplicated();
+    await renderApp({ server, url: `/article/${kept}?list=unread` });
+    await screen.findByRole("header", { name: "Big news" });
+
+    const others = screen.getByTestId("other-feeds");
+    expect(within(others).getByText("ほかに配信した購読フィード")).toBeOnTheScreen();
+    expect(within(others).getAllByRole("link").map((link) => link.props.accessibilityLabel)).toEqual(["Feed B", "Feed C"]);
+    // Right under the way to the page. The pager draws the neighbouring articles too, so look beside the list only.
+    const parts = others.parent!.children.filter((child) => typeof child !== "string");
+    const before = parts[parts.indexOf(others) - 1]!;
+    expect(within(before).getByText("元のページを開く")).toBeOnTheScreen();
+  });
+
+  it("names no other feed for an article that only one feed delivered", async () => {
+    const { server, b } = await duplicated();
+    const own = (await server.core<{ items: Array<{ id: number; title: string }> }>("listArticles", { feed: b.id }, "2026-03-01T12:00:00.000Z")).items.find((item) => item.title === "B post")!;
+    await renderApp({ server, url: `/article/${own.id}?list=feed-${b.id}` });
+    await screen.findByRole("header", { name: "B post" });
+    expect(screen.queryByText("ほかに配信した購読フィード")).toBeNull();
+  });
+
+  it("opens the copy of another feed, and goes back to the article it came from", async () => {
+    const { server } = await duplicated();
+    await renderApp({ server });
+    await press(/Big news/);
+    await screen.findByRole("header", { name: "Big news" });
+
+    await userEvent.setup().press(await screen.findByRole("link", { name: "Feed B" }));
+    // The pager is drawn again once the copy's feed list arrives, so a header found earlier may already be gone.
+    await eventually(() => expect(screen.getByRole("header", { name: "Big news in B" })).toBeOnTheScreen());
+
+    await press("一覧へ戻る");
+    await eventually(() => expect(screen.getByRole("header", { name: "Big news" })).toBeOnTheScreen());
   });
 });

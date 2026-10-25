@@ -3,6 +3,7 @@ import type { Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { transaction, type Database } from "./database.ts";
 import { releaseFeedsOfCategory } from "./feeds.ts";
+import { refreshFiltered } from "./filters.ts";
 import { bool, json, num, numOrNull, str, type Row } from "./rows.ts";
 
 const DEFAULTS = {
@@ -150,12 +151,14 @@ export function moveCategory(db: Database, id: number, before: number | null): C
 
 /**
  * Deletes the category. Its topics, generated articles, candidates and runs go with it (ON DELETE CASCADE).
- * Its subscribed feeds stay, with their articles, and belong to no category afterwards.
+ * Its subscribed feeds stay, with their articles, and belong to no category afterwards. Its filters go.
  */
 export function deleteCategory(db: Database, id: number): void {
   getCategory(db, id);
   transaction(db, () => {
-    releaseFeedsOfCategory(db, id);
+    const released = releaseFeedsOfCategory(db, id);
+    // The category's filters go with it (ON DELETE CASCADE), and what they hid comes back.
     db.prepare("DELETE FROM categories WHERE id = ?").run(id);
+    refreshFiltered(db, "a.feed_id IN (SELECT value FROM json_each(?))", [JSON.stringify(released)]);
   });
 }

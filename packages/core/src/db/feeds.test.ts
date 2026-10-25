@@ -238,3 +238,38 @@ describe("translation of a feed", () => {
     expect(listFeeds(db)[0]!.translate).toBe(false);
   });
 });
+
+describe("full content fetching of a feed", () => {
+  const since = (db: ReturnType<typeof createTestDb>, id: number) =>
+    db.prepare("SELECT fetch_full_content_since AS since FROM feeds WHERE id = ?").get(id)!.since;
+
+  it("is off for a feed that is registered without saying so", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example" }, clock);
+    expect(feed.fetchFullContent).toBe(false);
+    expect(since(db, feed.id)).toBeNull();
+  });
+
+  it("records the time it was switched on, at registration and at a change, and keeps it when switched on again", () => {
+    const { db, clock } = setup();
+    const registered = insertFeed(db, { url: "https://example.org/a.xml", title: "A", fetchFullContent: true }, clock);
+    expect(registered.fetchFullContent).toBe(true);
+    expect(since(db, registered.id)).toBe(START);
+
+    const changed = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    clock.advance(5 * MINUTE);
+    expect(updateFeed(db, changed.id, { fetchFullContent: true }, clock).fetchFullContent).toBe(true);
+    expect(since(db, changed.id)).toBe("2026-03-01T12:05:00.000Z");
+    clock.advance(5 * MINUTE);
+    updateFeed(db, changed.id, { fetchFullContent: true }, clock);
+    expect(since(db, changed.id)).toBe("2026-03-01T12:05:00.000Z");
+    expect(listFeeds(db).map((feed) => feed.fetchFullContent)).toEqual([true, true]);
+  });
+
+  it("forgets the time when it is switched off", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", fetchFullContent: true }, clock);
+    expect(updateFeed(db, feed.id, { fetchFullContent: false }, clock).fetchFullContent).toBe(false);
+    expect(since(db, feed.id)).toBeNull();
+  });
+});

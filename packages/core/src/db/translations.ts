@@ -68,7 +68,7 @@ export function deleteArticleTranslation(db: Database, id: number): void {
 export function findArticleTranslation(db: Database, id: number, article: { translatedTitle: string | null; sourceLanguage: string | null }): ArticleTranslation | null {
   const row = db.prepare("SELECT segments, method, truncated, created_at FROM article_translations WHERE article_id = ?").get(id);
   if (!row) return null;
-  const html = (markdown: string) => renderMarkdown(markdown, { images: true });
+  const html = (markdown: string) => renderMarkdown(markdown, { images: "relayed" });
   return {
     translatedTitle: article.translatedTitle,
     sourceLanguage: article.sourceLanguage,

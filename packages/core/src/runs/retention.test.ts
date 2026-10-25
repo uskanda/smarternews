@@ -17,7 +17,7 @@ async function seeded() {
   ]);
   const run = await h.run();
   const [kept, plain] = h.articles();
-  setArticleFlags(h.db, kept!.id, { starred: true });
+  setArticleFlags(h.db, kept!.id, { starred: true }, "2026-03-01T12:00:00.000Z");
   return { h, run, kept: kept!, plain: plain! };
 }
 

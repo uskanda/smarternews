@@ -1,8 +1,8 @@
 import { buildNav, GENERATED_LABEL, listKey, type NavEntry } from "@smarternews/client";
-import { useGlobalSearchParams, useRouter } from "expo-router";
+import { useGlobalSearchParams, usePathname, useRouter } from "expo-router";
 import { useDrawerStatus } from "expo-router/drawer";
-import { useMemo, useRef, type ReactNode } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCategories, useCounts, useFeeds } from "../api/queries";
 import { useTheme } from "../theme/theme";
@@ -61,6 +61,44 @@ function Item({
 }
 
 /**
+ * The search box at the top of the drawer. The search key of the keyboard closes the drawer and shows the
+ * results over every article; with spaces only, nothing changes.
+ */
+function SearchBox({ onSearch }: { onSearch: (words: string) => void }) {
+  const theme = useTheme();
+  const [value, setValue] = useState("");
+  return (
+    <View style={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.sm }}>
+      <TextInput
+        testID="search-box"
+        accessibilityLabel="記事を検索"
+        placeholder="記事を検索"
+        placeholderTextColor={theme.colors["on-surface-muted"]}
+        returnKeyType="search"
+        value={value}
+        onChangeText={setValue}
+        onSubmitEditing={() => {
+          const words = value.trim();
+          if (words.length > 0) onSearch(words);
+        }}
+        style={[
+          theme.type["body-md"],
+          {
+            minHeight: theme.spacing["touch-android"],
+            paddingHorizontal: theme.spacing.sm,
+            borderWidth: 1,
+            borderColor: theme.colors["outline-strong"],
+            borderRadius: theme.rounded.md,
+            backgroundColor: theme.colors.surface,
+            color: theme.colors["on-surface"],
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
+/**
  * The lists a user can read: the four fixed ones, the enabled categories with the generated articles and the
  * feeds below them, the feeds without a category, and settings. A category that has feeds can be folded.
  */
@@ -69,7 +107,10 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
   const insets = useSafeAreaInsets();
   const open = useDrawerStatus() === "open";
   const router = useRouter();
-  const current = useGlobalSearchParams<{ key?: string }>().key ?? "unread";
+  const onSearch = usePathname() === "/search";
+  const listParam = useGlobalSearchParams<{ key?: string }>().key ?? "unread";
+  // On the search results no entry of the drawer is the one shown.
+  const current = onSearch ? "" : listParam;
   const categories = useCategories().data;
   const feeds = useFeeds().data;
   const counts = useCounts().data;
@@ -137,6 +178,12 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
       accessibilityElementsHidden={!open}
       contentContainerStyle={{ paddingTop: insets.top + theme.spacing.md, paddingBottom: insets.bottom + theme.spacing.md }}
     >
+      <SearchBox
+        onSearch={(words) => {
+          closeDrawer();
+          router.navigate({ pathname: "/search", params: { q: words, category: undefined, feed: undefined, unread: undefined } });
+        }}
+      />
       {model.views.map((entry) => (
         <View key={listKey(entry.target)} style={{ flexDirection: "row" }}>
           {item(entry)}

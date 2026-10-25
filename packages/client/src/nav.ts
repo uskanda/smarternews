@@ -5,6 +5,8 @@ import type { ArticleListQuery, Category, Counts, Feed, MarkRead } from "@smarte
 /** A list of articles a reader can open. */
 export type ListTarget =
   | { type: "unread" | "all" | "starred" | "generated" | "uncategorized" }
+  /** The articles read in the last seven days, last read first. */
+  | { type: "recentlyRead" }
   /** A category: everything in it, or only the articles the model wrote. */
   | { type: "category"; categoryId: number; generatedOnly: boolean }
   | { type: "feed"; feedId: number };
@@ -12,7 +14,10 @@ export type ListTarget =
 export interface NavEntry {
   target: ListTarget;
   label: string;
-  /** Unread articles behind the entry. Zero for "すべて" and "スター", which do not count unread articles. */
+  /**
+   * Unread articles behind the entry. Zero for "すべて", "スター" and "最近読んだ記事", which do not count unread
+   * articles.
+   */
   unread: number;
 }
 
@@ -34,6 +39,7 @@ export interface NavModel {
 
 export const GENERATED_LABEL = "AI生成";
 export const UNCATEGORIZED_LABEL = "未分類";
+export const RECENTLY_READ_LABEL = "最近読んだ記事";
 
 export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts: Counts | undefined }): NavModel {
   const { categories, feeds, counts } = input;
@@ -72,6 +78,7 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
       { target: { type: "all" }, label: "すべて", unread: 0 },
       { target: { type: "starred" }, label: "スター", unread: 0 },
       { target: { type: "generated" }, label: GENERATED_LABEL, unread: counts?.generatedUnread ?? 0 },
+      { target: { type: "recentlyRead" }, label: RECENTLY_READ_LABEL, unread: 0 },
     ],
     groups,
     starred: counts?.starred ?? 0,
@@ -82,11 +89,13 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
 export function listKey(target: ListTarget): string {
   if (target.type === "category") return `category-${target.categoryId}${target.generatedOnly ? "-generated" : ""}`;
   if (target.type === "feed") return `feed-${target.feedId}`;
+  if (target.type === "recentlyRead") return "recently-read";
   return target.type;
 }
 
 export function parseListKey(key: string): ListTarget | null {
   if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { type: key };
+  if (key === "recently-read") return { type: "recentlyRead" };
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
   if (category) return { type: "category", categoryId: Number(category[1]), generatedOnly: category[2] !== undefined };
   const feed = /^feed-(\d{1,15})$/.exec(key);
@@ -110,6 +119,8 @@ export function targetFilter(target: ListTarget): ArticleListQuery {
       return { category: target.categoryId, ...(target.generatedOnly ? { origin: "generated" as const } : {}) };
     case "feed":
       return { feed: target.feedId };
+    case "recentlyRead":
+      return { recentlyRead: "true" };
   }
 }
 
@@ -131,5 +142,14 @@ export function targetScope(target: ListTarget): Omit<MarkRead, "before" | "minI
 
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */
 export function hasReadToggle(target: ListTarget): boolean {
-  return target.type !== "unread" && target.type !== "all" && target.type !== "starred";
+  return target.type !== "unread" && target.type !== "all" && target.type !== "starred" && target.type !== "recentlyRead";
+}
+
+/**
+ * Whether the list may offer mark all as read and the toggle for importance 4 and above. Not the recently
+ * read articles: everything there is read already, and a lower bound on importance would hide every feed
+ * article in a list meant for finding what was read.
+ */
+export function hasListControls(target: ListTarget): boolean {
+  return target.type !== "recentlyRead";
 }

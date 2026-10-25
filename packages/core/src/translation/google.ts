@@ -52,7 +52,7 @@ function compact(item: TranslationItem): Compact {
   if (item.plain) return { html: escapeHtml(item.text), urls: [], marker: null };
   const urls: string[] = [];
   const numbered = (url: string) => urls.push(url) - 1;
-  const html = renderMarkdown(item.text, { images: true })
+  const html = renderMarkdown(item.text, { images: "original" })
     .trim()
     // Only the address and, for an image, its description say something; the rest is how this app draws them.
     .replace(/<a\s[^>]*?href="([^"]*)"[^>]*>/g, (_tag, url: string) => `<a href="${numbered(url)}">`)

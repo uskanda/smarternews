@@ -24,4 +24,10 @@ describe("resolvePaths", () => {
     expect(paths.configDir).toBe("/tmp/c");
     expect(paths.dbFile).toBe("/tmp/d/db.sqlite");
   });
+
+  it("keeps the key that signs image URLs and the relayed images in the data directory", () => {
+    const paths = resolvePaths({ SMARTERNEWS_CONFIG_DIR: "/tmp/c", SMARTERNEWS_DATA_DIR: "/tmp/d" }, "/srv/user");
+    expect(paths.imageKeyFile).toBe("/tmp/d/image-proxy.key");
+    expect(paths.imageCacheDir).toBe("/tmp/d/image-cache");
+  });
 });

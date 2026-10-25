@@ -4,10 +4,10 @@ import { DrawerActions } from "@react-navigation/native";
 import { useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { BackHandler, FlatList, RefreshControl, SectionList, View } from "react-native";
+import { BackHandler, FlatList, RefreshControl, ScrollView, SectionList, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../api/AppProvider";
-import { useCategories, useFeeds, useSettings, useTimeZone } from "../api/queries";
+import { useCategories, useFeeds, useSettings, useTermMatcher, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
 import { unfold } from "../shell/collapsed";
 import { useTheme } from "../theme/theme";
@@ -18,19 +18,28 @@ import { useToast } from "../ui/toast";
 import { Txt } from "../ui/Txt";
 import { ArticleRow } from "./ArticleRow";
 import { EventRow } from "./EventRow";
-import { listParams, useReaderList, type View as ListView } from "./useReaderList";
+import { listParams, listRefOf, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
 
 function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): string {
   if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
   if (isEvents) return "これから開催されるイベントはありません。";
   if (view === "unread") return "未読の記事はありません。";
+  if (view === "recentlyRead") return "直近7日に読んだ記事はありません。";
   if (view === "starred") return "スターを付けた記事はありません。";
   if (view === "all") return "記事はまだありません。カテゴリを実行すると、ここに並びます。";
   return "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
 }
 
-/** A list of articles for one view. Opening a row goes to the article; the drawer changes the view. */
-export function ListScreen() {
+/** The search results: the list screen over what the words of the search found. */
+export function SearchScreen() {
+  return <ListScreen search />;
+}
+
+/**
+ * A list of articles for one view. Opening a row goes to the article; the drawer changes the view. With
+ * `search`, the list holds the search results the screen's parameters describe.
+ */
+export function ListScreen({ search = false }: { search?: boolean }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -41,13 +50,16 @@ export function ListScreen() {
   const settings = useSettings();
   const categories = useCategories();
   const feeds = useFeeds();
+  const groups = useTermMatcher();
   const client = useQueryClient();
-  const params = useLocalSearchParams<{ key: string; read?: string; min?: string }>();
-  const ref = { key: params.key ?? "unread", includeRead: params.read === "1", importantOnly: params.min === "4" };
+  const params = useLocalSearchParams<{ key: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string }>();
+  const ref = listRefOf(search ? SEARCH_KEY : (params.key ?? "unread"), params);
   const reader = useReaderList(ref);
   const { list, items, fetched, view, isEvents } = reader;
   const [refreshing, setRefreshing] = useState(false);
   const [menuFor, setMenuFor] = useState<ArticleSummary | null>(null);
+  const [narrowing, setNarrowing] = useState(false);
+  const { height: windowHeight } = useWindowDimensions();
 
   // The rows are drawn again only when their article changes, so what they call must not change either:
   // these three stay the same functions and reach the current state through a ref.
@@ -82,7 +94,20 @@ export function ListScreen() {
   // The last row must be able to scroll clear of the system's navigation bar.
   const listPadding = { paddingBottom: insets.bottom };
 
-  const setFilter = (name: "read" | "min", value: string, on: boolean) => router.setParams({ [name]: on ? value : undefined });
+  const setFilter = (name: "read" | "min" | "unread", value: string, on: boolean) => router.setParams({ [name]: on ? value : undefined });
+  /** Narrows the search results to a category or a feed, or to nothing. */
+  const narrow = (to: { category?: number; feed?: number }) => {
+    setNarrowing(false);
+    router.setParams({ category: to.category === undefined ? undefined : String(to.category), feed: to.feed === undefined ? undefined : String(to.feed) });
+  };
+  const searchRef = ref.search;
+  const narrowedTo =
+    searchRef?.category !== undefined
+      ? (categories.data?.find((entry) => entry.id === searchRef.category)?.name ?? "")
+      : searchRef?.feed !== undefined
+        ? (feeds.data?.find((entry) => entry.id === searchRef.feed)?.title ?? "")
+        : "すべて";
+  const narrowed = searchRef !== undefined && (searchRef.category !== undefined || searchRef.feed !== undefined || searchRef.unread);
 
   async function pulled() {
     setRefreshing(true);
@@ -127,7 +152,7 @@ export function ListScreen() {
     }
   }
 
-  const canMarkAll = (view === "unread" || reader.readToggle) && fetched.some((item) => !item.isRead);
+  const canMarkAll = reader.listControls && (view === "unread" || reader.readToggle) && fetched.some((item) => !item.isRead);
   const header = (
     <ScreenHeader
       title={reader.title}
@@ -150,11 +175,33 @@ export function ListScreen() {
   const status = (
     <View>
       {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
-      {list.isPending && !list.isError ? <Loading /> : null}
-      {list.isSuccess && items.length === 0 ? (
-        <Txt variant="body-md" color="on-surface-muted" style={{ padding: theme.spacing.lg }}>
-          {emptyText(view, reader.hasSources, isEvents)}
-        </Txt>
+      {list.isPending && !list.isError && !(searchRef && searchRef.q.length === 0) ? <Loading /> : null}
+      {searchRef && (searchRef.q.length === 0 || (list.isSuccess && items.length === 0)) ? (
+        <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm, alignItems: "flex-start" }}>
+          {searchRef.q.length === 0 ? (
+            <Txt variant="body-md" color="on-surface-muted">
+              項目の上の検索欄に語を入れてください。
+            </Txt>
+          ) : (
+            <>
+              <Txt variant="body-md">「{searchRef.q}」に一致する記事はありません。</Txt>
+              <Txt variant="body-md" color="on-surface-muted">
+                語を減らすと、見つかることがあります。
+              </Txt>
+              {narrowed ? <Button label="絞り込みを外す" onPress={() => router.setParams({ category: undefined, feed: undefined, unread: undefined })} /> : null}
+            </>
+          )}
+        </View>
+      ) : null}
+      {!searchRef && list.isSuccess && items.length === 0 ? (
+        <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm, alignItems: "flex-start" }}>
+          <Txt variant="body-md" color="on-surface-muted">
+            {emptyText(view, reader.hasSources, isEvents)}
+          </Txt>
+          {view === "recentlyRead" ? (
+            <Button label="「未読」を開く" variant="quiet" onPress={() => router.navigate({ pathname: "/list/[key]", params: { key: "unread" } })} />
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -204,15 +251,21 @@ export function ListScreen() {
           data={items}
           contentContainerStyle={listPadding}
           keyExtractor={(item) => String(item.id)}
+          // New term groups colour every row again.
+          extraData={groups}
           renderItem={({ item }) => (
             <ArticleRow
               article={item}
               sourceName={reader.sourceName(item)}
               timeZone={timeZone}
               now={minute}
+              time={reader.rowTime}
               onOpen={open}
               onToggleRead={toggleRead}
               onLongPress={showMenu}
+              excerpt={reader.excerptOf(item.id)}
+              terms={reader.terms}
+              groups={groups}
             />
           )}
           ListHeaderComponent={
@@ -220,6 +273,12 @@ export function ListScreen() {
               <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: theme.spacing.lg, paddingHorizontal: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.outline }}>
                 {reader.readToggle ? <Toggle label="既読も表示" value={ref.includeRead} onChange={(on) => setFilter("read", "1", on)} /> : null}
                 {reader.importanceFilter ? <Toggle label="重要度4以上だけ" value={ref.importantOnly} onChange={(on) => setFilter("min", "4", on)} /> : null}
+                {searchRef ? (
+                  <>
+                    <Button label={`絞り込み：${narrowedTo}`} variant="quiet" onPress={() => setNarrowing(true)} />
+                    <Toggle label="未読だけ" value={searchRef.unread} onChange={(on) => setFilter("unread", "true", on)} />
+                  </>
+                ) : null}
               </View>
               {status}
             </View>
@@ -230,6 +289,19 @@ export function ListScreen() {
           onEndReachedThreshold={0.5}
         />
       )}
+      <Sheet title="絞り込み" visible={narrowing} onClose={() => setNarrowing(false)}>
+        {/* Many categories and feeds scroll inside the sheet, which keeps the screen above it in view. */}
+        <ScrollView style={{ maxHeight: windowHeight * 0.6 }} contentContainerStyle={{ gap: theme.spacing.sm }}>
+          <Button label="すべて" onPress={() => narrow({})} />
+          {(categories.data ?? []).map((entry) => (
+            <Button key={`c${entry.id}`} label={entry.name} onPress={() => narrow({ category: entry.id })} />
+          ))}
+          {(feeds.data ?? []).map((entry) => (
+            <Button key={`f${entry.id}`} label={entry.title} onPress={() => narrow({ feed: entry.id })} />
+          ))}
+        </ScrollView>
+        <Button label="閉じる" variant="quiet" onPress={() => setNarrowing(false)} />
+      </Sheet>
       <Sheet title={menuFor?.title ?? ""} visible={menuFor !== null} onClose={() => setMenuFor(null)}>
         {menuFor ? (
           <View style={{ gap: theme.spacing.sm }}>

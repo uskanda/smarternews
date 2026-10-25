@@ -34,7 +34,7 @@ describe("swiping a row", () => {
   it("puts a read article back to unread", async () => {
     const server = await makeServer();
     const id = await server.article((await server.category()).id, { title: "Again" });
-    await server.core("setArticleFlags", id, { isRead: true });
+    await server.core("setArticleFlags", id, { isRead: true }, "$now");
     await renderApp({ server, url: "/list/all" });
     await screen.findByText("Again");
 
@@ -135,7 +135,7 @@ describe("marking everything as read", () => {
     const server = await makeServer();
     const category = await server.category();
     const before = await server.article(category.id, { title: "Read before" });
-    await server.core("setArticleFlags", before, { isRead: true });
+    await server.core("setArticleFlags", before, { isRead: true }, "$now");
     const ids = await articles(server, category.id, [{ title: "One" }, { title: "Two" }]);
     await renderApp({ server });
     await screen.findByText("Two");
@@ -313,5 +313,57 @@ describe("moving on after marking all as read", () => {
     await press("すべて既読にする");
     expect(await screen.findByText("4件を既読にしました")).toBeOnTheScreen();
     expect(screen.getByRole("header", { name: "未読" })).toBeOnTheScreen();
+  });
+});
+
+describe("putting back to unread in the recently read articles", () => {
+  /** Three articles of Tools read at 10:00 by mark all as read. */
+  async function readMistakenly() {
+    const server = await makeServer("2026-03-02T08:00:00.000Z");
+    const tools = await server.category("Tools");
+    const ids = await articles(server, tools.id, [{ title: "Tools 1" }, { title: "Tools 2" }, { title: "Tools 3" }]);
+    await server.advance(117 * MINUTE);
+    await server.core("markArticlesRead", { categoryId: tools.id, before: server.now().toISOString() }, "$now");
+    await renderApp({ server, url: "/list/recently-read" });
+    await screen.findByText("Tools 2");
+    return { server, ids };
+  }
+  const isUnread = (name: RegExp) => expect(label(name)).toMatch(/未読$/);
+  const pull = async () => {
+    const { refreshControl } = screen.getByTestId("article-list").props as { refreshControl: { props: { onRefresh: () => void } } };
+    await act(async () => refreshControl.props.onRefresh());
+  };
+  async function keptThenDropped(server: TestServer, id: number) {
+    await eventually(async () => expect((await article(server, id)).isRead).toBe(false));
+    await waitFor(() => isUnread(/Tools 2/));
+    expect(rowTitles()).toEqual(["Tools 3", "Tools 2", "Tools 1"]);
+    expect(label(/Tools 2/)).toContain("。10:00。");
+
+    await pull();
+    await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 1"]));
+  }
+
+  it("keeps a row swiped back to unread where it was until the list is pulled", async () => {
+    const { server, ids } = await readMistakenly();
+    await fireEvent(screen.getByTestId(`row-${ids[1]}`), "swipeableOpen", "right");
+    await keptThenDropped(server, ids[1]!);
+  });
+
+  it("keeps a row put back to unread from the long press menu", async () => {
+    const { server, ids } = await readMistakenly();
+    const user = userEvent.setup();
+    await user.longPress(screen.getByRole("button", { name: /Tools 2/ }));
+    await user.press(await screen.findByRole("button", { name: "未読に戻す" }));
+    await keptThenDropped(server, ids[1]!);
+  });
+
+  it("keeps a row put back to unread on the article screen", async () => {
+    const { server, ids } = await readMistakenly();
+    await press(/Tools 2/);
+    await screen.findByRole("header", { name: "Tools 2" });
+    await press("未読に戻す");
+    await eventually(async () => expect((await article(server, ids[1]!)).isRead).toBe(false));
+    await press("一覧へ戻る");
+    await keptThenDropped(server, ids[1]!);
   });
 });

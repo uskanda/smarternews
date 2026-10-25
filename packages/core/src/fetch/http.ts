@@ -9,10 +9,19 @@ export function defaultUserAgent(version: string): string {
   return `smarternews/${version} (+${REPOSITORY_URL})`;
 }
 
+/**
+ * What kind of failure a request met: the destination is refused (this machine, its network, a scheme that is
+ * not the web), the site did not answer in time, or anything else.
+ */
+export type FetchErrorKind = "blocked" | "timeout" | "error";
+
 export class FetchError extends Error {
-  constructor(message: string) {
+  readonly kind: FetchErrorKind;
+
+  constructor(message: string, kind: FetchErrorKind = "error") {
     super(message);
     this.name = "FetchError";
+    this.kind = kind;
   }
 }
 
@@ -24,6 +33,24 @@ export interface HttpResponse {
   /** The response headers, with their names in lower case. */
   headers: Record<string, string>;
   text: string;
+}
+
+/** What `getBytes` hands back: the body as the bytes that arrived. */
+export interface BytesResponse {
+  status: number;
+  /** The URL after redirects. */
+  url: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+export interface BytesRequestOptions {
+  /** The largest body accepted, in bytes. A larger one fails the request. */
+  maxBytes: number;
+  /** Sent besides the User-Agent. */
+  headers?: Record<string, string>;
+  /** Sees the head of the final response before its body is read; throws to refuse it. */
+  inspect?: (head: { status: number; url: string; contentType: string }) => void;
 }
 
 export interface FetcherOptions {
@@ -66,7 +93,7 @@ const MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function notAllowed(url: string, reason: string): FetchError {
-  return new FetchError(`destination not allowed: ${url} (${reason}); to fetch it, list the host under fetch.allowPrivateHosts in config.yaml`);
+  return new FetchError(`destination not allowed: ${url} (${reason}); to fetch it, list the host under fetch.allowPrivateHosts in config.yaml`, "blocked");
 }
 
 export class Fetcher {
@@ -91,12 +118,45 @@ export class Fetcher {
   }
 
   async get(url: string, request: RequestOptions = {}): Promise<HttpResponse> {
-    const { fetchImpl, timeoutMs, maxBytes, userAgent } = this.#options;
+    const { userAgent, maxBytes } = this.#options;
+    const { response, url: current } = await this.#send(url, request, { "user-agent": userAgent, accept: "*/*" });
+    const bytes = await this.#readBody(response, current, maxBytes);
+    const contentType = response.headers.get("content-type") ?? "";
+    const responseHeaders = Object.fromEntries(response.headers.entries());
+    return { status: response.status, url: current, contentType, headers: responseHeaders, text: decode(bytes, contentType) };
+  }
+
+  /**
+   * A GET whose body comes back as the bytes that arrived, under the caller's size limit. Every check of `get`
+   * applies. Only the User-Agent and `headers` are sent, also after a redirect to another site: they are
+   * meant to say what is accepted, never to carry a key. `inspect` sees the status and media type before the
+   * body is read, and refuses the response by throwing.
+   */
+  async getBytes(url: string, request: BytesRequestOptions): Promise<BytesResponse> {
+    const headers = { "user-agent": this.#options.userAgent, ...request.headers };
+    const { response, url: current } = await this.#send(url, { headers }, headers);
+    const contentType = response.headers.get("content-type") ?? "";
+    try {
+      request.inspect?.({ status: response.status, url: current, contentType });
+    } catch (error) {
+      await response.body?.cancel();
+      throw error;
+    }
+    const bytes = await this.#readBody(response, current, request.maxBytes);
+    return { status: response.status, url: current, contentType, bytes };
+  }
+
+  /**
+   * Sends the request and follows redirects, checking each target before it is asked. `base` is what is sent
+   * in place of the caller's headers once a redirect leads to another site.
+   */
+  async #send(url: string, request: RequestOptions, base: Record<string, string>): Promise<{ response: Response; url: string }> {
+    const { fetchImpl, timeoutMs } = this.#options;
     const signal = AbortSignal.timeout(timeoutMs);
     let current = url;
     let method = request.method ?? "GET";
     let body = request.body;
-    let headers: Record<string, string> = { "user-agent": userAgent, accept: "*/*", ...request.headers };
+    let headers: Record<string, string> = { ...base, ...request.headers };
     let response: Response;
     // Redirects are followed here and not by fetch, so that each target is checked before it is asked.
     for (let followed = 0; ; followed++) {
@@ -107,13 +167,13 @@ export class Fetcher {
         response = await fetchImpl(current, { method, body, headers, redirect: "manual", signal });
       } catch (error) {
         const name = (error as Error).name;
-        if (name === "TimeoutError" || name === "AbortError") throw new FetchError(`timed out after ${timeoutMs} ms: ${url}`);
+        if (name === "TimeoutError" || name === "AbortError") throw new FetchError(`timed out after ${timeoutMs} ms: ${url}`, "timeout");
         const cause = (error as { cause?: { code?: string; message?: string } }).cause;
         if (cause?.code === DESTINATION_CODE) throw notAllowed(current, cause.message ?? "refused address");
         throw new FetchError(`request failed: ${current}: ${(error as Error).message}`);
       }
       const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
-      if (location === null) break;
+      if (location === null) return { response, url: current };
       await response.body?.cancel();
       if (followed >= MAX_REDIRECTS) throw new FetchError(`more than ${MAX_REDIRECTS} redirects: ${url}`);
       const from = new URL(current).origin;
@@ -123,17 +183,13 @@ export class Fetcher {
         throw new FetchError(`redirect to something that is not a URL: ${url}`);
       }
       // What the caller sent was meant for the site it asked: a key or a validator does not follow to another one.
-      if (new URL(current).origin !== from) headers = { "user-agent": userAgent, accept: "*/*" };
+      if (new URL(current).origin !== from) headers = { ...base };
       if (response.status !== 307 && response.status !== 308 && method !== "GET") {
         method = "GET";
         body = undefined;
         headers = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== "content-type"));
       }
     }
-    const bytes = await this.#readBody(response, current, maxBytes);
-    const contentType = response.headers.get("content-type") ?? "";
-    const responseHeaders = Object.fromEntries(response.headers.entries());
-    return { status: response.status, url: current, contentType, headers: responseHeaders, text: decode(bytes, contentType) };
   }
 
   async #waitForHost(host: string): Promise<void> {
@@ -168,7 +224,8 @@ export class Fetcher {
     } catch (error) {
       if (error instanceof FetchError) throw error;
       const name = (error as Error).name;
-      throw new FetchError(name === "TimeoutError" ? `timed out after ${this.#options.timeoutMs} ms: ${url}` : `reading failed: ${url}`);
+      if (name === "TimeoutError") throw new FetchError(`timed out after ${this.#options.timeoutMs} ms: ${url}`, "timeout");
+      throw new FetchError(`reading failed: ${url}`);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;

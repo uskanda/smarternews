@@ -40,6 +40,22 @@ describe("the drawer", () => {
     expect(screen.getByRole("button", { name: "未読、未読2件" })).toBeOnTheScreen();
   });
 
+  it("lists 未読, すべて, スター, AI生成 and 最近読んだ記事 on top, the last without a number", async () => {
+    const server = await makeServer();
+    const a = await server.category("Security");
+    await server.core("setArticleFlags", await server.article(a.id), { isRead: true }, "$now");
+    await server.article(a.id);
+    await renderApp({ server });
+
+    await openDrawer();
+
+    await screen.findByRole("button", { name: "未読、未読1件" });
+    const names = screen.getAllByRole("button").map((node) => String(node.props.accessibilityLabel));
+    const top = ["未読、未読1件", "すべて", "スター", "AI生成、未読1件", "最近読んだ記事"];
+    expect(names.filter((name) => top.includes(name))).toEqual(top);
+    expect(names.indexOf("最近読んだ記事")).toBeLessThan(names.indexOf("Security、未読1件"));
+  });
+
   it("keeps its items away from a screen reader while it is closed", async () => {
     const server = await makeServer();
     await server.category("Security");

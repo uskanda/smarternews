@@ -170,8 +170,19 @@ describe("dragging in the drawer after a long press", () => {
     await ready(server);
 
     expect(() => getByGestureTestId("drag-uncategorized")).toThrow();
+    expect(() => getByGestureTestId("drag-recently-read")).toThrow();
     expect(() => getByGestureTestId(`drag-category-${a.id}-generated`)).toThrow();
     expect(getByGestureTestId(`drag-category-${a.id}`)).toBeTruthy();
+  });
+
+  it("starts no drag on a long press of 最近読んだ記事", async () => {
+    const { server } = await seeded();
+    await ready(server);
+
+    await userEvent.setup().longPress(screen.getByRole("button", { name: "最近読んだ記事" }));
+
+    expect(screen.queryByTestId("nav-drop-line")).toBeNull();
+    expect(await names(server)).toEqual(["A", "B", "C", "Events"]);
   });
 
   it("still opens an entry on a short press", async () => {

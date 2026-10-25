@@ -1,4 +1,4 @@
-import type { Run } from "@smarternews/core/api";
+import type { Run, TermColor } from "@smarternews/core/api";
 
 export const STATUS_LABEL: Record<Run["status"], string> = {
   queued: "待機中",
@@ -37,12 +37,12 @@ const STAGE_LABEL: Record<string, string> = {
 
 /**
  * What a refused change ran into, in the app's language. The server says it in English; the kinds it
- * produces for feeds and stop words are known, and anything else is shown as the server said it.
+ * produces for feeds and filters are known, and anything else is shown as the server said it.
  */
 export function conflictLabel(message: string): string {
   const subscribed = /already subscribed: (\S+)/.exec(message)?.[1];
   if (subscribed) return `このフィードはすでに購読しています（${subscribed}）。`;
-  if (/stop word .* is already registered/.test(message)) return "この語はすでに登録しています。";
+  if (/the same filter is already registered/.test(message)) return "同じフィルターがすでにあります。";
   return `ほかの内容とぶつかるため、実行できませんでした（${message}）。`;
 }
 
@@ -65,3 +65,6 @@ export function feedErrorLabel(error: string): string {
 export function stageLabel(stage: string): string {
   return STAGE_LABEL[stage] ?? stage;
 }
+
+/** The colours of term groups, by the names the screens use. */
+export const TERM_COLOR_LABEL: Record<TermColor, string> = { green: "緑", purple: "紫", pink: "桃色", orange: "橙色" };

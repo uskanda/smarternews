@@ -1,8 +1,10 @@
 import { insertFeed, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { relayPath } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { Markdown } from "./Markdown.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
@@ -50,7 +52,7 @@ describe("the entries of the navigation", () => {
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Blog/ });
     await waitFor(() =>
-      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
+      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
     );
   });
 
@@ -60,7 +62,7 @@ describe("the entries of the navigation", () => {
     server.article(tools.id);
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Tools/ });
-    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "Tools1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "Tools1"]));
     expect(within(nav()).queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -138,7 +140,7 @@ describe("the list an entry opens", () => {
 
   it("shows only the unread articles of the feed that is chosen", async () => {
     const { server, oldPost } = seeded();
-    setArticleFlags(server.db, oldPost, { isRead: true });
+    setArticleFlags(server.db, oldPost, { isRead: true }, server.clock().toISOString());
     const { user, path } = renderApp({ server });
     await user.click(await within(nav()).findByRole("link", { name: /Blog/ }));
     await screen.findByRole("heading", { level: 1, name: "Blog" });
@@ -275,10 +277,10 @@ describe("images", () => {
     return { server, route: `/c/tools/${id}` };
   }
 
-  it("are shown in the content of a feed article, without sending where the reader comes from", async () => {
+  it("are shown in the content of a feed article through the server's relay, without sending where the reader comes from", async () => {
     renderApp(withImage("Before.\n\n![A chart](https://img.example.org/a.png)\n\nAfter."));
     const image = await within(await opened()).findByRole("img", { name: "A chart" });
-    expect(image).toHaveAttribute("src", "https://img.example.org/a.png");
+    expect(image).toHaveAttribute("src", relayPath("https://img.example.org/a.png"));
     expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(image).toHaveAttribute("loading", "lazy");
     expect(image).toHaveClass("article-image");
@@ -295,10 +297,21 @@ describe("images", () => {
     expect(within(article()).getByText("After.")).toBeInTheDocument();
   });
 
-  it("are not loaded over plain HTTP", async () => {
+  it("over plain HTTP are shown through the relay too", async () => {
     renderApp(withImage("Text.\n\n![Plain](http://img.example.org/b.png)"));
-    await within(await opened()).findByText("Text.");
+    const image = await within(await opened()).findByRole("img", { name: "Plain" });
+    expect(image).toHaveAttribute("src", relayPath("http://img.example.org/b.png"));
+  });
+
+  it("are not loaded from anywhere but the relay", async () => {
+    renderApp(withImage("Text.\n\n![Inline](data:image/png;base64,AAAA) ![Local](/elsewhere.png)"));
+    await within(await opened()).findByText(/Text\./);
     expect(within(article()).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(article()).getByText("Inline Local")).toBeInTheDocument();
+    // An address the API did not rewrite, such as one a model wrote in another form, stays a description.
+    const direct = render(<Markdown text="![Direct](https://img.example.org/c.png)" images />);
+    expect(direct.container.querySelector("img")).toBeNull();
+    expect(direct.container).toHaveTextContent("Direct");
   });
 
   it("are never loaded in a generated article: only the description is shown", async () => {
@@ -318,7 +331,7 @@ describe("marking everything read", () => {
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
 
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
-    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
 
     await user.click(screen.getByRole("button", { name: "取り消す" }));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
@@ -381,7 +394,10 @@ describe("the summary of a feed article", () => {
     await within(pane).findByText("New words.");
     expect(summaryOf(pane)).toBeNull();
     expect(pane).not.toHaveTextContent(WAITING);
-    expect(within(pane).getByRole("link", { name: "元のページを開く" }).parentElement!.nextElementSibling).toHaveClass("article-body");
+    // Between the two, only the way to fetch the full content.
+    const next = within(pane).getByRole("link", { name: "元のページを開く" }).parentElement!.nextElementSibling!;
+    expect(within(next as HTMLElement).getByRole("button", { name: "全文を取得" })).toBeInTheDocument();
+    expect(next.nextElementSibling).toHaveClass("article-body");
   });
 
   it("says that the page could not be read when it was written from what the feed delivered", async () => {
@@ -490,5 +506,39 @@ describe("the summary of a feed article", () => {
     await within(pane).findByRole("heading", { level: 2, name: "Generated" });
     expect(summaryOf(pane)).toBeNull();
     expect(within(pane).queryByRole("status")).toBeNull();
+  });
+});
+
+describe("an article that other feeds delivered too", () => {
+  /** Blog keeps "Big news"; Releases delivered it too, recorded as its duplicate, next to two posts of its own. */
+  function duplicated() {
+    const s = seeded();
+    const kept = seedFeedArticle(s.server.db, s.blog.id, { title: "Big news", at: at(90), url: "https://news.example.org/big" });
+    const copy = seedFeedArticle(s.server.db, s.releases.id, { title: "Big news (Releases)", at: at(95), duplicateOf: kept });
+    seedFeedArticle(s.server.db, s.releases.id, { title: "Release 3", at: at(40) });
+    return { ...s, kept, copy };
+  }
+
+  it("is listed with its own feed, which counts it", async () => {
+    const { server, releases } = duplicated();
+    renderApp({ server, route: `/f/${releases.id}` });
+    await within(list()).findByRole("link", { name: /Big news \(Releases\)/ });
+    expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]);
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Releases/ })).toHaveTextContent("Releases3"));
+  });
+
+  it("opens the copy in the list of the other feed when its name is chosen", async () => {
+    const { server, blog, releases, kept, copy } = duplicated();
+    const { user, path } = renderApp({ server, route: `/f/${blog.id}/${kept}` });
+    const others = await within(await opened()).findByRole("region", { name: "ほかに配信した購読フィード" });
+
+    await user.click(within(others).getByRole("link", { name: "Releases" }));
+
+    await within(await opened()).findByRole("heading", { level: 2, name: "Big news (Releases)" });
+    expect(path()).toBe(`/f/${releases.id}/${copy}?read=1`);
+    expect(within(nav()).getByRole("link", { name: /Releases/ })).toHaveAttribute("aria-current", "page");
+    // The copy was marked read with the kept article, so the list includes read articles to show it.
+    await waitFor(() => expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]));
+    expect(row(/Big news \(Releases\)/)).toHaveAttribute("data-read", "true");
   });
 });

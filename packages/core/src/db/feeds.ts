@@ -4,6 +4,7 @@ import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
+import { refreshFiltered } from "./filters.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { getSettings } from "./settings.ts";
 
@@ -44,6 +45,7 @@ function toFeed(row: Row, baseMinutes: number): Feed {
     enabled,
     autoSummarize: bool(row.auto_summarize),
     translate: bool(row.translate),
+    fetchFullContent: bool(row.fetch_full_content),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
@@ -118,6 +120,8 @@ function setFeedCategory(db: Database, id: number, categoryId: number | null): v
   db.prepare("UPDATE feeds SET category_id = ? WHERE id = ?").run(categoryId, id);
   // Articles carry their feed's category, so that lists and counts by category need no join.
   db.prepare("UPDATE articles SET category_id = ? WHERE feed_id = ?").run(categoryId, id);
+  // The filters of the category the feed left stop applying, and those of the one it joined start to.
+  refreshFiltered(db, "a.feed_id = ?", [id]);
 }
 
 /** The ids of the feeds of one category, or of none, in their order. */
@@ -169,6 +173,8 @@ export interface NewFeed {
   autoSummarize?: boolean;
   /** Translate the titles and contents of the articles this feed delivers. */
   translate?: boolean;
+  /** Fetch the full content of the articles this feed delivers from now on. */
+  fetchFullContent?: boolean;
 }
 
 /** Stores a feed without fetching it. Refuses a URL that is already subscribed. */
@@ -183,8 +189,8 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
-          auto_summarize, auto_summarize_since, translate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -199,13 +205,15 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.autoSummarize ? 1 : 0,
       input.autoSummarize ? now : null,
       input.translate ? 1 : 0,
+      input.fetchFullContent ? 1 : 0,
+      input.fetchFullContent ? now : null,
     );
   return getFeed(db, num(result.lastInsertRowid));
 }
 
 /**
- * Changes a feed. Switching summaries on records the time: only articles stored after it are summarised.
- * Switching them on again when they are on keeps the earlier time.
+ * Changes a feed. Switching summaries or full content on records the time: only articles stored after it are
+ * summarised, or have their full content fetched. Switching either on again when it is on keeps the earlier time.
  */
 export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
@@ -218,6 +226,14 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
       db.prepare("UPDATE feeds SET auto_summarize = ?, auto_summarize_since = ? WHERE id = ?").run(
         patch.autoSummarize ? 1 : 0,
         patch.autoSummarize ? clock().toISOString() : null,
+        id,
+      );
+    }
+    // Full content already stored stays; articles that wait for it stop waiting when it is switched off.
+    if (patch.fetchFullContent !== undefined && patch.fetchFullContent !== current.fetchFullContent) {
+      db.prepare("UPDATE feeds SET fetch_full_content = ?, fetch_full_content_since = ? WHERE id = ?").run(
+        patch.fetchFullContent ? 1 : 0,
+        patch.fetchFullContent ? clock().toISOString() : null,
         id,
       );
     }
@@ -238,10 +254,16 @@ export function deleteFeed(db: Database, id: number): void {
   db.prepare("DELETE FROM feeds WHERE id = ?").run(id);
 }
 
-/** Moves the feeds of a category, and their articles, to no category. Called before the category is deleted. */
-export function releaseFeedsOfCategory(db: Database, categoryId: number): void {
+/**
+ * Moves the feeds of a category, and their articles, to no category. Called before the category is deleted.
+ * Returns the ids of the feeds that moved, whose articles the filters judge again once the category is gone.
+ */
+export function releaseFeedsOfCategory(db: Database, categoryId: number): number[] {
   db.prepare("UPDATE articles SET category_id = NULL WHERE origin = 'feed' AND category_id = ?").run(categoryId);
-  db.prepare("UPDATE feeds SET category_id = NULL WHERE category_id = ?").run(categoryId);
+  return db
+    .prepare("UPDATE feeds SET category_id = NULL WHERE category_id = ? RETURNING id")
+    .all(categoryId)
+    .map((row) => num(row.id));
 }
 
 export interface FetchSuccess {

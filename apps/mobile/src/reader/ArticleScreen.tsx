@@ -1,9 +1,10 @@
+import { listKey } from "@smarternews/client";
 import type { Article } from "@smarternews/core/api";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useArticle } from "../api/queries";
+import { useArticle, useFullContentFetch } from "../api/queries";
 import { useBack } from "../lib/back";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
@@ -11,7 +12,7 @@ import { IconButton } from "../ui/controls";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { Txt } from "../ui/Txt";
 import { ArticlePage } from "./ArticlePage";
-import { listParams, useReaderList } from "./useReaderList";
+import { listParams, listRefOf, SEARCH_KEY, useReaderList } from "./useReaderList";
 
 /**
  * The article the user opened, as one page among the articles of the list it was opened from: swiping left or
@@ -22,11 +23,12 @@ export function ArticleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string }>();
+  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string }>();
   const openedId = Number(params.id);
-  const ref = { key: params.list ?? "unread", includeRead: params.read === "1", importantOnly: params.min === "4" };
+  // Opened from search results, the pages follow the results and mark the words of the search.
+  const ref = listRefOf(params.list ?? "unread", params);
   const reader = useReaderList(ref);
-  const back = useBack({ pathname: "/list/[key]", params: { key: ref.key, ...listParams(ref) } });
+  const back = useBack(ref.key === SEARCH_KEY ? { pathname: "/search", params: listParams(ref) } : { pathname: "/list/[key]", params: { key: ref.key, ...listParams(ref) } });
 
   // The pages keep the order the list had when the article was opened. A refresh in the background must not
   // move what the user is reading.
@@ -43,6 +45,34 @@ export function ArticleScreen() {
   const position = Math.min(index ?? start, ids.length - 1);
   const currentId = ids[position] ?? openedId;
   const current = useArticle(currentId).data;
+
+  // Full content: fetched from the button on top, and asked for when an article that waits for it is in view,
+  // since once read it would no longer be fetched by itself. Which content is shown holds while the article is
+  // in view; moving to another one, or opening it again, shows the full content.
+  const fullContent = useFullContentFetch();
+  const [deliveredShown, setDeliveredShown] = useState<number | null>(null);
+  useEffect(() => setDeliveredShown(null), [currentId]);
+  const asked = useRef(new Set<number>());
+  const fetchFull = fullContent.fetch;
+  useEffect(() => {
+    if (!current || current.fullContentStatus !== "waiting" || asked.current.has(current.id)) return;
+    asked.current.add(current.id);
+    fetchFull(current.id);
+  }, [current, fetchFull]);
+  const fullButton =
+    current?.origin === "feed" ? (
+      current.fullContent !== null ? (
+        <IconButton
+          label="全文の表示を切り替える"
+          icon="fullText"
+          filled={deliveredShown !== current.id}
+          value={deliveredShown === current.id ? "配信された内容を表示中" : "全文を表示中"}
+          onPress={() => setDeliveredShown((shown) => (shown === current.id ? null : current.id))}
+        />
+      ) : (
+        <IconButton label="全文を取得" icon="fullText" disabled={fullContent.isFetching(current.id)} onPress={() => fullContent.fetch(current.id)} />
+      )
+    ) : null;
 
   // The page in view is read off the scroll position whenever a scroll comes to rest, however it was started:
   // a fling, a slow drag, or a screen reader's scroll.
@@ -67,6 +97,11 @@ export function ArticleScreen() {
     const { ref: list, router: to } = latest.current;
     to.push({ pathname: "/article/[id]", params: { id: String(id), list: list.key, ...listParams(list) } });
   }, []);
+  // The copy is opened in the list of its feed, read articles included: it was most likely read with this one.
+  const openCopy = useCallback((copy: Article["otherFeeds"][number]) => {
+    const list = { key: listKey({ type: "feed", feedId: copy.feedId }), includeRead: true, importantOnly: false };
+    latest.current.router.push({ pathname: "/article/[id]", params: { id: String(copy.articleId), list: list.key, ...listParams(list) } });
+  }, []);
   const sourceName = reader.sourceName;
 
   return (
@@ -75,7 +110,9 @@ export function ArticleScreen() {
         title={current ? sourceName(current) : ""}
         left={<IconButton label="一覧へ戻る" icon="back" onPress={back} />}
         right={
-          ids.length > 1 ? (
+          <>
+          {fullButton}
+          {ids.length > 1 ? (
             <Txt
               variant="label-sm"
               color="on-surface-muted"
@@ -86,7 +123,8 @@ export function ArticleScreen() {
             >
               {position + 1} / {ids.length}
             </Txt>
-          ) : null
+          ) : null}
+          </>
         }
       />
       <ScrollView
@@ -125,6 +163,11 @@ export function ArticleScreen() {
               sourceName={sourceName(reader.items.find((item) => item.id === id) ?? { origin: "generated", feedId: null, categoryId: null })}
               onRead={onRead}
               onOpenArticle={openArticle}
+              onOpenCopy={openCopy}
+              fullContentFetching={fullContent.isFetching(id)}
+              fullContentRequestFailed={fullContent.requestFailed(id)}
+              deliveredShown={deliveredShown === id}
+              terms={reader.terms}
             />
           ) : (
             <View key={id} style={{ width }} />

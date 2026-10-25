@@ -58,6 +58,12 @@ fetch:
   # List the hosts on your own network that it may fetch, for example a feed you host yourself.
   allowPrivateHosts: []   # e.g. [feeds.home.example, 192.168.0.10]
 
+# Images in the content of feed articles reach the screens through the server, which fetches each one and
+# keeps it on disk for a while. The signing key and the kept images live in the data directory.
+images:
+  cacheDays: 7               # an image older than this is fetched again
+  cacheMaxBytes: 1000000000  # beyond this total, the oldest images are deleted
+
 newsSearch:
   engine: google-news     # or bing-news
   maxResultsPerQuery: 10  # newest results taken per query

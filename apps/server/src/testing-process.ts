@@ -5,7 +5,7 @@
 // a real one. Everything listens on the loopback address only, and the product never starts this file.
 //
 //   POST /__control   {"op": "create", "start"?, "webSearch"?, "translation"?}    -> {"id", "url", "apiToken", "feedToken"}
-//   POST /__control   {"op": "category" | "article" | "advance" | "core" | "sql" | "releaseTranslation" | "dispose", "id", ...}
+//   POST /__control   {"op": "category" | "article" | "advance" | "core" | "sql" | "releaseTranslation" | "page" | "releasePage" | "dispose", "id", ...}
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as core from "@smarternews/core";
@@ -18,6 +18,8 @@ const instances = new Map<string, Instance>();
 const listeners = new Map<string, Server>();
 /** Per server whose translation API waits: what lets it answer. */
 const gates = new Map<string, () => void>();
+/** Per server and page URL, for pages that wait: what lets the page answer. */
+const pageGates = new Map<string, () => void>();
 let serial = 0;
 
 interface Command {
@@ -82,16 +84,34 @@ async function run(command: Command): Promise<unknown> {
     case "releaseTranslation":
       gates.get(command.id!)?.();
       return null;
+    case "page": {
+      // A page of another site, as the server fetches it for full content. A gated one answers after "releasePage".
+      const [url, html, gated] = args as [string, string, boolean | undefined];
+      const answer = () => new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+      if (!gated) {
+        server.site.set(url, answer);
+        return null;
+      }
+      const gate = new Promise<void>((resolve) => pageGates.set(`${command.id} ${url}`, resolve));
+      server.site.set(url, (async () => {
+        await gate;
+        return answer();
+      }) as unknown as () => Response);
+      return null;
+    }
+    case "releasePage":
+      pageGates.get(`${command.id} ${String(args[0])}`)?.();
+      return null;
     case "advance":
       server.clock.advance(args[0] as number);
       return server.clock().toISOString();
     case "core": {
       // Any function of the core package, or of its test helpers, that takes the database first. "$clock"
-      // stands for the server's clock.
+      // stands for the server's clock, "$now" for the time on it.
       const name = command.name ?? "";
       const fn = (core as unknown as Record<string, unknown>)[name] ?? (coreTesting as unknown as Record<string, unknown>)[name];
       if (typeof fn !== "function") throw new Error(`the core package has no function ${command.name}`);
-      return (fn as (...all: unknown[]) => unknown)(server.db, ...args.map((arg) => (arg === "$clock" ? server.clock : arg))) ?? null;
+      return (fn as (...all: unknown[]) => unknown)(server.db, ...args.map((arg) => (arg === "$clock" ? server.clock : arg === "$now" ? server.clock().toISOString() : arg))) ?? null;
     }
     case "sql": {
       const statement = server.db.prepare(command.query ?? "");

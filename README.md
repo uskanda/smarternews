@@ -61,10 +61,11 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
 - Categories and feeds can be reordered by dragging them in the left pane. A feed held over another category for half a second can be dropped into it. A right click on a category or a feed opens a menu that moves it up or down; for a feed the menu also unsubscribes. The menu key or `Shift+F10` opens the same menu from the keyboard. The order is kept on the server, so the Android app, the settings file and OPML follow it.
 - Marking a list as read opens the next list below it that has unread articles: from a category the next category, from a feed the next feed. "「すべて既読にする」のあと、未読のある次の項目へ移る" in the global settings switches this off.
-- The settings pages edit categories, topics, subscribed feeds, stop words, the reader information and the global settings, and load or save the settings file and OPML.
+- The settings pages edit categories, topics, subscribed feeds, filters, term highlights, the reader information and the global settings, and load or save the settings file and OPML.
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
+- The search box at the top of the left pane finds articles by words, read ones included, and marks the matching words in the list and the article. The result narrows to a category, a feed or unread articles, and its URL keeps the words.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `Shift+F10` opens the menu of a category or feed, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `w` fetches the full content of a feed article or switches between it and what the feed delivered, `Shift+F10` opens the menu of a category or feed, `/` moves to the search box, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen. `Space` scrolls the article down by a screen and moves to the next article at its end; `Shift+Space` scrolls up and moves to the previous article at its top. `Shift+A` marks the list as read, `r` reloads the list and the counts, and `u` shows or hides the read articles. `Shift+J` and `Shift+K` open the next and the previous entry of the left pane, skipping the entries of a folded category. `g` followed within a second by `a` opens 未読, by `s` スター, and by `r` 最近読んだ記事; `g` `e` opens the next event category each time.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
@@ -78,9 +79,11 @@ In the drawer, a long press on a category or a feed picks it up; drag it to reor
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 
+- The button on top of a feed article fetches its full content, and switches between it and what the feed delivered once it is there.
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
 - The drawer on the left lists the same views, categories and subscribed feeds as the web app, with unread counts.
-- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds and stop words are edited in the web app, which the settings screen opens in the browser.
+- The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds, filters and term highlights are edited in the web app, which the settings screen opens in the browser.
+- The list and the article colour the terms of your term groups as the web app does. Pulling the list down fetches terms changed on the web.
 - The interface is in Japanese, and the screen stays in portrait.
 
 Notifications are made on the device. While the app is closed, Android lets it ask your server for new articles from time to time, no more often than every 15 minutes and at moments Android chooses. So a notification can arrive well after the article, and battery saving can delay it further; opening the app always shows the current state. Nothing is sent to a notification service. The default notifies articles of importance 5 only; the settings screen offers every new written article, or none. Articles of subscribed feeds are never notified.
@@ -101,7 +104,7 @@ Without a signing key the build is signed with the debug key, which is enough to
 
 Two files hold your configuration, and both live outside the repository.
 
-The settings file holds what you want to read: categories, topics, subscribed feeds, stop words, a description of the reader, the output language and the time zone. [examples/settings.example.yaml](examples/settings.example.yaml) shows the format. `import` loads a settings file and `export` writes the current settings back, so the file also serves as a backup. Everything in it can be changed through the API as well.
+The settings file holds what you want to read: categories, topics, subscribed feeds, filters, term groups, a description of the reader, the output language and the time zone. [examples/settings.example.yaml](examples/settings.example.yaml) shows the format. `import` loads a settings file and `export` writes the current settings back, so the file also serves as a backup. Everything in it can be changed through the API as well.
 
 `~/.config/smarternews/config.yaml` holds how the server runs: the listen address, the model providers, and the limits. Every key is optional. [examples/config.example.yaml](examples/config.example.yaml) lists the keys with their defaults.
 
@@ -130,8 +133,10 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
 - "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.
-- For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. The page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
-- "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and stop words are matched against it.
+- For a summary the server fetches the article's page, as it fetches pages for a run, and gives its text to the model. Unless the feed fetches full content, the page text is not stored. When the page cannot be read, the summary is written from what the feed delivered, and says so; with less than 200 characters to go on, none is written.
+- "全文を取得する" in the form of a feed fetches the page of each article the feed delivers from then on, and keeps its text as the full content. It is off by default. The article shows the full content in place of what the feed delivered, says where it comes from, and offers to switch back. Pages are fetched one at a time after the articles are stored, obeying `robots.txt` and the interval per host, and no model is called for it. An article read before its turn is skipped, and a fetch that fails is not tried again by itself; the article then says why.
+- Any article of a feed can have its full content fetched from the article itself, whatever the setting: the "全文を取得" button in the web app, the `w` key, or the button on top in the Android app. Text shorter than what the feed delivered, such as a notice to subscribe, is not kept. With full content, a summary is written from it without a second request for the page, and translation translates it. The full content is never in the RSS output.
+- "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and filters are matched against it.
 - Translation sends the titles and contents of that feed's articles to Google's translation API, or to the model provider you configured, and sends nothing else. Titles are translated when articles arrive, by the API only. The content is translated when you first open an article, and the first 20,000 characters of it. Articles the feed already had are translated when you open them.
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
@@ -139,7 +144,7 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 - The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts and embedded frames are removed.
 - Deleting a category keeps its feeds. They move to "未分類" with their articles.
 
-Images in the content are loaded by your browser or phone from the site that publishes them, over HTTPS only and without a referrer. That site learns the address of your device and when you read. For articles the model wrote, no image is ever loaded.
+Images in the content are loaded by your browser or phone through the server, which fetches them from the site that publishes them (see [Images](#images)). For articles the model wrote, no image is ever loaded.
 
 To move subscriptions between readers, use OPML: the web app loads and saves it, and so do two commands.
 
@@ -150,9 +155,21 @@ node apps/server/src/main.ts opml-export > feeds.opml
 
 A folder becomes the category of the same name. If that category does not exist yet, it is created without topics, and such a category starts no scheduled run. Loading a file skips the feeds you already have and deletes nothing.
 
-### Stop words
+### Filters
 
-A stop word hides the articles of subscribed feeds whose title contains it. Each word can also cover the content. Matching ignores case and the difference between full-width and half-width characters. A hidden article is kept and comes back when you remove the word. Starred articles and articles the model wrote are never hidden.
+Filters hide articles of subscribed feeds. Hide filters apply to everything, to a category or to one feed, and hide the articles that meet all their conditions. Keep filters sit on a category or a feed and hide the articles there that meet none of them. Each condition looks at the title, the content, the author or the page URL, and matches a plain value or a regular expression; case and full-width letters do not matter. Translations are never matched, only the original text. The settings page shows how many articles each filter hides, lists them, and counts what a filter would hide before you save it. Switching a filter off or removing it brings its hidden articles back. Starred articles and articles the model wrote are never hidden.
+
+Stop words, which this replaced, became hide filters over everything when the server was updated, and a settings file that still lists `stopWords` loads the same way.
+
+### Term highlights
+
+Term groups colour words you want to spot, in the lists and the articles, written and delivered alike. A group has a name, one of four colours (green, purple, pink, orange) and its terms. A term matches anywhere in the text, as a filter's plain value does: case and full-width letters do not matter. The headline, the summary line, the article, its translation and original, and the feed summary are coloured, with a line under each match for readers who cannot tell the colours apart. A list row whose headline or summary line has a term shows the name of its group at the end of the row. Where terms of two groups meet in one place, the group higher on the settings page wins; its buttons move groups up and down. Nothing is hidden and no article changes: the apps match the terms on the device, and no model is involved.
+
+### Duplicates across feeds
+
+When two feeds deliver the same story, the lists over everything and over a category show it once. A new article counts as a duplicate when another feed delivered one with the same page or the same title in the last 7 days. Tracking parameters in the URL do not matter, and neither do case, width, spaces or punctuation in the title. Titles shorter than 10 characters are compared by their page only, and articles of the same feed are never compared. The article that arrived first stays in those lists and names the other feeds under the link to its page, each opening its own copy. Every copy stays in the list of its own feed and in that feed's unread count. Reading the article that stayed marks its copies read. The copies get no summary or translated title when they arrive, and no model is involved.
+
+Duplicate removal is on by default. Switch it off in the global settings to see every copy everywhere; switching it back on hides the same copies again.
 
 ### Reader information
 
@@ -191,6 +208,8 @@ The server counts the characters it sends per month and sends nothing beyond `mo
 
 After an upgrade that changes the database, the server copies the database file before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copy once the new version works for you.
 
+Change the articles in the database only through the server. Search keeps its index with triggers that call a function the server registers, so another connection, such as the `sqlite3` command, can read the database but fails when it writes articles.
+
 To read from other devices, set `listen` in `config.yaml` to an address those devices can reach, for example the Tailscale address of the machine. The server has no TLS and one fixed token, so it belongs on a private network. Do not expose the port to the internet.
 
 ## How it treats other sites
@@ -203,6 +222,18 @@ To read from other devices, set `listen` in `config.yaml` to an address those de
 - Subscribed feeds are fetched no more often than every five minutes, and every 30 minutes by default. The request carries the `ETag` and `Last-Modified` of the last answer, so an unchanged feed is answered without a body. What a feed delivers is shown to you only, and never served on.
 
 News search uses the RSS output of Google News by default, and of Bing News as an alternative. Both publishers allow that output for personal, non-commercial use in a feed reader. Check their terms before using smarternews for anything else.
+
+## Images
+
+The images in the content of feed articles reach the web app and the Android app through the server, so the sites that publish them see a request from the server, never your device's address or the fact that you opened the article. Images served over plain HTTP are shown too, since only the server asks for them. The server keeps each image on disk for a while and serves it from there the next time:
+
+```yaml
+images:
+  cacheDays: 7               # an image older than this is fetched again
+  cacheMaxBytes: 1000000000  # beyond this total, the oldest images are deleted
+```
+
+Both values are optional, and these are their defaults. The images are kept in `image-cache` in the data directory, next to `image-proxy.key`, the key that signs the image URLs the API gives out. Deleting the key and restarting the server invalidates every image URL given out before. [docs/api.md](docs/api.md#images) describes the relay.
 
 ## Where it does not go
 

@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { buildNav, listKey, type NavEntry } from "@smarternews/client";
-import { useMemo, useRef, useState, type ReactElement } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router";
+import { buildNav, listKey, nextEventCategory, stepTarget, type ListTarget, type NavEntry, type NavModel } from "@smarternews/client";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useArticle, useCategories, useCounts, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -12,6 +12,7 @@ import { PANES, usePanes } from "../lib/panes.ts";
 import { usePageTitle } from "../lib/title.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
+import { ScopedFiltersNote } from "../settings/ScopedFiltersNote.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
 import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
@@ -23,9 +24,64 @@ const KEYS: Array<[string, string]> = [
   ["s", "スターの切り替え"],
   ["m", "既読と未読の切り替え"],
   ["o", "主な出典を新しいタブで開く"],
+  ["w", "全文の取得と、配信された内容との切り替え"],
+  ["Space", "本文を1画面分送る。本文の末尾なら次の記事"],
+  ["Shift+Space", "本文を1画面分戻す。本文の先頭なら前の記事"],
+  ["Shift+A", "表示中の一覧をすべて既読にする"],
+  ["r", "一覧と件数を読み直す"],
+  ["u", "既読も表示するかを切り替える"],
+  ["Shift+J", "左のペインの次の項目"],
+  ["Shift+K", "左のペインの前の項目"],
+  ["g a", "「未読」へ移る"],
+  ["g s", "「スター」へ移る"],
+  ["g e", "次のイベントのカテゴリへ移る"],
+  ["g r", "「最近読んだ記事」へ移る"],
   ["Shift+F10", "フォーカスのあるカテゴリと購読フィードで、項目のメニューを開く（並べ替え、登録の解除）"],
+  ["/", "検索欄へ移る"],
   ["?", "この一覧を開く"],
 ];
+
+/** The id of the search box, which the `/` key puts the focus in. */
+const SEARCH_BOX = "article-search";
+
+/**
+ * The search box at the top of the left pane. Enter opens the results over every article; spaces alone do
+ * nothing. While results are shown, it holds their words.
+ */
+function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [params] = useSearchParams();
+  const onResults = pathname === "/search" || pathname.startsWith("/search/");
+  const shown = onResults ? (params.get("q") ?? "") : null;
+  const [value, setValue] = useState(shown ?? "");
+  useEffect(() => {
+    if (shown !== null) setValue(shown);
+  }, [shown]);
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const words = value.trim();
+    if (words.length === 0) return;
+    void navigate(`/search?q=${encodeURIComponent(words)}`);
+    onNavigate?.();
+    // The results are where the keyboard goes on: j and k move through them.
+    document.getElementById("content")?.focus();
+  }
+  return (
+    <form role="search" onSubmit={submit} className="flex px-xs">
+      <input
+        id={SEARCH_BOX}
+        type="search"
+        aria-label="記事を検索"
+        placeholder="記事を検索"
+        enterKeyHint="search"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface"
+      />
+    </form>
+  );
+}
 
 const ITEM = "tap flex min-w-0 flex-1 items-center justify-between gap-sm rounded-md px-sm py-xs type-body-md";
 
@@ -108,7 +164,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     setRemoving(true);
     try {
       await api.deleteFeed(feed.id);
-      for (const key of ["feeds", "counts", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["feeds", "counts", "articles", "filters"]) void client.invalidateQueries({ queryKey: [key] });
       toast({ message: "購読フィードを削除しました" });
       // The list that was open is gone with the feed.
       if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
@@ -132,6 +188,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       onDragStart={(event) => event.preventDefault()}
       className="relative flex h-full flex-col gap-lg overflow-y-auto bg-background p-sm"
     >
+      <SearchBox onNavigate={onNavigate} />
       <ul className="flex flex-col gap-px">
         {model.views.map((entry) => (
           <li key={listKey(entry.target)} className="flex">
@@ -235,11 +292,23 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
               「{leavingFeed.title}」と、その配信記事{leavingFeed.articleCount}件が消えます。
               {leavingFeed.starredCount > 0 ? `うち${leavingFeed.starredCount}件にはスターが付いています。` : ""}元に戻せません。
             </p>
+            <ScopedFiltersNote target={{ feedId: leavingFeed.id }} />
             <p>記事を残したまま取得だけを止めるには、設定の購読フィードで一時停止にしてください。</p>
           </>
         ) : null}
       </ConfirmDialog>
     </nav>
+  );
+}
+
+/** The list of the left pane that is open, with an article opened from it or not; null on any other page. */
+function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTarget) => string | null): ListTarget | null {
+  const entries = [...model.views, ...model.groups.flatMap((group) => [group.entry, ...group.children])];
+  return (
+    entries.find((entry) => {
+      const path = pathOf(entry.target);
+      return path !== null && isOnList(path, pathname);
+    })?.target ?? null
   );
 }
 
@@ -250,7 +319,7 @@ function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: b
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-outline bg-surface p-xl">
+        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 max-h-[90dvh] w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-outline bg-surface p-xl">
           <Dialog.Title className="type-headline-md">キー操作</Dialog.Title>
           <Dialog.Description className="pt-xs type-label-sm text-on-surface-muted">
             入力欄で文字を打っている間は働きません。
@@ -282,11 +351,42 @@ export function Shell() {
   const panes = usePanes(layout);
   const [navOpen, setNavOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  useHotkeys({ "?": () => setHelpOpen(true) });
+  const { now } = useApp();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const counts = useCounts().data;
+  const categories = useCategories().data;
+  const feeds = useFeeds().data;
+  const collapsed = useCollapsed();
+  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
+  const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
+  const current = currentEntry(model, pathname, pathOf);
+  const open = (target: ListTarget | null | undefined) => {
+    const path = target ? pathOf(target) : null;
+    if (path !== null) void navigate(path);
+  };
+  const view = (type: ListTarget["type"]) => model.views.find((entry) => entry.target.type === type)?.target;
+  useHotkeys(
+    {
+      "?": () => setHelpOpen(true),
+      // On a narrower screen the box is in the pane behind the button: opening it puts the focus in the box, its first field.
+      "/": () => {
+        if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
+        else setNavOpen(true);
+      },
+      "Shift+J": () => open(stepTarget(model, current, 1, collapsed.isCollapsed)),
+      "Shift+K": () => open(stepTarget(model, current, -1, collapsed.isCollapsed)),
+      "g a": () => open(view("unread")),
+      "g s": () => open(view("starred")),
+      "g e": () => open(nextEventCategory(model, current)),
+      "g r": () => open(view("recentlyRead")),
+    },
+    { now },
+  );
   // The reader fetches the same article, so this reads it from the cache.
   const articleId = Number(useParams().articleId);
   const openArticle = useArticle(Number.isInteger(articleId) && articleId > 0 ? articleId : null).data;
-  usePageTitle(useCounts().data?.unread, openArticle?.translatedTitle ?? openArticle?.title);
+  usePageTitle(counts?.unread, openArticle?.translatedTitle ?? openArticle?.title);
 
   return (
     <div className="flex h-full">

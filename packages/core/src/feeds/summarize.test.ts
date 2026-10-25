@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getArticle, setArticleFlags } from "../db/articles.ts";
+import { getArticle, recordFullContentFailure, saveFullContent, setArticleFlags } from "../db/articles.ts";
 import { insertFeed, updateFeed } from "../db/feeds.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "../testing/db.ts";
 import { fakeFetch, html, xml } from "../testing/http.ts";
 import { fakeLlm, type FakeHandler } from "../testing/llm.ts";
+import { FullContentWorker } from "./full-content.ts";
 import { FeedPoller } from "./poller.ts";
 import { summarizeNext, SummaryWorker } from "./summarize.ts";
 
@@ -23,14 +24,16 @@ function setup(
   routes: Parameters<typeof fakeFetch>[0],
   summarize: FakeHandler = () => ({ summary: "A summary." }),
   limits: { summariesPerDay?: number } = {},
+  feedOptions: { fetchFullContent?: boolean } = {},
 ) {
   const db = createTestDb();
   const clock = fakeClock(START);
   const fake = fakeFetch(routes, clock);
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
   const llm = fakeLlm(db, clock, { summarize }, { limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, ...limits } });
-  const deps = { db, clock, fetcher, runner: llm.runner };
-  const feed = insertFeed(db, { url: FEED_URL, title: "Feed", autoSummarize: true }, clock);
+  const fullContent = new FullContentWorker({ db, clock, fetcher });
+  const deps = { db, clock, fetcher, runner: llm.runner, fullContent };
+  const feed = insertFeed(db, { url: FEED_URL, title: "Feed", autoSummarize: true, ...feedOptions }, clock);
   clock.advance(MINUTE);
   let serial = 0;
   /** A feed article stored now, a minute after the feed began to summarise or later. */
@@ -41,7 +44,8 @@ function setup(
   };
   const pages = new PageFetcher(fetcher, { pagesPerRun: Number.POSITIVE_INFINITY, remember: false });
   const calls = () => db.prepare("SELECT task, ok FROM llm_calls ORDER BY id").all();
-  return { db, clock, deps, feed, fetcher, article, pages, prompts: () => llm.requests.summarize.map((request) => request.prompt), urls: fake.urls, calls };
+  const pageRequests = () => fake.urls().filter((url) => !url.endsWith("/robots.txt"));
+  return { db, clock, deps, feed, fetcher, article, pages, prompts: () => llm.requests.summarize.map((request) => request.prompt), urls: fake.urls, pageRequests, calls, fullContent };
 }
 
 describe("summarizeNext", () => {
@@ -62,6 +66,64 @@ describe("summarizeNext", () => {
     expect(stored.body).toBe(DELIVERED);
     expect(JSON.stringify(s.db.prepare("SELECT * FROM articles WHERE id = ?").get(id))).not.toContain("fulltext");
     expect(s.calls()).toEqual([{ task: "summarize", ok: 1 }]);
+  });
+
+  it("stores no full content from the page it read for a feed that does not fetch full content", async () => {
+    const s = setup({ "https://site.example.org/1": () => page(PAGE_TEXT) });
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(getArticle(s.db, id)).toMatchObject({ fullContent: null, fullContentStatus: "none", body: DELIVERED });
+  });
+
+  it("summarises from the stored full content without fetching the page, and says it read the page", async () => {
+    const s = setup({ "https://site.example.org/1": () => page(PAGE_TEXT) });
+    const id = s.article();
+    saveFullContent(s.db, id, { markdown: prose("stored", 400), text: prose("stored", 400), now: s.clock().toISOString() });
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(s.urls()).toEqual([]);
+    expect(s.prompts()[0]).toContain("stored stored");
+    expect(getArticle(s.db, id).autoSummary?.source).toBe("page");
+  });
+
+  it("summarises an article whose full content failed from what the feed delivered, without fetching the page", async () => {
+    const s = setup({ "https://site.example.org/1": () => page(PAGE_TEXT) });
+    const id = s.article();
+    recordFullContentFailure(s.db, id, { reason: "http", detail: "404" });
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(s.urls()).toEqual([]);
+    expect(s.prompts()[0]).toContain("excerpt excerpt");
+    expect(getArticle(s.db, id).autoSummary?.source).toBe("feed");
+  });
+
+  it("requests the page once for a feed that fetches full content and summarises, and stores both", async () => {
+    const s = setup({ "https://site.example.org/1": () => page(PAGE_TEXT) }, undefined, {}, { fetchFullContent: true });
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+    s.fullContent.tick();
+    await s.fullContent.idle();
+
+    expect(s.pageRequests()).toEqual(["https://site.example.org/1"]);
+    const article = getArticle(s.db, id);
+    expect(article.fullContent?.body).toContain("fulltext fulltext");
+    expect(article.autoSummary?.source).toBe("page");
+    expect(s.prompts()[0]).toContain("fulltext fulltext");
+  });
+
+  it("summarises from what the feed delivered when the full content fails, with one request for the page", async () => {
+    const s = setup({}, undefined, {}, { fetchFullContent: true });
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(s.pageRequests()).toEqual(["https://site.example.org/1"]);
+    expect(getArticle(s.db, id)).toMatchObject({ fullContentStatus: "failed", autoSummary: { source: "feed" } });
   });
 
   it("summarises from what the feed delivered when the page cannot be fetched, and says so", async () => {
@@ -116,7 +178,7 @@ describe("summarizeNext", () => {
 
   it("does nothing when no article waits", async () => {
     const s = setup({});
-    setArticleFlags(s.db, s.article(), { isRead: true });
+    setArticleFlags(s.db, s.article(), { isRead: true }, "2026-03-01T12:00:00.000Z");
     expect(await summarizeNext(s.deps, s.pages)).toBe("none");
     expect(s.urls()).toEqual([]);
     expect(s.prompts()).toEqual([]);

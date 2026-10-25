@@ -2,6 +2,9 @@
 // so that browser and React Native bundles can load it.
 import { z } from "zod";
 
+// Normalizing and matching search terms: the apps mark matches as the server finds them.
+export * from "./search/text.ts";
+
 export const kindSchema = z.enum(["news", "event"]);
 export type Kind = z.infer<typeof kindSchema>;
 
@@ -30,6 +33,11 @@ export const settingsSchema = z.object({
   feedIntervalMinutes: intervalMinutesSchema,
   /** Whether a reader opens the next list with unread articles after marking a list as read. */
   advanceAfterMarkAll: z.boolean(),
+  /**
+   * Whether a feed article that another feed delivered within seven days is hidden from the lists over
+   * everything and over categories, as a duplicate of the one stored first.
+   */
+  removeDuplicates: z.boolean(),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -188,6 +196,44 @@ export const articleTranslationSchema = z.object({
 });
 export type ArticleTranslation = z.infer<typeof articleTranslationSchema>;
 
+/**
+ * Why the full content of a feed article could not be had: the article has no page, robots.txt forbids it,
+ * the destination is refused, the site answered with an HTTP failure or with something that is not HTML, it
+ * did not answer in time, the request failed otherwise, no text could be taken out of the page, or what was
+ * taken out was shorter than what the feed delivered. A screen turns the reason into a sentence.
+ */
+export const fullContentErrorReasonSchema = z.enum(["no-url", "robots", "blocked", "http", "not-html", "timeout", "error", "no-content", "shorter"]);
+export type FullContentErrorReason = z.infer<typeof fullContentErrorReasonSchema>;
+
+export const fullContentErrorSchema = z.object({
+  reason: fullContentErrorReasonSchema,
+  /** The HTTP status for `http`, the media type for `not-html`, the message for `error`; otherwise null. */
+  detail: z.string().nullable(),
+});
+export type FullContentError = z.infer<typeof fullContentErrorSchema>;
+
+/** The text of a feed article's page, rewritten as Markdown by the rules of delivered content. */
+export const fullContentSchema = z.object({
+  body: z.string(),
+  bodyHtml: z.string(),
+  fetchedAt: z.string(),
+});
+export type FullContent = z.infer<typeof fullContentSchema>;
+
+/**
+ * Where a feed article stands with its full content: not fetched, waiting to be fetched by its feed's setting,
+ * fetched, or failed. A generated article is always `none`.
+ */
+export const fullContentStatusSchema = z.enum(["none", "waiting", "fetched", "failed"]);
+export type FullContentStatus = z.infer<typeof fullContentStatusSchema>;
+
+/** The answer to a request for the full content of one feed article, given once the fetch is over. */
+export const fullContentResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("fetched"), fullContent: fullContentSchema }),
+  z.object({ status: z.literal("failed"), error: fullContentErrorSchema }),
+]);
+export type FullContentResult = z.infer<typeof fullContentResultSchema>;
+
 export const articleSummarySchema = z.object({
   id: z.number().int(),
   /** Null for an article of a feed that belongs to no category. */
@@ -208,6 +254,8 @@ export const articleSummarySchema = z.object({
   updatedAt: z.string(),
   revision: z.number().int(),
   isRead: z.boolean(),
+  /** When the article was last marked read. Null for an unread article, and for one read before read times were kept. */
+  readAt: z.string().nullable(),
   starred: z.boolean(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
@@ -235,8 +283,18 @@ export const articleSchema = articleSummarySchema.extend({
   sourceLanguage: z.string().nullable(),
   /** The stored translation of the content. Null until the article is translated. */
   translation: articleTranslationSchema.nullable(),
+  /** The full content taken from the feed article's page, apart from what the feed delivered. Null when there is none. */
+  fullContent: fullContentSchema.nullable(),
+  fullContentStatus: fullContentStatusSchema,
+  /** Why the full content could not be had. Null unless the status is `failed`. */
+  fullContentError: fullContentErrorSchema.nullable(),
   snippetOnly: z.boolean(),
   previousArticleId: z.number().int().nullable(),
+  /**
+   * The other feeds that delivered a feed article, in the order their copies were stored: one entry per
+   * copy recorded as a duplicate of this article. Empty for an article without duplicates.
+   */
+  otherFeeds: z.array(z.object({ articleId: z.number().int(), feedId: z.number().int(), feedTitle: z.string() })),
   refs: z.array(articleRefSchema),
   topics: z.array(z.object({ id: z.number().int(), text: z.string() })),
 });
@@ -253,6 +311,11 @@ export const articleListQuerySchema = z.object({
   starred: z.enum(["true", "false"]).optional(),
   includeEnded: z.enum(["true", "false"]).optional(),
   minImportance: z.coerce.number().int().min(1).max(5).optional(),
+  /**
+   * Only the articles read in the last seven days, last read first, ended events included. Refused together
+   * with any other narrowing of the list.
+   */
+  recentlyRead: z.enum(["true"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });
@@ -263,6 +326,38 @@ export const articleListSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ArticleList = z.infer<typeof articleListSchema>;
+
+/**
+ * A search of the articles. Without narrowing it covers every article, generated and delivered, read or not,
+ * ended events included; what filters hide is left out, and so are hidden duplicates unless a feed is named.
+ */
+export const articleSearchQuerySchema = z.object({
+  /** The terms, separated by spaces. Checked by `parseSearchTerms`: not empty, at most 200 characters. */
+  q: z.string(),
+  category: z.coerce.number().int().optional(),
+  feed: z.coerce.number().int().optional(),
+  unread: z.enum(["true"]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+});
+export type ArticleSearchQuery = z.infer<typeof articleSearchQuerySchema>;
+
+export const articleSearchHitSchema = articleSummarySchema.extend({
+  /**
+   * The text around the first match in the summary, automatic summary, body, impact or venue, on one line and
+   * without Markdown. Null when only the title matches.
+   */
+  excerpt: z.string().nullable(),
+});
+export type ArticleSearchHit = z.infer<typeof articleSearchHitSchema>;
+
+export const articleSearchResultSchema = z.object({
+  items: z.array(articleSearchHitSchema),
+  nextCursor: z.string().nullable(),
+  /** The terms as they were matched: normalized, each once. A screen marks them with `matchRanges`. */
+  terms: z.array(z.string()),
+});
+export type ArticleSearchResult = z.infer<typeof articleSearchResultSchema>;
 
 export const articleUpdateSchema = z.object({ isRead: z.boolean().optional(), starred: z.boolean().optional() });
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
@@ -320,6 +415,8 @@ export const feedSchema = z.object({
   autoSummarize: z.boolean(),
   /** Whether the titles and contents of this feed's articles are translated into the output language. */
   translate: z.boolean(),
+  /** Whether the full content of the articles this feed delivers from now on is fetched from their pages. */
+  fetchFullContent: z.boolean(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -340,6 +437,7 @@ export const feedCreateSchema = z.object({
   enabled: z.boolean().optional(),
   autoSummarize: z.boolean().optional(),
   translate: z.boolean().optional(),
+  fetchFullContent: z.boolean().optional(),
 });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
@@ -374,31 +472,131 @@ export const opmlImportResultSchema = z.object({
 });
 export type OpmlImportResult = z.infer<typeof opmlImportResultSchema>;
 
-// ---- stop words --------------------------------------------------------------------------------
+// ---- filters -----------------------------------------------------------------------------------
 
-export const stopWordScopeSchema = z.enum(["title", "title_and_content"]);
-export type StopWordScope = z.infer<typeof stopWordScopeSchema>;
+/** A hide filter hides the feed articles that meet it; a keep filter hides those of its scope that meet none. */
+export const filterActionSchema = z.enum(["hide", "keep"]);
+export type FilterAction = z.infer<typeof filterActionSchema>;
 
-const stopWordTextSchema = z.string().trim().min(1).max(100);
+export const filterFieldSchema = z.enum(["title", "content", "author", "url"]);
+export type FilterField = z.infer<typeof filterFieldSchema>;
 
-export const stopWordSchema = z.object({
+export const filterMatchSchema = z.enum(["contains", "regex"]);
+export type FilterMatch = z.infer<typeof filterMatchSchema>;
+
+/** The most conditions one filter holds, and the longest value a condition holds. */
+export const MAX_FILTER_CONDITIONS = 10;
+export const MAX_FILTER_VALUE_CHARS = 200;
+
+/** An article meets a condition when any of the chosen fields matches the value. */
+export const filterConditionSchema = z.object({
+  fields: z
+    .array(filterFieldSchema)
+    .min(1, "choose at least one field")
+    .refine((fields) => new Set(fields).size === fields.length, "a field is chosen twice"),
+  match: filterMatchSchema,
+  value: z.string().trim().min(1).max(MAX_FILTER_VALUE_CHARS),
+});
+export type FilterCondition = z.infer<typeof filterConditionSchema>;
+
+export const filterScopeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("all") }),
+  z.object({ type: z.literal("category"), categoryId: z.number().int() }),
+  z.object({ type: z.literal("feed"), feedId: z.number().int() }),
+]);
+export type FilterScope = z.infer<typeof filterScopeSchema>;
+
+export const filterSchema = z.object({
   id: z.number().int(),
-  text: z.string(),
-  scope: stopWordScopeSchema,
-  /** Feed articles this word hides now. An article that matches several words counts for the oldest one. */
+  action: filterActionSchema,
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema),
+  enabled: z.boolean(),
+  /** Feed articles without a star this filter hides now. An article several filters hide counts for each. 0 while disabled. */
   hiddenCount: z.number().int(),
   createdAt: z.string(),
 });
-export type StopWord = z.infer<typeof stopWordSchema>;
+export type Filter = z.infer<typeof filterSchema>;
 
-export const stopWordCreateSchema = z.object({ text: stopWordTextSchema, scope: stopWordScopeSchema.optional() });
-export type StopWordCreate = z.infer<typeof stopWordCreateSchema>;
+const KEEP_EVERYWHERE = "a keep filter cannot apply to everything";
 
-export const stopWordUpdateSchema = z.object({ scope: stopWordScopeSchema });
-export type StopWordUpdate = z.infer<typeof stopWordUpdateSchema>;
+const filterFields = {
+  action: filterActionSchema,
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema).min(1, "a filter needs at least one condition").max(MAX_FILTER_CONDITIONS),
+  enabled: z.boolean(),
+};
 
-export const stopWordDeleteResultSchema = z.object({ restored: z.number().int() });
-export type StopWordDeleteResult = z.infer<typeof stopWordDeleteResultSchema>;
+export const filterCreateSchema = z
+  .object({ ...filterFields, enabled: filterFields.enabled.optional() })
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type FilterCreate = z.infer<typeof filterCreateSchema>;
+
+/** A change to a filter. A keep filter over everything is refused once the change is applied. */
+export const filterUpdateSchema = z
+  .object(filterFields)
+  .partial()
+  .refine((filter) => !(filter.action === "keep" && filter.scope?.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type FilterUpdate = z.infer<typeof filterUpdateSchema>;
+
+/** A changed filter, and how many feed articles came back to the lists with the change. */
+export const filterUpdateResultSchema = filterSchema.extend({ restored: z.number().int() });
+export type FilterUpdateResult = z.infer<typeof filterUpdateResultSchema>;
+
+export const filterDeleteResultSchema = z.object({ restored: z.number().int() });
+export type FilterDeleteResult = z.infer<typeof filterDeleteResultSchema>;
+
+/** A filter to try without saving it. With `id`, the stored filter of that id is left out of the count. */
+export const filterPreviewSchema = z
+  .object({ ...filterFields, enabled: filterFields.enabled.optional(), id: z.number().int().optional() })
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type FilterPreview = z.infer<typeof filterPreviewSchema>;
+
+export const filterPreviewResultSchema = z.object({ hiddenCount: z.number().int() });
+export type FilterPreviewResult = z.infer<typeof filterPreviewResultSchema>;
+
+/** A page of the feed articles a filter hides. The answer has the shape of the article list. */
+export const filterArticlesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+});
+export type FilterArticlesQuery = z.infer<typeof filterArticlesQuerySchema>;
+
+// ---- term highlights ---------------------------------------------------------------------------
+
+/** The colours a term group can take. Their values are in DESIGN.md, one for each colour scheme. */
+export const termColorSchema = z.enum(["green", "purple", "pink", "orange"]);
+export type TermColor = z.infer<typeof termColorSchema>;
+export const TERM_COLORS = termColorSchema.options;
+
+const termGroupNameSchema = z.string().trim().min(1, "a name is required").max(100);
+const highlightTermTextSchema = z.string().trim().min(1, "a term is required").max(100);
+
+/** A word marked in lists and article texts wherever it occurs, as stop words were matched. */
+export const highlightTermSchema = z.object({ id: z.number().int(), text: z.string() });
+export type HighlightTerm = z.infer<typeof highlightTermSchema>;
+
+/** Terms under one name and one colour. Groups are kept in an order: where two match one place, the upper one colours it. */
+export const termGroupSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  color: termColorSchema,
+  terms: z.array(highlightTermSchema),
+});
+export type TermGroup = z.infer<typeof termGroupSchema>;
+
+export const termGroupCreateSchema = z.object({ name: termGroupNameSchema, color: termColorSchema.optional() });
+export type TermGroupCreate = z.infer<typeof termGroupCreateSchema>;
+
+export const termGroupUpdateSchema = z.object({ name: termGroupNameSchema, color: termColorSchema }).partial();
+export type TermGroupUpdate = z.infer<typeof termGroupUpdateSchema>;
+
+/** Where a term group goes: before another one, or last. */
+export const termGroupMoveSchema = z.object({ before: z.number().int().nullable() });
+export type TermGroupMove = z.infer<typeof termGroupMoveSchema>;
+
+export const highlightTermCreateSchema = z.object({ text: highlightTermTextSchema });
+export type HighlightTermCreate = z.infer<typeof highlightTermCreateSchema>;
 
 // ---- runs --------------------------------------------------------------------------------------
 
@@ -510,6 +708,8 @@ const settingsFileSubscriptionSchema = z.object({
   autoSummarize: z.boolean().optional(),
   /** Left out, a new feed is not translated and a known one keeps what it has. */
   translate: z.boolean().optional(),
+  /** Left out, a new feed does not fetch full content and a known one keeps what it has. */
+  fetchFullContent: z.boolean().optional(),
 });
 export type SettingsFileSubscription = z.infer<typeof settingsFileSubscriptionSchema>;
 
@@ -527,13 +727,50 @@ const settingsFileCategorySchema = z.object({
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
 });
 
+/** A filter's scope in the file: a category by its slug, a feed by its URL. */
+const settingsFileFilterScopeSchema = z.union([
+  z.literal("all"),
+  z.object({ category: slugSchema }).strict(),
+  z.object({ feed: feedUrlSchema }).strict(),
+]);
+export type SettingsFileFilterScope = z.infer<typeof settingsFileFilterScopeSchema>;
+
+const settingsFileFilterSchema = z
+  .object({
+    action: filterActionSchema,
+    scope: settingsFileFilterScopeSchema,
+    /** Left out when the filter is enabled. */
+    enabled: z.boolean().optional(),
+    conditions: filterFields.conditions,
+  })
+  .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
+
+/** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
+const settingsFileStopWordSchema = z.object({
+  text: z.string().trim().min(1).max(100),
+  scope: z.enum(["title", "title_and_content"]).optional(),
+});
+
+/** A term group in the file, matched by its name. */
+const settingsFileTermGroupSchema = z.object({
+  name: termGroupNameSchema,
+  color: termColorSchema,
+  terms: z.array(highlightTermTextSchema).default([]),
+});
+export type SettingsFileTermGroup = z.infer<typeof settingsFileTermGroupSchema>;
+
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema.partial().optional(),
   categories: z.array(settingsFileCategorySchema).default([]),
   /** Subscribed feeds that belong to no category. */
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
-  stopWords: z.array(z.object({ text: stopWordTextSchema, scope: stopWordScopeSchema.optional() })).default([]),
+  filters: z.array(settingsFileFilterSchema).default([]),
+  /** Read for files written before filters, and turned into hide filters over everything. Never written. */
+  stopWords: z.array(settingsFileStopWordSchema).default([]),
+  /** In the order of the groups. Left out when there are none. */
+  termGroups: z.array(settingsFileTermGroupSchema).default([]),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 /** The file as it is written: lists that are empty may be left out. */
@@ -546,7 +783,9 @@ export const importResultSchema = z.object({
   topicsUpdated: z.number().int(),
   feedsCreated: z.number().int(),
   feedsUpdated: z.number().int(),
-  stopWordsCreated: z.number().int(),
+  filtersCreated: z.number().int(),
+  termGroupsCreated: z.number().int(),
+  highlightTermsCreated: z.number().int(),
 });
 export type ImportResult = z.infer<typeof importResultSchema>;
 
@@ -560,3 +799,16 @@ export const apiErrorSchema = z.object({
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;
+
+// ---- relayed images ----------------------------------------------------------------------------
+
+/**
+ * Where the server relays images: `<this path><signature>/<original URL in base64url>`. The API gives image
+ * URLs in this form, as paths without an origin; a screen loads an image only when its URL is one of them.
+ */
+export const IMAGE_PROXY_PATH = "/api/v1/image-proxy/";
+
+/** Whether an image URL is a path of the server's relay, the only kind of image a screen loads. */
+export function isImageProxyPath(url: string): boolean {
+  return url.startsWith(IMAGE_PROXY_PATH);
+}

@@ -182,7 +182,7 @@ describe("the periodic check", () => {
     const category = await server.category();
     await watching(server);
     await server.advance(MINUTE);
-    await server.core("setArticleFlags", await server.article(category.id, { importance: 5 }), { isRead: true });
+    await server.core("setArticleFlags", await server.article(category.id, { importance: 5 }), { isRead: true }, "$now");
 
     expect(await runCheck()).toBe("nothing");
     expect(notifications().shown).toEqual([]);

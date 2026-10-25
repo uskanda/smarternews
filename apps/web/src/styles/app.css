@@ -175,6 +175,94 @@
     -webkit-box-decoration-break: clone;
   }
 
+  /*
+   * A word that matched the search: a fill of its own and a line under it, so that it stays apart from the
+   * importance mark even where the two overlap and for readers who cannot tell the colours apart.
+   */
+  mark.search-match {
+    background: var(--color-search-match);
+    color: inherit;
+    text-decoration-line: underline;
+    text-decoration-color: var(--color-search-match-line);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.2em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /*
+   * A place a term of a term group matched: the fill of the group's colour and a thick line of that colour,
+   * drawn further from the text than a link's, so that it stays apart from a link and from the importance mark,
+   * and shows for readers who cannot tell the colours apart. A search match inside it keeps its own look.
+   */
+  mark.term-match {
+    color: inherit;
+    text-decoration-line: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.3em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* The badge of a term group at the end of a list row's details: its name on the fill, a line on the left. */
+  .term-badge {
+    @apply type-label-sm;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 var(--spacing-xs);
+    border-left: 2px solid;
+    border-radius: var(--radius-sm);
+    color: var(--color-on-surface);
+  }
+
+  /* A sample of a term colour on the settings page: the fill with the line under it. */
+  .term-swatch {
+    display: inline-block;
+    width: 1.25em;
+    height: 1em;
+    border-bottom: 2px solid;
+    border-radius: var(--radius-sm);
+  }
+
+  mark.term-match[data-term="green"],
+  .term-badge[data-term="green"],
+  .term-swatch[data-term="green"] {
+    background: var(--color-term-green-fill);
+    text-decoration-color: var(--color-term-green);
+    border-left-color: var(--color-term-green);
+    border-bottom-color: var(--color-term-green);
+  }
+
+  mark.term-match[data-term="purple"],
+  .term-badge[data-term="purple"],
+  .term-swatch[data-term="purple"] {
+    background: var(--color-term-purple-fill);
+    text-decoration-color: var(--color-term-purple);
+    border-left-color: var(--color-term-purple);
+    border-bottom-color: var(--color-term-purple);
+  }
+
+  mark.term-match[data-term="pink"],
+  .term-badge[data-term="pink"],
+  .term-swatch[data-term="pink"] {
+    background: var(--color-term-pink-fill);
+    text-decoration-color: var(--color-term-pink);
+    border-left-color: var(--color-term-pink);
+    border-bottom-color: var(--color-term-pink);
+  }
+
+  mark.term-match[data-term="orange"],
+  .term-badge[data-term="orange"],
+  .term-swatch[data-term="orange"] {
+    background: var(--color-term-orange-fill);
+    text-decoration-color: var(--color-term-orange);
+    border-left-color: var(--color-term-orange);
+    border-bottom-color: var(--color-term-orange);
+  }
+
   .article-body {
     display: flex;
     flex-direction: column;

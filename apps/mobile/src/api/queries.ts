@@ -1,6 +1,7 @@
-import type { Article, ArticleList, ArticleListQuery, ArticleSummary } from "@smarternews/core/api";
+import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { createTermMatcher, type TermMatcher } from "@smarternews/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "./AppProvider";
 
 /** How often lists and counts are fetched again while the app is in the foreground. */
@@ -28,6 +29,18 @@ export function useFeeds() {
   return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
 }
 
+/** The term groups in their order. Asked for again when a list is pulled to refresh. */
+export function useTermGroups() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["term-groups"], queryFn: () => api.termGroups() });
+}
+
+/** Finds the terms of the term groups in a text. Has no terms until the groups have arrived. */
+export function useTermMatcher(): TermMatcher {
+  const groups = useTermGroups().data;
+  return useMemo(() => createTermMatcher(groups ?? []), [groups]);
+}
+
 export function useCounts() {
   const { api } = useApp();
   return useQuery({ queryKey: ["counts"], queryFn: () => api.counts(), refetchInterval: REFRESH_MS });
@@ -41,6 +54,21 @@ export function useArticleList(filter: ArticleListQuery, enabled = true) {
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     refetchInterval: REFRESH_MS,
+    enabled,
+  });
+}
+
+/**
+ * Search results, a page at a time. Kept under "articles", so that a change of an article's flags reaches
+ * them as it reaches the lists. Not fetched again by itself: results do not move while the reader goes through them.
+ */
+export function useArticleSearch(query: Omit<ArticleSearchQuery, "limit" | "cursor">, enabled = true) {
+  const { api } = useApp();
+  return useInfiniteQuery({
+    queryKey: ["articles", "search", query],
+    queryFn: ({ pageParam }) => api.search({ ...query, limit: PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
     enabled,
   });
 }
@@ -72,7 +100,8 @@ export function useArticleTranslation(article: Article | undefined, active: bool
   const id = article?.id ?? null;
   const wanted = active && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
-    queryKey: ["article-translation", id],
+    // The full content, once it arrives, is translated anew: the server dropped the translation of the excerpt.
+    queryKey: ["article-translation", id, article?.fullContent?.fetchedAt ?? null],
     queryFn: async () => {
       const translation = await api.translateArticle(id!);
       patchArticle(client, id!, { translatedTitle: translation.translatedTitle });
@@ -83,6 +112,46 @@ export function useArticleTranslation(article: Article | undefined, active: bool
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
   });
+}
+
+/**
+ * Fetching the full content of feed articles from their pages. `fetch` asks the server and waits for the page;
+ * a second press for an article under way does nothing. What arrives, full content or the reason it failed, is
+ * put into the article, which is then fetched again. `requestFailed` is for a request that got no answer.
+ */
+export function useFullContentFetch() {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const underWay = useRef(new Set<number>());
+  const [fetching, setFetching] = useState<ReadonlySet<number>>(new Set());
+  const [unanswered, setUnanswered] = useState<ReadonlySet<number>>(new Set());
+  const fetch = useCallback(
+    (id: number) => {
+      if (underWay.current.has(id)) return;
+      underWay.current.add(id);
+      setFetching(new Set(underWay.current));
+      setUnanswered((current) => new Set([...current].filter((other) => other !== id)));
+      api
+        .fetchFullContent(id)
+        .then((result) => {
+          client.setQueryData<Article>(["article", id], (current) => {
+            if (!current) return current;
+            if (result.status === "failed") return { ...current, fullContentStatus: "failed", fullContentError: result.error };
+            // Storing the full content dropped the translation of what the feed delivered.
+            const translation = current.fullContentStatus === "fetched" ? current.translation : null;
+            return { ...current, fullContent: result.fullContent, fullContentStatus: "fetched", fullContentError: null, translation };
+          });
+          void client.invalidateQueries({ queryKey: ["article", id] });
+        })
+        .catch(() => setUnanswered((current) => new Set([...current, id])))
+        .finally(() => {
+          underWay.current.delete(id);
+          setFetching(new Set(underWay.current));
+        });
+    },
+    [api, client],
+  );
+  return { fetch, isFetching: (id: number) => fetching.has(id), requestFailed: (id: number) => unanswered.has(id) };
 }
 
 /** How often an open article is fetched again while its summary is on its way, and for how long. */
@@ -146,6 +215,9 @@ export function useArticleFlags() {
       void client.invalidateQueries({ queryKey: ["counts"] });
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
+      // A read state changes which articles the recently read list holds. While that list is shown, it keeps
+      // the row it changed until the reader refreshes.
+      else if (variables.isRead !== undefined) void client.invalidateQueries({ queryKey: ["articles", { recentlyRead: "true" }] });
     },
   });
 }

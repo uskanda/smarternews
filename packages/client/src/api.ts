@@ -2,8 +2,10 @@
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
   articleListSchema,
+  articleSearchResultSchema,
   articleSchema,
   articleTranslationSchema,
+  fullContentResultSchema,
   summaryRequestResultSchema,
   candidateSchema,
   categorySchema,
@@ -17,14 +19,20 @@ import {
   providerStatusSchema,
   runSchema,
   settingsSchema,
-  stopWordDeleteResultSchema,
-  stopWordSchema,
+  filterDeleteResultSchema,
+  filterPreviewResultSchema,
+  filterSchema,
+  filterUpdateResultSchema,
+  termGroupSchema,
   topicSchema,
   translationStatusSchema,
   type Article,
   type ArticleList,
   type ArticleListQuery,
+  type ArticleSearchQuery,
+  type ArticleSearchResult,
   type ArticleTranslation,
+  type FullContentResult,
   type SummaryRequestResult,
   type ArticleUpdate,
   type Candidate,
@@ -46,10 +54,18 @@ import {
   type Run,
   type Settings,
   type SettingsUpdate,
-  type StopWord,
-  type StopWordCreate,
-  type StopWordDeleteResult,
-  type StopWordUpdate,
+  type Filter,
+  type FilterArticlesQuery,
+  type FilterCreate,
+  type FilterDeleteResult,
+  type FilterPreview,
+  type FilterPreviewResult,
+  type FilterUpdate,
+  type FilterUpdateResult,
+  type HighlightTermCreate,
+  type TermGroup,
+  type TermGroupCreate,
+  type TermGroupUpdate,
   type Topic,
   type TopicCreate,
   type TopicUpdate,
@@ -186,6 +202,12 @@ export function createApi(options: ApiOptions) {
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>
       json(articleListSchema, `/articles${query(filter as Record<string, string | number | undefined>)}`),
+    /** The articles that have every term of `q`, newest first, a page at a time, with excerpts and the terms matched. */
+    search: (params: ArticleSearchQuery): Promise<ArticleSearchResult> =>
+      json(
+        articleSearchResultSchema,
+        `/search${query({ q: params.q, category: params.category, feed: params.feed, unread: params.unread, cursor: params.cursor, limit: params.limit })}`,
+      ),
     article: (id: number): Promise<Article> => json(articleSchema, `/articles/${id}`),
     updateArticle: (id: number, patch: ArticleUpdate): Promise<Article> =>
       json(articleSchema, `/articles/${id}`, body("PATCH", patch)),
@@ -196,6 +218,8 @@ export function createApi(options: ApiOptions) {
     /** Says that the article is open and its summary is wanted now. The answer tells whether one is on its way. */
     requestSummary: (id: number): Promise<SummaryRequestResult> => json(summaryRequestResultSchema, `/articles/${id}/summary`, { method: "POST" }),
     translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
+    /** Fetches the full content of a feed article from its page. Answers once the fetch is over, which can take seconds. */
+    fetchFullContent: (id: number): Promise<FullContentResult> => json(fullContentResultSchema, `/articles/${id}/full-content`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>
       json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),
@@ -214,10 +238,30 @@ export function createApi(options: ApiOptions) {
     importOpml: (text: string): Promise<OpmlImportResult> =>
       json(opmlImportResultSchema, "/feeds/opml", { method: "POST", headers: { "content-type": "text/x-opml" }, body: text }),
 
-    stopWords: (): Promise<StopWord[]> => json(z.array(stopWordSchema), "/stop-words"),
-    createStopWord: (input: StopWordCreate): Promise<StopWord> => json(stopWordSchema, "/stop-words", body("POST", input)),
-    updateStopWord: (id: number, patch: StopWordUpdate): Promise<StopWord> => json(stopWordSchema, `/stop-words/${id}`, body("PATCH", patch)),
-    deleteStopWord: (id: number): Promise<StopWordDeleteResult> => json(stopWordDeleteResultSchema, `/stop-words/${id}`, { method: "DELETE" }),
+    filters: (): Promise<Filter[]> => json(z.array(filterSchema), "/filters"),
+    createFilter: (input: FilterCreate): Promise<Filter> => json(filterSchema, "/filters", body("POST", input)),
+    /** Changes a filter or switches it. Says how many articles came back to the lists. */
+    updateFilter: (id: number, patch: FilterUpdate): Promise<FilterUpdateResult> => json(filterUpdateResultSchema, `/filters/${id}`, body("PATCH", patch)),
+    deleteFilter: (id: number): Promise<FilterDeleteResult> => json(filterDeleteResultSchema, `/filters/${id}`, { method: "DELETE" }),
+    /** The feed articles a filter hides, newest first, a page at a time. */
+    filterArticles: (id: number, page: FilterArticlesQuery = {}): Promise<ArticleList> =>
+      json(articleListSchema, `/filters/${id}/articles${query(page)}`),
+    /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
+    previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
+
+    /** The term groups in their order, each with its terms. */
+    termGroups: (): Promise<TermGroup[]> => json(z.array(termGroupSchema), "/term-groups"),
+    createTermGroup: (input: TermGroupCreate): Promise<TermGroup> => json(termGroupSchema, "/term-groups", body("POST", input)),
+    updateTermGroup: (id: number, patch: TermGroupUpdate): Promise<TermGroup> => json(termGroupSchema, `/term-groups/${id}`, body("PATCH", patch)),
+    deleteTermGroup: async (id: number): Promise<void> => void (await request(`/term-groups/${id}`, { method: "DELETE" })),
+    /** Puts the term group before another one, or last. Answers with all term groups in their order. */
+    moveTermGroup: (id: number, before: number | null): Promise<TermGroup[]> =>
+      json(z.array(termGroupSchema), `/term-groups/${id}/move`, body("POST", { before })),
+    /** Adds a term to a group. Answers with the group. */
+    addHighlightTerm: (groupId: number, input: HighlightTermCreate): Promise<TermGroup> =>
+      json(termGroupSchema, `/term-groups/${groupId}/terms`, body("POST", input)),
+    deleteHighlightTerm: async (groupId: number, termId: number): Promise<void> =>
+      void (await request(`/term-groups/${groupId}/terms/${termId}`, { method: "DELETE" })),
 
     runCategory: (categoryId: number): Promise<Run> => json(runSchema, `/categories/${categoryId}/runs`, { method: "POST" }),
     runs: (filter: { category?: number; limit?: number } = {}): Promise<Run[]> => json(z.array(runSchema), `/runs${query(filter)}`),

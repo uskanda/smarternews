@@ -1,8 +1,8 @@
-import { setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
+import { insertFeed, setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeServer, renderApp } from "../testing/harness.tsx";
+import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
@@ -64,7 +64,7 @@ describe("the list of views and categories", () => {
     updateCategory(server.db, hidden.id, { enabled: false });
     server.article(a.id);
     server.article(a.id);
-    setArticleFlags(server.db, server.article(b.id), { isRead: true });
+    setArticleFlags(server.db, server.article(b.id), { isRead: true }, server.clock().toISOString());
     renderApp({ server });
 
     const security = await within(nav()).findByRole("link", { name: /Security/ });
@@ -72,6 +72,22 @@ describe("the list of views and categories", () => {
     expect(within(nav()).getByRole("link", { name: /Tools/ })).not.toHaveTextContent(/\d/);
     expect(within(nav()).queryByRole("link", { name: /Hidden/ })).not.toBeInTheDocument();
     expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2");
+  });
+
+  it("lists the views in order, with 最近読んだ記事 last and without a number", async () => {
+    const server = makeServer();
+    const a = server.category("Security");
+    setArticleFlags(server.db, server.article(a.id), { isRead: true }, server.clock().toISOString());
+    server.article(a.id);
+    const { user, path } = renderApp({ server });
+
+    const views = await within(nav()).findAllByRole("list");
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事"]);
+    expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
+
+    await user.click(within(nav()).getByRole("link", { name: "最近読んだ記事" }));
+    expect(path()).toBe("/recently-read");
   });
 
   it("links to the settings and the run history", async () => {
@@ -289,6 +305,9 @@ describe("keyboard", () => {
     const dialog = await screen.findByRole("dialog", { name: "キー操作" });
     expect(within(dialog).getByText("次の記事")).toBeInTheDocument();
     expect(within(dialog).getByText("スターの切り替え")).toBeInTheDocument();
+    const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
+    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
+    expect(within(dialog).getByText("「最近読んだ記事」へ移る")).toBeInTheDocument();
   });
 
   it("leaves letters alone while the user types in a field", async () => {
@@ -303,6 +322,155 @@ describe("keyboard", () => {
 
     expect(field).toHaveValue("sjm?");
     expect(screen.queryByRole("dialog", { name: "キー操作" })).not.toBeInTheDocument();
+  });
+});
+
+describe("moving between the entries with keys", () => {
+  const feedOf = (server: TestServer, title: string, categoryId: number | null) =>
+    insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title, categoryId }, server.clock);
+
+  it("opens the next and the previous entry of the left pane with Shift+J and Shift+K", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const beta = server.category("Beta");
+    const { user, path } = renderApp({ server, route: `/c/${alpha.slug}` });
+    await within(nav()).findByRole("link", { name: "Beta" });
+
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/c/${beta.slug}`));
+
+    await user.keyboard("{Shift>}K{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/c/${alpha.slug}`));
+    await user.keyboard("{Shift>}K{/Shift}");
+    await waitFor(() => expect(path()).toBe("/recently-read"));
+  });
+
+  it("goes into the entries below a category, and past them once it is folded", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const beta = server.category("Beta");
+    feedOf(server, "X", alpha.id);
+    const { user, path } = renderApp({ server, route: `/c/${alpha.slug}` });
+    await within(nav()).findByRole("link", { name: "X" });
+
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/c/${alpha.slug}/generated`));
+
+    await user.click(within(nav()).getByRole("button", { name: "Alphaの下の項目" }));
+    // The open entry is hidden below the folded category, which holds the place.
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/c/${beta.slug}`));
+    await user.keyboard("{Shift>}K{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/c/${alpha.slug}`));
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/c/${beta.slug}`));
+  });
+
+  it("opens the first entry from the settings, and stays on the last one", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const { user, path } = renderApp({ server, route: "/settings" });
+    await within(nav()).findByRole("link", { name: "Alpha" });
+
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe("/unread"));
+
+    await user.click(within(nav()).getByRole("link", { name: "Alpha" }));
+    await waitFor(() => expect(path()).toBe(`/c/${alpha.slug}`));
+    await user.keyboard("{Shift>}J{/Shift}");
+    expect(path()).toBe(`/c/${alpha.slug}`);
+  });
+
+  it("opens 未読, not すべて, with g a, スター with g s and 最近読んだ記事 with g r", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    server.article(alpha.id, { title: "A story" });
+    const { user, path, requests } = renderApp({ server, route: `/c/${alpha.slug}` });
+    await screen.findByRole("link", { name: /A story/ });
+
+    await user.keyboard("ga");
+    await waitFor(() => expect(path()).toBe("/unread"));
+    await user.keyboard("gs");
+    await waitFor(() => expect(path()).toBe("/starred"));
+
+    const counted = () => requests.filter((request) => request.includes("/counts")).length;
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "スター" })).toBeInTheDocument());
+    const before = counted();
+    await user.keyboard("gr");
+    await waitFor(() => expect(path()).toBe("/recently-read"));
+    await screen.findByRole("heading", { level: 1, name: "最近読んだ記事" });
+    // The r of the pair is no refresh, which would fetch the counts again.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(counted()).toBe(before);
+  });
+
+  it("goes round the event categories with g e, from wherever the reader is", async () => {
+    const server = makeServer();
+    server.category("Alpha");
+    const fair = server.category("Fairs", "event");
+    server.category("Beta");
+    const talk = server.category("Talks", "event");
+    const { user, path } = renderApp({ server, route: "/settings" });
+    await within(nav()).findByRole("link", { name: "Talks" });
+
+    await user.keyboard("ge");
+    await waitFor(() => expect(path()).toBe(`/c/${fair.slug}`));
+    await user.keyboard("ge");
+    await waitFor(() => expect(path()).toBe(`/c/${talk.slug}`));
+    await user.keyboard("ge");
+    await waitFor(() => expect(path()).toBe(`/c/${fair.slug}`));
+  });
+
+  it("stays where it is with g e when there is no event category", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const { user, path } = renderApp({ server, route: `/c/${alpha.slug}` });
+    await within(nav()).findByRole("link", { name: "Alpha" });
+
+    await user.keyboard("ge");
+
+    expect(path()).toBe(`/c/${alpha.slug}`);
+  });
+
+  it("does nothing on g alone, and takes a key after a second for itself", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const id = server.article(alpha.id, { title: "A story" });
+    const { user, path } = renderApp({ server, route: `/c/${alpha.slug}/${id}` });
+    await screen.findByRole("heading", { level: 2, name: "A story" });
+
+    await user.keyboard("g");
+    server.clock.advance(2_000);
+    expect(path()).toBe(`/c/${alpha.slug}/${id}`);
+
+    await user.keyboard("s");
+    expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(path()).toBe(`/c/${alpha.slug}/${id}`);
+  });
+
+  it("uses up a key after g that names no list", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const id = server.article(alpha.id, { title: "A story" });
+    const { user } = renderApp({ server, route: `/c/${alpha.slug}/${id}` });
+    await screen.findByRole("button", { name: "未読に戻す" });
+
+    await user.keyboard("gm");
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
+  });
+
+  it("leaves g and s to a field the user types in", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const field = await screen.findByLabelText("新しいトピック");
+    await user.type(field, "gs");
+
+    expect(field).toHaveValue("gs");
+    expect(path()).toBe(`/settings/categories/${category.id}`);
   });
 });
 
