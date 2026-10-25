@@ -929,3 +929,33 @@ describe("the migration to annotations", () => {
     expect(sql).toContain("sn_search_text(NEW.origin, NEW.title, NEW.translated_title, NEW.summary, NEW.auto_summary, NEW.body,");
   });
 });
+
+describe("the migration to model costs", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("leaves the calls that exist without a cost and outside the budget, and the runs without a limit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "018")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const at = "2026-10-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'c', 'c', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(at);
+    db.prepare("INSERT INTO runs (id, category_id, trigger, status, queued_at) VALUES (1, 1, 'manual', 'stopped_by_limit', ?)").run(at);
+    db.prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at) VALUES (1, 'judge', 'fast', 10, 1, ?)").run(at);
+
+    copyFileSync(join(SHIPPED, "018_llm_costs.sql"), join(dir, "018_llm_costs.sql"));
+    migrate(db, dir);
+
+    expect(
+      db
+        .prepare("SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, billable FROM llm_calls")
+        .get(),
+    ).toEqual({ input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null, web_searches: null, cost_usd: null, billable: 0 });
+    expect(db.prepare("SELECT stopped_by FROM runs").get()).toEqual({ stopped_by: null });
+    db.prepare("UPDATE runs SET stopped_by = 'budget'").run();
+    expect(() => db.prepare("UPDATE runs SET stopped_by = 'week'").run()).toThrow();
+  });
+});

@@ -61,7 +61,17 @@ providers:
   it("keeps the documented defaults for limits and fetching", () => {
     const config = parseConfig("listen: 0.0.0.0:9000\n");
     expect(config.listen).toBe("0.0.0.0:9000");
-    expect(config.limits).toEqual({ llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100, judgeBatchSize: 30, pagesPerRun: 20, runRetries: 2 });
+    expect(config.limits).toEqual({
+      llmCallsPerRun: 40,
+      llmCallsPerDay: 300,
+      summariesPerDay: 100,
+      judgeBatchSize: 30,
+      pagesPerRun: 20,
+      runRetries: 2,
+      monthlyBudgetUsd: 100,
+      budgetWarnRatio: 0.8,
+      budgetResetDay: 1,
+    });
     expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000, allowPrivateHosts: [] });
   });
 
@@ -84,6 +94,17 @@ describe("the example configuration", () => {
     expect(resolveAssignment(config)).toMatchObject({ judge: "fast", write: "smart" });
     expect(config.newsSearch).toEqual({ engine: "google-news", maxResultsPerQuery: 10 });
     expect(config.images).toEqual({ cacheDays: 7, cacheMaxBytes: 1_000_000_000 });
+  });
+
+  it("holds an Anthropic API provider that is accepted once its lines are uncommented", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const text = readFileSync(join(import.meta.dirname, "../../../examples/config.example.yaml"), "utf8");
+    const uncommented = text.replace(/^ {2}# api:\n((?: {2}# {3}.*\n)+)/m, (block) => block.replace(/^ {2}# /gm, "  "));
+    expect(uncommented).not.toBe(text);
+    const config = parseConfig(uncommented);
+    expect(config.providers.api).toMatchObject({ adapter: "anthropic", model: "claude-sonnet-5-5", effort: "medium", maxWebSearches: 5 });
+    expect(config.limits).toMatchObject({ monthlyBudgetUsd: 100, budgetWarnRatio: 0.8, budgetResetDay: 1 });
   });
 });
 
@@ -177,5 +198,60 @@ describe("the number of retries of a failed run", () => {
     expect(() => parseConfig("limits:\n  runRetries: 4\n")).toThrow(/limits\.runRetries/);
     expect(() => parseConfig("limits:\n  runRetries: -1\n")).toThrow(/limits\.runRetries/);
     expect(() => parseConfig("limits:\n  runRetries: 1.5\n")).toThrow(/limits\.runRetries/);
+  });
+});
+
+describe("the Anthropic API provider", () => {
+  it("reads its key from ANTHROPIC_API_KEY and searches 5 times a call unless the file says otherwise", () => {
+    const config = parseConfig("providers:\n  fast: { adapter: anthropic, model: claude-haiku-5-5 }\n");
+    expect(config.providers.fast).toEqual({ adapter: "anthropic", model: "claude-haiku-5-5", apiKeyEnv: "ANTHROPIC_API_KEY", maxWebSearches: 5 });
+  });
+
+  it("takes an effort, a limit of searches and unit prices", () => {
+    const config = parseConfig(`
+providers:
+  smart:
+    adapter: anthropic
+    model: claude-sonnet-5-5
+    apiKeyEnv: MY_KEY
+    effort: medium
+    maxWebSearches: 3
+    pricing: { inputPerMTok: 1, webSearchPerSearch: 0.02 }
+`);
+    expect(config.providers.smart).toEqual({
+      adapter: "anthropic",
+      model: "claude-sonnet-5-5",
+      apiKeyEnv: "MY_KEY",
+      effort: "medium",
+      maxWebSearches: 3,
+      pricing: { inputPerMTok: 1, webSearchPerSearch: 0.02 },
+    });
+  });
+
+  it("refuses an effort it does not know, a key written into the file and a negative price", () => {
+    expect(() => parseConfig("providers:\n  a: { adapter: anthropic, model: m, effort: max }\n")).toThrow(/providers\.a\.effort/);
+    expect(() => parseConfig("providers:\n  a: { adapter: anthropic, model: m, apiKey: secret-value }\n")).toThrow(ConfigError);
+    expect(() => parseConfig("providers:\n  a: { adapter: anthropic, model: m, apiKey: secret-value }\n")).not.toThrow(/secret-value/);
+    expect(() => parseConfig("providers:\n  a: { adapter: anthropic, model: m, pricing: { inputPerMTok: -1 } }\n")).toThrow(
+      /providers\.a\.pricing\.inputPerMTok/,
+    );
+  });
+});
+
+describe("the monthly budget", () => {
+  it("is 100 dollars, warned of at 0.8 and reset on the 1st unless the file says otherwise", () => {
+    const { monthlyBudgetUsd, budgetWarnRatio, budgetResetDay } = parseConfig(null).limits;
+    expect({ monthlyBudgetUsd, budgetWarnRatio, budgetResetDay }).toEqual({ monthlyBudgetUsd: 100, budgetWarnRatio: 0.8, budgetResetDay: 1 });
+    const set = parseConfig("limits:\n  monthlyBudgetUsd: 50\n  budgetWarnRatio: 0.5\n  budgetResetDay: 10\n").limits;
+    expect([set.monthlyBudgetUsd, set.budgetWarnRatio, set.budgetResetDay]).toEqual([50, 0.5, 10]);
+  });
+
+  it("refuses a reset day outside 1 to 31, a warning ratio outside 0 to 1 and a negative budget", () => {
+    expect(() => parseConfig("limits:\n  budgetResetDay: 0\n")).toThrow(/limits\.budgetResetDay/);
+    expect(() => parseConfig("limits:\n  budgetResetDay: 32\n")).toThrow(/limits\.budgetResetDay/);
+    expect(() => parseConfig("limits:\n  budgetResetDay: 1.5\n")).toThrow(/limits\.budgetResetDay/);
+    expect(() => parseConfig("limits:\n  budgetWarnRatio: 1.2\n")).toThrow(/limits\.budgetWarnRatio/);
+    expect(() => parseConfig("limits:\n  budgetWarnRatio: 0\n")).toThrow(/limits\.budgetWarnRatio/);
+    expect(() => parseConfig("limits:\n  monthlyBudgetUsd: -1\n")).toThrow(/limits\.monthlyBudgetUsd/);
   });
 });

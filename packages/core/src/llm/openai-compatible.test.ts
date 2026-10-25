@@ -56,7 +56,7 @@ describe("the OpenAI-compatible adapter", () => {
     const { baseUrl, seen } = await server(() => completion('{"ok": true}'));
     const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "some-model", apiKey: "k-123", structuredOutput: "json_schema" });
 
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: true });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: true }, usage: null });
     expect(seen[0]!.url).toBe("/v1/chat/completions");
     expect(seen[0]!.authorization).toBe("Bearer k-123");
     expect(seen[0]!.body).toMatchObject({
@@ -73,7 +73,7 @@ describe("the OpenAI-compatible adapter", () => {
     const { baseUrl, seen } = await server(() => completion('```json\n{"ok": false}\n```'));
     const adapter = createOpenAiCompatibleAdapter({ baseUrl, model: "m", apiKey: null, structuredOutput: "prompt" });
 
-    await expect(adapter.complete(request())).resolves.toEqual({ ok: false });
+    await expect(adapter.complete(request())).resolves.toEqual({ answer: { ok: false }, usage: null });
     expect(seen[0]!.body.response_format).toBeUndefined();
     expect(seen[0]!.authorization).toBeUndefined();
     const system = (seen[0]!.body.messages as Array<{ content: string }>)[0]!.content;

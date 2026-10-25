@@ -35,7 +35,8 @@ describe("term highlights in the list", () => {
     saveTranslatedTitle(server.db, delivered, { original: "New rules", title: "新しい規制", sourceLanguage: "en" });
     renderApp({ server, route: "/all" });
 
-    await waitFor(() => expect(colored(row("半導体の話"))).toEqual(["規制:green"]));
+    // The list and the term groups arrive in two requests; under the load of the whole suite the second can take over a second.
+    await waitFor(() => expect(colored(row("半導体の話"))).toEqual(["規制:green"]), { timeout: 3000 });
     expect(row("半導体の話").querySelector("[data-title] mark")).toBeNull();
     expect(colored(row("新しい規制").querySelector("[data-title]")!)).toEqual(["規制:green"]);
   });

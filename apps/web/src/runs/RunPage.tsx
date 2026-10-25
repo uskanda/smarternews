@@ -2,8 +2,19 @@ import type { Candidate } from "@smarternews/core/api";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { ApiError, formatFull, RETRY_SKIPPED_LABEL, retryLabel, stageLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
-import { useCategories, useRun, useTimeZone } from "../api/queries.ts";
+import {
+  ApiError,
+  formatFull,
+  nextPeriodStart,
+  periodDayLabel,
+  RETRY_SKIPPED_LABEL,
+  retryLabel,
+  stageLabel,
+  STATUS_LABEL,
+  stopLimitLabel,
+  TRIGGER_LABEL,
+} from "@smarternews/client";
+import { useCategories, useProviders, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 
@@ -55,6 +66,7 @@ export function RunPage() {
   });
   const categories = useCategories().data ?? [];
   const timeZone = useTimeZone();
+  const budget = useProviders().data?.budget;
   const [grouped, setGrouped] = useState(false);
 
   if (id === null || (run.isError && run.error instanceof ApiError && run.error.kind === "not_found")) {
@@ -128,7 +140,11 @@ export function RunPage() {
         </dl>
         {data.status === "stopped_by_limit" ? (
           <p className="max-w-measure type-body-md">
-            LLMの呼び出し回数の上限に達したため、途中で止まりました。完成した記事は保存済みで、残りは次の実行が続けます。上限はサーバーの設定で変えられます。
+            {stopLimitLabel(data.stoppedBy)}
+            {data.stoppedBy === "budget" && budget
+              ? `${periodDayLabel(nextPeriodStart(budget.periodEnd))}に次の予算の期間が始まるまで、金額のかかるプロバイダーは呼び出しません。`
+              : ""}
+            完成した記事は保存済みで、残りは次の実行が続けます。上限はサーバーの設定で変えられます。
           </p>
         ) : null}
         {data.status === "failed" && data.retrySkipped ? <p className="max-w-measure type-body-md">{RETRY_SKIPPED_LABEL[data.retrySkipped]}</p> : null}

@@ -1,4 +1,4 @@
-import type { RetrySkipped, Run, RunFailure, RunStatus } from "../api.ts";
+import type { RetrySkipped, Run, RunFailure, RunStatus, StopLimit } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { notFound } from "../errors.ts";
 import type { Database } from "./database.ts";
@@ -24,6 +24,7 @@ function toRun(row: Row): Run {
     retryOf: numOrNull(row.retry_of),
     retryAt: strOrNull(row.retry_at),
     retrySkipped: strOrNull(row.retry_skipped) as RetrySkipped | null,
+    stoppedBy: strOrNull(row.stopped_by) as StopLimit | null,
   };
 }
 
@@ -83,13 +84,15 @@ export interface RunOutcome {
   articlesUpdated: number;
   llmCalls: number;
   failures: RunFailure[];
+  /** The allowance that stopped the run, when its status is stopped_by_limit. */
+  stoppedBy?: StopLimit | null;
 }
 
 export function finishRun(db: Database, id: number, outcome: RunOutcome): Run {
   db.prepare(
     `UPDATE runs
         SET status = ?, finished_at = ?, collected = ?, rejected = ?, articles_created = ?, articles_updated = ?,
-            llm_calls = ?, failures = ?
+            llm_calls = ?, failures = ?, stopped_by = ?
       WHERE id = ?`,
   ).run(
     outcome.status,
@@ -100,6 +103,7 @@ export function finishRun(db: Database, id: number, outcome: RunOutcome): Run {
     outcome.articlesUpdated,
     outcome.llmCalls,
     JSON.stringify(outcome.failures),
+    outcome.stoppedBy ?? null,
     id,
   );
   return getRun(db, id);

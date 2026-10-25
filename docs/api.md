@@ -615,7 +615,15 @@ A run has `trigger` (`schedule` or `manual`), `status`, `queuedAt`, `startedAt`,
 | `succeeded` | Finished without a failure |
 | `partial` | Finished, and some step failed: a feed, a topic's interpretation, one article |
 | `failed` | Every source failed, the run crashed, or the server stopped during it |
-| `stopped_by_limit` | A limit on model calls was reached. Finished articles are kept and the next run continues |
+| `stopped_by_limit` | A limit on model calls or the monthly budget was reached. Finished articles are kept and the next run continues |
+
+A run with the status `stopped_by_limit` names the limit in `stoppedBy`. Every other run has `null` there, and so do runs that stopped before the server kept this field.
+
+| `stoppedBy` | Meaning |
+|---|---|
+| `run` | The run made as many model calls as `limits.llmCallsPerRun` allows |
+| `day` | The day reached `limits.llmCallsPerDay` |
+| `budget` | The budget period spent `limits.monthlyBudgetUsd` on providers that cost money. Those providers are not called again until the next period starts |
 
 A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
 
@@ -641,7 +649,24 @@ A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been q
 
 ## Providers
 
-`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`), the provider assigned to each task, the model calls made today for runs (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/providers"
+```
+
+`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`, `billable`) and the provider assigned to each task. It also returns the model calls made today for runs (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
+
+A provider is `billable` when calling it costs money: today that means the `anthropic` adapter. The server works out the cost of each call from the token counts the API reports and the unit prices of the model. `budget` gives what the current budget period has spent:
+
+| Field | Meaning |
+|---|---|
+| `periodStart`, `periodEnd` | The first and the last day of the period, as `YYYY-MM-DD`. A period starts at midnight UTC on `limits.budgetResetDay` |
+| `spentUsd` | US dollars spent in the period by billable providers |
+| `monthlyBudgetUsd` | The budget of one period. Once `spentUsd` reaches it, billable providers are not called |
+| `warnRatio` | The share of the budget at which the screens warn |
+| `unknownCostCalls` | Calls to billable providers that ended without an answer, such as a timeout. Their cost is unknown and `spentUsd` leaves it out |
+| `byTask`, `byProvider` | `spentUsd` split by task and by provider name. A task or provider without a cost in the period has 0 |
+
+These amounts are the server's own estimate from published prices, not the amount Anthropic bills.
 
 ## RSS
 

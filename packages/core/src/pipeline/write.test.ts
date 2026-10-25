@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolvePricing } from "../llm/pricing.ts";
 import { html } from "../testing/http.ts";
 import { defaultHandlers, pipelineHarness, sourcesIn } from "../testing/pipeline.ts";
 
@@ -195,7 +196,7 @@ describe("failures while writing", () => {
 
     const run = await h.run();
 
-    expect(run).toMatchObject({ status: "stopped_by_limit", llmCalls: 3, articlesCreated: 1 });
+    expect(run).toMatchObject({ status: "stopped_by_limit", stoppedBy: "run", llmCalls: 3, articlesCreated: 1 });
     expect(h.articles().map((article) => article.title)).toEqual(["First [i5]"]);
 
     await h.run();
@@ -211,6 +212,35 @@ describe("failures while writing", () => {
 
     const second = await h.run();
 
-    expect(second).toMatchObject({ status: "stopped_by_limit", llmCalls: 0, articlesCreated: 0 });
+    expect(second).toMatchObject({ status: "stopped_by_limit", stoppedBy: "day", llmCalls: 0, articlesCreated: 0 });
+  });
+
+  it("stops when the budget period has used up its budget, keeping what is finished", async () => {
+    const h = pipelineHarness({ llmPricing: resolvePricing("claude-sonnet-5-5")! });
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, threeStories);
+    // Another call took the period to $99.99; the judge call and the grouping take it over $100.
+    h.db
+      .prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES ('write', 'write', 1, 1, ?, 99.99, 1)")
+      .run(h.clock().toISOString());
+    h.handlers.judge = (request) => {
+      h.db
+        .prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES ('judge', 'judge', 1, 1, ?, 0.02, 1)")
+        .run(h.clock().toISOString());
+      return defaultHandlers.judge(request);
+    };
+
+    const run = await h.run();
+
+    expect(run).toMatchObject({ status: "stopped_by_limit", stoppedBy: "budget", articlesCreated: 0 });
+    expect(h.requests.write).toHaveLength(0);
+  });
+
+  it("has no limit to name when it is not stopped by one", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "One", link: "https://example.org/1" }]);
+
+    expect(await h.run()).toMatchObject({ status: "succeeded", stoppedBy: null });
   });
 });
