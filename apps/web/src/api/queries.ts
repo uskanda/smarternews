@@ -139,6 +139,21 @@ export function useArticleSearch(query: Omit<ArticleSearchQuery, "limit" | "curs
   });
 }
 
+/**
+ * The articles of a name found in articles, a page at a time. Kept under "articles", as search results are, and,
+ * like them, not fetched again by itself.
+ */
+export function useMentionArticles(name: string, enabled = true) {
+  const { api } = useApp();
+  return useInfiniteQuery({
+    queryKey: ["articles", "mention", name],
+    queryFn: ({ pageParam }) => api.mentionArticles({ name, limit: PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+  });
+}
+
 export function useArticle(id: number | null) {
   const { api } = useApp();
   return useQuery({

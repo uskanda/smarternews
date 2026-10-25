@@ -23,6 +23,7 @@ import {
 } from "../db/candidates.ts";
 import { getCategory } from "../db/categories.ts";
 import { transaction, type Database } from "../db/database.ts";
+import { replaceMentions } from "../db/mentions.ts";
 import { finishRun, getRun, startRun } from "../db/runs.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyInterpretation, listTopics } from "../db/topics.ts";
@@ -448,9 +449,12 @@ async function writeStories(ctx: Context): Promise<void> {
     };
     const candidateIds = story.candidates.map((candidate) => candidate.id);
     const groupKey = `${ctx.run.id}:${storyNumber}`;
+    // Names that are not valid are left out: a new article has none, and a rewritten one keeps its earlier names.
+    const mentions = output.mentions;
     transaction(ctx.db, () => {
       if (story.mode === "update" && story.existing) {
         reviseArticle(ctx.db, story.existing.id, content);
+        if (mentions !== null) replaceMentions(ctx.db, story.existing.id, mentions);
         acceptCandidates(ctx.db, candidateIds, story.existing.id, groupKey, ctx.run.id);
         return;
       }
@@ -460,6 +464,7 @@ async function writeStories(ctx: Context): Promise<void> {
         kind: ctx.category.kind,
         previousArticleId: story.mode === "follow" ? (story.existing?.id ?? null) : null,
       });
+      if (mentions !== null) replaceMentions(ctx.db, articleId, mentions);
       acceptCandidates(ctx.db, candidateIds, articleId, groupKey, ctx.run.id);
     });
     if (story.mode === "update") ctx.stats.updated += 1;

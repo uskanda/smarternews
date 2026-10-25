@@ -480,3 +480,123 @@ describe("how up to date a feed is, and its stats", () => {
     expect((await (await s.get("/api/v1/providers")).json()).llmCallsToday).toBe(0);
   });
 });
+
+describe("web feeds", () => {
+  const PAGE = "https://town.example.org/news";
+  const ROBOTS = "https://town.example.org/robots.txt";
+  const posts = (keys: string[]) =>
+    `<html><head><title>Town News</title></head><body><nav><a href="/">Home</a></nav><ul class="posts">${keys
+      .map((key) => `<li class="post"><a href="/news/${key}">The story called ${key}</a><time datetime="2026-03-01T09:00:00Z">1 March</time></li>`)
+      .join("")}</ul></body></html>`;
+  const htmlAnswer = (body: string) => () => new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
+  const proposal = { candidates: [{ item: "ul.posts > li.post", title: null, link: null, date: "time" }] };
+  const pageRequests = (s: ReturnType<typeof testServer>) => s.site.requests.filter((request) => request.url.startsWith(PAGE));
+
+  it("answers candidates with their previews and whether the model proposed them", async () => {
+    const s = testServer(undefined, { proposeSelectors: () => proposal });
+    s.site.set(PAGE, htmlAnswer(posts(["a", "b", "c"])));
+
+    const response = await s.post("/api/v1/feeds/page/candidates", { url: PAGE });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      candidates: [
+        {
+          selectors: { item: "ul.posts > li.post", date: "time" },
+          preview: {
+            count: 3,
+            items: ["a", "b", "c"].map((key) => ({ title: `The story called ${key}`, url: `https://town.example.org/news/${key}`, publishedAt: "2026-03-01T09:00:00.000Z" })),
+          },
+        },
+      ],
+      usedModel: true,
+      fallback: null,
+    });
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([]);
+  });
+
+  it("answers 200 with guessed candidates on a day that reached the limit", async () => {
+    const s = testServer(undefined, { proposeSelectors: () => proposal, selectorProposalsPerDay: 0 });
+    s.site.set(PAGE, htmlAnswer(posts(["a", "b", "c"])));
+    const response = await s.post("/api/v1/feeds/page/candidates", { url: PAGE });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ usedModel: false, fallback: "limit" });
+    expect(body.candidates[0].selectors).toEqual({ item: "ul.posts > li.post", date: "time" });
+    expect(s.llmRequests.proposeSelectors).toHaveLength(0);
+  });
+
+  it("refuses a page robots.txt forbids, and one that answers 404, with the reason", async () => {
+    const s = testServer(undefined, { proposeSelectors: () => proposal });
+    s.site.set(ROBOTS, () => new Response("User-agent: *\nDisallow: /news", { status: 200 }));
+    const forbidden = await s.post("/api/v1/feeds/page/candidates", { url: PAGE });
+    expect(forbidden.status).toBe(400);
+    expect((await forbidden.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/robots\.txt forbids/) }]);
+    expect(pageRequests(s)).toEqual([]);
+
+    const missing = await s.post("/api/v1/feeds/page/candidates", { url: "https://other.example.org/none" });
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error.message).toMatch(/HTTP status 404/);
+    expect(s.llmRequests.proposeSelectors).toHaveLength(0);
+  });
+
+  it("previews a set of selectors, and refuses one that is not a CSS selector without a request", async () => {
+    const s = testServer();
+    s.site.set(PAGE, htmlAnswer(posts(["a", "b"])));
+    const preview = await s.post("/api/v1/feeds/page/preview", { url: PAGE, selectors: { item: "li.post" } });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({ count: 2, items: [{ title: "The story called a" }, { title: "The story called b" }] });
+
+    const before = s.site.requests.length;
+    const invalid = await s.post("/api/v1/feeds/page/preview", { url: PAGE, selectors: { item: "div[" } });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).error.fields).toEqual([{ path: "selectors.item", message: "not a CSS selector" }]);
+    expect(s.site.requests.length).toBe(before);
+  });
+
+  it("registers a web feed, and lists its format and selectors next to a feed without them", async () => {
+    const s = testServer();
+    const category = s.category("Town");
+    s.site.set(PAGE, htmlAnswer(posts(["a", "b"])));
+    s.site.set(FEED, rss("Example Blog", [{ key: "x" }]));
+
+    const created = await s.post("/api/v1/feeds", { url: PAGE, format: "page", selectors: { item: "li.post", date: "time" }, categoryId: category.id, fetchFullContent: true });
+    expect(created.status).toBe(201);
+    await s.post("/api/v1/feeds", { url: FEED });
+
+    const list = await (await s.get("/api/v1/feeds")).json();
+    expect(list).toEqual([
+      expect.objectContaining({ url: PAGE, title: "Town News", format: "page", selectors: { item: "li.post", date: "time" }, categoryId: category.id, fetchFullContent: true, articleCount: 2 }),
+      expect.objectContaining({ url: FEED, format: "feed", selectors: null }),
+    ]);
+    const detail = await (await s.get(`/api/v1/feeds/${(await created.json()).id}`)).json();
+    expect(detail).toMatchObject({ format: "page", selectors: { item: "li.post", date: "time" } });
+  });
+
+  it("refuses selectors for an Atom feed with 400", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "x" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const response = await s.patch(`/api/v1/feeds/${feed.id}`, { selectors: { item: "li" } });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([{ path: "selectors", message: expect.stringMatching(/has no selectors/) }]);
+    expect((await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).selectors).toBeNull();
+  });
+
+  it("takes new selectors from the next fetch on, and keeps the articles stored before", async () => {
+    const s = testServer();
+    s.site.set(PAGE, htmlAnswer(posts(["a", "b"])));
+    const feed = await (await s.post("/api/v1/feeds", { url: PAGE, format: "page", selectors: { item: "li.post" } })).json();
+
+    // The page is rebuilt: the old selectors find nothing, and the fetch fails.
+    s.site.set(PAGE, htmlAnswer('<html><head><title>Town News</title></head><body><div class="cards"><a class="card" href="/news/c">The story called c</a><a class="card" href="/news/a">The story called a</a></div></body></html>'));
+    s.clock.advance(HOUR);
+    const failed = await (await s.post(`/api/v1/feeds/${feed.id}/fetch`)).json();
+    expect(failed).toMatchObject({ status: "failed", error: "no element matches the item selector", feed: { lastError: "no element matches the item selector" } });
+
+    const changed = await s.patch(`/api/v1/feeds/${feed.id}`, { selectors: { item: "div.cards > a.card" } });
+    expect(changed.status).toBe(200);
+    expect((await changed.json()).selectors).toEqual({ item: "div.cards > a.card" });
+    const fetched = await (await s.post(`/api/v1/feeds/${feed.id}/fetch`)).json();
+    expect(fetched).toMatchObject({ status: "updated", created: 1, feed: { lastError: null, articleCount: 3 } });
+  });
+});

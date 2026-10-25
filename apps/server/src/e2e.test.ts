@@ -37,6 +37,23 @@ process.stdin.on("end", () => {
 });
 `;
 
+// A stand-in for the claude command that only proposes selectors, and writes a line to calls.log next to
+// itself for every call.
+const FAKE_PROPOSER = `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+const { join } = require("node:path");
+let stdin = "";
+process.stdin.on("data", (chunk) => (stdin += chunk));
+process.stdin.on("end", () => {
+  appendFileSync(join(__dirname, "calls.log"), stdin.split("\\n")[0] + "\\n");
+  const output = { candidates: [{ item: "ul.town > li", title: null, link: null, date: "time" }] };
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: output }));
+});
+`;
+
+/** The stories the page of the town lists, newest first. */
+let townStories = ["harbor", "library"];
+
 let site: ReturnType<typeof createServer>;
 let siteUrl = "";
 const requests: Array<{ path: string; userAgent: string }> = [];
@@ -55,6 +72,13 @@ beforeAll(async () => {
           ],
           new Date(Date.now() - 3_600_000).toISOString(),
         ),
+      );
+    } else if (req.url === "/town") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        `<html><head><title>Town Notices</title></head><body><nav><a href="/">Home</a></nav><ul class="town">${townStories
+          .map((story) => `<li><a href="/town/${story}">The notice about the ${story}</a><time datetime="${new Date(Date.now() - 3_600_000).toISOString()}">an hour ago</time></li>`)
+          .join("")}</ul></body></html>`,
       );
     } else if (req.url === "/story") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -144,5 +168,69 @@ categories:
     // The crawler named itself to the site, and did not fetch the page of the rejected candidate.
     expect(requests.every((request) => request.userAgent.startsWith("smarternews/"))).toBe(true);
     expect(requests.map((request) => request.path)).not.toContain("/ad");
+  });
+});
+
+describe("a web feed from its candidates to its articles", () => {
+  it("proposes selectors with the model once, subscribes, and takes the next article out of the page, in the settings file but not in OPML", async () => {
+    const root = mkdtempSync(join(tmpdir(), "sn-e2e-page-"));
+    const env = { SMARTERNEWS_CONFIG_DIR: join(root, "config"), SMARTERNEWS_DATA_DIR: join(root, "data") };
+    mkdirSync(env.SMARTERNEWS_CONFIG_DIR, { recursive: true });
+    const claude = join(root, "claude");
+    writeFileSync(claude, FAKE_PROPOSER);
+    chmodSync(claude, 0o755);
+    writeFileSync(
+      join(env.SMARTERNEWS_CONFIG_DIR, "config.yaml"),
+      `providers:\n  fake: { adapter: claude-cli, model: test, command: ${JSON.stringify(claude)} }\nfetch: { hostIntervalMs: 0, allowPrivateHosts: ["127.0.0.1"] }\n`,
+    );
+    const calls = () => {
+      try {
+        return readFileSync(join(root, "calls.log"), "utf8").split("\n").filter(Boolean);
+      } catch {
+        return [];
+      }
+    };
+
+    const runtime = createRuntime({ env, home: root });
+    const server = await startServer(runtime, { hostname: "127.0.0.1", port: 0 });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const apiToken = readFileSync(join(env.SMARTERNEWS_CONFIG_DIR, "api-token"), "utf8").trim();
+      const call = async (method: string, path: string, body?: unknown) => {
+        const response = await fetch(`${base}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${apiToken}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        return { status: response.status, text: await response.text() };
+      };
+      const page = `${siteUrl}/town`;
+
+      const candidates = JSON.parse((await call("POST", "/api/v1/feeds/page/candidates", { url: page })).text);
+      expect(candidates).toMatchObject({ usedModel: true, fallback: null, candidates: [{ selectors: { item: "ul.town > li", date: "time" }, preview: { count: 2 } }] });
+      expect(calls()).toEqual([expect.stringMatching(/^Task: a web page lists articles/)]);
+
+      const created = await call("POST", "/api/v1/feeds", { url: page, format: "page", selectors: candidates.candidates[0].selectors });
+      expect(created.status).toBe(201);
+      const feed = JSON.parse(created.text);
+      expect(feed).toMatchObject({ title: "Town Notices", format: "page", articleCount: 2 });
+
+      townStories = ["market", "harbor", "library"];
+      const fetched = JSON.parse((await call("POST", `/api/v1/feeds/${feed.id}/fetch`)).text);
+      expect(fetched).toMatchObject({ status: "updated", created: 1 });
+      const articles = JSON.parse((await call("GET", `/api/v1/articles?feed=${feed.id}`)).text) as { items: Array<{ title: string }> };
+      expect(articles.items.map((item) => item.title)).toEqual(["The notice about the market", "The notice about the harbor", "The notice about the library"]);
+
+      expect((await call("GET", "/api/v1/feeds/opml")).text).not.toContain("/town");
+      const settings = (await call("GET", "/api/v1/settings/export")).text;
+      expect(settings).toContain(`url: ${page}`);
+      expect(settings).toMatch(/selectors:\s+item: ul.town > li\s+date: time/);
+
+      // Only the request for candidates called the model.
+      expect(calls()).toHaveLength(1);
+    } finally {
+      await server.close();
+      runtime.close();
+    }
   });
 });

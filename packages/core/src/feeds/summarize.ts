@@ -3,7 +3,8 @@
 import type { AutoSummarySource } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { articleForFullContent, nextArticleToSummarize, recordSummaryFailure, saveAutoSummary, skipAutoSummary } from "../db/articles.ts";
-import type { Database } from "../db/database.ts";
+import { transaction, type Database } from "../db/database.ts";
+import { replaceMentions } from "../db/mentions.ts";
 import { getSettings } from "../db/settings.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
@@ -84,7 +85,11 @@ export async function summarizeNext(deps: SummaryDeps, pages: PageFetcher): Prom
       { outputLanguage: getSettings(db).outputLanguage, title: article.title, text: input.text },
       { runId: null, calls: 0 },
     );
-    saveAutoSummary(db, article.id, { text: output.summary, source: input.source, now: clock().toISOString() });
+    // The names come with the summary, in the same transaction. Names that are not valid are left out.
+    transaction(db, () => {
+      saveAutoSummary(db, article.id, { text: output.summary, source: input.source, now: clock().toISOString() });
+      if (output.mentions !== null) replaceMentions(db, article.id, output.mentions);
+    });
     return "summarized";
   } catch (error) {
     // The allowance ran out between the question above and the call, or within the call's second attempt.

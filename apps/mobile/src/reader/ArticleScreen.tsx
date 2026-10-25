@@ -12,7 +12,7 @@ import { IconButton } from "../ui/controls";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { Txt } from "../ui/Txt";
 import { ArticlePage } from "./ArticlePage";
-import { listParams, listRefOf, SEARCH_KEY, useReaderList } from "./useReaderList";
+import { listParams, listRefOf, MENTION_KEY, SEARCH_KEY, useReaderList } from "./useReaderList";
 
 /**
  * The article the user opened, as one page among the articles of the list it was opened from: swiping left or
@@ -23,12 +23,18 @@ export function ArticleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string }>();
+  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; name?: string }>();
   const openedId = Number(params.id);
   // Opened from search results, the pages follow the results and mark the words of the search.
   const ref = listRefOf(params.list ?? "unread", params);
   const reader = useReaderList(ref);
-  const back = useBack(ref.key === SEARCH_KEY ? { pathname: "/search", params: listParams(ref) } : { pathname: "/list/[key]", params: { key: ref.key, ...listParams(ref) } });
+  const back = useBack(
+    ref.key === SEARCH_KEY
+      ? { pathname: "/search", params: listParams(ref) }
+      : ref.key === MENTION_KEY
+        ? { pathname: "/mention", params: listParams(ref) }
+        : { pathname: "/list/[key]", params: { key: ref.key, ...listParams(ref) } },
+  );
 
   // The pages keep the order the list had when the article was opened. A refresh in the background must not
   // move what the user is reading.
@@ -109,6 +115,8 @@ export function ArticleScreen() {
     const list = { key: listKey({ type: "feed", feedId: copy.feedId }), includeRead: true, importantOnly: false };
     latest.current.router.push({ pathname: "/article/[id]", params: { id: String(copy.articleId), list: list.key, ...listParams(list) } });
   }, []);
+  // The articles of a name open over this article, which back returns to.
+  const openMention = useCallback((name: string) => latest.current.router.push({ pathname: "/mention", params: { name } }), []);
   const sourceName = reader.sourceName;
 
   return (
@@ -171,6 +179,7 @@ export function ArticleScreen() {
               onRead={onRead}
               onOpenArticle={openArticle}
               onOpenCopy={openCopy}
+              onOpenMention={openMention}
               fullContentFetching={fullContent.isFetching(id)}
               fullContentRequestFailed={fullContent.requestFailed(id)}
               deliveredShown={deliveredShown === id}

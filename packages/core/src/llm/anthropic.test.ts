@@ -219,9 +219,10 @@ describe("toApiSchema", () => {
     return found;
   }
 
-  it("leaves none of the constraints the API refuses in the schemas of the seven tasks", () => {
-    for (const definition of Object.values(tasks)) {
-      const converted = toApiSchema(z.toJSONSchema(definition.output) as Record<string, unknown>);
+  it("leaves none of the constraints the API refuses in the schemas of the tasks", () => {
+    // The runner sends the wire schema where a task has one: an output that transforms has no JSON Schema.
+    for (const definition of Object.values(tasks) as Array<{ output: z.ZodType; wire?: z.ZodType }>) {
+      const converted = toApiSchema(z.toJSONSchema(definition.wire ?? definition.output) as Record<string, unknown>);
       const found = keys(converted);
       expect(UNSUPPORTED.filter((key) => found.has(key))).toEqual([]);
     }

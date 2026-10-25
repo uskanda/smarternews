@@ -74,7 +74,7 @@ describe("the description of the providers", () => {
     const providers = buildProviders(parseConfig("providers:\n  fast: { adapter: anthropic, model: claude-haiku-5-5 }\n  cli: { adapter: claude-cli, model: sonnet }\ntasks: { default: cli }\n"), {
       ANTHROPIC_API_KEY: "k",
     });
-    const assignment = { interpret: "cli", search: "cli", judge: "fast", cluster: "cli", write: "cli", summarize: "fast", translate: "fast" } as const;
+    const assignment = { interpret: "cli", search: "cli", judge: "fast", cluster: "cli", write: "cli", summarize: "fast", translate: "fast", proposeSelectors: "cli" } as const;
     const runner = new TaskRunner({
       db: createTestDb(),
       clock: fakeClock("2026-10-25T00:00:00.000Z"),

@@ -205,6 +205,26 @@
   }
 
   /* The badge of a term group at the end of a list row's details: its name on the fill, a line on the left. */
+  /* A name found in the article: a link to the list of its articles. A frame on all four sides and no fill, so
+     that it is not taken for a term badge, which has a coloured fill and a line on its left. */
+  .mention-link {
+    @apply type-body-md;
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border: 1px solid var(--color-outline-strong);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    color: var(--color-primary);
+    text-underline-offset: 4px;
+  }
+
+  .mention-link:hover {
+    text-decoration-line: underline;
+  }
+
   .term-badge {
     @apply type-label-sm;
     min-width: 0;

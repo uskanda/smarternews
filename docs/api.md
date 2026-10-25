@@ -68,7 +68,7 @@ Settings fields:
 | `removeDuplicates` | `true` hides a feed article that another feed delivered first from the lists over everything and over categories. `true` by default; see [Duplicates across feeds](#duplicates-across-feeds) |
 | `staleFeedDays` | After how many days without a new item an enabled subscribed feed counts as stale, a whole number from 1 to 365. `60` by default; see [Stale feeds and feed stats](#stale-feeds-and-feed-stats) |
 
-Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
+Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
 `listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated` or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest` or `oldest`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
@@ -126,6 +126,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/:id/full-content` | Fetch the full content of a feed article from its page, and answer when that is done |
 | `GET /api/v1/translation` | How much the translation API was used this month |
 | `GET /api/v1/annotations` | The reader's highlights and notes on every article, the last made first: see [Annotations](#annotations) |
+| `GET /api/v1/mentions/articles` | The articles that mention a name, newest first: see [Mentions](#mentions) |
 
 Query parameters of the list:
 
@@ -230,6 +231,7 @@ The detail adds these:
 | `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
 | `annotations` | The reader's annotations on the article: `note`, the note on the whole article or `null`, and `highlights`, the oldest first. See [Annotations](#annotations). The list does not have this field |
+| `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
 
 ### Open times
 
@@ -243,7 +245,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 
 ### Search
 
-`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs or the targets of links. Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
+`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs, the targets of links or the names found in articles (see [Mentions](#mentions)). Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
 
 | Parameter | Effect |
 |---|---|
@@ -265,6 +267,22 @@ curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "q=battery factory
 The search index is kept by triggers that call a function the server registers when it opens the database. A connection without that function, such as the `sqlite3` command, can read the database but cannot insert, change or delete articles.
 
 Generated articles without a star or an annotation are deleted 180 days after their last update, feed articles without a star or an annotation 90 days after the time they sort by. Starred and annotated articles are kept. An article whose last annotation is removed is deleted at the next purge once its time has passed.
+
+## Mentions
+
+The names of people, organizations, products and places that an article mentions, at most ten an article. The model finds them in the call that writes a generated article, and in the call that summarises a feed article; no call is made only for names. So a feed article has names only when its feed has automatic summaries on and its summary has been written. A follow-up that rewrites a generated article replaces its names. A feed that rewrites its item, or stops summarising, leaves the names as they are. Articles stored before the server kept names have none. When the names of an answer are not valid, the article or summary is stored without them, and a rewritten article keeps its earlier names.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/mentions/articles` | The articles that have the name `name` among their names. `limit` (1 to 200, default 50) and `cursor`, as in the article list |
+
+Names are compared in a normalized form: full-width and half-width alike, upper and lower case alike, without the spaces around them, and with a run of spaces taken as one. Nothing else is taken as the same name: an abbreviation, another spelling or a part of a name is another name. The kind does not count, so the organization `Apple` and the product `Apple` are one name.
+
+The list holds generated and feed articles alike, read ones and events that have ended included, newest first by last update. A feed article that a filter hides is left out, unless it has a star or an annotation, and so is a hidden duplicate, as in a search. The response has the shape of the article list: `items`, `nextCursor` and `asOf`. A name no article has gets an empty list. A name that is empty or only spaces, or longer than 100 characters once normalized, gets 400 with the field `name`. The list calls neither a model nor the translation API.
+
+```bash
+curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "name=Bank of Japan" "$API/api/v1/mentions/articles?limit=20"
+```
 
 ## Annotations
 
@@ -318,8 +336,10 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `GET /api/v1/feeds` | List the subscribed feeds with their fetch state |
 | `POST /api/v1/feeds` | Subscribe to a feed (status 201) |
 | `POST /api/v1/feeds/discover` | Find the feeds a page points to, without subscribing |
+| `POST /api/v1/feeds/page/candidates` | Propose selectors for a page without a feed, each with a preview. See [Web feeds](#web-feeds) |
+| `POST /api/v1/feeds/page/preview` | Show what a set of selectors takes out of a page |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent` |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, and `selectors` of a web feed |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -356,6 +376,8 @@ Fields of a feed:
 | Field | Content |
 |---|---|
 | `url`, `title`, `siteUrl` | The feed, its name, and the page it belongs to |
+| `format` | `feed` for RSS, Atom and RDF; `page` for a [web feed](#web-feeds). It never changes |
+| `selectors` | The selectors of a web feed; `null` for a feed |
 | `categoryId` | The category, or `null` |
 | `intervalMinutes` | The feed's own interval, or `null` for the base interval |
 | `enabled` | False while the feed is paused: it is not fetched, and its articles stay |
@@ -375,7 +397,30 @@ A fetch that fails is recorded on the feed and not in the run history. After eac
 
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
-The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders.
+The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders. Web feeds are not in it: OPML has no way to hold their selectors. The settings file has them.
+
+### Web feeds
+
+A web feed reads a page that has no feed. The server fetches the page and takes its articles out with CSS selectors: `item` selects every element that holds one article, and the optional `title`, `link` and `date` select the parts of an article inside it. Without `title` the text of the link is the title; without `link` the item's first link is the link, or the item itself when it is a link. An item without a link or a title is left out. Links are made absolute against the page. `date` reads the `datetime` attribute, or else the text: ISO 8601, `2026-10-20`, `2026/10/20`, `2026.10.20` and `2026年10月20日`, each with a time after it or not. A time without an offset is read in `timeZone` of the settings, and an article without a date sorts by the fetch that found it. Each selector is at most 300 characters; one that is not a CSS selector is refused with status 400 and the name of the field, before any request.
+
+A web feed's articles hold the title, the link and the date only. The text of the page is not stored; switch `fetchFullContent` on to have the server fetch each article's page, as for any feed. The page is fetched by the rules of full content: robots.txt is obeyed, and a page it forbids is not requested. No condition is sent, and no script of the page runs, so a page that draws its list with a script has no articles to take out. Fetching, taking out and storing call no model.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://example.org/news"}' "$API/api/v1/feeds/page/candidates"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://example.org/news","selectors":{"item":"ul.news > li","date":"time"}}' "$API/api/v1/feeds/page/preview"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://example.org/news","format":"page","selectors":{"item":"ul.news > li","date":"time"},"fetchFullContent":true}' "$API/api/v1/feeds"
+```
+
+`candidates` takes `{"url": ...}` and answers `candidates`, `usedModel` and `fallback`. Each candidate has `selectors` and a `preview`, and takes at least one article out of the page. The model's `proposeSelectors` task is asked once, the only call of a model for web feeds; the answer waits for it, up to `llm.timeoutMs`. On a day that reached `selectorProposalsPerDay` or `llmCallsPerDay`, when the task fails or runs out of time, and when none of its candidates takes an article out, the server guesses candidates from the parts of the page with many links. `usedModel` is then `false`, and `fallback` says why: `limit`, `failed` or `empty`. The list may be empty. None of this is an error. A page that cannot be fetched (robots.txt, an HTTP failure) answers 400 with the reason. Nothing is stored.
+
+`preview` takes `{"url": ..., "selectors": ...}` and answers `count`, the number of articles the selectors take out, and `items`, the first 10 with `title`, `url` and `publishedAt` (`null` without a date). It calls no model and stores nothing.
+
+Subscribing with `"format": "page"` needs `selectors`, and refuses a page from which they take no article. A feed without `format` is subscribed as before, and `selectors` without `"format": "page"` is refused. `PATCH` takes new `selectors` for a web feed; they apply from the next fetch, and the articles stored before stay. A feed refuses `selectors` with 400. `format` cannot be changed.
+
+A fetch whose page has no element for `item` fails with the reason `no element matches the item selector`. It stores nothing, keeps `lastSucceededAt` and `lastNewItemAt`, and doubles the wait before the next try like any failure; when this goes on past `staleFeedDays`, the feed is stale as well. The server never asks the model again by itself: ask for candidates once more and change the selectors.
 
 ### Stale feeds and feed stats
 
@@ -653,7 +698,7 @@ A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been q
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/providers"
 ```
 
-`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`, `billable`) and the provider assigned to each task. It also returns the model calls made today for runs (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
+`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`, `billable`) and the provider assigned to each task. It also returns the model calls made today for runs and proposals of selectors (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
 
 A provider is `billable` when calling it costs money: today that means the `anthropic` adapter. The server works out the cost of each call from the token counts the API reports and the unit prices of the model. `budget` gives what the current budget period has spent:
 

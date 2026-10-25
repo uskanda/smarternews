@@ -11,6 +11,7 @@ import { Badge } from "./ArticleRow";
 import { AnnotatedBody, ArticleNote } from "./annotations";
 import { Highlighted, highlight } from "./highlight";
 import { Markdown, type AnnotationMarks } from "./Markdown";
+import { Mentions } from "./Mentions";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
   const theme = useTheme();
@@ -93,6 +94,8 @@ export interface ArticlePageProps {
   onOpenArticle: (id: number) => void;
   /** Opens the copy of the article that another feed delivered, with that feed's list behind it. */
   onOpenCopy: (copy: Article["otherFeeds"][number]) => void;
+  /** Opens the list of the articles of a name found in the article. */
+  onOpenMention: (name: string) => void;
   /** The full content of this article is being fetched. */
   fullContentFetching: boolean;
   /** The last request for the full content of this article got no answer. */
@@ -131,6 +134,7 @@ export const ArticlePage = memo(function ArticlePage({
   onRead,
   onOpenArticle,
   onOpenCopy,
+  onOpenMention,
   fullContentFetching,
   fullContentRequestFailed,
   deliveredShown,
@@ -327,6 +331,8 @@ export const ArticlePage = memo(function ArticlePage({
           )
         }
       />
+      {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
+      <Mentions mentions={article.mentions} onOpen={onOpenMention} />
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">

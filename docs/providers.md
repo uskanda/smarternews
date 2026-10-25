@@ -1,6 +1,6 @@
 # Model providers
 
-smarternews calls a language model for seven tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
+smarternews calls a language model for eight tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
 
 | Task | What the model does | When it runs |
 |---|---|---|
@@ -11,6 +11,7 @@ smarternews calls a language model for seven tasks. A provider is a model you co
 | `write` | Writes the article for one story | Once per story |
 | `summarize` | Summarises one article of a subscribed feed | Once per article of a feed that has summaries switched on |
 | `translate` | Translates the title and the content of one article of a subscribed feed | When an article of a feed that translates is opened and the translation API cannot be used; once per 8,000 characters |
+| `proposeSelectors` | Proposes CSS selectors that take the articles out of a page without a feed | When you ask for candidates while adding a web feed, or choose "候補を出し直す" while editing one |
 
 Providers and assignments live in `~/.config/smarternews/config.yaml`. The server reads the file at start-up and refuses to start when an assignment names a provider that is not configured. [examples/config.example.yaml](../examples/config.example.yaml) lists every key.
 
@@ -177,6 +178,19 @@ The server counts every character it sends, tags included, per month in the conf
 
 The `translate` task takes over when no key is set, when the month has reached its limit, and when the API fails. It runs only when a reader opens an article, never while feeds are fetched, so without a key the titles in the lists stay in the original language until an article is opened. Like `summarize`, it uses the provider named `fast` when there is one and `tasks` does not assign it. Its calls count towards `limits.llmCallsPerDay`. It receives numbered passages and must answer with the same numbers and the same count; an answer that does not, or that adds a link the passage does not have, is discarded and nothing is stored.
 
+## Selectors for web feeds
+
+A web feed is a page without a feed whose articles are taken out with CSS selectors. `proposeSelectors` reads the page once and proposes up to three sets of selectors. It runs only when you ask for candidates on the page of the subscribed feeds: never while a web feed is fetched, and never on its own when a page stops matching its selectors. It receives the page's URL and its HTML without scripts, styles and embeds, cut to the first 50,000 characters, and uses no tools.
+
+A task that is not listed under `tasks` uses `default`, with a second exception: `proposeSelectors` uses the provider named `smart` when there is one. It reads a long page and is asked for seldom. Without a provider of that name it uses `default`.
+
+`limits.selectorProposalsPerDay` (50 by default) bounds the proposals of one day. Each proposal also counts towards `limits.llmCallsPerDay`, whose default of 350 makes room for those 50. 0 switches proposals off. On a day that has reached either limit, and when the task fails, times out or proposes selectors that take no article out of the page, the server finds candidates by itself in the parts of the page with many links. The page says that the model was not used, and this is not an error.
+
+```yaml
+limits:
+  selectorProposalsPerDay: 50
+```
+
 ## Mixing providers
 
 Assignments are per task, so a cheap model can do the high-volume work. `judge` reads up to 30 short candidates per call and `cluster` reads headlines, while `write` produces the text you read. The default configuration therefore runs `judge` and `cluster` on `haiku` and the other tasks on `sonnet`.
@@ -185,7 +199,7 @@ Assignments are per task, so a cheap model can do the high-volume work. `judge` 
 
 The server validates every answer against the task's schema. An answer that does not match is requested once more with the same input. A second mismatch fails the task: nothing is stored, and the run history records the failure.
 
-A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, and `limits.summariesPerDay` those of summaries; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
+A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, and `limits.selectorProposalsPerDay` those of proposals of selectors; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
 
 `limits.runRetries` (2 by default, 0 to 3) is how often a scheduled run that ended as `failed` is tried again. Each retry is a run like any other, so it obeys `limits.llmCallsPerRun` and `limits.llmCallsPerDay`. While a provider stays down, a category therefore uses up to three runs' worth of calls for one scheduled time. A run that stopped at a limit is not retried.
 

@@ -17,6 +17,7 @@ describe("parseConfig", () => {
       write: "smart",
       summarize: "fast",
       translate: "fast",
+      proposeSelectors: "smart",
     });
   });
 
@@ -27,7 +28,16 @@ providers:
   b: { adapter: openai-compatible, baseUrl: "http://127.0.0.1:1/v1", model: m }
 tasks: { default: a, judge: b }
 `);
-    expect(resolveAssignment(config)).toEqual({ interpret: "a", search: "a", judge: "b", cluster: "a", write: "a", summarize: "a", translate: "a" });
+    expect(resolveAssignment(config)).toEqual({
+      interpret: "a",
+      search: "a",
+      judge: "b",
+      cluster: "a",
+      write: "a",
+      summarize: "a",
+      translate: "a",
+      proposeSelectors: "a",
+    });
   });
 
   it("assigns every task to the only provider when no tasks are given", () => {
@@ -63,8 +73,9 @@ providers:
     expect(config.listen).toBe("0.0.0.0:9000");
     expect(config.limits).toEqual({
       llmCallsPerRun: 40,
-      llmCallsPerDay: 300,
+      llmCallsPerDay: 350,
       summariesPerDay: 100,
+      selectorProposalsPerDay: 50,
       judgeBatchSize: 30,
       pagesPerRun: 20,
       runRetries: 2,
@@ -198,6 +209,28 @@ describe("the number of retries of a failed run", () => {
     expect(() => parseConfig("limits:\n  runRetries: 4\n")).toThrow(/limits\.runRetries/);
     expect(() => parseConfig("limits:\n  runRetries: -1\n")).toThrow(/limits\.runRetries/);
     expect(() => parseConfig("limits:\n  runRetries: 1.5\n")).toThrow(/limits\.runRetries/);
+  });
+});
+
+describe("the task that proposes selectors and its limit", () => {
+  const providers = (names: string[]) => `providers:\n${names.map((name) => `  ${name}: { adapter: claude-cli, model: m }\n`).join("")}`;
+
+  it("goes to smart when nothing is assigned, while judge and cluster stay on fast", () => {
+    expect(resolveAssignment(parseConfig(null))).toMatchObject({ proposeSelectors: "smart", judge: "fast", cluster: "fast" });
+    const config = parseConfig(`${providers(["fast", "smart"])}tasks:\n  default: fast\n`);
+    expect(resolveAssignment(config)).toMatchObject({ proposeSelectors: "smart", write: "fast" });
+  });
+
+  it("goes to the default provider when none is named smart, and to the assigned one", () => {
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`)).proposeSelectors).toBe("big");
+    const config = parseConfig(`${providers(["big", "smart", "local"])}tasks:\n  default: big\n  proposeSelectors: local\n`);
+    expect(resolveAssignment(config).proposeSelectors).toBe("local");
+  });
+
+  it("allows 50 proposals and 350 calls a day unless the file says otherwise, and 0 proposals", () => {
+    expect(parseConfig(null).limits).toMatchObject({ selectorProposalsPerDay: 50, llmCallsPerDay: 350 });
+    expect(parseConfig("limits:\n  selectorProposalsPerDay: 0\n").limits.selectorProposalsPerDay).toBe(0);
+    expect(() => parseConfig("limits:\n  selectorProposalsPerDay: -1\n")).toThrow(/limits\.selectorProposalsPerDay/);
   });
 });
 

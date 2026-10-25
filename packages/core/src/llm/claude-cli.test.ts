@@ -3,6 +3,35 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createClaudeCliAdapter } from "./claude-cli.ts";
+import { z } from "zod";
+import type { TaskName } from "../api.ts";
+import { createTestDb, fakeClock } from "../testing/db.ts";
+import type { LlmAdapter } from "./adapter.ts";
+import { TaskRunner } from "./runner.ts";
+import { TASK_NAMES, tasks } from "./tasks.ts";
+
+/** A task runner that sends every task to the adapter under test. */
+function runnerWith(adapter: LlmAdapter): TaskRunner {
+  return new TaskRunner({
+    db: createTestDb(),
+    clock: fakeClock("2026-03-01T12:00:00.000Z"),
+    providers: new Map([["p", { name: "p", adapterKind: "test", model: "m", pricing: null, adapter }]]),
+    assignment: Object.fromEntries(TASK_NAMES.map((task) => [task, "p"])) as Record<TaskName, string>,
+    limits: { llmCallsPerRun: 40, llmCallsPerDay: 300 },
+    timeouts: { defaultMs: 5000, searchMs: 5000 },
+    timeZone: () => "UTC",
+  });
+}
+
+const writeInput = {
+  kind: "news" as const,
+  outputLanguage: "ja",
+  readerInfo: "",
+  now: "2026-03-01T06:00:00.000Z",
+  timeZone: "UTC",
+  sources: [{ title: "t", siteName: "s", url: "https://example.org/a", publishedAt: null, text: "text" }],
+  existingArticle: null,
+};
 
 // A stand-in for the claude command: it records how it was started and prints a canned answer.
 const FAKE = `#!/usr/bin/env node
@@ -129,5 +158,19 @@ describe("the claude command adapter", () => {
 
   it("says that it can search", () => {
     expect(fake({}).adapter.capabilities.webSearch).toBe(true);
+  });
+});
+
+describe("the claude command adapter under the task runner", () => {
+  it("receives the schema made from the wire schema of the write task, with the form of the names", async () => {
+    const mentions = [{ name: "日本銀行", kind: "organization" }];
+    const answer = { title: "t", summary: "s", body: "b", unconfirmed: false, impact: null, event: null, mentions };
+    const { adapter, readLog } = fake({ FAKE_OUTPUT: success(answer) });
+    const runner = runnerWith(adapter);
+
+    await expect(runner.run("write", writeInput, { runId: null, calls: 0 })).resolves.toEqual(answer);
+    const { $schema: _dialect, ...wire } = z.toJSONSchema(tasks.write.wire!) as Record<string, unknown>;
+    expect(JSON.parse(valuesOf(readLog().argv, "--json-schema")[0]!)).toEqual(wire);
+    expect(JSON.stringify(wire)).toContain('"enum":["person","organization","product","place"]');
   });
 });

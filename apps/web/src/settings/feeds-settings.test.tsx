@@ -778,3 +778,168 @@ describe("stale feeds and the numbers of a feed", () => {
     expect(row).toHaveTextContent("直近30日に2件");
   });
 });
+
+describe("subscribing to a page without a feed", () => {
+  const PAGE = "https://town.example.org/news";
+  const listing = (keys: string[], extra = "") =>
+    () =>
+      new Response(
+        `<html><head><title>Town News</title></head><body><ul class="posts">${keys
+          .map((key) => `<li class="post"><a href="/news/${key}">Story ${key}</a>${key === "a" ? '<time datetime="2026-03-01T09:00:00Z">1 March</time>' : ""}</li>`)
+          .join("")}</ul>${extra}</body></html>`,
+        { headers: { "content-type": "text/html" } },
+      );
+  const twoCandidates = () => ({
+    candidates: [
+      { item: "ul.posts > li.post", title: null, link: null, date: "time" },
+      { item: "li.post", title: null, link: null, date: null },
+    ],
+  });
+  const NOTE = /LLMを使わずにページの作りから候補を推定しました/;
+
+  async function offerPage(server: TestServer) {
+    const view = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("購読フィードの追加");
+    await view.user.type(within(form).getByLabelText("フィードまたはサイトのURL"), PAGE);
+    await view.user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await within(form).findByRole("button", { name: "このページを購読する" });
+    return { ...view, form };
+  }
+
+  it("offers the page only after no feed was found, asks for nothing until it is chosen, and subscribes with the second candidate", async () => {
+    const server = makeServer(undefined, { proposeSelectors: twoCandidates });
+    server.category("Town");
+    server.site.set(PAGE, listing(["a", "b", "c"]));
+    const { user, form, requests } = await offerPage(server);
+    expect(requests.some((request) => request.includes("/feeds/page/candidates"))).toBe(false);
+    expect(server.llmRequests.proposeSelectors).toHaveLength(0);
+
+    await user.click(within(form).getByRole("button", { name: "このページを購読する" }));
+    const choices = await within(form).findByRole("group", { name: /候補が2つあります/ });
+    expect(within(form).queryByText(NOTE)).not.toBeInTheDocument();
+    expect(within(choices).getAllByText("3件の記事を抜き出せます")).toHaveLength(2);
+    expect(within(choices).getAllByText("Story a")).toHaveLength(2);
+    expect(within(choices).getAllByText(/日時なし/).length).toBeGreaterThan(0);
+    // The full content switch starts on, and says why beside it.
+    expect(within(form).getByRole("checkbox", { name: "全文を取得する" })).toBeChecked();
+    expect(within(form).getByText(/本文は、全文の取得で得ます/)).toBeInTheDocument();
+
+    await user.selectOptions(within(form).getByLabelText("カテゴリ"), "Town");
+    await user.click(within(choices).getByRole("radio", { name: /候補2/ }));
+    await user.click(within(form).getByRole("button", { name: "このページを追加" }));
+
+    await rowOf("Town News");
+    expect(listFeeds(server.db)).toMatchObject([{ url: PAGE, format: "page", selectors: { item: "li.post" }, fetchFullContent: true, articleCount: 3 }]);
+    expect(server.llmRequests.proposeSelectors).toHaveLength(1);
+  });
+
+  it("says in one sentence, not as an error, that the model was not used on a day that reached the limit", async () => {
+    const server = makeServer(undefined, { proposeSelectors: twoCandidates, selectorProposalsPerDay: 0 });
+    server.site.set(PAGE, listing(["a", "b", "c"]));
+    const { user, form } = await offerPage(server);
+    await user.click(within(form).getByRole("button", { name: "このページを購読する" }));
+
+    const note = await within(form).findByText(NOTE);
+    expect(note).toHaveTextContent("今日のLLMの呼び出しが上限に達したため");
+    expect(note).not.toHaveClass("text-error");
+    expect(note.closest("[role=alert]")).toBeNull();
+    expect(await within(form).findByRole("group", { name: /候補が1つあります/ })).toBeInTheDocument();
+    expect(server.llmRequests.proposeSelectors).toHaveLength(0);
+  });
+
+  it("offers fields when there is no candidate, and subscribes once a preview took articles out", async () => {
+    const server = makeServer(undefined, { selectorProposalsPerDay: 0 });
+    server.site.set(PAGE, () => new Response('<html><head><title>Town News</title></head><body><p><a href="/news/a">Story a</a></p></body></html>', { headers: { "content-type": "text/html" } }));
+    const { user, form } = await offerPage(server);
+    await user.click(within(form).getByRole("button", { name: "このページを購読する" }));
+    expect(await within(form).findByText(/候補は見つかりませんでした/)).toBeInTheDocument();
+    const add = within(form).getByRole("button", { name: "このページを追加" });
+    expect(add).toBeDisabled();
+
+    // Selectors that find nothing: the preview says so, and adding stays unavailable.
+    await user.type(within(form).getByLabelText("項目のセレクター"), "li.none");
+    await user.click(within(form).getByRole("button", { name: "見本を見る" }));
+    expect(await within(form).findByText("このセレクターでは記事を抜き出せませんでした。")).toBeInTheDocument();
+    expect(add).toBeDisabled();
+
+    await user.clear(within(form).getByLabelText("項目のセレクター"));
+    await user.type(within(form).getByLabelText("項目のセレクター"), "p");
+    await user.click(within(form).getByRole("button", { name: "見本を見る" }));
+    expect(await within(form).findByText("1件の記事を抜き出せます")).toBeInTheDocument();
+    await user.click(add);
+
+    await rowOf("Town News");
+    expect(listFeeds(server.db)).toMatchObject([{ url: PAGE, format: "page", selectors: { item: "p" } }]);
+  });
+
+  it("does not offer the page when a feed was found", async () => {
+    const server = makeServer();
+    server.site.set("https://blog.example.org/", page('<link rel="alternate" type="application/rss+xml" title="Posts" href="/feed.xml">'));
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("購読フィードの追加");
+    await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
+    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await rowOf("Example Blog");
+    expect(within(form).queryByRole("button", { name: "このページを購読する" })).not.toBeInTheDocument();
+  });
+});
+
+describe("editing a web feed", () => {
+  const PAGE = "https://town.example.org/news";
+  const answer = (body: string) => () => new Response(`<html><head><title>Town News</title></head><body>${body}</body></html>`, { headers: { "content-type": "text/html" } });
+
+  it("asks for candidates again, and saves the one chosen", async () => {
+    const server = makeServer(undefined, {
+      proposeSelectors: () => ({ candidates: [{ item: "div.cards > a.card", title: null, link: null, date: null }] }),
+    });
+    const feed = insertFeed(server.db, { url: PAGE, title: "Town News", format: "page", selectors: { item: "li.post" } }, server.clock);
+    recordFetchFailure(server.db, feed.id, { now: "2026-03-01T11:00:00.000Z", error: "no element matches the item selector" });
+    server.site.set(PAGE, answer('<div class="cards"><a class="card" href="/news/x">Story x</a><a class="card" href="/news/y">Story y</a></div>'));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Town News");
+    expect(row).toHaveTextContent("理由: ページに記事が見つかりませんでした");
+    await user.click(within(row).getByRole("button", { name: "Town Newsを編集" }));
+    await user.click(within(row).getByRole("button", { name: "候補を出し直す" }));
+    const choices = await within(row).findByRole("group", { name: /候補が1つあります/ });
+    expect(within(choices).getByText("2件の記事を抜き出せます")).toBeInTheDocument();
+    await user.click(within(choices).getByRole("radio", { name: /候補1/ }));
+    expect(within(row).getByLabelText("項目のセレクター")).toHaveValue("div.cards > a.card");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).selectors).toEqual({ item: "div.cards > a.card" });
+  });
+
+  it("adds a date selector after trying it on the page", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: PAGE, title: "Town News", format: "page", selectors: { item: "li.post" } }, server.clock);
+    server.site.set(PAGE, answer('<ul><li class="post"><a href="/news/a">Story a</a><time datetime="2026-03-01T09:00:00Z">x</time></li></ul>'));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Town News");
+    await user.click(within(row).getByRole("button", { name: "Town Newsを編集" }));
+    expect(within(row).getByLabelText("項目のセレクター")).toHaveValue("li.post");
+    await user.type(within(row).getByLabelText("日時のセレクター"), "time");
+    await user.click(within(row).getByRole("button", { name: "見本を見る" }));
+    expect(await within(row).findByText("1件の記事を抜き出せます")).toBeInTheDocument();
+    expect(within(row).getByText(/3月1日 09:00/)).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).selectors).toEqual({ item: "li.post", date: "time" });
+  });
+
+  it("shows neither the selectors nor the candidates for an Atom feed", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    await within(row).findByLabelText("名前");
+    expect(within(row).queryByLabelText("項目のセレクター")).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "見本を見る" })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "候補を出し直す" })).not.toBeInTheDocument();
+  });
+});

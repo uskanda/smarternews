@@ -55,13 +55,17 @@ export interface CallBudget {
 
 /** Summaries of feed articles a day, unless the configuration says otherwise. */
 const SUMMARIES_PER_DAY = 100;
+/** Proposals of selectors a day, unless the configuration says otherwise. */
+const SELECTOR_PROPOSALS_PER_DAY = 50;
 
 export interface TaskLimits {
   llmCallsPerRun: number;
-  /** Calls for runs. Summaries of feed articles are not counted here. */
+  /** Calls for runs and proposals of selectors. Summaries of feed articles are not counted here. */
   llmCallsPerDay: number;
   /** Calls that summarise feed articles. The calls of runs are not counted here. */
   summariesPerDay: number;
+  /** Calls that propose selectors for a web feed. They count towards `llmCallsPerDay` as well. */
+  selectorProposalsPerDay: number;
 }
 
 /** The money the providers that cost money may use, and when its period starts again. */
@@ -79,7 +83,7 @@ export interface TaskRunnerOptions {
   clock: Clock;
   providers: Map<string, Provider>;
   assignment: Record<TaskName, string>;
-  limits: Omit<TaskLimits, "summariesPerDay"> & { summariesPerDay?: number };
+  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay"> & { summariesPerDay?: number; selectorProposalsPerDay?: number };
   timeouts: { defaultMs: number; searchMs: number };
   timeZone: () => string;
   budget?: BudgetLimits;
@@ -93,7 +97,7 @@ export class TaskRunner {
   }
 
   get limits(): TaskLimits {
-    return { summariesPerDay: SUMMARIES_PER_DAY, ...this.#options.limits };
+    return { summariesPerDay: SUMMARIES_PER_DAY, selectorProposalsPerDay: SELECTOR_PROPOSALS_PER_DAY, ...this.#options.limits };
   }
 
   providerFor(task: TaskName): Provider {
@@ -166,8 +170,8 @@ export class TaskRunner {
   }
 
   /**
-   * Model calls made for runs since the start of the current day in the configured time zone. Summaries of
-   * feed articles have an allowance of their own, so that neither uses up the other's.
+   * Model calls made for runs and proposals of selectors since the start of the current day in the configured
+   * time zone. Summaries of feed articles have an allowance of their own, so that neither uses up the other's.
    */
   callsToday(): number {
     return this.#countToday("task <> 'summarize'");
@@ -183,6 +187,17 @@ export class TaskRunner {
     return this.summariesToday() < this.limits.summariesPerDay;
   }
 
+  /** Calls that proposed selectors since the start of the current day, a second attempt included. */
+  selectorProposalsToday(): number {
+    return this.#countToday("task = 'proposeSelectors'");
+  }
+
+  /** False once the day has used its allowance of proposals, or its allowance of calls. */
+  canProposeSelectors(): boolean {
+    const limits = this.limits;
+    return this.selectorProposalsToday() < limits.selectorProposalsPerDay && this.callsToday() < limits.llmCallsPerDay;
+  }
+
   #countToday(condition: string): number {
     const { db, clock, timeZone } = this.#options;
     const since = startOfLocalDay(clock(), timeZone()).toISOString();
@@ -194,7 +209,7 @@ export class TaskRunner {
     const provider = this.providerFor(name);
     const { system, prompt } = definition.build(input);
     // The dialect marker is dropped: the claude command refuses a schema that carries it.
-    const { $schema: _dialect, ...outputSchema } = z.toJSONSchema(definition.output) as Record<string, unknown>;
+    const { $schema: _dialect, ...outputSchema } = z.toJSONSchema(definition.wire ?? definition.output) as Record<string, unknown>;
     const timeoutMs = name === "search" ? this.#options.timeouts.searchMs : this.#options.timeouts.defaultMs;
 
     let problem = "";
@@ -224,6 +239,7 @@ export class TaskRunner {
     if (task === "summarize") {
       if (!this.canSummarize()) throw new LlmLimitError("day");
     } else {
+      if (task === "proposeSelectors" && this.selectorProposalsToday() >= this.limits.selectorProposalsPerDay) throw new LlmLimitError("day");
       if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
       if (this.callsToday() >= this.#options.limits.llmCallsPerDay) throw new LlmLimitError("day");
     }

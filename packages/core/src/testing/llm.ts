@@ -18,8 +18,9 @@ export function fakeLlm(
   handlers: Partial<Record<TaskName, FakeHandler>>,
   options: {
     webSearch?: boolean;
-    limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number };
+    limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number };
     timeZone?: string;
+    timeoutMs?: number;
     /** Makes every provider one that costs money, at these prices. */
     pricing?: ModelPricing;
     /** What every call used. */
@@ -54,7 +55,7 @@ export function fakeLlm(
     providers,
     assignment: Object.fromEntries(TASK_NAMES.map((task) => [task, task])) as Record<TaskName, string>,
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
-    timeouts: { defaultMs: 2000, searchMs: 2000 },
+    timeouts: { defaultMs: options.timeoutMs ?? 2000, searchMs: options.timeoutMs ?? 2000 },
     timeZone: () => options.timeZone ?? "UTC",
     budget: options.budget,
   });

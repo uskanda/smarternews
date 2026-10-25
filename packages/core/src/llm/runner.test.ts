@@ -55,7 +55,7 @@ function provider(name: string, adapter: LlmAdapter, pricing: ModelPricing | nul
 function setup(options: {
   providers: Provider[];
   assignment?: Partial<Record<TaskName, string>>;
-  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number };
+  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number };
   timeoutMs?: number;
   timeZone?: string;
   budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
@@ -75,6 +75,7 @@ function setup(options: {
       write: first,
       summarize: first,
       translate: first,
+      proposeSelectors: first,
       ...options.assignment,
     },
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
@@ -232,7 +233,7 @@ describe("the allowance of summaries", () => {
 
     await runner.run("interpret", interpretInput, fresh());
     expect(runner.summariesToday()).toBe(0);
-    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "One." });
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "One.", mentions: null });
     expect(runner.summariesToday()).toBe(1);
   });
 
@@ -245,7 +246,7 @@ describe("the allowance of summaries", () => {
     expect(requests).toHaveLength(1);
 
     clock.advance(24 * 60 * 60_000);
-    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "Two." });
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "Two.", mentions: null });
   });
 
   it("allows 100 summaries a day when no limit is given, and gives the model no tools", async () => {
@@ -256,6 +257,142 @@ describe("the allowance of summaries", () => {
     await runner.run("summarize", summarizeInput, fresh());
     expect(requests[0]!.webSearch).toBe(false);
     expect(calls()).toEqual([{ task: "summarize", provider: "a", ok: 1, error: null }]);
+  });
+});
+
+describe("mentions in the outputs of the write and summarize tasks", () => {
+  const writeInput = {
+    kind: "news" as const,
+    outputLanguage: "ja",
+    readerInfo: "",
+    now: "2026-03-01T06:00:00.000Z",
+    timeZone: "UTC",
+    sources: [{ title: "t", siteName: "s", url: "https://example.org/a", publishedAt: null, text: "text" }],
+    existingArticle: null,
+  };
+  const article = { title: "日本銀行が利上げ", summary: "要約。", body: "本文。", unconfirmed: false, impact: null, event: null };
+  const summarizeInput = { outputLanguage: "ja", title: "Headline", text: "The text of the article." };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("hands the provider the schema with the form of the names", async () => {
+    const { adapter, requests } = scripted([{ ...article, mentions: [] }]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await runner.run("write", writeInput, fresh());
+
+    const schema = requests[0]!.outputSchema as { properties: Record<string, { items?: { properties: { kind: unknown } } }>; required: string[] };
+    expect(schema).not.toHaveProperty("$schema");
+    expect(schema.required).toContain("mentions");
+    expect(schema.properties.mentions!.items!.properties.kind).toEqual({ type: "string", enum: ["person", "organization", "product", "place"] });
+  });
+
+  it("gives the names of a valid output", async () => {
+    const mentions = [
+      { name: "日本銀行", kind: "organization" },
+      { name: "植田和男", kind: "person" },
+    ];
+    const { adapter } = scripted([{ ...article, mentions }]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions });
+  });
+
+  it("does not ask again when only a name lacks its kind, and gives null for the names", async () => {
+    const { adapter, requests } = scripted([{ ...article, mentions: [{ name: "日本銀行" }] }, { ...article, mentions: [] }]);
+    const { runner, calls } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions: null });
+    expect(requests).toHaveLength(1);
+    expect(calls()).toEqual([{ task: "write", provider: "a", ok: 1, error: null }]);
+  });
+
+  it("gives null for the names of an output without them", async () => {
+    const { adapter } = scripted([{ summary: "要約。" }]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "要約。", mentions: null });
+  });
+
+  it("uses the names of the second output when the first has no summary", async () => {
+    const { adapter, requests } = scripted([
+      { mentions: [{ name: "日本銀行", kind: "organization" }] },
+      { summary: "要約。", mentions: [{ name: "植田和男", kind: "person" }] },
+    ]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({
+      summary: "要約。",
+      mentions: [{ name: "植田和男", kind: "person" }],
+    });
+    expect(requests).toHaveLength(2);
+  });
+
+  it("fails when both outputs lack a summary, though their names are valid", async () => {
+    const mentions = [{ name: "日本銀行", kind: "organization" }];
+    const { adapter } = scripted([{ mentions }, { mentions }]);
+    const { runner, calls } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("summarize", summarizeInput, fresh())).rejects.toBeInstanceOf(TaskFailedError);
+    expect(calls().map((call) => call.ok)).toEqual([0, 0]);
+  });
+});
+
+describe("the allowance of selector proposals", () => {
+  const proposeInput = { url: "https://example.org/news", html: "<ul><li><a href='/1'>One</a></li></ul>" };
+  const proposal = { candidates: [{ item: "li", title: null, link: null, date: null }] };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("stops proposing once the day has used its allowance of proposals, and starts again the next day", async () => {
+    const { adapter, requests } = scripted([proposal, proposal, proposal]);
+    const { runner, clock } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, selectorProposalsPerDay: 2 } });
+
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    expect(runner.canProposeSelectors()).toBe(false);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(2);
+
+    clock.advance(24 * 60 * 60_000);
+    expect(runner.canProposeSelectors()).toBe(true);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).resolves.toBeDefined();
+  });
+
+  it("counts a proposal towards the calls of the day, and not towards the summaries", async () => {
+    const { adapter } = scripted([proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+    expect(runner.limits).toMatchObject({ selectorProposalsPerDay: 50 });
+
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    expect(runner.callsToday()).toBe(1);
+    expect(runner.summariesToday()).toBe(0);
+    expect(runner.selectorProposalsToday()).toBe(1);
+  });
+
+  it("does not propose once the calls of the day reach their allowance", async () => {
+    const { adapter, requests } = scripted([validInterpretation, proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    expect(runner.canProposeSelectors()).toBe(false);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("counts the second attempt after an invalid output as a call of its own", async () => {
+    const { adapter } = scripted([{ candidates: [{ item: "div[", title: null, link: null, date: null }] }, proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await runner.run("proposeSelectors", proposeInput, fresh());
+    expect(runner.selectorProposalsToday()).toBe(2);
+    expect(runner.callsToday()).toBe(2);
+  });
+
+  it("is used up by none when its allowance is 0", async () => {
+    const { adapter, requests } = scripted([proposal]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, selectorProposalsPerDay: 0 } });
+    expect(runner.canProposeSelectors()).toBe(false);
+    await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(0);
   });
 });
 
@@ -364,7 +501,7 @@ describe("TaskRunner and the monthly budget", () => {
 
     expect(status).toMatchObject({ periodStart: "2026-10-10", periodEnd: "2026-11-09", monthlyBudgetUsd: 100, warnRatio: 0.8, unknownCostCalls: 1 });
     expect(status.spentUsd).toBeCloseTo(4.6, 8);
-    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0 });
+    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0, proposeSelectors: 0 });
     expect(status.byProvider).toEqual({ fast: 1.2, smart: 3.4, cli: 0 });
   });
 });

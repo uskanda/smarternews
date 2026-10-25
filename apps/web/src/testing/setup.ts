@@ -1,11 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetHotkeys } from "../lib/keys.ts";
 import { resetPaneState } from "../lib/panes.ts";
 import { resetScrollReadState } from "../lib/scroll-read.ts";
 import { resetThemeState } from "../lib/theme.ts";
+
+// Screens answer from a real API, so on a busy machine a list can take longer than the 1 s default to appear.
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();

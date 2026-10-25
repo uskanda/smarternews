@@ -20,6 +20,7 @@ const TASK_LABEL = {
   write: "本文の生成",
   summarize: "要約",
   translate: "翻訳",
+  proposeSelectors: "セレクターの提案",
 } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const STALE_RANGE = "1から365までの日数を入れてください。";
