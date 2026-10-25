@@ -12,7 +12,9 @@ import {
   listFeedArticles,
   markArticlesRead,
   markArticlesUnread,
+  markSeenArticlesRead,
   nextArticleToSummarize,
+  recordArticleOpened,
   openEventArticles,
   recentNewsArticles,
   reviseArticle,
@@ -208,6 +210,22 @@ describe("duplicates across feeds", () => {
     });
   });
 
+  describe("when the kept article is read with the version a screen showed", () => {
+    it("marks its unread duplicates read and returns them too", () => {
+      const s = withDuplicates();
+      const ids = markSeenArticlesRead(s.db, [{ id: s.kept, updatedAt: getArticle(s.db, s.kept).updatedAt }], NOW);
+      expect(ids).toEqual([s.kept, s.copyB, s.copyC].sort((left, right) => left - right));
+      expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([true, true]);
+    });
+
+    it("leaves the duplicates alone while removal is off", () => {
+      const s = withDuplicates();
+      updateSettings(s.db, { removeDuplicates: false });
+      expect(markSeenArticlesRead(s.db, [{ id: s.kept, updatedAt: getArticle(s.db, s.kept).updatedAt }], NOW)).toEqual([s.kept]);
+      expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([false, false]);
+    });
+  });
+
   describe("summaries", () => {
     function summarizing() {
       const s = withDuplicates();
@@ -337,6 +355,44 @@ describe("read times", () => {
     expect(s.readAt(id)).toBeNull();
   });
 
+  it("marks read what a screen showed, at one time, unless a follow-up came after the version shown", () => {
+    const s = reading();
+    const [first, second, revised] = [s.article(), s.article(), s.article()];
+    const shown = (id: number) => ({ id, updatedAt: getArticle(s.db, id).updatedAt });
+    const seen = [shown(first), shown(second), shown(revised)];
+    reviseArticle(s.db, revised, {
+      title: "Revised",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: TEN,
+      refs: [],
+      topicIds: [],
+    });
+    expect(markSeenArticlesRead(s.db, seen, ELEVEN)).toEqual([first, second]);
+    expect([s.readAt(first), s.readAt(second), s.readAt(revised)]).toEqual([ELEVEN, ELEVEN, null]);
+    expect(getArticle(s.db, revised).isRead).toBe(false);
+  });
+
+  it("takes the version shown in any offset, as the same instant", () => {
+    const s = reading();
+    const id = s.article();
+    expect(markSeenArticlesRead(s.db, [{ id, updatedAt: "2026-03-01T09:00:00+09:00" }], ELEVEN)).toEqual([id]);
+  });
+
+  it("leaves an article read already, with its time, out of what it returns, and skips one that is gone", () => {
+    const s = reading();
+    const [before, unread] = [s.article(), s.article()];
+    setArticleFlags(s.db, before, { isRead: true }, TEN);
+    const seen = [before, unread, 9999].map((id) => ({ id, updatedAt: "2026-03-01T00:00:00.000Z" }));
+    expect(markSeenArticlesRead(s.db, seen, ELEVEN)).toEqual([unread]);
+    expect([s.readAt(before), s.readAt(unread)]).toEqual([TEN, ELEVEN]);
+  });
+
   it("gives the duplicates read with a kept article the same time", () => {
     const s = reading();
     const a = seedFeed(s.db, { title: "Feed A" });
@@ -448,5 +504,226 @@ describe("the list of recently read articles", () => {
       expect(() => listArticles(s.db, { recentlyRead: "true", ...query }, NOW)).toThrow(DomainError);
     }
     expect(() => listArticles(s.db, { recentlyRead: "true", includeEnded: "false", limit: 10 }, NOW)).not.toThrow();
+  });
+});
+
+describe("the list oldest first", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function listing() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const article = (title: string, at: string) => generated(db, category, { title }, at);
+    const titles = (query: ArticleListQuery) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, article, titles };
+  }
+
+  it("orders by the time lists sort by, oldest first, and leaves the newest first list as it was", () => {
+    const s = listing();
+    s.article("A", ago(HOUR));
+    s.article("B", ago(48 * HOUR));
+    s.article("C", ago(HOUR / 2));
+    expect(s.titles({ order: "oldest" })).toEqual(["B", "A", "C"]);
+    expect(s.titles({})).toEqual(["C", "A", "B"]);
+    expect(s.titles({ order: "newest" })).toEqual(["C", "A", "B"]);
+  });
+
+  it("orders a feed article by its sort time among the generated ones, narrowed as the newest first list is", () => {
+    const s = listing();
+    s.article("Generated", ago(3 * HOUR));
+    const feed = seedFeed(s.db, { categoryId: s.category });
+    seedFeedArticle(s.db, feed, { title: "Feed", at: ago(5 * HOUR) });
+    seedFeedArticle(s.db, feed, { title: "Read feed", at: ago(4 * HOUR), isRead: true });
+    expect(s.titles({ category: s.category, order: "oldest" })).toEqual(["Feed", "Read feed", "Generated"]);
+    expect(s.titles({ category: s.category, unread: "true", order: "oldest" })).toEqual(["Feed", "Generated"]);
+  });
+
+  it("moves a generated article that a follow-up updates to the end", () => {
+    const s = listing();
+    const old = s.article("Two days old", ago(48 * HOUR));
+    s.article("An hour old", ago(HOUR));
+    reviseArticle(s.db, old, {
+      title: "Two days old, followed up",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: NOW,
+      refs: [],
+      topicIds: [],
+    });
+    expect(s.titles({ order: "oldest" })).toEqual(["An hour old", "Two days old, followed up"]);
+  });
+
+  it("pages oldest first without repeating or skipping articles of the same time", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) s.article(`#${index}`, ago(index < 60 ? 200 * 60_000 : (120 - index) * 60_000));
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    const times: string[] = [];
+    let cursor: string | undefined;
+    let last: ReturnType<typeof listArticles> | undefined;
+    do {
+      last = listArticles(s.db, { order: "oldest", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(last.items.length);
+      seen.push(...last.items.map((item) => item.title));
+      times.push(...last.items.map((item) => item.updatedAt));
+      cursor = last.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    expect(times).toEqual([...times].sort());
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it("reads a cursor without a direction as newest first, and refuses a cursor of the other direction", () => {
+    const s = listing();
+    for (let index = 0; index < 5; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR));
+    const newest = listArticles(s.db, { limit: 2 }, NOW);
+    const oldest = listArticles(s.db, { order: "oldest", limit: 2 }, NOW);
+    // A cursor this server issued before lists had an order: the time and the id, nothing else.
+    const legacy = Buffer.from(JSON.stringify([newest.items[1]!.updatedAt, newest.items[1]!.id])).toString("base64url");
+
+    expect(listArticles(s.db, { limit: 2, cursor: legacy }, NOW).items.map((item) => item.title)).toEqual(["#2", "#3"]);
+    expect(listArticles(s.db, { limit: 2, cursor: newest.nextCursor! }, NOW).items.map((item) => item.title)).toEqual(["#2", "#3"]);
+    expect(listArticles(s.db, { order: "oldest", limit: 2, cursor: oldest.nextCursor! }, NOW).items.map((item) => item.title)).toEqual(["#2", "#1"]);
+
+    for (const query of [
+      { order: "oldest", cursor: newest.nextCursor! },
+      { order: "oldest", cursor: legacy },
+      { cursor: oldest.nextCursor! },
+      { order: "newest", cursor: oldest.nextCursor! },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid" }));
+    }
+  });
+
+  it("refuses an order for the list of events and the recently read articles, even newest first", () => {
+    const s = listing();
+    for (const query of [
+      { kind: "event", order: "oldest" },
+      { kind: "event", order: "newest" },
+      { recentlyRead: "true", order: "oldest" },
+      { recentlyRead: "true", order: "newest" },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "order" })] }));
+    }
+  });
+
+  it("says when the list was read, whatever the order and the page", () => {
+    const s = listing();
+    for (let index = 0; index < 3; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR));
+    expect(listArticles(s.db, { order: "oldest", limit: 1 }, NOW).asOf).toBe(NOW);
+    expect(listArticles(s.db, {}, NOW).asOf).toBe(NOW);
+    expect(listArticles(s.db, { kind: "event" }, NOW).asOf).toBe(NOW);
+    expect(listArticles(s.db, { recentlyRead: "true" }, NOW).asOf).toBe(NOW);
+  });
+});
+
+describe("open times", () => {
+  const TEN = "2026-03-01T10:00:00.000Z";
+  const ELEVEN = "2026-03-01T11:00:00.000Z";
+  const NOON = "2026-03-01T12:00:00.000Z";
+
+  function opening() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const feed = seedFeed(db, { categoryId: category });
+    const openedAt = (id: number) => getArticle(db, id).openedAt;
+    return { db, category, feed, openedAt, generated: () => generated(db, category, {}, "2026-03-01T00:00:00.000Z") };
+  }
+
+  it("records when a feed article and a generated one are first opened, and keeps that time", () => {
+    const s = opening();
+    const feedArticle = seedFeedArticle(s.db, s.feed);
+    const generatedArticle = s.generated();
+    expect(s.openedAt(feedArticle)).toBeNull();
+
+    expect(recordArticleOpened(s.db, feedArticle, TEN)).toBe(TEN);
+    expect(recordArticleOpened(s.db, generatedArticle, TEN)).toBe(TEN);
+    expect(recordArticleOpened(s.db, feedArticle, ELEVEN)).toBe(TEN);
+    expect(s.openedAt(feedArticle)).toBe(TEN);
+    expect(s.openedAt(generatedArticle)).toBe(TEN);
+  });
+
+  it("leaves read and unread as they are, and records an article that is read already", () => {
+    const s = opening();
+    const unread = seedFeedArticle(s.db, s.feed);
+    const read = seedFeedArticle(s.db, s.feed, { isRead: true });
+    recordArticleOpened(s.db, unread, TEN);
+    recordArticleOpened(s.db, read, TEN);
+    expect(getArticle(s.db, unread)).toMatchObject({ isRead: false, readAt: null, openedAt: TEN });
+    expect(getArticle(s.db, read)).toMatchObject({ isRead: true, openedAt: TEN });
+    expect(getCounts(s.db, NOON).unread).toBe(1);
+  });
+
+  it("refuses an article that does not exist", () => {
+    const s = opening();
+    expect(() => recordArticleOpened(s.db, 999, TEN)).toThrow(expect.objectContaining({ code: "not_found" }));
+  });
+
+  it("is set by none of the ways of marking read: one article, mark all as read, what a screen showed, duplicates", () => {
+    const s = opening();
+    const one = seedFeedArticle(s.db, s.feed);
+    setArticleFlags(s.db, one, { isRead: true }, TEN);
+    const all = [seedFeedArticle(s.db, s.feed), seedFeedArticle(s.db, s.feed), seedFeedArticle(s.db, s.feed)];
+    markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN);
+    const shown = seedFeedArticle(s.db, s.feed);
+    markSeenArticlesRead(s.db, [{ id: shown, updatedAt: getArticle(s.db, shown).updatedAt }], NOON);
+    const other = seedFeed(s.db);
+    const kept = seedFeedArticle(s.db, s.feed);
+    const copy = seedFeedArticle(s.db, other, { duplicateOf: kept });
+    recordArticleOpened(s.db, kept, NOON);
+    setArticleFlags(s.db, kept, { isRead: true }, NOON);
+
+    expect(getArticle(s.db, copy)).toMatchObject({ isRead: true, openedAt: null });
+    expect([one, ...all, shown].map(s.openedAt)).toEqual([null, null, null, null, null]);
+  });
+
+  it("is kept when the article is put back to unread, alone or by undoing mark all as read, and by a follow-up", () => {
+    const s = opening();
+    const one = seedFeedArticle(s.db, s.feed);
+    recordArticleOpened(s.db, one, TEN);
+    setArticleFlags(s.db, one, { isRead: true }, TEN);
+    setArticleFlags(s.db, one, { isRead: false }, NOON);
+    expect(getArticle(s.db, one)).toMatchObject({ isRead: false, readAt: null, openedAt: TEN });
+
+    const undone = seedFeedArticle(s.db, s.feed);
+    recordArticleOpened(s.db, undone, TEN);
+    markArticlesUnread(s.db, markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN));
+    expect(s.openedAt(undone)).toBe(TEN);
+
+    const revised = s.generated();
+    recordArticleOpened(s.db, revised, TEN);
+    setArticleFlags(s.db, revised, { isRead: true }, TEN);
+    reviseArticle(s.db, revised, {
+      title: "Revised",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: ELEVEN,
+      refs: [],
+      topicIds: [],
+    });
+    expect(getArticle(s.db, revised)).toMatchObject({ isRead: false, openedAt: TEN });
+  });
+
+  it("is given in the list: the opened article has it, one marked read in bulk has none", () => {
+    const s = opening();
+    const opened = seedFeedArticle(s.db, s.feed, { title: "Opened" });
+    const bulk = seedFeedArticle(s.db, s.feed, { title: "Bulk" });
+    recordArticleOpened(s.db, opened, TEN);
+    markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN);
+    const items = listArticles(s.db, { unread: "false" }, NOON).items;
+    expect(items.find((item) => item.id === opened)!.openedAt).toBe(TEN);
+    expect(items.find((item) => item.id === bulk)!.openedAt).toBeNull();
   });
 });

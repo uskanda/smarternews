@@ -83,3 +83,11 @@ export function searchText(fields: SearchFields): string {
       .join("\n"),
   );
 }
+
+/**
+ * The text the search index holds for one annotation: the highlighted text and the note, one to a line,
+ * normalized as the terms are. A note is matched as it was written: its Markdown marks are not taken out.
+ */
+export function annotationText(quote: string | null, note: string | null): string {
+  return normalizeForMatch([quote, note].filter((field): field is string => field !== null && field.length > 0).join("\n"));
+}

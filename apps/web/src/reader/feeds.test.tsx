@@ -43,6 +43,8 @@ function seeded() {
   const stray = seedFeedArticle(server.db, loose.id, { title: "Stray", at: at(10) });
   const generated = server.article(tools.id, { title: "Generated", importance: 5 });
   const carNews = server.article(cars.id, { title: "Car news" });
+  // The list is read a moment after the last article is stored, as it is on a server: marking it all covers them all.
+  server.clock.advance(1);
   return { server, tools, cars, blog, releases, loose, oldPost, newPost, release, stray, generated, carNews };
 }
 
@@ -52,7 +54,7 @@ describe("the entries of the navigation", () => {
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Blog/ });
     await waitFor(() =>
-      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
+      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
     );
   });
 
@@ -62,7 +64,7 @@ describe("the entries of the navigation", () => {
     server.article(tools.id);
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Tools/ });
-    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "Tools1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "注釈", "Tools1"]));
     expect(within(nav()).queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -307,7 +309,9 @@ describe("images", () => {
     renderApp(withImage("Text.\n\n![Inline](data:image/png;base64,AAAA) ![Local](/elsewhere.png)"));
     await within(await opened()).findByText(/Text\./);
     expect(within(article()).queryByRole("img")).not.toBeInTheDocument();
-    expect(within(article()).getByText("Inline Local")).toBeInTheDocument();
+    // Each description stands apart, so that it is no part of the text a highlight is found in.
+    expect(within(article()).getByText("Inline")).toBeInTheDocument();
+    expect(within(article()).getByText("Local")).toBeInTheDocument();
     // An address the API did not rewrite, such as one a model wrote in another form, stays a description.
     const direct = render(<Markdown text="![Direct](https://img.example.org/c.png)" images />);
     expect(direct.container.querySelector("img")).toBeNull();
@@ -331,7 +335,7 @@ describe("marking everything read", () => {
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
 
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
-    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
 
     await user.click(screen.getByRole("button", { name: "取り消す" }));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
@@ -397,7 +401,9 @@ describe("the summary of a feed article", () => {
     // Between the two, only the way to fetch the full content.
     const next = within(pane).getByRole("link", { name: "元のページを開く" }).parentElement!.nextElementSibling!;
     expect(within(next as HTMLElement).getByRole("button", { name: "全文を取得" })).toBeInTheDocument();
-    expect(next.nextElementSibling).toHaveClass("article-body");
+    // Then the note on the whole article, and the content.
+    expect(within(next.nextElementSibling as HTMLElement).getByRole("button", { name: "メモを書く" })).toBeInTheDocument();
+    expect(next.nextElementSibling!.nextElementSibling!.querySelector(".article-body")).toHaveTextContent("New words.");
   });
 
   it("says that the page could not be read when it was written from what the feed delivered", async () => {

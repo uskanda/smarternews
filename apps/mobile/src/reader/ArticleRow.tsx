@@ -55,6 +55,8 @@ export interface ArticleRowProps {
   onLongPress: (article: ArticleSummary) => void;
   /** In search results: the text around the match, shown in place of the summary when there is one. */
   excerpt?: string | null;
+  /** In search results: the excerpt was taken from a note of the reader's, which the row says before it. */
+  excerptFromNote?: boolean;
   /** In search results: the words to mark in the headline and the excerpt. */
   terms?: readonly string[];
   /** The term groups to colour the headline and the summary by, and to show the badges of. */
@@ -77,6 +79,7 @@ export const ArticleRow = memo(function ArticleRow({
   onToggleRead,
   onLongPress,
   excerpt = null,
+  excerptFromNote = false,
   terms,
   groups = null,
 }: ArticleRowProps) {
@@ -93,7 +96,7 @@ export const ArticleRow = memo(function ArticleRow({
   const spoken = [
     marked ? `重要度${article.importance}` : null,
     headline,
-    line,
+    excerpt !== null && excerptFromNote ? `メモ、${line}` : line,
     sourceName,
     time,
     generated ? `出典${article.refCount}件` : null,
@@ -176,6 +179,11 @@ export const ArticleRow = memo(function ArticleRow({
             {highlight(headline, terms, groups)}
           </Txt>
           <Txt testID={excerpt !== null ? `excerpt-${article.id}` : undefined} variant="body-md" color="on-surface-muted" numberOfLines={2}>
+            {excerpt !== null && excerptFromNote ? (
+              <Txt testID={`excerpt-note-${article.id}`} variant="label-sm" color="on-surface">
+                {"メモ "}
+              </Txt>
+            ) : null}
             {highlight(line, terms, groups)}
           </Txt>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: theme.spacing.md, rowGap: theme.spacing.xs }}>

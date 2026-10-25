@@ -2,19 +2,24 @@ import {
   GENERATED_LABEL,
   hasListControls,
   hasReadToggle,
+  hasSortMenu,
+  listKey as keyOf,
+  listSortOf,
   mergeKept,
   parseListKey,
   RECENTLY_READ_LABEL,
+  ANNOTATIONS_LABEL,
   sortKeyFor,
   targetFilter,
   targetScope,
   UNCATEGORIZED_LABEL,
   type ListTarget,
 } from "@smarternews/client";
-import type { ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
+import type { ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
-import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds } from "../api/queries";
+import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useListSortChange, useListViews, useReadPatch } from "../api/queries";
+import { useToast } from "../ui/toast";
 import { advanceCheckedAt } from "../notifications/store";
 import { useReaderSession } from "./session";
 
@@ -71,6 +76,8 @@ const TITLES: Record<Exclude<View, "category" | "feed">, string> = {
   generated: GENERATED_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
+  // Not in the drawer: the app shows annotations in the article only.
+  annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
@@ -108,6 +115,13 @@ export function useReaderList(ref: ListRef) {
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const importantOnly = importanceFilter && ref.importantOnly;
+  // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
+  const toast = useToast();
+  const listViews = useListViews();
+  const viewsSettled = listViews.isSuccess || listViews.isError;
+  const sortMenu = !isSearch && hasSortMenu(target, categories.data);
+  const sort: ListSort = sortMenu ? listSortOf(target, listViews.data?.items, categories.data) : "newest";
+  const sortChange = useListSortChange(() => toast({ message: "並び順を保存できませんでした。もう一度試してください。" }));
   /** True when the list names a category or a feed that does not exist. */
   const missing = !isSearch && ((target.type === "category" && categories.isSuccess && !category) || (target.type === "feed" && feeds.isSuccess && !feed));
 
@@ -115,10 +129,10 @@ export function useReaderList(ref: ListRef) {
     if (isEvents) return { category: category!.id, kind: "event" };
     return {
       ...(importantOnly ? { minImportance: 4 } : {}),
-      ...targetFilter(target),
+      ...targetFilter(target, sort),
       ...(readToggle && !ref.includeRead ? { unread: "true" as const } : {}),
     };
-  }, [target, category, isEvents, readToggle, ref.includeRead, importantOnly]);
+  }, [target, category, isEvents, readToggle, ref.includeRead, importantOnly, sort]);
   const searchQuery = useMemo(
     () => ({
       q: search?.q ?? "",
@@ -131,9 +145,10 @@ export function useReaderList(ref: ListRef) {
   const unreadOnly = isSearch ? searchQuery.unread === "true" : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = !isSearch && filter.recentlyRead === "true";
-  const listKey = JSON.stringify(isSearch ? { search: searchQuery } : filter);
+  // A change of order is the same list: what was kept moves to its place in the new order.
+  const listKey = JSON.stringify(isSearch ? { search: searchQuery } : { ...filter, order: undefined });
 
-  const articleList = useArticleList(filter, !missing && !isSearch);
+  const articleList = useArticleList(filter, !missing && !isSearch && viewsSettled);
   const results = useArticleSearch(searchQuery, isSearch && searchQuery.q.length > 0);
   const list = isSearch ? results : articleList;
   const fetched = useMemo<ArticleSummary[]>(
@@ -141,7 +156,7 @@ export function useReaderList(ref: ListRef) {
     [isSearch, results.data, articleList.data],
   );
   const excerpts = useMemo(
-    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item.excerpt] as const)) ?? []),
+    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
     [results.data],
   );
   // What was listed on screen has been seen: the periodic check does not notify it later. Only generated
@@ -152,15 +167,32 @@ export function useReaderList(ref: ListRef) {
     if (newest !== "") void advanceCheckedAt(newest);
   }, [fetched]);
   const kept = session.keptFor(listKey);
-  const items = useMemo(() => mergeKept(fetched, kept, isSearch ? undefined : sortKeyFor(target)), [fetched, kept, target, isSearch]);
+  const items = useMemo(() => mergeKept(fetched, kept, isSearch ? undefined : sortKeyFor(target), sort), [fetched, kept, target, isSearch, sort]);
 
   const setRead = useCallback(
     (target: { id: number }, isRead: boolean) => {
+      // Put back to unread by the user: scrolling past it does not read it again in this visit to the list.
+      if (!isRead) session.exclude(listKey, target.id);
       const summary = items.find((item) => item.id === target.id);
       if ((unreadOnly || recentlyRead) && summary) session.keep(listKey, { ...summary, isRead });
       flags.mutate({ id: target.id, isRead });
     },
     [items, unreadOnly, recentlyRead, session, listKey, flags],
+  );
+  const readPatch = useReadPatch();
+  /** Shows rows read, or unread again, as the list was scrolled past them: before or without a request. */
+  const showRead = useCallback(
+    (rows: readonly ArticleSummary[], isRead: boolean) => {
+      for (const row of rows) {
+        if (unreadOnly) session.keep(listKey, { ...row, isRead });
+        else session.patch(row.id, { isRead });
+      }
+      readPatch(
+        rows.map((row) => row.id),
+        isRead,
+      );
+    },
+    [unreadOnly, session, listKey, readPatch],
   );
   const toggleStar = useCallback(
     (target: { id: number; starred: boolean }) => {
@@ -203,7 +235,9 @@ export function useReaderList(ref: ListRef) {
     /** The words the server matched, normalized: what a search result marks. Undefined outside the search results. */
     terms: isSearch ? results.data?.pages[0]?.terms : undefined,
     /** The excerpt of a search result, or null when only its title matched or it is no search result. */
-    excerptOf: (id: number) => excerpts.get(id) ?? null,
+    excerptOf: (id: number) => excerpts.get(id)?.excerpt ?? null,
+    /** Whether the excerpt of a search result was taken from a note of the reader's. */
+    excerptFromNote: (id: number) => excerpts.get(id)?.excerptFromNote ?? false,
     title,
     category,
     missing,
@@ -218,6 +252,14 @@ export function useReaderList(ref: ListRef) {
     /** Which time a row shows: when it was read in the recently read articles, else when it was last updated. */
     rowTime: (recentlyRead ? "read" : "updated") as "read" | "updated",
     importantOnly,
+    /** Whether the list offers the menu of its order: not the events, the recently read or the search results. */
+    sortMenu,
+    /** The order the list is shown in. */
+    sort,
+    /** Lists the entry in the other order, from its start, and stores the order on the server. */
+    changeSort: (next: ListSort) => sortChange.mutate({ key: keyOf(target), sort: next }),
+    /** When the server read the first page: what a mark-all-read covers, whatever the order and the pages loaded. */
+    asOf: articleList.data?.pages[0]?.asOf,
     /** What a mark-all-read of this list covers. */
     scope: targetScope(target),
     filter,
@@ -233,5 +275,13 @@ export function useReaderList(ref: ListRef) {
     setRead,
     toggleStar,
     refresh,
+    /** Which list this is, for what is kept and excluded during a visit to it. */
+    listKey,
+    /** False where scrolling past a row never reads it: the recently read articles, search results and events. */
+    scrollReadable: !isSearch && !recentlyRead && !isEvents,
+    showRead,
+    excluded: session.excludedFor(listKey),
+    /** Says that this list is the one shown, which ends the visit to the last one. */
+    visit: session.visit,
   };
 }

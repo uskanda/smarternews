@@ -1,4 +1,4 @@
-import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
+import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary, ListSort, ListViews } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { createTermMatcher, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +39,40 @@ export function useTermGroups() {
 export function useTermMatcher(): TermMatcher {
   const groups = useTermGroups().data;
   return useMemo(() => createTermMatcher(groups ?? []), [groups]);
+}
+
+/**
+ * The list views of the entries: the order each lists its articles in. Fetched again when the app comes back
+ * to the foreground, which is when a change made on the web page reaches the app; not every minute, so that
+ * the list being read is not reordered under the reader.
+ */
+export function useListViews() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["list-views"], queryFn: () => api.listViews() });
+}
+
+/**
+ * Changes the order of an entry. The screen takes it at once, and goes back to the order it had when the
+ * server cannot store it; `onFailed` then says so.
+ */
+export function useListSortChange(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, sort }: { key: string; sort: ListSort }) => api.updateListView(key, { sort }),
+    onMutate: async ({ key, sort }) => {
+      // A fetch under way would put the old order back.
+      await client.cancelQueries({ queryKey: ["list-views"] });
+      const before = client.getQueryData<ListViews>(["list-views"]);
+      const others = (before?.items ?? []).filter((view) => view.key !== key);
+      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      return { before };
+    },
+    onError: (_error, _variables, context) => {
+      client.setQueryData<ListViews>(["list-views"], context?.before ?? { items: [] });
+      onFailed();
+    },
+  });
 }
 
 export function useCounts() {
@@ -198,6 +232,39 @@ export function useSummaryRequest(article: Article | undefined, active: boolean)
 }
 
 /** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */
+/** Shows articles read or unread in every list and in their detail, without a request of its own. */
+export function useReadPatch(): (ids: readonly number[], isRead: boolean) => void {
+  const client = useQueryClient();
+  return useCallback(
+    (ids, isRead) => {
+      for (const id of ids) patchArticle(client, id, { isRead });
+    },
+    [client],
+  );
+}
+
+/**
+ * Records that an article's body is shown, for an article without an open time. The time that comes back goes
+ * into every cached copy, so the same article is not sent again. A failure is not shown: the next time the
+ * article is shown sends it again.
+ */
+export function useRecordOpened() {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const sending = useRef(new Set<number>());
+  return useCallback(
+    (article: Pick<Article, "id" | "openedAt">) => {
+      if (article.openedAt !== null || sending.current.has(article.id)) return;
+      sending.current.add(article.id);
+      api.openArticle(article.id).then(
+        ({ openedAt }) => patchArticle(client, article.id, { openedAt }),
+        () => sending.current.delete(article.id),
+      );
+    },
+    [api, client],
+  );
+}
+
 export function useArticleFlags() {
   const { api } = useApp();
   const client = useQueryClient();

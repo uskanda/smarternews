@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useArticle, useFullContentFetch } from "../api/queries";
+import { useArticle, useFullContentFetch, useRecordOpened } from "../api/queries";
 import { useBack } from "../lib/back";
 import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
@@ -45,6 +45,13 @@ export function ArticleScreen() {
   const position = Math.min(index ?? start, ids.length - 1);
   const currentId = ids[position] ?? openedId;
   const current = useArticle(currentId).data;
+
+  // The article in view has its body shown: the server records the opening. The neighbours loaded beside it are
+  // not in view, and marking read from the list never comes here.
+  const recordOpened = useRecordOpened();
+  useEffect(() => {
+    if (current?.id === currentId) recordOpened(current);
+  }, [current, currentId, recordOpened]);
 
   // Full content: fetched from the button on top, and asked for when an article that waits for it is in view,
   // since once read it would no longer be fetched by itself. Which content is shown holds while the article is

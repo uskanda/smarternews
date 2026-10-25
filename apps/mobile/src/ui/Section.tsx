@@ -7,7 +7,7 @@ import { Txt } from "./Txt";
 export function Section({ title, children }: { title: string; children: ReactNode }) {
   const theme = useTheme();
   return (
-    <View style={{ gap: theme.spacing.md, padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.outline }}>
+    <View testID={`section-${title}`} style={{ gap: theme.spacing.md, padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.outline }}>
       <Txt variant="headline-md" heading>
         {title}
       </Txt>

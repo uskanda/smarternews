@@ -3,6 +3,7 @@ import type {
   ArticleEvent,
   ArticleList,
   ArticleListQuery,
+  ArticlePage,
   ArticleRef,
   ArticleSearchHit,
   ArticleSearchQuery,
@@ -16,15 +17,18 @@ import type {
   FullContentErrorReason,
   FullContentStatus,
   Kind,
+  ListSort,
   Origin,
   Registration,
+  SeenArticle,
 } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { searchBody } from "../search/plain.ts";
-import { charCount, excerptOf, parseSearchTerms, SHORT_TERM_CHARS } from "../search/text.ts";
+import { charCount, parseSearchTerms, searchExcerpt, SHORT_TERM_CHARS } from "../search/text.ts";
 import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
+import { annotationsOf } from "./annotations.ts";
 import { deleteArticleTranslation, findArticleTranslation } from "./translations.ts";
 
 /**
@@ -33,13 +37,26 @@ import { deleteArticleTranslation, findArticleTranslation } from "./translations
  */
 const GENERATED = "origin = 'generated'";
 
+/** Whether the article of the given table alias has an annotation: a highlight or a note on the whole article. */
+export function hasAnnotation(alias: string): string {
+  return `EXISTS (SELECT 1 FROM annotations ann WHERE ann.article_id = ${alias}.id)`;
+}
+
+/**
+ * Whether the article of the given table alias is one the reader keeps: it has a star or an annotation. Such
+ * an article is never hidden by filters, nor counted as hidden, and outlives the retention period.
+ */
+export function keptByReader(alias: string): string {
+  return `(${alias}.starred = 1 OR ${hasAnnotation(alias)})`;
+}
+
 /**
  * Whether the article of the given table alias is hidden by filters: a feed article that an enabled filter
- * hides, unless it has a star. Every list, count, "mark all as read" and the summaries leave such a row out.
- * A generated article is never hidden.
+ * hides, unless the reader keeps it with a star or an annotation. Every list, count, "mark all as read" and
+ * the summaries leave such a row out. A generated article is never hidden.
  */
 export function hiddenByFilters(alias: string): string {
-  return `(${alias}.filtered = 1 AND ${alias}.starred = 0)`;
+  return `(${alias}.filtered = 1 AND NOT ${keptByReader(alias)})`;
 }
 
 /**
@@ -115,6 +132,7 @@ function toSummary(row: Row): ArticleSummary {
     revision: num(row.revision),
     isRead: bool(row.is_read),
     readAt: strOrNull(row.read_at),
+    openedAt: strOrNull(row.opened_at),
     starred: bool(row.starred),
     primaryUrl: strOrNull(row.primary_url),
     refCount: num(row.ref_count),
@@ -190,6 +208,7 @@ function toArticle(db: Database, row: Row): Article {
       .prepare("SELECT t.id, t.text FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ? ORDER BY t.id")
       .all(id)
       .map((topic) => ({ id: num(topic.id), text: str(topic.text) })),
+    annotations: annotationsOf(db, id),
   };
 }
 
@@ -504,18 +523,45 @@ export function recordFullContentFailure(db: Database, id: number, failure: { re
 
 type CursorValue = [string, number];
 
-function encodeCursor(value: CursorValue): string {
-  return Buffer.from(JSON.stringify(value)).toString("base64url");
+/**
+ * A cursor holds the time and id of the last article of a page and, for a list oldest first, that order. A
+ * cursor without an order is of a list newest first, as every cursor was before lists had an order, or of a
+ * list whose order is fixed.
+ */
+function encodeCursor(value: CursorValue, order: ListSort = "newest"): string {
+  return Buffer.from(JSON.stringify(order === "newest" ? value : [...value, order])).toString("base64url");
 }
 
-function decodeCursor(cursor: string): CursorValue {
+/** Reads a cursor of a list in the given order, refusing one of a list in the other order. */
+function decodeCursor(cursor: string, order: ListSort = "newest"): CursorValue {
+  let value: unknown;
   try {
-    const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
-    if (Array.isArray(value) && typeof value[0] === "string" && typeof value[1] === "number") return [value[0], value[1]];
+    value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
   } catch {
-    // fall through to the refusal below
+    value = null;
+  }
+  if (
+    Array.isArray(value) &&
+    typeof value[0] === "string" &&
+    typeof value[1] === "number" &&
+    (value.length === 2 || (value.length === 3 && (value[2] === "newest" || value[2] === "oldest")))
+  ) {
+    const given = (value[2] as ListSort | undefined) ?? "newest";
+    if (given !== order) {
+      throw new DomainError("invalid", `the cursor is of a list ${given} first, and the list asked for is ${order} first`, [
+        { path: "cursor", message: "the cursor is of a list in another order" },
+      ]);
+    }
+    return [value[0], value[1]];
   }
   throw new DomainError("invalid", "the cursor is not one this server issued", [{ path: "cursor", message: "invalid cursor" }]);
+}
+
+/** Refuses an order for a list whose order is fixed: the events by start, the recently read by read time. */
+function refuseOrder(query: ArticleListQuery, list: string): void {
+  if (query.order !== undefined) {
+    throw new DomainError("invalid", `the order of ${list} cannot be chosen`, [{ path: "order", message: `not allowed with ${list}` }]);
+  }
 }
 
 /** How far back the list of recently read articles goes: seven days of 24 hours, counted from now. */
@@ -530,6 +576,7 @@ const NARROWING = ["category", "uncategorized", "origin", "feed", "kind", "unrea
  * article, which is listed instead.
  */
 function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): ArticleList {
+  refuseOrder(query, "recentlyRead");
   const given = NARROWING.filter((name) => query[name] !== undefined);
   if (given.length > 0) {
     throw new DomainError(
@@ -557,18 +604,24 @@ function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): A
     .all(...params, limit + 1);
   const page = rows.slice(0, limit);
   const last = page.at(-1);
-  return { items: page.map(toSummary), nextCursor: rows.length > limit && last ? encodeCursor([str(last.read_at), num(last.id)]) : null };
+  return {
+    items: page.map(toSummary),
+    nextCursor: rows.length > limit && last ? encodeCursor([str(last.read_at), num(last.id)]) : null,
+    asOf: now,
+  };
 }
 
 /**
  * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
- * by start time, soonest first; every other list by last update, newest first. The recently read articles
- * are a list of their own.
+ * by start time, soonest first; every other list by last update, newest first unless oldest first is asked
+ * for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   if (query.recentlyRead === "true") return listRecentlyRead(db, query, now);
   const limit = query.limit ?? 50;
   const byEventStart = query.kind === "event";
+  if (byEventStart) refuseOrder(query, "kind=event");
+  const oldestFirst = query.order === "oldest";
   const params: Array<string | number> = [];
   // A feed article that filters hide is in no list.
   const where: string[] = [`NOT ${hiddenByFilters("a")}`];
@@ -603,15 +656,17 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
     params.push(now);
   }
   if (query.cursor !== undefined) {
-    const [value, id] = decodeCursor(query.cursor);
+    const [value, id] = decodeCursor(query.cursor, query.order);
     where.push(
       byEventStart
         ? "(a.event_starts_at > ? OR (a.event_starts_at = ? AND a.id > ?))"
-        : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
+        : oldestFirst
+          ? "(a.updated_at > ? OR (a.updated_at = ? AND a.id > ?))"
+          : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
     );
     params.push(value, value, id);
   }
-  const order = byEventStart ? "a.event_starts_at ASC, a.id ASC" : "a.updated_at DESC, a.id DESC";
+  const order = byEventStart ? "a.event_starts_at ASC, a.id ASC" : oldestFirst ? "a.updated_at ASC, a.id ASC" : "a.updated_at DESC, a.id DESC";
   const rows = db
     .prepare(
       `SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")}
@@ -622,9 +677,9 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const last = page.at(-1);
   const nextCursor =
     rows.length > limit && last
-      ? encodeCursor([str(byEventStart ? last.event_starts_at : last.updated_at), num(last.id)])
+      ? encodeCursor([str(byEventStart ? last.event_starts_at : last.updated_at), num(last.id)], query.order)
       : null;
-  return { items: page.map(toSummary), nextCursor };
+  return { items: page.map(toSummary), nextCursor, asOf: now };
 }
 
 /** A page of the articles `a` that meet `where`, newest first by the time lists sort by, as the article list pages. */
@@ -633,7 +688,7 @@ export function pageArticles(
   where: string,
   params: Array<string | number>,
   query: { limit?: number; cursor?: string },
-): ArticleList {
+): ArticlePage {
   const limit = query.limit ?? 50;
   const conditions = [`(${where})`];
   const values = [...params];
@@ -664,9 +719,12 @@ function likePattern(term: string): string {
  * A page of the articles that have every term of the query, newest first by last update, generated and
  * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
  * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
- * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt.
+ * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt, taken
+ * from the reader's notes when no field of the article has the terms. The index holds the highlighted texts
+ * and notes of every article, so they are matched like the fields.
+ * `asOf` is `now`, when the result was read, as in the article list.
  */
-export function searchArticles(db: Database, query: ArticleSearchQuery): ArticleSearchResult {
+export function searchArticles(db: Database, query: ArticleSearchQuery, now: string = new Date().toISOString()): ArticleSearchResult {
   const terms = parseSearchTerms(query.q);
   const long = terms.filter((term) => charCount(term) > SHORT_TERM_CHARS);
   const short = terms.filter((term) => charCount(term) <= SHORT_TERM_CHARS);
@@ -702,21 +760,36 @@ export function searchArticles(db: Database, query: ArticleSearchQuery): Article
       .all(JSON.stringify(ids))
       .map((row) => [num(row.id), row] as const),
   );
+  // The notes of every article of the page in one query: the note on the whole article first, then those on
+  // highlights in the order they were made.
+  const notes = new Map<number, string[]>();
+  for (const row of db
+    .prepare(
+      `SELECT article_id, note FROM annotations
+        WHERE article_id IN (SELECT value FROM json_each(?)) AND note IS NOT NULL
+        ORDER BY article_id, kind = 'highlight', created_at, id`,
+    )
+    .all(JSON.stringify(ids))) {
+    const list = notes.get(num(row.article_id)) ?? [];
+    list.push(str(row.note));
+    notes.set(num(row.article_id), list);
+  }
   const items = page.items.map((item): ArticleSearchHit => {
     const row = fields.get(item.id)!;
-    const excerpt = excerptOf(
+    const excerpt = searchExcerpt(
       {
         summary: str(row.summary),
         autoSummary: strOrNull(row.auto_summary),
         body: searchBody({ origin: str(row.origin), body: str(row.body), contentText: str(row.content_text) }),
         impact: strOrNull(row.impact),
         venue: strOrNull(row.event_venue),
+        notes: notes.get(item.id) ?? [],
       },
       terms,
     );
-    return { ...item, excerpt };
+    return { ...item, ...excerpt };
   });
-  return { items, nextCursor: page.nextCursor, terms };
+  return { items, nextCursor: page.nextCursor, asOf: now, terms };
 }
 
 /**
@@ -793,6 +866,32 @@ export function markArticlesRead(
       .map((row) => num(row.id));
     return [...marked, ...readDuplicatesOf(db, marked, now)].sort((a, b) => a - b);
   });
+}
+
+/**
+ * Marks as read, at `now`, the named articles that a screen showed: each one only while it is unread and not
+ * updated after the version shown, so a follow-up that came in since stays unread. An article that is gone is
+ * skipped. What filters hide is not checked, as with one article: the screen showed it. Returns which ones
+ * changed, the hidden duplicates of those articles too.
+ */
+export function markSeenArticlesRead(db: Database, seen: SeenArticle[], now: string): number[] {
+  const statement = db.prepare("UPDATE articles SET is_read = 1, read_at = ? WHERE id = ? AND is_read = 0 AND updated_at <= ? RETURNING id");
+  return transaction(db, () => {
+    const marked = seen.flatMap((article) =>
+      statement.all(now, article.id, new Date(article.updatedAt).toISOString()).map((row) => num(row.id)),
+    );
+    return [...marked, ...readDuplicatesOf(db, marked, now)].sort((a, b) => a - b);
+  });
+}
+
+/**
+ * Records that a reader opened the article: its body was shown. The first time is kept; read and unread stay as
+ * they are. Returns the open time.
+ */
+export function recordArticleOpened(db: Database, id: number, now: string): string {
+  const row = db.prepare("UPDATE articles SET opened_at = coalesce(opened_at, ?) WHERE id = ? RETURNING opened_at").get(now, id);
+  if (!row) throw notFound("article", id);
+  return str(row.opened_at);
 }
 
 /** Puts the named articles back to unread, without their read times. Returns how many changed. */
@@ -877,12 +976,12 @@ export function listFeedArticles(db: Database, filter: { categoryId: number | nu
     .map((row) => toArticle(db, row));
 }
 
-/** Removes generated articles without a star that were last updated before the given time. */
+/** Removes generated articles without a star or an annotation that were last updated before the given time. */
 export function deleteUnstarredArticlesBefore(db: Database, before: string): number {
-  return num(db.prepare(`DELETE FROM articles WHERE ${GENERATED} AND starred = 0 AND updated_at < ?`).run(before).changes);
+  return num(db.prepare(`DELETE FROM articles WHERE ${GENERATED} AND NOT ${keptByReader("articles")} AND updated_at < ?`).run(before).changes);
 }
 
-/** Removes feed articles without a star whose sort time lies before the given time. */
+/** Removes feed articles without a star or an annotation whose sort time lies before the given time. */
 export function deleteUnstarredFeedArticlesBefore(db: Database, before: string): number {
-  return num(db.prepare("DELETE FROM articles WHERE origin = 'feed' AND starred = 0 AND updated_at < ?").run(before).changes);
+  return num(db.prepare(`DELETE FROM articles WHERE origin = 'feed' AND NOT ${keptByReader("articles")} AND updated_at < ?`).run(before).changes);
 }

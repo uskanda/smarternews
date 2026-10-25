@@ -127,7 +127,7 @@ describe("the API client", () => {
     server.category("Security");
     const text = await api.exportSettings();
     expect(text).toContain("slug: security");
-    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0 });
+    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
   });
 
   it("subscribes to a feed, changes it, fetches it now and deletes it", async () => {
@@ -150,6 +150,60 @@ describe("the API client", () => {
 
     await api.deleteFeed(feed.id);
     expect(await api.feeds()).toEqual([]);
+  });
+
+  it("marks read the articles a screen showed, sending each with its version, and can keep the request alive", async () => {
+    const server = testServer();
+    const sent: Array<{ body: unknown; keepalive: boolean | undefined }> = [];
+    const api = createApi({
+      fetchImpl: (input, init) => {
+        if (init?.body !== undefined) sent.push({ body: JSON.parse(String(init.body)), keepalive: init.keepalive });
+        return server.app.request(String(input), init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    const category = server.category();
+    const ids = [server.article(category.id), server.article(category.id)];
+    const shown = (await api.articles({ category: category.id })).items.map((item) => ({ id: item.id, updatedAt: item.updatedAt }));
+    sent.length = 0;
+
+    expect(await api.markSeenRead(shown)).toEqual({ updated: 2, ids: [...ids].sort((a, b) => a - b) });
+    expect(await api.markSeenRead(shown, { keepalive: true })).toEqual({ updated: 0, ids: [] });
+    expect(sent).toEqual([
+      { body: { articles: shown }, keepalive: undefined },
+      { body: { articles: shown }, keepalive: true },
+    ]);
+  });
+
+  it("records that an article was opened with a POST to its path, and reads the time", async () => {
+    const server = testServer();
+    const sent: Array<{ url: string; method: string | undefined }> = [];
+    const api = createApi({
+      fetchImpl: (input, init) => {
+        sent.push({ url: String(input), method: init?.method });
+        return server.app.request(String(input), init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    const id = server.article(server.category().id);
+
+    expect(await api.openArticle(id)).toEqual({ openedAt: server.clock().toISOString() });
+    expect(sent.at(-1)).toEqual({ url: `/api/v1/articles/${id}/open`, method: "POST" });
+    expect((await api.article(id)).openedAt).toBe(server.clock().toISOString());
+    await expect(api.openArticle(999)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("reads the stats of a feed and whether it is stale", async () => {
+    const { api, server, seen } = setup();
+    const url = "https://blog.example.org/feed.xml";
+    server.site.set(url, `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>One</title><guid>1</guid><link>https://blog.example.org/1</link></item></channel></rss>`);
+    const feed = await api.createFeed({ url });
+    expect(feed).toMatchObject({ stale: false, lastNewItemAt: server.clock().toISOString(), recentArticleCount: 1 });
+
+    expect(await api.feedStats(feed.id)).toMatchObject({ received: 1, opened: 0, starred: 0, hiddenByFilters: 0, hiddenAsDuplicates: 0 });
+    expect(seen.at(-1)!.url).toBe(`/api/v1/feeds/${feed.id}/stats`);
   });
 
   it("downloads the subscribed feeds as OPML and uploads the document back", async () => {
@@ -192,7 +246,7 @@ describe("searching articles", () => {
 
     const result = await api.search({ q: "電池" });
     expect(seen.at(-1)!.url).toBe(`/api/v1/search?q=${encodeURIComponent("電池")}`);
-    expect(result).toMatchObject({ items: [{ id, excerpt: null }], nextCursor: null, terms: ["電池"] });
+    expect(result).toMatchObject({ items: [{ id, excerpt: null, excerptFromNote: false }], nextCursor: null, terms: ["電池"] });
 
     // The server refuses a cursor it did not issue; what matters here is what was sent.
     await api.search({ q: "電池 工場", category: 3, feed: 4, unread: "true", cursor: "c", limit: 20 }).catch(() => undefined);
@@ -347,5 +401,69 @@ describe("term groups", () => {
       onUnauthorized: () => {},
     });
     await expect(api.termGroups()).rejects.toBeInstanceOf(Error);
+  });
+});
+
+describe("list views", () => {
+  it("are read, and one entry is changed, in the shared shape", async () => {
+    const { api, seen } = setup();
+    expect(await api.listViews()).toEqual({ items: [] });
+    expect(seen.at(-1)!.url).toBe("/api/v1/list-views");
+
+    expect(await api.updateListView("unread", { sort: "oldest" })).toEqual({ key: "unread", sort: "oldest" });
+    expect(seen.at(-1)!.url).toBe("/api/v1/list-views/unread");
+    expect(await api.listViews()).toEqual({ items: [{ key: "unread", sort: "oldest" }] });
+    await expect(api.updateListView("recently-read", { sort: "oldest" })).rejects.toMatchObject({ kind: "invalid" });
+  });
+
+  it("order the article list when the list sends its order, and the answer says when it was read", async () => {
+    const { server, api, seen } = setup();
+    const category = server.category();
+    const older = server.article(category.id);
+    server.clock.advance(60_000);
+    const newer = server.article(category.id);
+
+    const list = await api.articles({ category: category.id, order: "oldest" });
+
+    expect(seen.at(-1)!.url).toBe(`/api/v1/articles?category=${category.id}&order=oldest`);
+    expect(list.items.map((item) => item.id)).toEqual([older, newer]);
+    expect(list.asOf).toBe(server.clock().toISOString());
+  });
+});
+
+describe("annotations", () => {
+  const anchor = { quote: "電池の工場", prefix: "同社は", suffix: "を新設する", position: 3 };
+
+  it("adds, changes and removes a highlight, and reads it in the article and the list", async () => {
+    const { server, api, seen } = setup();
+    const id = server.article(server.category().id);
+    const highlight = await api.addHighlight(id, anchor);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/articles/${id}/highlights`);
+    expect(highlight).toMatchObject({ articleId: id, ...anchor, note: null });
+    expect(await api.updateHighlight(highlight.id, "規模を確かめる")).toMatchObject({ note: "規模を確かめる" });
+    expect((await api.article(id)).annotations.highlights).toEqual([{ ...highlight, note: "規模を確かめる", updatedAt: expect.any(String) }]);
+    expect((await api.annotations({ limit: 10 })).items.map((item) => [item.kind, item.quote, item.note])).toEqual([["highlight", "電池の工場", "規模を確かめる"]]);
+    expect(seen.at(-1)!.url).toBe("/api/v1/annotations?limit=10");
+    await api.deleteHighlight(highlight.id);
+    await expect(api.deleteHighlight(highlight.id)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("saves and removes the note on a whole article", async () => {
+    const { server, api } = setup();
+    const id = server.article(server.category().id);
+    expect(await api.saveArticleNote(id, "あとで比べる")).toMatchObject({ articleId: id, text: "あとで比べる" });
+    expect((await api.article(id)).annotations.note?.text).toBe("あとで比べる");
+    await api.deleteArticleNote(id);
+    expect((await api.article(id)).annotations.note).toBeNull();
+    await expect(api.saveArticleNote(id, " ")).rejects.toMatchObject({ kind: "invalid", fields: [{ path: "text", message: "is empty" }] });
+  });
+
+  it("refuses an answer that does not have the shape of a highlight", async () => {
+    const api = createApi({
+      fetchImpl: () => new Response(JSON.stringify({ id: 1 }), { headers: { "content-type": "application/json" } }),
+      getToken: () => null,
+      onUnauthorized: () => {},
+    });
+    await expect(api.addHighlight(1, anchor)).rejects.toThrow();
   });
 });

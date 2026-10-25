@@ -3,12 +3,13 @@ import type { ArticleSummary } from "@smarternews/core/api";
 import { DrawerActions } from "@react-navigation/native";
 import { useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BackHandler, FlatList, RefreshControl, ScrollView, SectionList, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../api/AppProvider";
 import { useCategories, useFeeds, useSettings, useTermMatcher, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
+import { useScrollRead } from "../settings/scroll-read";
 import { unfold } from "../shell/collapsed";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, IconButton, Loading, Toggle } from "../ui/controls";
@@ -18,7 +19,10 @@ import { useToast } from "../ui/toast";
 import { Txt } from "../ui/Txt";
 import { ArticleRow } from "./ArticleRow";
 import { EventRow } from "./EventRow";
+import { SCROLL_READ_VIEWABILITY, useScrollToRead } from "./scroll-read";
 import { listParams, listRefOf, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
+
+const SORT_LABELS = { newest: "新しい順", oldest: "古い順" } as const;
 
 function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): string {
   if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
@@ -59,17 +63,37 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const [refreshing, setRefreshing] = useState(false);
   const [menuFor, setMenuFor] = useState<ArticleSummary | null>(null);
   const [narrowing, setNarrowing] = useState(false);
+  const [sorting, setSorting] = useState(false);
   const { height: windowHeight } = useWindowDimensions();
+
+  // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished.
+  const scrollReadOn = useScrollRead() && reader.scrollReadable;
+  const [pulls, setPulls] = useState(0);
+  const { visit, listKey: readerKey } = reader;
+  useEffect(() => visit(readerKey), [visit, readerKey]);
+  const scrollRead = useScrollToRead({
+    enabled: scrollReadOn,
+    items,
+    resetKey: `${readerKey}#${pulls}`,
+    excluded: reader.excluded,
+    show: reader.showRead,
+    onFailed: (retry) => toast({ message: "スクロールした記事を既読にできませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: retry } }),
+  });
+  // The room below the last row is as tall as the list, so that the last row too can go past the top.
+  const [listHeight, setListHeight] = useState(0);
 
   // The rows are drawn again only when their article changes, so what they call must not change either:
   // these three stay the same functions and reach the current state through a ref.
-  const current = useRef({ reader, ref, router });
-  current.current = { reader, ref, router };
+  const current = useRef({ reader, ref, router, drop: scrollRead.drop });
+  current.current = { reader, ref, router, drop: scrollRead.drop };
   const open = useCallback((article: ArticleSummary) => {
     const { ref: list, router: to } = current.current;
     to.push({ pathname: "/article/[id]", params: { id: String(article.id), list: list.key, ...listParams(list) } });
   }, []);
-  const toggleRead = useCallback((article: ArticleSummary) => current.current.reader.setRead(article, !article.isRead), []);
+  const toggleRead = useCallback((article: ArticleSummary) => {
+    if (article.isRead) current.current.drop(article.id);
+    current.current.reader.setRead(article, !article.isRead);
+  }, []);
   const showMenu = useCallback((article: ArticleSummary) => setMenuFor(article), []);
 
   // Back from another list returns to the unread list, where the app starts; back from there leaves the app.
@@ -111,6 +135,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
 
   async function pulled() {
     setRefreshing(true);
+    setPulls((count) => count + 1);
     try {
       await reader.refresh();
     } finally {
@@ -134,10 +159,10 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   }
 
   async function markAllRead() {
-    const newest = fetched.reduce<string | null>((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null);
-    if (newest === null) return;
-    // "Before" is just after the newest article on screen, so one that arrives later stays unread.
-    const before = new Date(new Date(newest).getTime() + 1).toISOString();
+    // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
+    // marked too, whatever the order. A refetch reads the first page again, and moves the time with it.
+    const before = reader.asOf;
+    if (before === undefined || fetched.length === 0) return;
     try {
       const result = await api.markRead({ before, ...reader.scope, ...(reader.importantOnly ? { minImportance: 4 } : {}) });
       await reader.refresh();
@@ -207,6 +232,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   );
   const refreshControl = <RefreshControl refreshing={refreshing} onRefresh={() => void pulled()} colors={[theme.colors.primary]} progressBackgroundColor={theme.colors.surface} />;
   const footer = list.isFetchingNextPage ? <Loading /> : null;
+  const room = scrollReadOn ? <View testID="scroll-read-room" style={{ height: listHeight }} /> : null;
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -247,7 +273,8 @@ export function ListScreen({ search = false }: { search?: boolean }) {
         <FlatList
           accessibilityLabel="記事の一覧"
           testID="article-list"
-          key={ref.key}
+          // Another order starts at the top as well.
+          key={`${ref.key}:${reader.sort}`}
           data={items}
           contentContainerStyle={listPadding}
           keyExtractor={(item) => String(item.id)}
@@ -264,6 +291,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               onToggleRead={toggleRead}
               onLongPress={showMenu}
               excerpt={reader.excerptOf(item.id)}
+              excerptFromNote={reader.excerptFromNote(item.id)}
               terms={reader.terms}
               groups={groups}
             />
@@ -273,6 +301,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: theme.spacing.lg, paddingHorizontal: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.outline }}>
                 {reader.readToggle ? <Toggle label="既読も表示" value={ref.includeRead} onChange={(on) => setFilter("read", "1", on)} /> : null}
                 {reader.importanceFilter ? <Toggle label="重要度4以上だけ" value={ref.importantOnly} onChange={(on) => setFilter("min", "4", on)} /> : null}
+                {reader.sortMenu ? <Button label={`並び順：${SORT_LABELS[reader.sort]}`} variant="quiet" onPress={() => setSorting(true)} /> : null}
                 {searchRef ? (
                   <>
                     <Button label={`絞り込み：${narrowedTo}`} variant="quiet" onPress={() => setNarrowing(true)} />
@@ -283,12 +312,37 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               {status}
             </View>
           }
-          ListFooterComponent={footer}
+          ListFooterComponent={
+            <>
+              {footer}
+              {room}
+            </>
+          }
           refreshControl={refreshControl}
           onEndReached={more}
-          onEndReachedThreshold={0.5}
+          // The room below the last row is one screen: the next page is asked for as early as without it.
+          onEndReachedThreshold={scrollReadOn ? 1.5 : 0.5}
+          onLayout={(event) => setListHeight(event.nativeEvent.layout.height)}
+          onViewableItemsChanged={scrollRead.onViewableItemsChanged}
+          viewabilityConfig={SCROLL_READ_VIEWABILITY}
         />
       )}
+      <Sheet title="並び順" visible={sorting} onClose={() => setSorting(false)}>
+        <View style={{ gap: theme.spacing.sm }}>
+          {(["newest", "oldest"] as const).map((option) => (
+            <Button
+              key={option}
+              label={SORT_LABELS[option]}
+              selected={option === reader.sort}
+              onPress={() => {
+                setSorting(false);
+                if (option !== reader.sort) reader.changeSort(option);
+              }}
+            />
+          ))}
+          <Button label="閉じる" variant="quiet" onPress={() => setSorting(false)} />
+        </View>
+      </Sheet>
       <Sheet title="絞り込み" visible={narrowing} onClose={() => setNarrowing(false)}>
         {/* Many categories and feeds scroll inside the sheet, which keeps the screen above it in view. */}
         <ScrollView style={{ maxHeight: windowHeight * 0.6 }} contentContainerStyle={{ gap: theme.spacing.sm }}>
@@ -315,6 +369,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
             <Button
               label={menuFor.isRead ? "未読に戻す" : "既読にする"}
               onPress={() => {
+                if (menuFor.isRead) scrollRead.drop(menuFor.id);
                 reader.setRead(menuFor, !menuFor.isRead);
                 setMenuFor(null);
               }}

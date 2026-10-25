@@ -1,5 +1,5 @@
 import type {
-  ArticleList,
+  ArticlePage,
   Filter,
   FilterAction,
   FilterArticlesQuery,
@@ -15,7 +15,7 @@ import type {
 import type { Clock } from "../clock.ts";
 import { DomainError, notFound, type FieldError } from "../errors.ts";
 import { compileConditions, conditionProblems, matchesAll, normalizedValue, type CompiledCondition } from "../filters/match.ts";
-import { pageArticles } from "./articles.ts";
+import { keptByReader, pageArticles } from "./articles.ts";
 import { transaction, type Database } from "./database.ts";
 import { json, num, str, strOrNull, type Row } from "./rows.ts";
 
@@ -57,26 +57,35 @@ const FILTERED = `(a.origin = 'feed' AND (
   OR ${notKept("category", "a")}
   OR ${notKept("feed", "a")}))`;
 
-/** Whether the enabled filter `f` hides the feed article `a`, counted for that filter. Starred articles are not. */
+/**
+ * Whether the enabled filter `f` hides the feed article `a`, counted for that filter. Articles the reader keeps
+ * with a star or an annotation are not.
+ */
 function hiddenByFilter(f: string, a: string): string {
-  return `(${a}.starred = 0 AND ${f}.enabled = 1 AND ${inScope(f, a)} AND CASE ${f}.action
+  return `(NOT ${keptByReader(a)} AND ${f}.enabled = 1 AND ${inScope(f, a)} AND CASE ${f}.action
     WHEN 'hide' THEN EXISTS (SELECT 1 FROM filter_matches fm WHERE fm.filter_id = ${f}.id AND fm.article_id = ${a}.id)
     ELSE NOT ${keptBySameScope(f, a)} END)`;
 }
 
 /**
  * Works out `filtered` again for the feed articles `a` that meet `where`. Returns how many came back to the
- * lists: articles without a star that were hidden and are not any more.
+ * lists: articles without a star or an annotation that were hidden and are not any more.
  */
 export function refreshFiltered(db: Database, where = "1", params: Array<string | number> = []): number {
   const changed = db
     .prepare(
       `UPDATE articles AS a SET filtered = 1 - filtered
         WHERE a.origin = 'feed' AND (${where}) AND a.filtered <> (CASE WHEN ${FILTERED} THEN 1 ELSE 0 END)
-        RETURNING filtered, starred`,
+        RETURNING id, filtered, starred`,
     )
     .all(...params);
-  return changed.filter((row) => num(row.filtered) === 0 && num(row.starred) === 0).length;
+  const back = changed.filter((row) => num(row.filtered) === 0 && num(row.starred) === 0).map((row) => num(row.id));
+  if (back.length === 0) return 0;
+  // An annotated article was in the lists all along. RETURNING cannot look at another table.
+  const annotated = db
+    .prepare("SELECT count(DISTINCT article_id) AS n FROM annotations WHERE article_id IN (SELECT value FROM json_each(?))")
+    .get(JSON.stringify(back))!;
+  return back.length - num(annotated.n);
 }
 
 // ---- the stored filters ------------------------------------------------------------------------
@@ -131,8 +140,8 @@ function toStored(row: Row, conditions: Map<number, FilterCondition[]>): StoredF
 const HIDDEN_COUNT = `CASE
   WHEN f.enabled = 0 THEN 0
   WHEN f.action = 'hide' THEN (SELECT count(*) FROM filter_matches m JOIN articles a ON a.id = m.article_id
-    WHERE m.filter_id = f.id AND a.starred = 0 AND ${inScope("f", "a")})
-  ELSE (SELECT count(*) FROM articles a WHERE a.starred = 0 AND ${inScope("f", "a")} AND NOT ${keptBySameScope("f", "a")})
+    WHERE m.filter_id = f.id AND NOT ${keptByReader("a")} AND ${inScope("f", "a")})
+  ELSE (SELECT count(*) FROM articles a WHERE NOT ${keptByReader("a")} AND ${inScope("f", "a")} AND NOT ${keptBySameScope("f", "a")})
 END AS hidden_count`;
 
 /** Every filter in the order they were registered, with how many feed articles each hides now. */
@@ -346,7 +355,7 @@ export function deleteFilter(db: Database, id: number): FilterDeleteResult {
 // ---- reading what a filter hides ---------------------------------------------------------------
 
 /** The feed articles the filter counts as hidden, newest first, a page at a time like the article list. */
-export function listFilterArticles(db: Database, id: number, query: FilterArticlesQuery): ArticleList {
+export function listFilterArticles(db: Database, id: number, query: FilterArticlesQuery): ArticlePage {
   getFilter(db, id);
   return pageArticles(db, `EXISTS (SELECT 1 FROM filters f WHERE f.id = ? AND ${hiddenByFilter("f", "a")})`, [id], query);
 }
@@ -360,7 +369,7 @@ export function previewFilter(db: Database, input: FilterPreview): FilterPreview
   if (input.id !== undefined) getFilter(db, input.id);
   const [scope, categoryId, feedId] = scopeColumns(input.scope);
   const where = [
-    "a.starred = 0",
+    `NOT ${keptByReader("a")}`,
     scope === "category" ? "a.category_id = ?" : scope === "feed" ? "a.feed_id = ?" : "1",
   ];
   const params: Array<string | number | null> = scope === "category" ? [categoryId!] : scope === "feed" ? [feedId!] : [];

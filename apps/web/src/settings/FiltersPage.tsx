@@ -493,7 +493,7 @@ export function FiltersPage() {
         <h2 className="type-headline-md">追加</h2>
         <ul aria-label="フィルターの適用先" className="flex max-w-measure-article list-disc flex-col gap-xs pl-lg type-label-sm text-on-surface-muted">
           <li>購読フィードの配信記事だけを隠します。AI生成の記事は隠しません。</li>
-          <li>スターのある記事は隠しません。</li>
+          <li>スターまたは注釈のある記事は隠しません。</li>
           <li>隠すフィルターと残すフィルターの両方に当たる記事は隠します。</li>
         </ul>
         <FilterForm />

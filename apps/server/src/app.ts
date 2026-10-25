@@ -1,5 +1,15 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  addHighlight,
+  annotationListQuerySchema,
+  articleNoteUpdateSchema,
+  deleteArticleNote,
+  deleteHighlight,
+  highlightCreateSchema,
+  highlightUpdateSchema,
+  listAnnotations,
+  saveArticleNote,
+  updateHighlightNote,
   articleListQuerySchema,
   articleSearchQuerySchema,
   articleUpdateSchema,
@@ -19,6 +29,7 @@ import {
   feedCreateSchema,
   feedDiscoverSchema,
   feedUpdateSchema,
+  feedStats,
   findCategoryBySlug,
   getArticle,
   ImageFetchError,
@@ -38,6 +49,8 @@ import {
   listCategories,
   listFeedArticles,
   listFeeds,
+  listListViews,
+  listViewUpdateSchema,
   listRunCandidates,
   listFilters,
   listFilterArticles,
@@ -49,7 +62,8 @@ import {
   categoryMoveSchema,
   feedMoveSchema,
   markArticlesUnread,
-  markReadSchema,
+  markReadBodySchema,
+  markSeenArticlesRead,
   markUnreadSchema,
   notFound,
   renderRss,
@@ -63,6 +77,7 @@ import {
   filterPreviewSchema,
   filterUpdateSchema,
   previewFilter,
+  recordArticleOpened,
   addHighlightTerm,
   createTermGroup,
   deleteHighlightTerm,
@@ -81,6 +96,7 @@ import {
   updateFeed,
   updateSettings,
   updateFilter,
+  updateListView,
   updateTopic,
   zodFieldErrors,
   type ApiError,
@@ -279,19 +295,23 @@ export function createApp(deps: AppDeps): Hono {
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
   api.post("/articles/mark-read", async (c) => {
-    const ids = markArticlesRead(db, parse(markReadSchema, await jsonBody(c)), clock().toISOString());
+    const input = parse(markReadBodySchema, await jsonBody(c));
+    const now = clock().toISOString();
+    const ids = "articles" in input && input.articles ? markSeenArticlesRead(db, input.articles, now) : markArticlesRead(db, input, now);
     return c.json({ updated: ids.length, ids });
   });
   api.post("/articles/mark-unread", async (c) =>
     c.json({ updated: markArticlesUnread(db, parse(markUnreadSchema, await jsonBody(c)).ids) }),
   );
   // Plain matching against the search index: no model and no translation is involved.
-  api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()))));
+  api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()), clock().toISOString())));
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
   api.get("/articles/:id", (c) => c.json(answered(getArticle(db, idParam(c, "article")))));
   api.patch("/articles/:id", async (c) =>
     c.json(answered(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)), clock().toISOString()))),
   );
+  // Sent by a screen that shows the article's body; marking read is a separate request.
+  api.post("/articles/:id/open", (c) => c.json({ openedAt: recordArticleOpened(db, idParam(c, "article"), clock().toISOString()) }));
   // Translates the content when it has no translation yet, so the answer can take as long as that does.
   api.post("/articles/:id/summary", (c) => {
     if (!requestAutoSummary(db, idParam(c, "article"), clock().toISOString())) return c.json({ status: "none" });
@@ -308,8 +328,31 @@ export function createApp(deps: AppDeps): Hono {
   });
   api.get("/translation", (c) => c.json(translation.status()));
 
+  // annotations: plain storage, no model and no translation is involved
+  api.get("/annotations", (c) => c.json(listAnnotations(db, parse(annotationListQuerySchema, c.req.query()))));
+  api.post("/articles/:id/highlights", async (c) => {
+    const id = idParam(c, "article");
+    return c.json(addHighlight(db, id, parse(highlightCreateSchema, await jsonBody(c)), clock().toISOString()), 201);
+  });
+  api.patch("/highlights/:id", async (c) => {
+    const id = idParam(c, "highlight");
+    return c.json(updateHighlightNote(db, id, parse(highlightUpdateSchema, await jsonBody(c)).note, clock().toISOString()));
+  });
+  api.delete("/highlights/:id", (c) => {
+    deleteHighlight(db, idParam(c, "highlight"));
+    return c.body(null, 204);
+  });
+  api.put("/articles/:id/note", async (c) => {
+    const id = idParam(c, "article");
+    return c.json(saveArticleNote(db, id, parse(articleNoteUpdateSchema, await jsonBody(c)).text, clock().toISOString()));
+  });
+  api.delete("/articles/:id/note", (c) => {
+    deleteArticleNote(db, idParam(c, "article"));
+    return c.body(null, 204);
+  });
+
   // subscribed feeds
-  api.get("/feeds", (c) => c.json(listFeeds(db)));
+  api.get("/feeds", (c) => c.json(listFeeds(db, clock())));
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
@@ -318,11 +361,13 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
-  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
+  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
+  // Counted from what the articles are now: no model is involved.
+  api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
   api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
-    return c.json(listFeeds(db));
+    return c.json(listFeeds(db, clock()));
   });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
@@ -331,7 +376,7 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/:id/fetch", async (c) => {
     const id = idParam(c, "feed");
     const outcome = await poller.fetchNow(id);
-    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id) };
+    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id, clock()) };
     return c.json(result);
   });
 
@@ -344,6 +389,12 @@ export function createApp(deps: AppDeps): Hono {
   api.delete("/filters/:id", (c) => c.json(deleteFilter(db, idParam(c, "filter"))));
   api.get("/filters/:id/articles", (c) =>
     c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
+  );
+
+  // list views: how each entry of the left pane and the drawer orders its articles, shared by both apps
+  api.get("/list-views", (c) => c.json(listListViews(db)));
+  api.patch("/list-views/:key", async (c) =>
+    c.json(updateListView(db, c.req.param("key"), parse(listViewUpdateSchema, await jsonBody(c)))),
   );
 
   // term highlights: only stored and answered here; the apps match the terms against what they show

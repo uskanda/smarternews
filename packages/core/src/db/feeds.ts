@@ -1,7 +1,8 @@
-import type { Feed, FeedMove, FeedUpdate } from "../api.ts";
+import { FEED_STATS_DAYS, type Feed, type FeedMove, type FeedStats, type FeedUpdate } from "../api.ts";
 import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
+import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { refreshFiltered } from "./filters.ts";
@@ -9,14 +10,36 @@ import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { getSettings } from "./settings.ts";
 
 const MINUTE = 60_000;
+const DAY = 86_400_000;
 const MAX_WAIT_MS = 24 * 60 * MINUTE;
 
-/** Feed articles without a star are kept this long, counted from the time they sort by. */
+/** Feed articles without a star or an annotation are kept this long, counted from the time they sort by. */
 export const FEED_RETENTION_DAYS = 90;
 
+/**
+ * The articles the stats of a feed count: the feed articles of the feed `feed` (an SQL expression) stored at or
+ * after the one parameter it takes. The origin condition stays although only feed articles have a feed.
+ */
+const recentArticles = (alias: string, feed: string) => `${alias}.origin = 'feed' AND ${alias}.feed_id = ${feed} AND ${alias}.created_at >= ?`;
+
+/** Takes one parameter first: the start of the stats period. */
 const FEED_COLUMNS = `f.*,
+  (SELECT count(*) FROM articles a WHERE ${recentArticles("a", "f.id")}) AS recent_article_count,
   (SELECT count(*) FROM articles a WHERE a.feed_id = f.id) AS article_count,
-  (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND a.starred = 1) AS starred_count`;
+  (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND a.starred = 1) AS starred_count,
+  (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND ${hasAnnotation("a")}) AS annotated_count`;
+
+/** The start of the stats period that ends at `now`. */
+function statsSince(now: Date): string {
+  return new Date(now.getTime() - FEED_STATS_DAYS * DAY).toISOString();
+}
+
+/** Enabled, and no new item since the subscription or the last one for more than the given days. */
+function isStale(row: Row, staleDays: number, now: Date): boolean {
+  if (!bool(row.enabled)) return false;
+  const since = new Date(strOrNull(row.last_new_item_at) ?? str(row.created_at)).getTime();
+  return now.getTime() - since > staleDays * DAY;
+}
 
 /**
  * How long to wait after the last fetch: the interval, doubled for every failure in a row, one day at most.
@@ -33,7 +56,18 @@ function nextFetchFrom(row: Row, baseMinutes: number): Date {
   return new Date(new Date(last).getTime() + waitMs(numOrNull(row.interval_minutes), num(row.failure_count), baseMinutes));
 }
 
-function toFeed(row: Row, baseMinutes: number): Feed {
+interface FeedContext {
+  baseMinutes: number;
+  staleDays: number;
+  now: Date;
+}
+
+function feedContext(db: Database, now: Date): FeedContext {
+  const settings = getSettings(db);
+  return { baseMinutes: settings.feedIntervalMinutes, staleDays: settings.staleFeedDays, now };
+}
+
+function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
   const enabled = bool(row.enabled);
   return {
     id: num(row.id),
@@ -53,29 +87,34 @@ function toFeed(row: Row, baseMinutes: number): Feed {
     nextFetchAt: enabled ? nextFetchFrom(row, baseMinutes).toISOString() : null,
     articleCount: num(row.article_count),
     starredCount: num(row.starred_count),
+    annotatedCount: num(row.annotated_count),
     createdAt: str(row.created_at),
+    lastNewItemAt: strOrNull(row.last_new_item_at),
+    stale: isStale(row, staleDays, now),
+    recentArticleCount: num(row.recent_article_count),
   };
 }
 
-export function listFeeds(db: Database): Feed[] {
-  const base = getSettings(db).feedIntervalMinutes;
+/** The feeds as they are at `now`, which decides which are stale and what counts as recent. */
+export function listFeeds(db: Database, now: Date = systemClock()): Feed[] {
+  const context = feedContext(db, now);
   return db
     // In the order of the lists: by category, then within it; the feeds of no category come last.
     .prepare(
       `SELECT ${FEED_COLUMNS} FROM feeds f LEFT JOIN categories c ON c.id = f.category_id
         ORDER BY c.id IS NULL, c.position, c.id, f.position, f.id`,
     )
-    .all()
-    .map((row) => toFeed(row, base));
+    .all(statsSince(now))
+    .map((row) => toFeed(row, context));
 }
 
-export function findFeed(db: Database, id: number): Feed | null {
-  const row = db.prepare(`SELECT ${FEED_COLUMNS} FROM feeds f WHERE f.id = ?`).get(id);
-  return row ? toFeed(row, getSettings(db).feedIntervalMinutes) : null;
+export function findFeed(db: Database, id: number, now: Date = systemClock()): Feed | null {
+  const row = db.prepare(`SELECT ${FEED_COLUMNS} FROM feeds f WHERE f.id = ?`).get(statsSince(now), id);
+  return row ? toFeed(row, feedContext(db, now)) : null;
 }
 
-export function getFeed(db: Database, id: number): Feed {
-  const feed = findFeed(db, id);
+export function getFeed(db: Database, id: number, now: Date = systemClock()): Feed {
+  const feed = findFeed(db, id, now);
   if (!feed) throw notFound("feed", id);
   return feed;
 }
@@ -83,6 +122,31 @@ export function getFeed(db: Database, id: number): Feed {
 export function findFeedByUrl(db: Database, url: string): Feed | null {
   const row = db.prepare("SELECT id FROM feeds WHERE url = ?").get(normalizeUrl(url));
   return row ? getFeed(db, num(row.id)) : null;
+}
+
+/**
+ * What became of the articles the feed delivered within the last `FEED_STATS_DAYS` days before `now`, counted
+ * from what the articles are now. No model is involved.
+ */
+export function feedStats(db: Database, id: number, now: Date): FeedStats {
+  const feed = getFeed(db, id, now);
+  const since = statsSince(now);
+  const row = db
+    .prepare(
+      `SELECT count(*) AS received, count(a.opened_at) AS opened, coalesce(sum(a.starred = 1), 0) AS starred,
+              coalesce(sum(${hiddenByFilters("a")}), 0) AS hidden_by_filters, coalesce(sum(${hiddenDuplicate("a")}), 0) AS hidden_as_duplicates
+         FROM articles a WHERE ${recentArticles("a", "?")}`,
+    )
+    .get(id, since)!;
+  return {
+    since,
+    received: num(row.received),
+    opened: num(row.opened),
+    starred: num(row.starred),
+    hiddenByFilters: num(row.hidden_by_filters),
+    hiddenAsDuplicates: num(row.hidden_as_duplicates),
+    lastNewItemAt: feed.lastNewItemAt,
+  };
 }
 
 /** When the feed is fetched next, whether or not it is enabled. */
@@ -93,7 +157,7 @@ export function nextFetchAt(db: Database, feed: Feed): Date {
 
 /** The enabled feeds whose wait is over, the longest overdue first. */
 export function dueFeeds(db: Database, now: Date): Feed[] {
-  return listFeeds(db)
+  return listFeeds(db, now)
     .filter((feed) => feed.nextFetchAt !== null && new Date(feed.nextFetchAt) <= now)
     .sort((a, b) => a.nextFetchAt!.localeCompare(b.nextFetchAt!) || a.id - b.id);
 }
@@ -208,7 +272,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.fetchFullContent ? 1 : 0,
       input.fetchFullContent ? now : null,
     );
-  return getFeed(db, num(result.lastInsertRowid));
+  return getFeed(db, num(result.lastInsertRowid), clock());
 }
 
 /**
@@ -245,7 +309,7 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
       setFeedCategory(db, id, patch.categoryId);
     }
   });
-  return getFeed(db, id);
+  return getFeed(db, id, clock());
 }
 
 /** Deletes the feed. Its articles, starred ones included, go with it (ON DELETE CASCADE). */

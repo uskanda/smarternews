@@ -57,8 +57,10 @@ describe("Fetcher", () => {
         return new Response("ok");
       }) as typeof fetch,
     });
+    // Measured from before the calls: the first request may reach fetch late on a busy machine, the slots may not.
+    const started = Date.now();
     await Promise.all([fetcher.get("https://example.org/1"), fetcher.get("https://example.org/2")]);
-    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(35);
+    expect(times[1]! - started).toBeGreaterThanOrEqual(39);
   });
 
   it("does not delay a request to another host", async () => {

@@ -63,6 +63,25 @@ describe("FeedPoller", () => {
     expect(getFeed(s.db, feed.id).articleCount).toBe(1);
   });
 
+  it("keeps a stale feed enabled and goes on fetching it", async () => {
+    const s = setup({ "https://a.example.org/feed.xml": () => xml(rss("A", ["a1"])) });
+    const feed = s.add("a");
+    await s.round();
+    // The same item for 61 days: nothing new comes.
+    for (let day = 0; day < 61; day += 1) {
+      s.clock.advance(24 * 60 * MINUTE);
+      await s.round();
+    }
+    expect(getFeed(s.db, feed.id, s.clock())).toMatchObject({ stale: true, enabled: true });
+    const before = s.urls().length;
+
+    s.clock.advance(30 * MINUTE);
+    await s.round();
+
+    expect(s.urls()).toHaveLength(before + 1);
+    expect(getFeed(s.db, feed.id, s.clock())).toMatchObject({ stale: true, enabled: true, lastSucceededAt: s.clock().toISOString() });
+  });
+
   it("fetches one feed at a time", async () => {
     let active = 0;
     let most = 0;

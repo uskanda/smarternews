@@ -1,4 +1,16 @@
-import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
+import type {
+  AnnotationList,
+  Article,
+  ArticleList,
+  ArticleListQuery,
+  ArticleNote,
+  ArticleSearchQuery,
+  ArticleSummary,
+  Highlight,
+  HighlightCreate,
+  ListSort,
+  ListViews,
+} from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { createTermMatcher, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -62,6 +74,37 @@ export function useTermGroups() {
 export function useTermMatcher(): TermMatcher {
   const groups = useTermGroups().data;
   return useMemo(() => createTermMatcher(groups ?? []), [groups]);
+}
+
+/**
+ * The list views of the entries: the order each lists its articles in. Fetched when the page loads and not
+ * again by itself, so that a change on another device does not reorder the list being read.
+ */
+export function useListViews() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["list-views"], queryFn: () => api.listViews(), staleTime: Number.POSITIVE_INFINITY });
+}
+
+/**
+ * Changes the order of an entry. The screen takes it at once, and goes back to the order it had when the
+ * server cannot store it; `onFailed` then says so.
+ */
+export function useListSortChange(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, sort }: { key: string; sort: ListSort }) => api.updateListView(key, { sort }),
+    onMutate: ({ key, sort }) => {
+      const before = client.getQueryData<ListViews>(["list-views"]);
+      const others = (before?.items ?? []).filter((view) => view.key !== key);
+      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      return { before };
+    },
+    onError: (_error, _variables, context) => {
+      client.setQueryData<ListViews>(["list-views"], context?.before ?? { items: [] });
+      onFailed();
+    },
+  });
 }
 
 export function useCounts() {
@@ -233,6 +276,42 @@ export function useSummaryRequest(article: Article | undefined): "none" | "waiti
 }
 
 /** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */
+/**
+ * Shows articles read or unread in every list and in their detail, before or without a request: the rows the
+ * list was scrolled past, and those rows again when the request failed.
+ */
+export function useReadPatch(): (ids: readonly number[], isRead: boolean) => void {
+  const client = useQueryClient();
+  return useCallback(
+    (ids, isRead) => {
+      for (const id of ids) patchArticle(client, id, { isRead });
+    },
+    [client],
+  );
+}
+
+/**
+ * Records that an article's body is shown, for an article without an open time. The time that comes back goes
+ * into every cached copy, so the same article is not sent again. A failure is not shown: the next opening sends
+ * it again.
+ */
+export function useRecordOpened() {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const sending = useRef(new Set<number>());
+  return useCallback(
+    (article: Pick<Article, "id" | "openedAt">) => {
+      if (article.openedAt !== null || sending.current.has(article.id)) return;
+      sending.current.add(article.id);
+      api.openArticle(article.id).then(
+        ({ openedAt }) => patchArticle(client, article.id, { openedAt }),
+        () => sending.current.delete(article.id),
+      );
+    },
+    [api, client],
+  );
+}
+
 export function useArticleFlags() {
   const { api } = useApp();
   const client = useQueryClient();
@@ -287,4 +366,108 @@ export function useRun(id: number | null) {
     retry: false,
     refetchInterval: (query) => (query.state.data?.status === "queued" || query.state.data?.status === "running" ? 3000 : false),
   });
+}
+
+/** The annotations of every article, the last made first, a page at a time. */
+export function useAnnotationList() {
+  const { api } = useApp();
+  return useInfiniteQuery({
+    queryKey: ["annotations"],
+    queryFn: ({ pageParam }) => api.annotations({ limit: PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+  });
+}
+
+type AnnotationPages = InfiniteData<AnnotationList>;
+
+/**
+ * Writing annotations. What the server answers goes into the article and into the list of annotations at once,
+ * without fetching them again. An annotation also decides whether filters hide a feed article and what search
+ * finds, so the lists, the counts, the filters and search results are marked stale; search results are read
+ * again when they are opened.
+ */
+export function useAnnotationActions() {
+  const { api } = useApp();
+  const client = useQueryClient();
+
+  const stale = () => {
+    for (const key of ["counts", "filters", "feeds"]) void client.invalidateQueries({ queryKey: [key] });
+    // A list on screen takes in or lets go of the article now; search results only when they are opened again.
+    void client.invalidateQueries({ queryKey: ["articles"], predicate: (query) => query.queryKey[1] !== "search" });
+    void client.invalidateQueries({ queryKey: ["articles", "search"], refetchType: "none" });
+  };
+  const patchArticle = (articleId: number, change: (annotations: Article["annotations"]) => Article["annotations"]) =>
+    client.setQueryData<Article>(["article", articleId], (article) => (article ? { ...article, annotations: change(article.annotations) } : article));
+  const patchList = (change: (items: AnnotationList["items"]) => AnnotationList["items"]) =>
+    client.setQueryData<AnnotationPages>(["annotations"], (data) =>
+      data ? { ...data, pages: data.pages.map((page) => ({ ...page, items: change(page.items) })) } : data,
+    );
+  /** The row of the list for an annotation of an article, with the titles of the article as the cache has it. */
+  const rowOf = (articleId: number, annotation: { id: number; createdAt: string; quote: string | null; note: string | null }, kind: "highlight" | "note") => {
+    const article = client.getQueryData<Article>(["article", articleId]);
+    return article
+      ? {
+          kind,
+          id: annotation.id,
+          articleId,
+          origin: article.origin,
+          title: article.title,
+          translatedTitle: article.translatedTitle,
+          quote: annotation.quote,
+          note: annotation.note,
+          createdAt: annotation.createdAt,
+        }
+      : null;
+  };
+  const prepend = (row: AnnotationList["items"][number] | null) => {
+    if (!row) return void client.invalidateQueries({ queryKey: ["annotations"] });
+    client.setQueryData<AnnotationPages>(["annotations"], (data) =>
+      data ? { ...data, pages: data.pages.map((page, index) => (index === 0 ? { ...page, items: [row, ...page.items.filter((item) => item.id !== row.id)] } : page)) } : data,
+    );
+  };
+
+  return {
+    async addHighlight(articleId: number, input: HighlightCreate): Promise<Highlight> {
+      const highlight = await api.addHighlight(articleId, input);
+      patchArticle(articleId, (annotations) => ({ ...annotations, highlights: [...annotations.highlights, highlight] }));
+      prepend(rowOf(articleId, highlight, "highlight"));
+      stale();
+      return highlight;
+    },
+    async updateHighlight(highlight: Highlight, note: string | null): Promise<Highlight> {
+      const changed = await api.updateHighlight(highlight.id, note);
+      patchArticle(highlight.articleId, (annotations) => ({
+        ...annotations,
+        highlights: annotations.highlights.map((item) => (item.id === changed.id ? changed : item)),
+      }));
+      patchList((items) => items.map((item) => (item.id === changed.id ? { ...item, note: changed.note } : item)));
+      stale();
+      return changed;
+    },
+    async deleteHighlight(highlight: Highlight): Promise<void> {
+      await api.deleteHighlight(highlight.id);
+      patchArticle(highlight.articleId, (annotations) => ({ ...annotations, highlights: annotations.highlights.filter((item) => item.id !== highlight.id) }));
+      patchList((items) => items.filter((item) => item.id !== highlight.id));
+      stale();
+    },
+    async saveNote(articleId: number, text: string): Promise<ArticleNote> {
+      const note = await api.saveArticleNote(articleId, text);
+      patchArticle(articleId, (annotations) => ({ ...annotations, note }));
+      const listed = client
+        .getQueryData<AnnotationPages>(["annotations"])
+        ?.pages.some((page) => page.items.some((item) => item.id === note.id));
+      if (listed) patchList((items) => items.map((item) => (item.id === note.id ? { ...item, note: note.text } : item)));
+      else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
+      stale();
+      return note;
+    },
+    async deleteNote(articleId: number): Promise<void> {
+      const before = client.getQueryData<Article>(["article", articleId])?.annotations.note ?? null;
+      await api.deleteArticleNote(articleId);
+      patchArticle(articleId, (annotations) => ({ ...annotations, note: null }));
+      patchList((items) => items.filter((item) => !(item.kind === "note" && item.articleId === articleId) && item.id !== before?.id));
+      stale();
+    },
+  };
 }

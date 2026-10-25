@@ -1,7 +1,16 @@
 // The only code in the web app and the Android app that talks to the server. Every answer is checked against
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
+  annotationListSchema,
+  articleNoteSchema,
+  highlightSchema,
+  type AnnotationList,
+  type AnnotationListQuery,
+  type ArticleNote,
+  type Highlight,
+  type HighlightCreate,
   articleListSchema,
+  articlePageSchema,
   articleSearchResultSchema,
   articleSchema,
   articleTranslationSchema,
@@ -13,7 +22,10 @@ import {
   feedDiscoveryResultSchema,
   feedFetchResultSchema,
   feedSchema,
+  feedStatsSchema,
   importResultSchema,
+  listViewSchema,
+  listViewsSchema,
   markReadResultSchema,
   opmlImportResultSchema,
   providerStatusSchema,
@@ -29,6 +41,7 @@ import {
   type Article,
   type ArticleList,
   type ArticleListQuery,
+  type ArticlePage,
   type ArticleSearchQuery,
   type ArticleSearchResult,
   type ArticleTranslation,
@@ -45,10 +58,15 @@ import {
   type FeedDiscoveryResult,
   type FeedFetchResult,
   type FeedMove,
+  type FeedStats,
   type FeedUpdate,
   type ImportResult,
+  type ListView,
+  type ListViews,
+  type ListViewUpdate,
   type MarkRead,
   type MarkReadResult,
+  type SeenArticle,
   type OpmlImportResult,
   type ProviderStatus,
   type Run,
@@ -220,7 +238,33 @@ export function createApi(options: ApiOptions) {
     translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
     /** Fetches the full content of a feed article from its page. Answers once the fetch is over, which can take seconds. */
     fetchFullContent: (id: number): Promise<FullContentResult> => json(fullContentResultSchema, `/articles/${id}/full-content`, { method: "POST" }),
+    /**
+     * Records that the article's body is shown to the reader. Only a screen that shows the body sends it; marking
+     * read is a separate request. Answers with the time of the first opening.
+     */
+    openArticle: (id: number): Promise<{ openedAt: string }> =>
+      json(z.object({ openedAt: z.string() }), `/articles/${id}/open`, { method: "POST" }),
+    /** The annotations of every article, the last made first, a page at a time. */
+    annotations: (page: AnnotationListQuery = {}): Promise<AnnotationList> => json(annotationListSchema, `/annotations${query(page)}`),
+    /** Highlights a part of an article's body, with a note or none. */
+    addHighlight: (articleId: number, input: HighlightCreate): Promise<Highlight> =>
+      json(highlightSchema, `/articles/${articleId}/highlights`, body("POST", input)),
+    /** Puts a note on a highlight in place of the one it has; null removes the note and keeps the highlight. */
+    updateHighlight: (id: number, note: string | null): Promise<Highlight> => json(highlightSchema, `/highlights/${id}`, body("PATCH", { note })),
+    deleteHighlight: async (id: number): Promise<void> => void (await request(`/highlights/${id}`, { method: "DELETE" })),
+    /** Writes the note on a whole article, or replaces the one it has. */
+    saveArticleNote: (articleId: number, text: string): Promise<ArticleNote> => json(articleNoteSchema, `/articles/${articleId}/note`, body("PUT", { text })),
+    deleteArticleNote: async (articleId: number): Promise<void> => void (await request(`/articles/${articleId}/note`, { method: "DELETE" })),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
+    /**
+     * Marks read the articles as a screen showed them, each with the `updatedAt` it had on screen: one that a
+     * follow-up updated since stays unread. `keepalive` lets the request finish after the page has gone.
+     */
+    markSeenRead: (articles: SeenArticle[], options: { keepalive?: boolean } = {}): Promise<MarkReadResult> =>
+      json(markReadResultSchema, "/articles/mark-read", {
+        ...body("POST", { articles }),
+        ...(options.keepalive ? { keepalive: true } : {}),
+      }),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>
       json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),
     counts: (): Promise<Counts> => json(countsSchema, "/counts"),
@@ -233,6 +277,8 @@ export function createApi(options: ApiOptions) {
     /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
     moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),
     deleteFeed: async (id: number): Promise<void> => void (await request(`/feeds/${id}`, { method: "DELETE" })),
+    /** What became of the articles the feed delivered in the last 30 days. */
+    feedStats: (id: number): Promise<FeedStats> => json(feedStatsSchema, `/feeds/${id}/stats`),
     fetchFeed: (id: number): Promise<FeedFetchResult> => json(feedFetchResultSchema, `/feeds/${id}/fetch`, { method: "POST" }),
     exportOpml: async (): Promise<string> => (await request("/feeds/opml")).text(),
     importOpml: (text: string): Promise<OpmlImportResult> =>
@@ -244,10 +290,16 @@ export function createApi(options: ApiOptions) {
     updateFilter: (id: number, patch: FilterUpdate): Promise<FilterUpdateResult> => json(filterUpdateResultSchema, `/filters/${id}`, body("PATCH", patch)),
     deleteFilter: (id: number): Promise<FilterDeleteResult> => json(filterDeleteResultSchema, `/filters/${id}`, { method: "DELETE" }),
     /** The feed articles a filter hides, newest first, a page at a time. */
-    filterArticles: (id: number, page: FilterArticlesQuery = {}): Promise<ArticleList> =>
-      json(articleListSchema, `/filters/${id}/articles${query(page)}`),
+    filterArticles: (id: number, page: FilterArticlesQuery = {}): Promise<ArticlePage> =>
+      json(articlePageSchema, `/filters/${id}/articles${query(page)}`),
     /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
     previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
+
+    /** The entries whose list view differs from the defaults. Any other entry is newest first. */
+    listViews: (): Promise<ListViews> => json(listViewsSchema, "/list-views"),
+    /** Changes the list view of the entry a key of `listKey` names. Answers with the entry's view. */
+    updateListView: (key: string, patch: ListViewUpdate): Promise<ListView> =>
+      json(listViewSchema, `/list-views/${encodeURIComponent(key)}`, body("PATCH", patch)),
 
     /** The term groups in their order, each with its terms. */
     termGroups: (): Promise<TermGroup[]> => json(z.array(termGroupSchema), "/term-groups"),

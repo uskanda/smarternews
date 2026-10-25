@@ -345,4 +345,73 @@
     @apply type-body-md;
     color: var(--color-on-surface-muted);
   }
+
+  /*
+   * A highlight the reader made: the fill alone, without a line, so that it is told from a search match and a
+   * term, which have lines, also by readers who cannot tell the colours apart. Their marks sit inside it.
+   */
+  mark.annotation-mark {
+    background: var(--color-annotation-fill);
+    color: inherit;
+    cursor: pointer;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* The icon after a highlight with a note. */
+  .annotation-note-icon {
+    display: inline-block;
+    width: 0.85em;
+    height: 0.85em;
+    margin-left: 0.15em;
+    vertical-align: -0.05em;
+    color: var(--color-annotation);
+  }
+
+  /* An original shown alone in a translated body: its blocks are blocks of the body. */
+  .segment-alone {
+    display: contents;
+  }
+
+  /* Selected text of the body: grey, so that it is not taken for a highlight. */
+  .article-body ::selection {
+    background: var(--color-text-selection);
+    color: inherit;
+  }
+
+  /* The quote of a highlight in a dialog and among those the body no longer holds. */
+  .annotation-quote {
+    border-left: 2px solid var(--color-outline-strong);
+    padding-left: var(--spacing-md);
+  }
+
+  /* The note on the whole article above the body: the reader's own words, set apart by a line of the highlight colour. */
+  .article-note {
+    border-left: 2px solid var(--color-annotation);
+    padding-left: var(--spacing-md);
+  }
+
+  /* The highlighted text of a row of the list of annotations. */
+  .annotation-list-quote {
+    border-left: 2px solid var(--color-annotation);
+    padding-left: var(--spacing-sm);
+  }
+
+  /* "メモ" before an excerpt taken from a note. */
+  .excerpt-note {
+    margin-right: var(--spacing-xs);
+    color: var(--color-on-surface);
+  }
+
+  /* The menu of a selection in the body, below it: the look of the menu of an entry. */
+  .selection-menu {
+    position: fixed;
+    z-index: 30;
+    display: flex;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs);
+    border: 1px solid var(--color-outline-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
 }

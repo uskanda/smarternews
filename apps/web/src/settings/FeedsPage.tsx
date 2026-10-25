@@ -1,5 +1,5 @@
-import type { Category, Feed, Settings } from "@smarternews/core/api";
-import { useQueryClient } from "@tanstack/react-query";
+import type { Category, Feed, FeedStats, Settings } from "@smarternews/core/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { ApiError, conflictLabel, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { feedDeletionText } from "./feed-deletion.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -215,6 +216,64 @@ function AddFeed({ categories }: { categories: Category[] }) {
 
 // ---- the list ----------------------------------------------------------------------------------
 
+/** "4件（40%）": a count and its share of what came, rounded to a whole percent. */
+function share(count: number, received: number): string {
+  return `${count}件（${Math.round((count / received) * 100)}%）`;
+}
+
+function StatsList({ stats, timeZone }: { stats: FeedStats; timeZone: string }) {
+  const at = (iso: string) => `${formatDay(iso, timeZone).date} ${formatClock(iso, timeZone)}`;
+  const rows: Array<[string, string]> = [
+    ["届いた記事", `${stats.received}件`],
+    ...(stats.received > 0
+      ? ([
+          ["開いた記事", share(stats.opened, stats.received)],
+          ["スターを付けた記事", share(stats.starred, stats.received)],
+        ] as Array<[string, string]>)
+      : ([
+          ["開いた記事", `${stats.opened}件`],
+          ["スターを付けた記事", `${stats.starred}件`],
+        ] as Array<[string, string]>)),
+    ["フィルターで隠した記事", `${stats.hiddenByFilters}件`],
+    ["重複として隠した記事", `${stats.hiddenAsDuplicates}件`],
+    ["最後の新着", stats.lastNewItemAt ? at(stats.lastNewItemAt) : "まだありません"],
+  ];
+  return (
+    <>
+      {stats.received === 0 ? <p className="type-body-md">直近30日に届いた記事はありません。</p> : null}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-lg gap-y-xs type-body-md">
+        {rows.map(([term, value]) => (
+          <div key={term} className="contents">
+            <dt className="text-on-surface-muted">{term}</dt>
+            <dd className="tabular-nums">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
+  );
+}
+
+/** What became of the articles the feed delivered in the last 30 days, counted by the server when the form opens. */
+function FeedStatsSection({ feed }: { feed: Feed }) {
+  const { api } = useApp();
+  const timeZone = useTimeZone();
+  const stats = useQuery({ queryKey: ["feed-stats", feed.id], queryFn: () => api.feedStats(feed.id) });
+  const id = `feed-${feed.id}-stats`;
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-xs rounded-md border border-outline px-lg py-md">
+      <h3 id={id} className="type-label-md">
+        直近30日の統計
+      </h3>
+      {stats.isError ? <ErrorNotice error={stats.error} onRetry={() => void stats.refetch()} /> : null}
+      {stats.isPending && !stats.isError ? <Loading /> : null}
+      {stats.data ? <StatsList stats={stats.data} timeZone={timeZone} /> : null}
+      <p className="type-label-sm text-on-surface-muted">
+        保存した日から30日以内の記事を数えます。フィルターで隠した記事は、いまのフィルターで数えます。
+      </p>
+    </section>
+  );
+}
+
 function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Category[]; onDone: () => void }) {
   const { api } = useApp();
   const refresh = useRefresh();
@@ -264,6 +323,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
     <form ref={form} noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
+      <FeedStatsSection feed={feed} />
       <Field label="名前" value={title} onChange={(event) => setTitle(event.target.value)} error={fieldError(error, "title")} />
       <div className="flex flex-col gap-xs">
         <label htmlFor={`${id}-category`} className="type-label-md">
@@ -323,7 +383,10 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.translate ? <Badge>翻訳</Badge> : null}
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
       {feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
+      {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}
       <span className="tabular-nums">{feed.lastError && !feed.lastSucceededAt ? "まだ成功していません" : lastSuccess}</span>
+      <span className="tabular-nums">直近30日に{feed.recentArticleCount}件</span>
+      <span className="tabular-nums">{feed.lastNewItemAt ? `最後の新着 ${at(feed.lastNewItemAt)}` : "新着はまだありません"}</span>
       {feed.lastError ? (
         <span className="break-all text-error" title={feed.lastError}>
           理由: {feedErrorLabel(feed.lastError)}
@@ -357,7 +420,7 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
       const result = await api.fetchFeed(feed.id);
       // The answer holds the feed as it is now, so the row changes without waiting for the next refresh.
       client.setQueryData<Feed[]>(["feeds"], (list) => list?.map((entry) => (entry.id === feed.id ? result.feed : entry)));
-      refresh("counts", "articles");
+      refresh("counts", "articles", "feed-stats");
       toast({
         message:
           result.status === "failed"
@@ -423,10 +486,7 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
           </>
         }
       >
-        <p>
-          「{feed.title}」と、その配信記事{feed.articleCount}件が消えます。
-          {feed.starredCount > 0 ? `うち${feed.starredCount}件にはスターが付いています。` : ""}元に戻せません。
-        </p>
+        <p>{feedDeletionText(feed)}</p>
         <ScopedFiltersNote target={{ feedId: feed.id }} />
         <p>記事を残したまま取得だけを止めるには、編集で一時停止にしてください。</p>
       </ConfirmDialog>
@@ -593,9 +653,15 @@ function TranslationUsage() {
   );
 }
 
+/** A stale feed or one whose last fetch failed: what the switch above the list puts first. */
+const needsLook = (feed: Feed) => feed.stale || feed.lastError !== null;
+
 /** Subscribed feeds: adding, the list with what the last fetch did, the base interval, and OPML. */
 export function FeedsPage() {
   const feeds = useFeeds();
+  // Kept on this screen only: opened again, the list is in the order of the left pane.
+  const [problemsFirst, setProblemsFirst] = useState(false);
+  const listed = feeds.data && problemsFirst ? [...feeds.data.filter(needsLook), ...feeds.data.filter((feed) => !needsLook(feed))] : feeds.data;
   const categories = useCategories().data ?? [];
   const settings = useSettings().data;
   const timeZone = useTimeZone();
@@ -616,7 +682,10 @@ export function FeedsPage() {
         {feeds.isError ? <ErrorNotice error={feeds.error} onRetry={() => void feeds.refetch()} /> : null}
         {feeds.isPending && !feeds.isError ? <Loading /> : null}
         {feeds.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">購読フィードはまだありません。</p> : null}
-        <ul>{feeds.data?.map((feed) => <FeedRow key={feed.id} feed={feed} categories={categories} settings={settings} timeZone={timeZone} />)}</ul>
+        {feeds.data && feeds.data.length > 0 ? (
+          <Checkbox label="問題のある購読フィードを先頭に並べる" checked={problemsFirst} onChange={(event) => setProblemsFirst(event.target.checked)} />
+        ) : null}
+        <ul>{listed?.map((feed) => <FeedRow key={feed.id} feed={feed} categories={categories} settings={settings} timeZone={timeZone} />)}</ul>
       </section>
       {settings ? <BaseInterval settings={settings} /> : null}
       <TranslationUsage />

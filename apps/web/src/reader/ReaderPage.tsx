@@ -1,19 +1,37 @@
-import type { Article, ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
+import type { Article, ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { useArticle, useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useFullContentFetch, useSettings, useTimeZone } from "../api/queries.ts";
+import {
+  useArticle,
+  useArticleFlags,
+  useRecordOpened,
+  useArticleList,
+  useArticleSearch,
+  useCategories,
+  useFeeds,
+  useFullContentFetch,
+  useListSortChange,
+  useListViews,
+  useReadPatch,
+  useSettings,
+  useTimeZone,
+} from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
 import { followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
+import { useScrollRead } from "../lib/scroll-read.ts";
 import {
+  ANNOTATIONS_LABEL,
   buildNav,
   GENERATED_LABEL,
   hasListControls,
   hasReadToggle,
+  hasSortMenu,
   listKey as keyOf,
+  listSortOf,
   mergeKept,
   nextTarget,
   RECENTLY_READ_LABEL,
@@ -29,9 +47,12 @@ import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
+import { useScrollToRead } from "./scroll-read.ts";
+import { SortMenu } from "./SortMenu.tsx";
 
 export type View =
   | "unread"
@@ -40,6 +61,8 @@ export type View =
   | "generated"
   | "uncategorized"
   | "recentlyRead"
+  /** The reader's annotations: a list of annotations, not of articles. */
+  | "annotations"
   | "category"
   | "category-generated"
   | "feed"
@@ -53,6 +76,7 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   generated: GENERATED_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
+  annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
@@ -111,6 +135,20 @@ function SearchEmpty({ words, narrowed, onWiden }: { words: string; narrowed: bo
 
 const SELECT = "rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 
+/** The height of the list's visible area, followed as it changes while `active`. */
+function useListHeight(ref: RefObject<HTMLElement | null>, active: boolean): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const element = ref.current;
+    if (!active || !element) return;
+    setHeight(element.clientHeight);
+    const observer = new ResizeObserver(() => setHeight(element.clientHeight));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref, active]);
+  return height;
+}
+
 /** The reading screen: a list of articles for the chosen view, and the chosen article beside it. */
 export function ReaderPage({ view }: { view: View }) {
   const { api, now } = useApp();
@@ -129,6 +167,7 @@ export function ReaderPage({ view }: { view: View }) {
   const feeds = useFeeds();
   const inCategory = view === "category" || view === "category-generated";
   const isSearch = view === "search";
+  const isAnnotations = view === "annotations";
   const category: Category | undefined = inCategory ? categories.data?.find((entry) => entry.slug === params.slug) : undefined;
   const feed: Feed | undefined = view === "feed" ? feeds.data?.find((entry) => String(entry.id) === params.feedId) : undefined;
   // Null until the category or the feed the path names is known.
@@ -146,18 +185,27 @@ export function ReaderPage({ view }: { view: View }) {
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
+  // The annotation chosen in the list of annotations, which the article is brought to.
+  const annotationParam = isAnnotations ? search.get("annotation") : null;
+  const focusAnnotation = annotationParam && /^\d{1,15}$/.test(annotationParam) ? Number(annotationParam) : null;
   const includeRead = search.get("read") === "1";
   const importantOnly = importanceFilter && search.get("min") === "4";
+  // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
+  const listViews = useListViews();
+  const viewsSettled = listViews.isSuccess || listViews.isError;
+  const sortMenu = target !== null && !isSearch && hasSortMenu(target, categories.data);
+  const sort: ListSort = target !== null && sortMenu ? listSortOf(target, listViews.data?.items, categories.data) : "newest";
+  const sortChange = useListSortChange(() => toast({ message: "並び順を保存できませんでした。もう一度試してください。" }));
 
   const filter = useMemo<ArticleListQuery>(() => {
     if (target === null) return {};
     if (isEvents) return { category: category!.id, kind: "event" };
     return {
       ...(importantOnly ? { minImportance: 4 } : {}),
-      ...targetFilter(target),
+      ...targetFilter(target, sort),
       ...(readToggle && !includeRead ? { unread: "true" as const } : {}),
     };
-  }, [target, category, isEvents, readToggle, includeRead, importantOnly]);
+  }, [target, category, isEvents, readToggle, includeRead, importantOnly, sort]);
   // The search: the words, a category by its slug or a feed by its id, and whether only unread articles count.
   const words = isSearch ? (search.get("q") ?? "").trim() : "";
   const searchSlug = isSearch ? search.get("category") : null;
@@ -182,23 +230,56 @@ export function ReaderPage({ view }: { view: View }) {
   const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = filter.recentlyRead === "true";
-  const list = useArticleList(filter, target !== null);
+  const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
   const active = isSearch ? results : list;
   const fetched = useMemo<ArticleSummary[]>(
     () => (isSearch ? results.data?.pages.flatMap((page) => page.items) : list.data?.pages.flatMap((page) => page.items)) ?? EMPTY,
     [isSearch, results.data, list.data],
   );
   const excerpts = useMemo(
-    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item.excerpt] as const)) ?? []),
+    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
     [results.data],
   );
 
-  // Articles read during this visit stay in an unread list until the user changes the list or refreshes.
-  const listKey = JSON.stringify(isSearch ? searchQuery : filter);
+  // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
+  // change of order is the same list: what was kept moves to its place in the new order.
+  const listKey = JSON.stringify(isSearch ? searchQuery : { ...filter, order: undefined });
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const sortKey = target ? sortKeyFor(target) : undefined;
-  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey), [fetched, kept, listKey, sortKey]);
+  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
+
+  // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
+  // not in the recently read articles, which is where a mistake is put right, nor in search results or events.
+  const [refreshes, setRefreshes] = useState(0);
+  const listScroll = useRef<HTMLDivElement>(null);
+  const listRows = useRef<HTMLUListElement>(null);
+  const readPatch = useReadPatch();
+  const scrollReadChosen = useScrollRead();
+  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && (layout !== "narrow" || articleId === null);
+  const scrollRead = useScrollToRead({
+    enabled: scrollReadOn,
+    scrollRef: listScroll,
+    rowsRef: listRows,
+    items,
+    resetKey: `${listKey}#${refreshes}`,
+    show: (ids, isRead) => {
+      const changed = new Set(ids);
+      setKept((current) => {
+        if (current.key !== listKey) return current;
+        const known = new Set(current.items.map((item) => item.id));
+        const added = unreadOnly ? items.filter((item) => changed.has(item.id) && !known.has(item.id)) : [];
+        return {
+          key: listKey,
+          items: [...current.items, ...added].map((item) => (changed.has(item.id) ? { ...item, isRead } : item)),
+        };
+      });
+      readPatch(ids, isRead);
+    },
+    onFailed: (retry) =>
+      toast({ message: "スクロールした記事を既読にできませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: retry } }),
+  });
+  const listHeight = useListHeight(listScroll, scrollReadOn);
 
   const basePath = (target && listPathOf(target, () => category?.slug)) ?? `/${view}`;
   const query = search.toString() ? `?${search.toString()}` : "";
@@ -210,6 +291,8 @@ export function ReaderPage({ view }: { view: View }) {
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
   function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
+    // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
+    if (!isRead) scrollRead.exclude(target.id);
     const summary = items.find((item) => item.id === target.id);
     if ((unreadOnly || recentlyRead) && summary) {
       setKept((current) => ({
@@ -234,12 +317,15 @@ export function ReaderPage({ view }: { view: View }) {
   useEffect(() => setDeliveredShown(null), [articleId]);
 
   // Opening an unread article marks it as read, once per visit to that article. An article that waits for its
-  // full content has it asked for: once read, it would no longer be fetched by itself.
+  // full content has it asked for: once read, it would no longer be fetched by itself. Its body is shown now, so
+  // the server records the opening; marking read anywhere else does not.
   const opened = useArticle(articleId).data;
+  const recordOpened = useRecordOpened();
   const autoMarked = useRef<number | null>(null);
   useEffect(() => {
     if (!opened || autoMarked.current === opened.id) return;
     autoMarked.current = opened.id;
+    recordOpened(opened);
     if (opened.fullContentStatus === "waiting") fullContent.fetch(opened.id);
     if (!opened.isRead) setRead(opened, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when another article is opened, not on every change
@@ -254,6 +340,7 @@ export function ReaderPage({ view }: { view: View }) {
 
   function refresh() {
     setKept({ key: listKey, items: [] });
+    setRefreshes((count) => count + 1);
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["counts"] });
   }
@@ -283,10 +370,10 @@ export function ReaderPage({ view }: { view: View }) {
 
   async function markAllRead() {
     if (!listControls) return;
-    const newest = fetched.reduce<string | null>((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null);
-    if (newest === null) return;
-    // "Before" is just after the newest article on screen, so one that arrives later stays unread.
-    const before = new Date(new Date(newest).getTime() + 1).toISOString();
+    // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
+    // marked too, whatever the order. A refetch reads the first page again, and moves the time with it.
+    const before = list.data?.pages[0]?.asOf;
+    if (before === undefined || fetched.length === 0) return;
     try {
       const result = await api.markRead({ before, ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
       refresh();
@@ -327,6 +414,16 @@ export function ReaderPage({ view }: { view: View }) {
     setSearch(next, { replace: true });
   }
   const narrowingId = useId();
+
+  /** Lists the entry in the other order, from its start; the article open stays open. */
+  function changeSort(next: ListSort) {
+    if (target === null) return;
+    sortChange.mutate({ key: keyOf(target), sort: next });
+  }
+  // A list in another order starts at its top.
+  useLayoutEffect(() => {
+    if (listScroll.current) listScroll.current.scrollTop = 0;
+  }, [sort]);
   const narrowing = searchSlug !== null ? `c:${searchSlug}` : searchFeedId !== undefined ? `f:${searchFeedId}` : "";
 
   const index = items.findIndex((item) => item.id === articleId);
@@ -372,8 +469,9 @@ export function ReaderPage({ view }: { view: View }) {
   const canMarkAll = listControls && (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
   useHotkeys(
     {
-      j: () => move(1),
-      k: () => move(-1),
+      // The list of annotations moves through its own rows.
+      j: isAnnotations ? undefined : () => move(1),
+      k: isAnnotations ? undefined : () => move(-1),
       Space: () => page(1),
       "Shift+Space": () => page(-1),
       // The same as the buttons and the toggle beside the list, and only while they are offered.
@@ -416,7 +514,9 @@ export function ReaderPage({ view }: { view: View }) {
               : "検索"
             : TITLES[view];
 
-  const listPane = isEvents ? (
+  const listPane = isAnnotations ? (
+    <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
+  ) : isEvents ? (
     <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
@@ -437,6 +537,7 @@ export function ReaderPage({ view }: { view: View }) {
           {importanceFilter ? (
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
+          {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">
@@ -468,7 +569,7 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
-      <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
@@ -477,7 +578,7 @@ export function ReaderPage({ view }: { view: View }) {
         {!isSearch && list.isSuccess && items.length === 0 ? (
           <EmptyList view={view} hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0} />
         ) : null}
-        <ul>
+        <ul ref={listRows}>
           {items.map((item) => (
             <ArticleRow
               key={item.id}
@@ -488,7 +589,8 @@ export function ReaderPage({ view }: { view: View }) {
               timeZone={timeZone}
               now={now()}
               time={recentlyRead ? "read" : "updated"}
-              excerpt={excerpts.get(item.id) ?? null}
+              excerpt={excerpts.get(item.id)?.excerpt ?? null}
+              excerptFromNote={excerpts.get(item.id)?.excerptFromNote ?? false}
               terms={terms}
             />
           ))}
@@ -500,6 +602,8 @@ export function ReaderPage({ view }: { view: View }) {
             </Button>
           </div>
         ) : null}
+        {/* Room below the last row, so that it too can go past the top. */}
+        {scrollReadOn ? <div aria-hidden="true" data-scroll-read-room style={{ height: listHeight }} /> : null}
       </div>
     </section>
   );
@@ -547,6 +651,7 @@ export function ReaderPage({ view }: { view: View }) {
                 onToggle: () => toggleDelivered(articleId),
               }}
               terms={terms}
+              focusAnnotation={focusAnnotation}
             />
           )}
         </div>

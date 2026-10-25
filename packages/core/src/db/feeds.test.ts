@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { createTestDb, fakeClock, seedFeedArticle } from "../testing/db.ts";
+import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
+import { recordArticleOpened } from "./articles.ts";
+import { createFilter, deleteFilter } from "./filters.ts";
 import { createCategory, deleteCategory } from "./categories.ts";
-import { deleteFeed, dueFeeds, getFeed, insertFeed, listFeeds, nextFetchAt, recordFetchFailure, recordFetchSuccess, updateFeed } from "./feeds.ts";
+import {
+  deleteFeed,
+  dueFeeds,
+  feedStats,
+  getFeed,
+  insertFeed,
+  listFeeds,
+  nextFetchAt,
+  recordFetchFailure,
+  recordFetchSuccess,
+  updateFeed,
+} from "./feeds.ts";
 import { updateSettings } from "./settings.ts";
 
 const START = "2026-03-01T12:00:00.000Z";
@@ -30,7 +43,7 @@ describe("insertFeed", () => {
       articleCount: 0,
       starredCount: 0,
     });
-    expect(listFeeds(db)).toEqual([feed]);
+    expect(listFeeds(db, clock())).toEqual([feed]);
   });
 
   it("refuses a URL that differs from a subscribed one only in tracking parameters", () => {
@@ -271,5 +284,137 @@ describe("full content fetching of a feed", () => {
     const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", fetchFullContent: true }, clock);
     expect(updateFeed(db, feed.id, { fetchFullContent: false }, clock).fetchFullContent).toBe(false);
     expect(since(db, feed.id)).toBeNull();
+  });
+});
+
+describe("a stale feed", () => {
+  const DAY = 86_400_000;
+  const NOW = new Date(START);
+  const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
+
+  function feedWith(db: ReturnType<typeof createTestDb>, lastNew: string | null, created = daysAgo(400)): number {
+    const id = seedFeed(db, { at: created });
+    db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run(lastNew, id);
+    return id;
+  }
+
+  it("is one whose last new item came more days ago than the setting, and not one within them", () => {
+    const { db } = setup();
+    const old = feedWith(db, daysAgo(61));
+    const recent = feedWith(db, daysAgo(59));
+    expect(getFeed(db, old, NOW)).toMatchObject({ stale: true, lastNewItemAt: daysAgo(61) });
+    expect(getFeed(db, recent, NOW)).toMatchObject({ stale: false, lastNewItemAt: daysAgo(59) });
+    expect(listFeeds(db, NOW).map((feed) => [feed.id, feed.stale])).toEqual([
+      [old, true],
+      [recent, false],
+    ]);
+  });
+
+  it("follows a change of the days at once", () => {
+    const { db } = setup();
+    const id = feedWith(db, daysAgo(61));
+    updateSettings(db, { staleFeedDays: 90 });
+    expect(getFeed(db, id, NOW).stale).toBe(false);
+  });
+
+  it("counts from the subscription when no new item ever came", () => {
+    const { db } = setup();
+    const old = feedWith(db, null, daysAgo(61));
+    const recent = feedWith(db, null, daysAgo(59));
+    expect(getFeed(db, old, NOW)).toMatchObject({ stale: true, lastNewItemAt: null });
+    expect(getFeed(db, recent, NOW).stale).toBe(false);
+  });
+
+  it("is judged apart from failures: a feed that keeps failing is stale too", () => {
+    const { db } = setup();
+    const id = feedWith(db, daysAgo(61));
+    recordFetchFailure(db, id, { now: daysAgo(1), error: "HTTP status 500" });
+    recordFetchFailure(db, id, { now: daysAgo(0), error: "HTTP status 500" });
+    expect(getFeed(db, id, NOW)).toMatchObject({ stale: true, failureCount: 2 });
+  });
+
+  it("is never a disabled feed", () => {
+    const { db } = setup();
+    const id = feedWith(db, daysAgo(100));
+    updateFeed(db, id, { enabled: false });
+    expect(getFeed(db, id, NOW).stale).toBe(false);
+  });
+});
+
+describe("the stats of a feed", () => {
+  const DAY = 86_400_000;
+  const NOW = new Date(START);
+  const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
+  const title = (value: string) => ({ fields: ["title" as const], match: "contains" as const, value });
+
+  it("count the articles stored within 30 days, the opened and the starred ones", () => {
+    const { db } = setup();
+    const feed = seedFeed(db);
+    const ids = Array.from({ length: 10 }, (_unused, index) => seedFeedArticle(db, feed, { storedAt: daysAgo(index + 1), starred: index === 0 }));
+    for (const id of ids.slice(0, 4)) recordArticleOpened(db, id, START);
+    // Stored 31 and 40 days ago, one of them opened: left out.
+    recordArticleOpened(db, seedFeedArticle(db, feed, { storedAt: daysAgo(31) }), START);
+    seedFeedArticle(db, feed, { storedAt: daysAgo(40), starred: true });
+    db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run(daysAgo(1), feed);
+
+    expect(feedStats(db, feed, NOW)).toEqual({
+      since: daysAgo(30),
+      received: 10,
+      opened: 4,
+      starred: 1,
+      hiddenByFilters: 0,
+      hiddenAsDuplicates: 0,
+      lastNewItemAt: daysAgo(1),
+    });
+    expect(getFeed(db, feed, NOW).recentArticleCount).toBe(10);
+    expect(listFeeds(db, NOW)[0]!.recentArticleCount).toBe(10);
+  });
+
+  it("count nothing for a feed whose only article was stored 31 days ago", () => {
+    const { db } = setup();
+    const feed = seedFeed(db);
+    recordArticleOpened(db, seedFeedArticle(db, feed, { storedAt: daysAgo(31) }), START);
+    expect(feedStats(db, feed, NOW)).toMatchObject({ received: 0, opened: 0 });
+    expect(getFeed(db, feed, NOW).recentArticleCount).toBe(0);
+  });
+
+  it("count what filters hide now, without the starred ones, and nothing once the filter is deleted", () => {
+    const { db, clock } = setup();
+    const feed = seedFeed(db);
+    seedFeedArticle(db, feed, { title: "PR one", storedAt: daysAgo(1) });
+    seedFeedArticle(db, feed, { title: "PR two", storedAt: daysAgo(1) });
+    seedFeedArticle(db, feed, { title: "PR starred", storedAt: daysAgo(1), starred: true });
+    seedFeedArticle(db, feed, { title: "News", storedAt: daysAgo(1) });
+    const filter = createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [title("PR")] }, clock);
+    expect(feedStats(db, feed, NOW)).toMatchObject({ received: 4, hiddenByFilters: 2 });
+    deleteFilter(db, filter.id);
+    expect(feedStats(db, feed, NOW)).toMatchObject({ received: 4, hiddenByFilters: 0 });
+  });
+
+  it("count the recorded duplicates while duplicate removal is on, and none while it is off", () => {
+    const { db } = setup();
+    const a = seedFeed(db);
+    const b = seedFeed(db);
+    const kept = seedFeedArticle(db, a, { storedAt: daysAgo(2) });
+    seedFeedArticle(db, b, { storedAt: daysAgo(1), duplicateOf: kept });
+    seedFeedArticle(db, b, { storedAt: daysAgo(1), duplicateOf: kept });
+    expect(feedStats(db, b, NOW)).toMatchObject({ received: 2, hiddenAsDuplicates: 2 });
+    updateSettings(db, { removeDuplicates: false });
+    expect(feedStats(db, b, NOW)).toMatchObject({ received: 2, hiddenAsDuplicates: 0 });
+  });
+
+  it("count a duplicate that a filter also hides in both", () => {
+    const { db, clock } = setup();
+    const a = seedFeed(db);
+    const b = seedFeed(db);
+    const kept = seedFeedArticle(db, a, { title: "Other", storedAt: daysAgo(2) });
+    seedFeedArticle(db, b, { title: "PR copy", storedAt: daysAgo(1), duplicateOf: kept });
+    createFilter(db, { action: "hide", scope: { type: "all" }, conditions: [title("PR")] }, clock);
+    expect(feedStats(db, b, NOW)).toMatchObject({ received: 1, hiddenByFilters: 1, hiddenAsDuplicates: 1 });
+  });
+
+  it("refuse a feed that does not exist", () => {
+    const { db } = setup();
+    expect(() => feedStats(db, 999, NOW)).toThrow(expect.objectContaining({ code: "not_found" }));
   });
 });

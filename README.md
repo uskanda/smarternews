@@ -53,9 +53,11 @@ curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 
 ## Web app
 
-The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. The settings offer four choices for how it looks: follow the device, light, dark, or dark blue. Following the device is the default: light on a light device, dark blue on a dark one. The choice is kept in the browser. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
+The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. The section "この端末の設定" of the settings offers four choices for how it looks: follow the device, light, dark, or dark blue. Following the device is the default: light on a light device, dark blue on a dark one. Everything in that section is kept in the browser, not on the server. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
 
 - Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
+- "スクロールした記事を既読にする" in "この端末の設定" marks an unread article as read once its row has gone wholly past the top of the list, however fast you scroll. It is off by default. The rows stay in the list, and the list gets room below its last row so that the last one can go past the top too. There is no undo; put an article back to unread from 最近読んだ記事 instead. An article put back to unread is left alone until the list is reloaded or another entry is opened. 最近読んだ記事, search results and event categories are never marked this way.
+- The button "並び順" at the top of the list switches it between newest first and oldest first. Each entry of the left pane keeps its own order on the server, so the Android app opens it the same way. Oldest first goes by the same time: a generated article that a follow-up rewrites moves to the end, and new articles join at the end. In an oldest first list, "すべて既読にする" also marks the articles not loaded yet, up to the time the list was loaded. Event categories, 最近読んだ記事 and search results keep their own order.
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
 - An event category is shown as a list of upcoming events grouped by day.
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
@@ -73,14 +75,16 @@ The token is stored in the browser's local storage. "このブラウザーから
 
 ## Android app
 
-The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Its settings screen offers the same four choices, kept on the device. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
+The Android app is a reader for the phone. It shows the same lists and articles as the web app, marks an article as read when you open it, and tells you about new articles with notifications. Its settings screen offers the same four choices in "この端末の設定", kept on the device apart from the browser. Download the APK from the [releases page](https://github.com/uskanda/smarternews/releases) and install it; Android asks once whether to allow installing from that source. The APK holds no server address and no token.
 
 In the drawer, a long press on a category or a feed picks it up; drag it to reorder, or hold a feed over another category for half a second to move it there.
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 
+- "並び順" at the top of a list switches it between newest first and oldest first, as on the web app, and the two share the order of each entry.
 - The button on top of a feed article fetches its full content, and switches between it and what the feed delivered once it is there.
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
+- "スクロールした記事を既読にする" in "この端末の設定" marks rows read as the list is scrolled past them, as on the web app. It is switched on the device by itself: turning it on in the browser does not turn it on in the app. A row put back to unread by a swipe, the long press menu or the article screen is left alone until the list is pulled or another list is opened. If the server cannot be reached, the rows show unread again with "もう一度試す".
 - The drawer on the left lists the same views, categories and subscribed feeds as the web app, with unread counts.
 - The settings screen edits the reader information, starts a run of a category, and shows what the latest run of each category did. Categories, topics, subscribed feeds, filters and term highlights are edited in the web app, which the settings screen opens in the browser.
 - The list and the article colour the terms of your term groups as the web app does. Pulling the list down fetches terms changed on the web.
@@ -206,7 +210,7 @@ The server counts the characters it sends per month and sends nothing beyond `mo
 
 [examples/smarternews.service](examples/smarternews.service) is a systemd user unit. The comments at its top give the install commands.
 
-After an upgrade that changes the database, the server copies the database file before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copy once the new version works for you.
+Copy the database file before you upgrade. An older version cannot write to a database that a newer one has changed, so going back means going back to that copy. When an upgrade rebuilds tables, the server also copies the file itself before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copies once the new version works for you.
 
 Change the articles in the database only through the server. Search keeps its index with triggers that call a function the server registers, so another connection, such as the `sqlite3` command, can read the database but fails when it writes articles.
 

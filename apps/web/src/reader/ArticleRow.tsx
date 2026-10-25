@@ -18,6 +18,7 @@ export function ArticleRow({
   now,
   time = "updated",
   excerpt = null,
+  excerptFromNote = false,
   terms,
 }: {
   article: ArticleSummary;
@@ -31,6 +32,8 @@ export function ArticleRow({
   time?: "updated" | "read";
   /** In search results: the text around the match, shown in place of the summary when there is one. */
   excerpt?: string | null;
+  /** In search results: the excerpt was taken from a note of the reader's, which the row says before it. */
+  excerptFromNote?: boolean;
   /** In search results: the words to mark in the headline and the excerpt. */
   terms?: readonly string[];
 }) {
@@ -62,6 +65,7 @@ export function ArticleRow({
         </span>
         {excerpt !== null ? (
           <span data-excerpt className="line-clamp-2 type-body-md text-on-surface-muted">
+            {excerptFromNote ? <span data-excerpt-note className="excerpt-note type-label-sm">メモ</span> : null}
             <Highlighted text={excerpt} terms={terms} groups={matcher} />
           </span>
         ) : (

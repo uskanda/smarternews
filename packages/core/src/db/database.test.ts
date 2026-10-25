@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -462,6 +462,9 @@ describe("the migration from stop words to filters", () => {
   it("matches the filters once at the first start, and what the words hid stays hidden", () => {
     const { db, dir } = withStopWords();
     migrate(db, dir);
+    // The server starts on the schema of today: the later migrations run before it matches.
+    for (const name of readdirSync(SHIPPED).filter((file) => file > "010")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    migrate(db, dir);
 
     expect(buildPendingFilterMatches(db)).toBe(true);
 
@@ -724,7 +727,7 @@ describe("the migration to term highlights", () => {
     const settings = () => db.prepare("SELECT * FROM settings").all();
     const before = { articles: articles(), settings: settings() };
 
-    for (const name of readdirSync(SHIPPED).filter((file) => file >= "014")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file >= "014" && file < "016")) copyFileSync(join(SHIPPED, name), join(dir, name));
     migrate(db, dir);
 
     expect({ articles: articles(), settings: settings() }).toEqual(before);
@@ -735,5 +738,194 @@ describe("the migration to term highlights", () => {
     expect(() => db.prepare("INSERT INTO term_groups (name, color, position, created_at) VALUES ('B', 'yellow', 2, ?)").run(now)).toThrow();
     db.prepare("DELETE FROM term_groups WHERE id = 1").run();
     expect(db.prepare("SELECT count(*) AS n FROM highlight_terms").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("the migration to list views", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("adds the table and leaves the rows that exist as they were", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "015")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, category_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, is_read, starred)
+       VALUES (1, 'feed', 5, 3, 'k1', 'news', 't', 's', 'b', ?, ?, ?, 1, 1)`,
+    ).run(now, now, now);
+    const rows = () => ({
+      articles: db.prepare("SELECT * FROM articles ORDER BY id").all(),
+      categories: db.prepare("SELECT * FROM categories ORDER BY id").all(),
+      feeds: db.prepare("SELECT * FROM feeds ORDER BY id").all(),
+      settings: db.prepare("SELECT * FROM settings").all(),
+    });
+    const before = rows();
+
+    copyFileSync(join(SHIPPED, "015_list_views.sql"), join(dir, "015_list_views.sql"));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(before);
+    expect(db.prepare("SELECT count(*) AS n FROM list_views").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+  });
+
+  it("holds one row per entry, and only the pairs of entry kind and target that make sense", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    const insert = (list: string, categoryId: number | null, feedId: number | null, sort = "oldest") =>
+      db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, ?, ?, ?)").run(list, categoryId, feedId, sort);
+
+    insert("unread", null, null);
+    insert("category", 3, null);
+    insert("category_generated", 3, null);
+    insert("feed", null, 5);
+    expect(db.prepare("SELECT sort FROM list_views WHERE list = 'unread'").get()).toEqual({ sort: "oldest" });
+
+    expect(() => insert("unread", null, null)).toThrow();
+    expect(() => insert("category", 3, null)).toThrow();
+    expect(() => insert("feed", null, 5)).toThrow();
+    expect(() => insert("unread", 3, null)).toThrow();
+    expect(() => insert("category", null, null)).toThrow();
+    expect(() => insert("category", 3, 5)).toThrow();
+    expect(() => insert("feed", 3, null)).toThrow();
+    expect(() => insert("recently_read", null, null)).toThrow();
+    expect(() => insert("all", null, null, "random")).toThrow();
+  });
+});
+
+describe("the migration to feed stats", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives each feed the time its newest article was stored, leaves open times empty, and adds the days", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "016")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const created = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO settings (id, reader_info, output_language, time_zone, search_language, search_region) VALUES (1, '', 'ja', 'UTC', 'ja', 'JP')").run();
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(created);
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (6, 'https://example.org/6', 'six', ?)").run(created);
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, is_read, read_at)
+       VALUES (?, 'feed', 5, ?, 'news', 't', 's', 'b', ?, ?, ?, ?, ?)`,
+    );
+    insert.run(1, "k1", created, created, "2026-02-01T00:00:00.000Z", 1, "2026-02-02T00:00:00.000Z");
+    insert.run(2, "k2", created, created, "2026-03-01T00:00:00.000Z", 0, null);
+
+    copyFileSync(join(SHIPPED, "016_feed_stats.sql"), join(dir, "016_feed_stats.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, last_new_item_at FROM feeds ORDER BY id").all()).toEqual([
+      { id: 5, last_new_item_at: "2026-03-01T00:00:00.000Z" },
+      { id: 6, last_new_item_at: null },
+    ]);
+    expect(db.prepare("SELECT id, is_read, opened_at FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, is_read: 1, opened_at: null },
+      { id: 2, is_read: 0, opened_at: null },
+    ]);
+    expect(db.prepare("SELECT stale_feed_days FROM settings").get()).toEqual({ stale_feed_days: 60 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'articles_feed_created'").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+  });
+});
+
+describe("the annotation text function", () => {
+  it("gives the quote and the note, one to a line and normalized, the note's Markdown left as written", () => {
+    const db = openDatabase(":memory:");
+    const text = (quote: string | null, note: string | null) => db.prepare("SELECT sn_annotation_text(?, ?) AS text").get(quote, note)?.text;
+    expect(text("ＡＩの電池", "**比較** する [link](https://example.org)")).toBe("aiの電池\n**比較** する [link](https://example.org)");
+    expect(text("電池", null)).toBe("電池");
+    expect(text(null, "あとで比べる")).toBe("あとで比べる");
+  });
+});
+
+describe("the migration to annotations", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  function before017() {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "017")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    return { db, dir };
+  }
+
+  it("leaves the articles, the search results and the rows of the index as they were", () => {
+    const { db, dir } = before017();
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, content_text, first_published_at, updated_at, created_at, starred)
+       VALUES (?, 'feed', 5, ?, 'news', ?, 's', 'b', ?, ?, ?, ?, ?)`,
+    );
+    insert.run(1, "k1", "電池の話", "新しい電池の工場", now, now, now, 1);
+    insert.run(2, "k2", "Title", "量子の話", now, now, now, 0);
+    const rows = () => ({
+      articles: db.prepare("SELECT * FROM articles ORDER BY id").all(),
+      index: db.prepare("SELECT rowid, text FROM article_search ORDER BY rowid").all(),
+      found: db.prepare("SELECT rowid FROM article_search WHERE article_search MATCH '\"電池の\"'").all(),
+    });
+    const earlier = rows();
+
+    copyFileSync(join(SHIPPED, "017_annotations.sql"), join(dir, "017_annotations.sql"));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(earlier);
+    expect(earlier.index).toHaveLength(2);
+    expect(tableNames(db)).toContain("annotations");
+    const triggers = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%_search_%' ORDER BY name")
+      .all()
+      .map((row) => String(row.name));
+    expect(triggers).toEqual([
+      "annotations_search_delete",
+      "annotations_search_insert",
+      "annotations_search_update",
+      "articles_search_delete",
+      "articles_search_insert",
+      "articles_search_update",
+    ]);
+  });
+
+  it("holds one note per article, and only the fields each kind has", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k1', 'news', 't', 's', 'b', ?, ?, ?)`,
+    ).run(now, now, now);
+    const insert = (kind: string, quote: string | null, prefix: string | null, suffix: string | null, position: number | null, note: string | null) =>
+      db
+        .prepare("INSERT INTO annotations (article_id, kind, quote, prefix, suffix, position, note, created_at, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(kind, quote, prefix, suffix, position, note, now, now);
+
+    insert("highlight", "電池", "", "", 0, null);
+    insert("highlight", "電池", "前", "後", 3, "メモ");
+    insert("note", null, null, null, null, "あとで比べる");
+    expect(() => insert("note", null, null, null, null, "二つ目")).toThrow();
+    expect(() => insert("highlight", null, "", "", 0, null)).toThrow();
+    expect(() => insert("highlight", "電池", "", "", -1, null)).toThrow();
+    expect(() => insert("highlight", "電池", null, "", 0, null)).toThrow();
+    expect(() => insert("note", null, null, null, null, null)).toThrow();
+    expect(() => insert("note", "電池", null, null, null, "メモ")).toThrow();
+    expect(() => insert("comment", null, null, null, null, "メモ")).toThrow();
+
+    db.prepare("DELETE FROM articles WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM annotations").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM article_search").get()).toEqual({ n: 0 });
+  });
+
+  it("does not change the migration that built the search index", () => {
+    const sql = readFileSync(join(SHIPPED, "012_article_search.sql"), "utf8");
+    expect(sql).not.toContain("annotation");
+    expect(sql).toContain("sn_search_text(NEW.origin, NEW.title, NEW.translated_title, NEW.summary, NEW.auto_summary, NEW.body,");
   });
 });

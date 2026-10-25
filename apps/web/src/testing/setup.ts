@@ -4,6 +4,7 @@ import { afterEach } from "vitest";
 import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetHotkeys } from "../lib/keys.ts";
 import { resetPaneState } from "../lib/panes.ts";
+import { resetScrollReadState } from "../lib/scroll-read.ts";
 import { resetThemeState } from "../lib/theme.ts";
 
 afterEach(() => {
@@ -12,6 +13,7 @@ afterEach(() => {
   resetPaneState();
   resetCollapsedState();
   resetThemeState();
+  resetScrollReadState();
   resetHotkeys();
 });
 

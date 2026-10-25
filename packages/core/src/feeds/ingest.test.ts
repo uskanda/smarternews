@@ -733,3 +733,86 @@ describe("full content when a feed is fetched", () => {
     expect(s.list().map((article) => article.id)).toEqual([s.id]);
   });
 });
+
+describe("when a feed last listed a new item", () => {
+  const lastNew = (s: ReturnType<typeof setup>, id: number) => getFeed(s.db, id).lastNewItemAt;
+
+  it("is the time of the subscription for a feed that delivers items, and stays empty for one without", async () => {
+    const items = Array.from({ length: 20 }, (_unused, index) => ({ title: `Post ${index}`, key: `k${index}` }));
+    const s = setup(items);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(lastNew(s, feed.id)).toBe(START);
+
+    const empty = setup([]);
+    const none = await subscribe(empty.deps, { url: FEED_URL });
+    expect(lastNew(empty, none.id)).toBeNull();
+  });
+
+  it("becomes the time of the fetch that finds an item the feed never listed", async () => {
+    const s = setup([{ title: "A" }, { title: "B" }, { title: "C" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    s.serve([{ title: "D", published: s.clock().toISOString() }, { title: "A" }, { title: "B" }, { title: "C" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(lastNew(s, feed.id)).toBe(s.clock().toISOString());
+  });
+
+  it("moves for an item published two years ago, which is not stored", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    s.serve([{ title: "Old", published: "2024-03-01T00:00:00.000Z" }, { title: "A" }]);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 0 });
+    expect(lastNew(s, feed.id)).toBe(s.clock().toISOString());
+  });
+
+  it("moves for an item recorded as a duplicate of another feed's article", async () => {
+    const s = setup([{ title: "A" }]);
+    const other = insertFeed(s.db, { url: "https://other.example.org/feed.xml", title: "Other" }, s.clock);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.db
+      .prepare(
+        `INSERT INTO articles (origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, dedup_url, dedup_title)
+         VALUES ('feed', ?, 'x', 'news', 'Shared', 's', 'b', ?, ?, ?, 'https://example.org/shared', 'shared story title')`,
+      )
+      .run(other.id, START, START, START);
+    s.clock.advance(HOUR);
+    s.serve([{ title: "Shared story title", key: "dup", link: "https://example.org/shared" }, { title: "A" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(s.db.prepare("SELECT duplicate_of FROM articles WHERE feed_id = ? AND item_key = 'dup'").get(feed.id)!.duplicate_of).not.toBeNull();
+    expect(lastNew(s, feed.id)).toBe(s.clock().toISOString());
+  });
+
+  it("stays when only known items come, rewritten or not", async () => {
+    const s = setup([{ title: "A", key: "a" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    s.serve([{ title: "A rewritten", key: "a", content: "<p>New words.</p>" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(getArticle(s.db, s.list()[0]!.id).title).toBe("A rewritten");
+    expect(lastNew(s, feed.id)).toBe(START);
+  });
+
+  it("stays when the feed still lists an item whose article was purged", async () => {
+    const s = setup([{ title: "Undated", key: "u", published: null }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    for (let day = 0; day < 91; day += 10) {
+      s.clock.advance(10 * DAY);
+      await fetchFeed(s.deps, feed.id);
+    }
+    purgeExpired(s.db, s.clock);
+    expect(getFeed(s.db, feed.id).articleCount).toBe(0);
+    s.clock.advance(HOUR);
+    await fetchFeed(s.deps, feed.id);
+    expect(lastNew(s, feed.id)).toBe(START);
+  });
+
+  it("stays when the feed answers that nothing changed", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    s.serve(() => new Response(null, { status: 304 }));
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "not_modified" });
+    expect(lastNew(s, feed.id)).toBe(START);
+  });
+});

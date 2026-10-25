@@ -45,3 +45,12 @@ describe("mergeKept", () => {
     expect(sortKeyFor({ type: "unread" })(entry)).toBe("2026-03-01T12:00:00Z");
   });
 });
+
+describe("mergeKept oldest first", () => {
+  it("puts an article read during the visit back in its place among the oldest first", () => {
+    const fetched = [item(1, "2026-03-01T12:00:00Z"), item(3, "2026-03-01T12:02:00Z"), item(5, "2026-03-01T12:02:00Z")];
+    const kept = [item(2, "2026-03-01T12:01:00Z", true), item(4, "2026-03-01T12:02:00Z", true)];
+    expect(mergeKept(fetched, kept, undefined, "oldest").map((entry) => entry.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(mergeKept(fetched, kept).map((entry) => entry.id)).toEqual([5, 4, 3, 2, 1]);
+  });
+});
