@@ -1,7 +1,8 @@
 import type { TaskName } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import type { Database } from "../db/database.ts";
-import type { LlmRequest } from "../llm/adapter.ts";
+import type { LlmRequest, LlmUsage } from "../llm/adapter.ts";
+import type { ModelPricing } from "../llm/pricing.ts";
 import { TaskRunner, type Provider } from "../llm/runner.ts";
 import { TASK_NAMES } from "../llm/tasks.ts";
 
@@ -15,7 +16,16 @@ export function fakeLlm(
   db: Database,
   clock: Clock,
   handlers: Partial<Record<TaskName, FakeHandler>>,
-  options: { webSearch?: boolean; limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number }; timeZone?: string } = {},
+  options: {
+    webSearch?: boolean;
+    limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number };
+    timeZone?: string;
+    /** Makes every provider one that costs money, at these prices. */
+    pricing?: ModelPricing;
+    /** What every call used. */
+    usage?: LlmUsage;
+    budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
+  } = {},
 ) {
   const requests = Object.fromEntries(TASK_NAMES.map((task) => [task, [] as LlmRequest[]])) as Record<TaskName, LlmRequest[]>;
   const providers = new Map<string, Provider>(
@@ -25,13 +35,14 @@ export function fakeLlm(
         name: task,
         adapterKind: "fake",
         model: "fake",
+        pricing: options.pricing ?? null,
         adapter: {
           capabilities: { webSearch: options.webSearch ?? true },
           async complete(request: LlmRequest) {
             requests[task].push(request);
             const handler = handlers[task];
             if (!handler) throw new Error(`the test did not expect a ${task} call`);
-            return handler(request);
+            return { answer: await handler(request), usage: options.usage ?? null };
           },
         },
       },
@@ -45,6 +56,7 @@ export function fakeLlm(
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
     timeouts: { defaultMs: 2000, searchMs: 2000 },
     timeZone: () => options.timeZone ?? "UTC",
+    budget: options.budget,
   });
   return { runner, requests };
 }
