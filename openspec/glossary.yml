@@ -21,6 +21,10 @@ terms:
     definition: "候補を集めてくる手段で、フィード、ニュース検索、LLM検索のいずれか。"
     aliases: ["情報源"]
     en: "source"
+  - term: "検索先"
+    definition: "ニュース検索が問い合わせるニュースのRSS検索で、Google NewsとBing Newsのどちらか。"
+    aliases: ["検索エンジン"]
+    en: "news engine"
   - term: "候補"
     definition: "取得元から得た、記事の材料になりうる1件のWebページの情報。"
     aliases: ["候補記事"]

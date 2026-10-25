@@ -51,3 +51,4 @@ filters.ts
 FiltersPage.tsx
 articles.filtered
 event.code
+newsSearch.engines
