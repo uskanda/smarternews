@@ -42,6 +42,6 @@
 ## 6. 文書と確認
 
 - [x] 6.1 `README.md` と `README.ja.md` の「Stop words」の節と、ストップワードに触れた文をフィルターの説明に書き換える。書き換えたあとに、両方のファイルで「stop word」と「ストップワード」の検索が、移行の説明のほかに当たらないことを確かめる
-- [ ] 6.2 `openspec/changes/` のほかの変更（#47、#51、#52）が先にarchiveされているかを見る。されていたら、その仕様の「ストップワード」の文言をフィルターに合わせる差分を、この変更の仕様に足す。`openspec validate add-feed-filters --strict` が通ることを確かめる
-- [ ] 6.3 `openspec/glossary.yml` の「ストップワード」の項を消し、「フィルター」の項の `aliases` に「ストップワード」を足す。main specsに「ストップワード」が残っていないことを、archiveの前に確かめる
+- [x] 6.2 `openspec/changes/` のほかの変更（#47、#51、#52）が先にarchiveされているかを見る。されていたら、その仕様の「ストップワード」の文言をフィルターに合わせる差分を、この変更の仕様に足す。`openspec validate add-feed-filters --strict` が通ることを確かめる（#54のterm-highlightsとweb-settingsの要件の文言を、この変更の仕様のMODIFIEDで直した）
+- [x] 6.3 `openspec/glossary.yml` の「ストップワード」の項を、フィルターに置き換わった以前の機能を指す定義に改める。README.ja.mdの移行の説明がこの語を使うため、項は消さない。main specsに「ストップワード」が残っていないことを、archiveの前に確かめる
 - [x] 6.4 `make verify` を通す。作業用の場所に向けたサーバーを、空いているポートで起動する。移行のあとに、以前のストップワードがフィルターとして表示され、同じ記事を隠していることを確かめる。サーバーは起動のときに控えたPIDで止める

@@ -50,7 +50,7 @@ terms:
     aliases: ["クロール間隔", "ポーリング間隔"]
     en: "fetch interval"
   - term: "ストップワード"
-    definition: "タイトルまたは内容に含む配信記事を、一覧から隠すために登録する語。"
+    definition: "以前の版で配信記事を隠すために登録した語で、今はフィルターに置き換わった。移行の説明にだけ使う。"
     aliases: ["NGワード", "ミュート語"]
     en: "stop word"
   - term: "フォルダー"
