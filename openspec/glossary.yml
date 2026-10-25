@@ -430,3 +430,27 @@ terms:
     definition: "設定の画面のうち、その端末（Webではブラウザー）にだけ保存する設定を集めた区画。"
     aliases: ["端末設定", "ローカル設定"]
     en: "settings on this device"
+  - term: "セレクター"
+    definition: "ページの中の要素を指す、CSSの選択の式。"
+    aliases: []
+    en: "selector"
+  - term: "Webページの購読フィード"
+    definition: "フィードを持たないページを登録し、セレクターの組で記事を抜き出して読む購読フィード。"
+    aliases: ["Webフィード", "ページフィード", "スクレイピングフィード"]
+    en: "web page feed"
+  - term: "セレクターの組"
+    definition: "項目、タイトル、リンク、日時の4つのセレクターの組で、項目のセレクターだけが必須。"
+    aliases: ["抽出ルール", "抜き出しの指定"]
+    en: "selector set"
+  - term: "セレクターの候補"
+    definition: "セレクターの提案のタスクかプログラムの推定が出す、利用者が選ぶためのセレクターの組。"
+    aliases: []
+    en: "selector candidate"
+  - term: "抜き出した名前"
+    definition: "記事を書くタスクか要約のタスクが記事から取り出した、人、組織、製品、地名の名前。"
+    aliases: ["メンション", "エンティティ", "固有表現"]
+    en: "mention"
+  - term: "名前の記事の一覧"
+    definition: "同じ抜き出した名前を持つ記事を集めた一覧。"
+    aliases: ["メンション一覧"]
+    en: "mention article list"
