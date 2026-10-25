@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { getArticle, recordFullContentFailure, saveFullContent, setArticleFlags } from "../db/articles.ts";
+import { getArticle, recordFullContentFailure, requestAutoSummary, saveFullContent, setArticleFlags } from "../db/articles.ts";
+import { listMentionArticles } from "../db/mentions.ts";
 import { insertFeed, updateFeed } from "../db/feeds.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
@@ -388,5 +389,91 @@ describe("SummaryWorker", () => {
     worker.tick();
     await worker.idle();
     expect(s.prompts()).toEqual([]);
+  });
+});
+
+describe("mentions of feed articles", () => {
+  const BOJ = { name: "日本銀行", kind: "organization" as const };
+  const UEDA = { name: "植田和男", kind: "person" as const };
+  const answer = (mentions: unknown): FakeHandler => () => ({ summary: "A summary.", mentions });
+
+  it("stores the names of the summary output with the summary", async () => {
+    const s = setup({}, answer([BOJ, UEDA]));
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(getArticle(s.db, id)).toMatchObject({ autoSummary: { text: "A summary." }, mentions: [BOJ, UEDA] });
+    expect(s.calls()).toEqual([{ task: "summarize", ok: 1 }]);
+  });
+
+  it("stores the summary without names when only a name is empty, or when the output has no names", async () => {
+    for (const handler of [answer([BOJ, { name: "", kind: "person" }]), () => ({ summary: "A summary." })]) {
+      const s = setup({}, handler);
+      const id = s.article();
+
+      expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+      expect(getArticle(s.db, id)).toMatchObject({ autoSummary: { text: "A summary." }, mentions: [] });
+      expect(s.calls()).toEqual([{ task: "summarize", ok: 1 }]);
+    }
+  });
+
+  it("keeps the first ten names, each name once", async () => {
+    const twelve = Array.from({ length: 12 }, (_, index) => ({ name: `組織${index + 1}`, kind: "organization" }));
+    const s = setup({}, answer(twelve));
+    const id = s.article();
+    await summarizeNext(s.deps, s.pages);
+    expect(getArticle(s.db, id).mentions).toEqual(twelve.slice(0, 10));
+
+    const t = setup({}, answer([{ name: "OpenAI", kind: "organization" }, UEDA, { name: "openai", kind: "product" }]));
+    const other = t.article();
+    await summarizeNext(t.deps, t.pages);
+    expect(getArticle(t.db, other).mentions).toEqual([{ name: "OpenAI", kind: "organization" }, UEDA]);
+  });
+
+  it("stores neither summary nor names when both outputs lack a summary", async () => {
+    const s = setup({}, () => ({ mentions: [BOJ] }));
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("failed");
+
+    expect(getArticle(s.db, id)).toMatchObject({ autoSummary: null, mentions: [] });
+  });
+
+  it("gives no names to an article too short to summarise, nor to one of a feed that does not summarise", async () => {
+    const s = setup({}, answer([BOJ]));
+    const short = s.article({ body: prose("short", 50) });
+    expect(await summarizeNext(s.deps, s.pages)).toBe("skipped");
+    expect(getArticle(s.db, short).mentions).toEqual([]);
+
+    updateFeed(s.db, s.feed.id, { autoSummarize: false }, s.clock);
+    const plain = s.article();
+    expect(await summarizeNext(s.deps, s.pages)).toBe("none");
+    expect(getArticle(s.db, plain).mentions).toEqual([]);
+    expect(s.prompts()).toEqual([]);
+  });
+
+  it("stores the names with a summary a reader asked for on an article already read", async () => {
+    const s = setup({}, answer([BOJ]));
+    const id = s.article();
+    setArticleFlags(s.db, id, { isRead: true }, s.clock().toISOString());
+    expect(requestAutoSummary(s.db, id, s.clock().toISOString())).toBe(true);
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(getArticle(s.db, id).mentions).toEqual([BOJ]);
+    expect(s.calls()).toEqual([{ task: "summarize", ok: 1 }]);
+  });
+
+  it("keeps the names when the feed stops summarising, and the article stays in the list of the name", async () => {
+    const s = setup({}, answer([BOJ]));
+    const id = s.article();
+    await summarizeNext(s.deps, s.pages);
+
+    updateFeed(s.db, s.feed.id, { autoSummarize: false }, s.clock);
+
+    expect(getArticle(s.db, id).mentions).toEqual([BOJ]);
+    expect(listMentionArticles(s.db, { name: "日本銀行" }, s.clock().toISOString()).items.map((item) => item.id)).toEqual([id]);
   });
 });

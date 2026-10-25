@@ -1,3 +1,4 @@
+import { replaceMentions } from "@smarternews/core";
 import { API_TOKEN, testServer } from "@smarternews/server/testing";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, createApi } from "./api.ts";
@@ -465,5 +466,35 @@ describe("annotations", () => {
       onUnauthorized: () => {},
     });
     await expect(api.addHighlight(1, anchor)).rejects.toThrow();
+  });
+});
+
+describe("the articles of a name", () => {
+  it("sends the name, the limit and the cursor, and reads a page in the shape of the article list", async () => {
+    const { server, api, seen } = setup();
+    const id = server.article(server.category().id, { title: "金融政策" });
+    replaceMentions(server.db, id, [{ name: "日本銀行", kind: "organization" }]);
+
+    const page = await api.mentionArticles({ name: "日本銀行" });
+    expect(seen.at(-1)!.url).toBe(`/api/v1/mentions/articles?name=${encodeURIComponent("日本銀行")}`);
+    expect(page).toMatchObject({ items: [{ id, origin: "generated" }], nextCursor: null });
+    expect((await api.article(id)).mentions).toEqual([{ name: "日本銀行", kind: "organization" }]);
+
+    await api.mentionArticles({ name: "日本銀行", cursor: "c", limit: 20 }).catch(() => undefined);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/mentions/articles?name=${encodeURIComponent("日本銀行")}&cursor=c&limit=20`);
+  });
+
+  it("fails as invalid for a name of spaces only", async () => {
+    const { api } = setup();
+    await expect(api.mentionArticles({ name: " " })).rejects.toMatchObject({ kind: "invalid", fields: [{ path: "name", message: "is empty" }] });
+  });
+
+  it("refuses an answer outside the shape", async () => {
+    const api = createApi({
+      fetchImpl: async () => new Response(JSON.stringify({ items: [{ id: 1 }], nextCursor: null, asOf: "x" }), { headers: { "content-type": "application/json" } }),
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    await expect(api.mentionArticles({ name: "日本銀行" })).rejects.toBeInstanceOf(Error);
   });
 });

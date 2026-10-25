@@ -2,6 +2,7 @@
 // Nothing else in the code base talks to a model.
 import { z } from "zod";
 import { registrationSchema, type Kind, type SearchLocale, type TaskName } from "../api.ts";
+import { MAX_MENTIONS, mentionKindSchema, parseMentions } from "../mentions.ts";
 
 export interface TaskPrompt {
   system: string;
@@ -9,7 +10,13 @@ export interface TaskPrompt {
 }
 
 export interface TaskDefinition<Input, Output> {
+  /** Checks the provider's answer and turns it into the task's output. */
   output: z.ZodType<Output>;
+  /**
+   * The schema the provider is given, when it differs from `output`: a part that `output` accepts in any shape
+   * and checks on its own is described here, so that the model still sees its form.
+   */
+  wire?: z.ZodObject;
   build(input: Input): TaskPrompt;
   /** A check the schema cannot express. Returns what is wrong, or null. */
   check?(input: Input, output: Output): string | null;
@@ -37,6 +44,22 @@ const IMPORTANCE = [
   "2 = minor",
   "1 = barely related",
 ].join("\n");
+
+/**
+ * The mentions of an output. Any shape passes the check of the output, so that a mistake in the names never makes
+ * the task ask again; `parseMentions` then gives the names, or null when they are not valid.
+ */
+const mentionsOutput = z.unknown().optional().transform(parseMentions);
+/** How the provider is told to write the mentions. Limits are left out: they are in the prompt and in `parseMentions`. */
+const mentionsWire = z.array(z.object({ name: z.string(), kind: mentionKindSchema }));
+
+function mentionRules(where: string): string[] {
+  return [
+    `- mentions: the names of people, organizations, products and places that appear in ${where}, most important first, at most ${MAX_MENTIONS}. kind is person, organization, product or place.`,
+    "- Write each name in its official form, in the output language; a name that has no established form in the output language keeps its original spelling. Write an abbreviation or a nickname as the official name.",
+    "- mentions is an empty list when no such name appears.",
+  ];
+}
 
 // ---- interpret ---------------------------------------------------------------------------------
 
@@ -231,7 +254,7 @@ export interface WriteInput {
   existingArticle: { title: string; summary: string; body: string } | null;
 }
 
-const writeOutput = z.object({
+const writeBody = z.object({
   title: z.string().trim().min(1).max(300),
   summary: z.string().trim().min(1).max(1000),
   body: z.string().trim().min(1).max(20000),
@@ -248,10 +271,12 @@ const writeOutput = z.object({
     })
     .nullable(),
 });
+const writeOutput = writeBody.extend({ mentions: mentionsOutput });
 export type WriteOutput = z.infer<typeof writeOutput>;
 
 const write: TaskDefinition<WriteInput, WriteOutput> = {
   output: writeOutput,
+  wire: writeBody.extend({ mentions: mentionsWire }),
   build: (input) => ({
     system: SYSTEM,
     prompt: [
@@ -285,6 +310,7 @@ const write: TaskDefinition<WriteInput, WriteOutput> = {
       input.kind === "event"
         ? "- event: the event's name; startsAt and endsAt as local date-times in the reader's time zone, written YYYY-MM-DD or YYYY-MM-DDTHH:MM, null when the sources do not say; venue; fee; registration (required, not_required or unknown). Never guess a date."
         : "- event: null.",
+      ...mentionRules("the article you wrote: its title, summary and body"),
     ]
       .filter((line) => line.length > 0)
       .join("\n"),
@@ -304,11 +330,13 @@ export interface SummarizeInput {
   text: string;
 }
 
-const summarizeOutput = z.object({ summary: z.string().trim().min(1).max(SUMMARY_MAX_CHARS) });
+const summarizeBody = z.object({ summary: z.string().trim().min(1).max(SUMMARY_MAX_CHARS) });
+const summarizeOutput = summarizeBody.extend({ mentions: mentionsOutput });
 export type SummarizeOutput = z.infer<typeof summarizeOutput>;
 
 const summarize: TaskDefinition<SummarizeInput, SummarizeOutput> = {
   output: summarizeOutput,
+  wire: summarizeBody.extend({ mentions: mentionsWire }),
   build: (input) => ({
     system: SYSTEM,
     prompt: [
@@ -320,6 +348,7 @@ const summarize: TaskDefinition<SummarizeInput, SummarizeOutput> = {
       "- State only what the article says. Add no background, no opinion and nothing you know from elsewhere.",
       "- Use a neutral, plain register (in Japanese, the です・ます style). No greetings and no praise.",
       `- summary: plain prose in one paragraph, without Markdown, headings, lists or links. Aim for about 300 characters and never exceed ${SUMMARY_MAX_CHARS}.`,
+      ...mentionRules("the article"),
     ].join("\n"),
   }),
 };

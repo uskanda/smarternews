@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getArticle, insertArticle, listArticles, saveFullContent, searchArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
+import { replaceMentions } from "../db/mentions.ts";
 import { getFeed, insertFeed, listFeeds } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
 import { createFilter } from "../db/filters.ts";
@@ -198,6 +199,19 @@ describe("fetchFeed", () => {
 
     const [after] = s.list();
     expect(after).toMatchObject({ id: before!.id, title: "A (corrected)", summary: "Better words.", isRead: true, updatedAt: before!.updatedAt });
+  });
+
+  it("keeps the names found in an article when its item is rewritten", async () => {
+    const s = setup([{ title: "A", key: "a", content: "<p>First words.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const [before] = s.list();
+    replaceMentions(s.db, before!.id, [{ name: "日本銀行", kind: "organization" }]);
+    s.clock.advance(HOUR);
+    s.serve([{ title: "A (corrected)", key: "a", content: "<p>Better words.</p>" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, before!.id)).toMatchObject({ title: "A (corrected)", summary: "Better words.", mentions: [{ name: "日本銀行", kind: "organization" }] });
   });
 
   it("makes a stored item searchable, and a rewrite replaces what search finds", async () => {

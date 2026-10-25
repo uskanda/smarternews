@@ -8,6 +8,7 @@ export * from "./full-content.ts";
 export * from "./highlight.ts";
 export * from "./images.ts";
 export * from "./labels.ts";
+export * from "./mentions.ts";
 export * from "./merge.ts";
 export * from "./messages.ts";
 export * from "./nav.ts";

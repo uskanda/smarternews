@@ -929,3 +929,73 @@ describe("the migration to annotations", () => {
     expect(sql).toContain("sn_search_text(NEW.origin, NEW.title, NEW.translated_title, NEW.summary, NEW.auto_summary, NEW.body,");
   });
 });
+
+describe("the migration to mentions", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  function before018() {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "018")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    return { db, dir };
+  }
+
+  it("leaves the articles and the search results as they were, and gives no article a name", () => {
+    const { db, dir } = before018();
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'economy', 'Economy', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (1, 'generated', 1, 'news', '日本銀行が利上げ', 's', '日本銀行の本文', 3, ?, ?, ?)`,
+    ).run(now, now, now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, auto_summary, first_published_at, updated_at, created_at)
+       VALUES (2, 'feed', 5, 'k2', 'news', 'Title', 's', 'b', '日本銀行の要約', ?, ?, ?)`,
+    ).run(now, now, now);
+    const rows = () => ({
+      articles: db.prepare("SELECT * FROM articles ORDER BY id").all(),
+      found: db.prepare("SELECT rowid FROM article_search WHERE article_search MATCH '\"日本銀\"' ORDER BY rowid").all(),
+      calls: db.prepare("SELECT count(*) AS n FROM llm_calls").get(),
+    });
+    const earlier = rows();
+
+    copyFileSync(join(SHIPPED, "018_mentions.sql"), join(dir, "018_mentions.sql"));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(earlier);
+    expect(earlier.found).toEqual([{ rowid: 1 }, { rowid: 2 }]);
+    expect(earlier.calls).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM article_mentions").get()).toEqual({ n: 0 });
+  });
+
+  it("holds names of four kinds, each once an article, and lets them go with their article", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (1, 'feed', 5, 'k1', 'news', 't', 's', 'b', ?, ?, ?)`,
+    ).run(now, now, now);
+    const insert = (position: number, name: string, kind: string) =>
+      db.prepare("INSERT INTO article_mentions (article_id, position, name, name_key, kind) VALUES (1, ?, ?, ?, ?)").run(position, name, name.toLowerCase(), kind);
+
+    insert(0, "OpenAI", "organization");
+    insert(1, "Sam Altman", "person");
+    insert(2, "ChatGPT", "product");
+    insert(3, "San Francisco", "place");
+    expect(() => insert(4, "openai", "product")).toThrow();
+    expect(() => insert(3, "Tokyo", "place")).toThrow();
+    expect(() => insert(5, "Summit", "event")).toThrow();
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT article_id FROM article_mentions WHERE name_key = ?").all("openai");
+    expect(JSON.stringify(plan)).toMatch(/USING (COVERING )?INDEX/);
+
+    db.prepare("DELETE FROM articles WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM article_mentions").get()).toEqual({ n: 0 });
+  });
+});

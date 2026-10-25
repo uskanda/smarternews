@@ -18,7 +18,7 @@ import {
 import type { ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
-import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useListSortChange, useListViews, useReadPatch } from "../api/queries";
+import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useListSortChange, useListViews, useMentionArticles, useReadPatch } from "../api/queries";
 import { useToast } from "../ui/toast";
 import { advanceCheckedAt } from "../notifications/store";
 import { useReaderSession } from "./session";
@@ -27,6 +27,9 @@ export type View = ListTarget["type"];
 
 /** The key of the search results, which are no list of the drawer. */
 export const SEARCH_KEY = "search";
+
+/** The key of the articles of a name found in articles, which are no list of the drawer either. */
+export const MENTION_KEY = "mention";
 
 /** A search: the words, and the narrowing to a category, a feed or unread articles. */
 export interface SearchRef {
@@ -43,6 +46,8 @@ export interface ListRef {
   importantOnly: boolean;
   /** Set for the search results, whose key is `SEARCH_KEY`. */
   search?: SearchRef;
+  /** Set for the articles of a name, whose key is `MENTION_KEY`. */
+  mention?: { name: string };
 }
 
 const idParam = (value: string | undefined) => (value !== undefined && /^\d{1,15}$/.test(value) ? Number(value) : undefined);
@@ -50,7 +55,7 @@ const idParam = (value: string | undefined) => (value !== undefined && /^\d{1,15
 /** The list a screen shows, from the key of the list and the search parameters of the screen. */
 export function listRefOf(
   key: string,
-  params: { read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string },
+  params: { read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; name?: string },
 ): ListRef {
   return {
     key,
@@ -66,6 +71,7 @@ export function listRefOf(
           },
         }
       : {}),
+    ...(key === MENTION_KEY ? { mention: { name: (params.name ?? "").trim() } } : {}),
   };
 }
 
@@ -83,6 +89,7 @@ const EMPTY: ArticleSummary[] = [];
 
 /** The search parameters that carry a list's filters from the list screen to the article screen and back. */
 export function listParams(ref: ListRef): Record<string, string> {
+  if (ref.mention) return { name: ref.mention.name };
   if (ref.search) {
     const { q, category, feed, unread } = ref.search;
     return { q, ...(category !== undefined ? { category: String(category) } : {}), ...(feed !== undefined ? { feed: String(feed) } : {}), ...(unread ? { unread: "true" } : {}) };
@@ -105,13 +112,17 @@ export function useReaderList(ref: ListRef) {
   const target = useMemo<ListTarget>(() => parseListKey(ref.key) ?? { type: "unread" }, [ref.key]);
   const search = ref.search;
   const isSearch = search !== undefined;
+  const mention = ref.mention;
+  const isMention = mention !== undefined;
+  // Search results and the articles of a name are found articles: no list of the drawer, and nothing to finish.
+  const found = isSearch || isMention;
   const view: View = target.type;
   const category: Category | undefined = target.type === "category" ? categories.data?.find((entry) => entry.id === target.categoryId) : undefined;
   const feed: Feed | undefined = target.type === "feed" ? feeds.data?.find((entry) => entry.id === target.feedId) : undefined;
   const isEvents = target.type === "category" && !target.generatedOnly && category?.kind === "event";
-  const readToggle = !isSearch && hasReadToggle(target) && !isEvents;
-  // Search results never offer marking everything read: they are found articles, not a list to finish.
-  const listControls = !isSearch && hasListControls(target);
+  const readToggle = !found && hasReadToggle(target) && !isEvents;
+  // Found articles never offer marking everything read: they are not a list to finish.
+  const listControls = !found && hasListControls(target);
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const importantOnly = importanceFilter && ref.importantOnly;
@@ -119,11 +130,11 @@ export function useReaderList(ref: ListRef) {
   const toast = useToast();
   const listViews = useListViews();
   const viewsSettled = listViews.isSuccess || listViews.isError;
-  const sortMenu = !isSearch && hasSortMenu(target, categories.data);
+  const sortMenu = !found && hasSortMenu(target, categories.data);
   const sort: ListSort = sortMenu ? listSortOf(target, listViews.data?.items, categories.data) : "newest";
   const sortChange = useListSortChange(() => toast({ message: "並び順を保存できませんでした。もう一度試してください。" }));
   /** True when the list names a category or a feed that does not exist. */
-  const missing = !isSearch && ((target.type === "category" && categories.isSuccess && !category) || (target.type === "feed" && feeds.isSuccess && !feed));
+  const missing = !found && ((target.type === "category" && categories.isSuccess && !category) || (target.type === "feed" && feeds.isSuccess && !feed));
 
   const filter = useMemo<ArticleListQuery>(() => {
     if (isEvents) return { category: category!.id, kind: "event" };
@@ -142,18 +153,20 @@ export function useReaderList(ref: ListRef) {
     }),
     [search?.q, search?.category, search?.feed, search?.unread],
   );
-  const unreadOnly = isSearch ? searchQuery.unread === "true" : filter.unread === "true";
+  const unreadOnly = isSearch ? searchQuery.unread === "true" : !isMention && filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
-  const recentlyRead = !isSearch && filter.recentlyRead === "true";
+  const recentlyRead = !found && filter.recentlyRead === "true";
   // A change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(isSearch ? { search: searchQuery } : { ...filter, order: undefined });
+  const mentionName = mention?.name ?? "";
+  const listKey = JSON.stringify(isSearch ? { search: searchQuery } : isMention ? { mention: mentionName } : { ...filter, order: undefined });
 
-  const articleList = useArticleList(filter, !missing && !isSearch && viewsSettled);
+  const articleList = useArticleList(filter, !missing && !found && viewsSettled);
   const results = useArticleSearch(searchQuery, isSearch && searchQuery.q.length > 0);
-  const list = isSearch ? results : articleList;
+  const mentionList = useMentionArticles(mentionName, isMention && mentionName.length > 0);
+  const list = isSearch ? results : isMention ? mentionList : articleList;
   const fetched = useMemo<ArticleSummary[]>(
-    () => (isSearch ? results.data?.pages.flatMap((page) => page.items) : articleList.data?.pages.flatMap((page) => page.items)) ?? EMPTY,
-    [isSearch, results.data, articleList.data],
+    () => (isSearch ? results.data : isMention ? mentionList.data : articleList.data)?.pages.flatMap((page) => page.items) ?? EMPTY,
+    [isSearch, isMention, results.data, mentionList.data, articleList.data],
   );
   const excerpts = useMemo(
     () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
@@ -167,7 +180,7 @@ export function useReaderList(ref: ListRef) {
     if (newest !== "") void advanceCheckedAt(newest);
   }, [fetched]);
   const kept = session.keptFor(listKey);
-  const items = useMemo(() => mergeKept(fetched, kept, isSearch ? undefined : sortKeyFor(target), sort), [fetched, kept, target, isSearch, sort]);
+  const items = useMemo(() => mergeKept(fetched, kept, found ? undefined : sortKeyFor(target), sort), [fetched, kept, target, found, sort]);
 
   const setRead = useCallback(
     (target: { id: number }, isRead: boolean) => {
@@ -217,7 +230,11 @@ export function useReaderList(ref: ListRef) {
     ? searchQuery.q.length > 0
       ? `「${searchQuery.q}」の検索結果`
       : "検索"
-    : target.type === "category"
+    : isMention
+      ? mentionName.length > 0
+        ? `「${mentionName}」を含む記事`
+        : "名前を含む記事"
+      : target.type === "category"
       ? category
         ? target.generatedOnly
           ? `${category.name}の${GENERATED_LABEL}`
@@ -232,6 +249,8 @@ export function useReaderList(ref: ListRef) {
     target,
     /** True for the search results. */
     isSearch,
+    /** The name of the articles of a name, or undefined for any other list. */
+    mention: isMention ? mentionName : undefined,
     /** The words the server matched, normalized: what a search result marks. Undefined outside the search results. */
     terms: isSearch ? results.data?.pages[0]?.terms : undefined,
     /** The excerpt of a search result, or null when only its title matched or it is no search result. */
@@ -277,8 +296,8 @@ export function useReaderList(ref: ListRef) {
     refresh,
     /** Which list this is, for what is kept and excluded during a visit to it. */
     listKey,
-    /** False where scrolling past a row never reads it: the recently read articles, search results and events. */
-    scrollReadable: !isSearch && !recentlyRead && !isEvents,
+    /** False where scrolling past a row never reads it: the recently read articles, found articles and events. */
+    scrollReadable: !found && !recentlyRead && !isEvents,
     showRead,
     excluded: session.excludedFor(listKey),
     /** Says that this list is the one shown, which ends the visit to the last one. */

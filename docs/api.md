@@ -126,6 +126,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/:id/full-content` | Fetch the full content of a feed article from its page, and answer when that is done |
 | `GET /api/v1/translation` | How much the translation API was used this month |
 | `GET /api/v1/annotations` | The reader's highlights and notes on every article, the last made first: see [Annotations](#annotations) |
+| `GET /api/v1/mentions/articles` | The articles that mention a name, newest first: see [Mentions](#mentions) |
 
 Query parameters of the list:
 
@@ -230,6 +231,7 @@ The detail adds these:
 | `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
 | `annotations` | The reader's annotations on the article: `note`, the note on the whole article or `null`, and `highlights`, the oldest first. See [Annotations](#annotations). The list does not have this field |
+| `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
 
 ### Open times
 
@@ -243,7 +245,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 
 ### Search
 
-`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs or the targets of links. Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
+`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs, the targets of links or the names found in articles (see [Mentions](#mentions)). Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
 
 | Parameter | Effect |
 |---|---|
@@ -265,6 +267,22 @@ curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "q=battery factory
 The search index is kept by triggers that call a function the server registers when it opens the database. A connection without that function, such as the `sqlite3` command, can read the database but cannot insert, change or delete articles.
 
 Generated articles without a star or an annotation are deleted 180 days after their last update, feed articles without a star or an annotation 90 days after the time they sort by. Starred and annotated articles are kept. An article whose last annotation is removed is deleted at the next purge once its time has passed.
+
+## Mentions
+
+The names of people, organizations, products and places that an article mentions, at most ten an article. The model finds them in the call that writes a generated article, and in the call that summarises a feed article; no call is made only for names. So a feed article has names only when its feed has automatic summaries on and its summary has been written. A follow-up that rewrites a generated article replaces its names. A feed that rewrites its item, or stops summarising, leaves the names as they are. Articles stored before the server kept names have none. When the names of an answer are not valid, the article or summary is stored without them, and a rewritten article keeps its earlier names.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/mentions/articles` | The articles that have the name `name` among their names. `limit` (1 to 200, default 50) and `cursor`, as in the article list |
+
+Names are compared in a normalized form: full-width and half-width alike, upper and lower case alike, without the spaces around them, and with a run of spaces taken as one. Nothing else is taken as the same name: an abbreviation, another spelling or a part of a name is another name. The kind does not count, so the organization `Apple` and the product `Apple` are one name.
+
+The list holds generated and feed articles alike, read ones and events that have ended included, newest first by last update. A feed article that a filter hides is left out, unless it has a star or an annotation, and so is a hidden duplicate, as in a search. The response has the shape of the article list: `items`, `nextCursor` and `asOf`. A name no article has gets an empty list. A name that is empty or only spaces, or longer than 100 characters once normalized, gets 400 with the field `name`. The list calls neither a model nor the translation API.
+
+```bash
+curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "name=Bank of Japan" "$API/api/v1/mentions/articles?limit=20"
+```
 
 ## Annotations
 

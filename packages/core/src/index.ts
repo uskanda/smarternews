@@ -17,6 +17,7 @@ export * from "./db/settings.ts";
 export * from "./db/term-highlights.ts";
 export * from "./db/filters.ts";
 export * from "./db/list-views.ts";
+export * from "./db/mentions.ts";
 export * from "./db/topics.ts";
 export * from "./db/translations.ts";
 export * from "./feeds/content.ts";

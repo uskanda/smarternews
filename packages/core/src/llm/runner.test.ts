@@ -213,7 +213,7 @@ describe("the allowance of summaries", () => {
 
     await runner.run("interpret", interpretInput, fresh());
     expect(runner.summariesToday()).toBe(0);
-    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "One." });
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "One.", mentions: null });
     expect(runner.summariesToday()).toBe(1);
   });
 
@@ -226,7 +226,7 @@ describe("the allowance of summaries", () => {
     expect(requests).toHaveLength(1);
 
     clock.advance(24 * 60 * 60_000);
-    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "Two." });
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "Two.", mentions: null });
   });
 
   it("allows 100 summaries a day when no limit is given, and gives the model no tools", async () => {
@@ -237,5 +237,82 @@ describe("the allowance of summaries", () => {
     await runner.run("summarize", summarizeInput, fresh());
     expect(requests[0]!.webSearch).toBe(false);
     expect(calls()).toEqual([{ task: "summarize", provider: "a", ok: 1, error: null }]);
+  });
+});
+
+describe("mentions in the outputs of the write and summarize tasks", () => {
+  const writeInput = {
+    kind: "news" as const,
+    outputLanguage: "ja",
+    readerInfo: "",
+    now: "2026-03-01T06:00:00.000Z",
+    timeZone: "UTC",
+    sources: [{ title: "t", siteName: "s", url: "https://example.org/a", publishedAt: null, text: "text" }],
+    existingArticle: null,
+  };
+  const article = { title: "日本銀行が利上げ", summary: "要約。", body: "本文。", unconfirmed: false, impact: null, event: null };
+  const summarizeInput = { outputLanguage: "ja", title: "Headline", text: "The text of the article." };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("hands the provider the schema with the form of the names", async () => {
+    const { adapter, requests } = scripted([{ ...article, mentions: [] }]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await runner.run("write", writeInput, fresh());
+
+    const schema = requests[0]!.outputSchema as { properties: Record<string, { items?: { properties: { kind: unknown } } }>; required: string[] };
+    expect(schema).not.toHaveProperty("$schema");
+    expect(schema.required).toContain("mentions");
+    expect(schema.properties.mentions!.items!.properties.kind).toEqual({ type: "string", enum: ["person", "organization", "product", "place"] });
+  });
+
+  it("gives the names of a valid output", async () => {
+    const mentions = [
+      { name: "日本銀行", kind: "organization" },
+      { name: "植田和男", kind: "person" },
+    ];
+    const { adapter } = scripted([{ ...article, mentions }]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions });
+  });
+
+  it("does not ask again when only a name lacks its kind, and gives null for the names", async () => {
+    const { adapter, requests } = scripted([{ ...article, mentions: [{ name: "日本銀行" }] }, { ...article, mentions: [] }]);
+    const { runner, calls } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions: null });
+    expect(requests).toHaveLength(1);
+    expect(calls()).toEqual([{ task: "write", provider: "a", ok: 1, error: null }]);
+  });
+
+  it("gives null for the names of an output without them", async () => {
+    const { adapter } = scripted([{ summary: "要約。" }]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({ summary: "要約。", mentions: null });
+  });
+
+  it("uses the names of the second output when the first has no summary", async () => {
+    const { adapter, requests } = scripted([
+      { mentions: [{ name: "日本銀行", kind: "organization" }] },
+      { summary: "要約。", mentions: [{ name: "植田和男", kind: "person" }] },
+    ]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("summarize", summarizeInput, fresh())).resolves.toEqual({
+      summary: "要約。",
+      mentions: [{ name: "植田和男", kind: "person" }],
+    });
+    expect(requests).toHaveLength(2);
+  });
+
+  it("fails when both outputs lack a summary, though their names are valid", async () => {
+    const mentions = [{ name: "日本銀行", kind: "organization" }];
+    const { adapter } = scripted([{ mentions }, { mentions }]);
+    const { runner, calls } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("summarize", summarizeInput, fresh())).rejects.toBeInstanceOf(TaskFailedError);
+    expect(calls().map((call) => call.ok)).toEqual([0, 0]);
   });
 });

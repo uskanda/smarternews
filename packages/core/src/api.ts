@@ -2,8 +2,13 @@
 // so that browser and React Native bundles can load it.
 import { z } from "zod";
 
+import { MAX_MENTION_NAME_CHARS, mentionKey, mentionSchema } from "./mentions.ts";
+import { charCount } from "./search/text.ts";
+
 // Normalizing and matching search terms: the apps mark matches as the server finds them.
 export * from "./search/text.ts";
+// The names found in articles, their kinds and how names are compared.
+export * from "./mentions.ts";
 
 export const kindSchema = z.enum(["news", "event"]);
 export type Kind = z.infer<typeof kindSchema>;
@@ -417,6 +422,11 @@ export const articleSchema = articleSummarySchema.extend({
   topics: z.array(z.object({ id: z.number().int(), text: z.string() })),
   /** The reader's highlights and note on the article. A screen finds the highlights in the body it draws. */
   annotations: articleAnnotationsSchema,
+  /**
+   * The names of people, organizations, products and places found in the article, in the order they were
+   * stored. Empty for an article without them, such as one stored before names were kept.
+   */
+  mentions: z.array(mentionSchema),
 });
 export type Article = z.infer<typeof articleSchema>;
 
@@ -502,6 +512,23 @@ export const articleSearchResultSchema = z.object({
   terms: z.array(z.string()),
 });
 export type ArticleSearchResult = z.infer<typeof articleSearchResultSchema>;
+
+/**
+ * The articles of a name: those that have the name among their mentions, as `mentionKey` compares names,
+ * generated and delivered, read ones and ended events included, newest first. What filters hide and hidden
+ * duplicates are left out, as in a search. The answer has the shape of the article list.
+ */
+export const mentionArticlesQuerySchema = z.object({
+  name: z.string().superRefine((name, context) => {
+    if (name.trim().length === 0) context.addIssue({ code: "custom", message: "is empty" });
+    else if (charCount(mentionKey(name)) > MAX_MENTION_NAME_CHARS) {
+      context.addIssue({ code: "custom", message: `is too long: at most ${MAX_MENTION_NAME_CHARS} characters` });
+    }
+  }),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+});
+export type MentionArticlesQuery = z.infer<typeof mentionArticlesQuerySchema>;
 
 export const articleUpdateSchema = z.object({ isRead: z.boolean().optional(), starred: z.boolean().optional() });
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;

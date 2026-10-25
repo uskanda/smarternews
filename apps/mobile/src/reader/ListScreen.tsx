@@ -20,7 +20,8 @@ import { Txt } from "../ui/Txt";
 import { ArticleRow } from "./ArticleRow";
 import { EventRow } from "./EventRow";
 import { SCROLL_READ_VIEWABILITY, useScrollToRead } from "./scroll-read";
-import { listParams, listRefOf, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
+import { useBack } from "../lib/back";
+import { listParams, listRefOf, MENTION_KEY, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
 
 const SORT_LABELS = { newest: "新しい順", oldest: "古い順" } as const;
 
@@ -40,10 +41,19 @@ export function SearchScreen() {
 }
 
 /**
- * A list of articles for one view. Opening a row goes to the article; the drawer changes the view. With
- * `search`, the list holds the search results the screen's parameters describe.
+ * The articles of a name found in articles, opened over the article the name was chosen in. Back returns to
+ * that article.
  */
-export function ListScreen({ search = false }: { search?: boolean }) {
+export function MentionScreen() {
+  return <ListScreen mention />;
+}
+
+/**
+ * A list of articles for one view. Opening a row goes to the article; the drawer changes the view. With
+ * `search`, the list holds the search results the screen's parameters describe; with `mention`, the articles of
+ * the name in them.
+ */
+export function ListScreen({ search = false, mention = false }: { search?: boolean; mention?: boolean }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -56,8 +66,9 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const feeds = useFeeds();
   const groups = useTermMatcher();
   const client = useQueryClient();
-  const params = useLocalSearchParams<{ key: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string }>();
-  const ref = listRefOf(search ? SEARCH_KEY : (params.key ?? "unread"), params);
+  const params = useLocalSearchParams<{ key: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; name?: string }>();
+  const ref = listRefOf(search ? SEARCH_KEY : mention ? MENTION_KEY : (params.key ?? "unread"), params);
+  const back = useBack({ pathname: "/list/[key]", params: { key: "unread" } });
   const reader = useReaderList(ref);
   const { list, items, fetched, view, isEvents } = reader;
   const [refreshing, setRefreshing] = useState(false);
@@ -96,11 +107,12 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   }, []);
   const showMenu = useCallback((article: ArticleSummary) => setMenuFor(article), []);
 
-  // Back from another list returns to the unread list, where the app starts; back from there leaves the app.
+  // Back from another list returns to the unread list, where the app starts; back from there leaves the app. The
+  // articles of a name are over the article they were opened from, which back returns to.
   const key = ref.key;
   useFocusEffect(
     useCallback(() => {
-      if (key === "unread") return undefined;
+      if (key === "unread" || key === MENTION_KEY) return undefined;
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
         current.current.router.navigate({ pathname: "/list/[key]", params: { key: "unread" } });
         return true;
@@ -181,7 +193,13 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const header = (
     <ScreenHeader
       title={reader.title}
-      left={<IconButton label="項目を開く" icon="menu" onPress={() => navigation.dispatch(DrawerActions.openDrawer())} />}
+      left={
+        mention ? (
+          <IconButton label="記事へ戻る" icon="back" onPress={back} />
+        ) : (
+          <IconButton label="項目を開く" icon="menu" onPress={() => navigation.dispatch(DrawerActions.openDrawer())} />
+        )
+      }
       right={canMarkAll ? <IconButton label="すべて既読にする" icon="checkAll" onPress={() => void markAllRead()} /> : null}
     />
   );
@@ -200,7 +218,12 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const status = (
     <View>
       {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
-      {list.isPending && !list.isError && !(searchRef && searchRef.q.length === 0) ? <Loading /> : null}
+      {list.isPending && !list.isError && !(searchRef && searchRef.q.length === 0) && reader.mention !== "" ? <Loading /> : null}
+      {reader.mention !== undefined && (reader.mention.length === 0 || (list.isSuccess && items.length === 0)) ? (
+        <Txt variant="body-md" color="on-surface-muted" style={{ padding: theme.spacing.lg }}>
+          {reader.mention.length === 0 ? "名前が指定されていません。記事の本文の下の名前を選んでください。" : `「${reader.mention}」を含む記事はありません。`}
+        </Txt>
+      ) : null}
       {searchRef && (searchRef.q.length === 0 || (list.isSuccess && items.length === 0)) ? (
         <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm, alignItems: "flex-start" }}>
           {searchRef.q.length === 0 ? (
@@ -218,7 +241,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
           )}
         </View>
       ) : null}
-      {!searchRef && list.isSuccess && items.length === 0 ? (
+      {!searchRef && reader.mention === undefined && list.isSuccess && items.length === 0 ? (
         <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm, alignItems: "flex-start" }}>
           <Txt variant="body-md" color="on-surface-muted">
             {emptyText(view, reader.hasSources, isEvents)}

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  articleSchema,
+  mentionArticlesQuerySchema,
+  mentionSchema,
   markReadBodySchema,
   MAX_MARK_SEEN,
   articleSearchQuerySchema,
@@ -242,5 +245,28 @@ describe("the shape of annotations", () => {
   it("takes the page of the annotation list from a query string", () => {
     expect(annotationListQuerySchema.parse({ limit: "50", cursor: "abc" })).toEqual({ limit: 50, cursor: "abc" });
     expect(annotationListQuerySchema.safeParse({ limit: "0" }).success).toBe(false);
+  });
+});
+
+describe("the shapes of mentions", () => {
+  it("gives the names of an article detail as names with one of four kinds", () => {
+    expect(mentionSchema.safeParse({ name: "日本銀行", kind: "organization" }).success).toBe(true);
+    expect(mentionSchema.safeParse({ name: "日本銀行", kind: "event" }).success).toBe(false);
+    expect(articleSchema.shape.mentions.safeParse([{ name: "植田和男", kind: "person" }]).success).toBe(true);
+  });
+
+  it("takes a name, a limit and a cursor for the articles of a name", () => {
+    expect(mentionArticlesQuerySchema.parse({ name: "日本銀行", limit: "20", cursor: "abc" })).toEqual({ name: "日本銀行", limit: 20, cursor: "abc" });
+    expect(mentionArticlesQuerySchema.safeParse({}).success).toBe(false);
+  });
+
+  it("refuses a name of spaces only, and a name longer than 100 characters once normalized", () => {
+    expect(issuesOf(mentionArticlesQuerySchema.safeParse({ name: " 　 " }))).toEqual([{ path: "name", message: "is empty" }]);
+    expect(issuesOf(mentionArticlesQuerySchema.safeParse({ name: "あ".repeat(101) }))).toEqual([
+      { path: "name", message: "is too long: at most 100 characters" },
+    ]);
+    expect(mentionArticlesQuerySchema.safeParse({ name: "あ".repeat(100) }).success).toBe(true);
+    // Spaces around the name and inside it count only as normalized.
+    expect(mentionArticlesQuerySchema.safeParse({ name: `  ${"あ".repeat(50)}    ${"い".repeat(49)}  ` }).success).toBe(true);
   });
 });

@@ -124,7 +124,7 @@ export class TaskRunner {
     const provider = this.providerFor(name);
     const { system, prompt } = definition.build(input);
     // The dialect marker is dropped: the claude command refuses a schema that carries it.
-    const { $schema: _dialect, ...outputSchema } = z.toJSONSchema(definition.output) as Record<string, unknown>;
+    const { $schema: _dialect, ...outputSchema } = z.toJSONSchema(definition.wire ?? definition.output) as Record<string, unknown>;
     const timeoutMs = name === "search" ? this.#options.timeouts.searchMs : this.#options.timeouts.defaultMs;
 
     let problem = "";

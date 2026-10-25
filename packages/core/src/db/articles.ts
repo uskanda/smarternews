@@ -29,6 +29,7 @@ import { charCount, parseSearchTerms, searchExcerpt, SHORT_TERM_CHARS } from "..
 import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { annotationsOf } from "./annotations.ts";
+import { mentionsOf } from "./mentions.ts";
 import { deleteArticleTranslation, findArticleTranslation } from "./translations.ts";
 
 /**
@@ -209,6 +210,7 @@ function toArticle(db: Database, row: Row): Article {
       .all(id)
       .map((topic) => ({ id: num(topic.id), text: str(topic.text) })),
     annotations: annotationsOf(db, id),
+    mentions: mentionsOf(db, id),
   };
 }
 

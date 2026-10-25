@@ -16,6 +16,7 @@ import { createCategory, deleteCategory } from "./categories.ts";
 import type { Database } from "./database.ts";
 import { deleteFeed } from "./feeds.ts";
 import { createFilter } from "./filters.ts";
+import { replaceMentions } from "./mentions.ts";
 import { updateSettings } from "./settings.ts";
 import { saveTranslatedTitle } from "./translations.ts";
 
@@ -514,5 +515,26 @@ describe("the time a follow-up takes with many highlights", () => {
     expect(indexed(db, id)).toContain("メモ 99 を書いた");
     expect(took).toBeLessThan(500);
     console.info(`reviseArticle with 100 highlights took ${took.toFixed(1)} ms`);
+  });
+});
+
+describe("search and the names found in articles", () => {
+  it("does not match a name the article has only among its mentions", () => {
+    const db = createTestDb();
+    const id = seedFeedArticle(db, seedFeed(db), { title: "金融政策", body: "日銀が金利を上げた。" });
+    replaceMentions(db, id, [{ name: "日本銀行", kind: "organization" }]);
+
+    expect(search(db, "日本銀行")).toEqual([]);
+    expect(indexed(db, id)).not.toContain("日本銀行");
+  });
+
+  it("finds an article whose body has the name, as any other word", () => {
+    const db = createTestDb();
+    const id = generated(db, category(db), { body: "日本銀行が金利を上げた。" });
+    replaceMentions(db, id, [{ name: "日本銀行", kind: "organization" }]);
+
+    const result = searchArticles(db, { q: "日本銀行" });
+    expect(result.items.map((item) => item.id)).toEqual([id]);
+    expect(result.items[0]!.excerpt).toContain("日本銀行が金利を上げた");
   });
 });

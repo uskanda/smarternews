@@ -12,6 +12,8 @@ import {
   updateHighlightNote,
   articleListQuerySchema,
   articleSearchQuerySchema,
+  listMentionArticles,
+  mentionArticlesQuerySchema,
   articleUpdateSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
@@ -305,6 +307,8 @@ export function createApp(deps: AppDeps): Hono {
   );
   // Plain matching against the search index: no model and no translation is involved.
   api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()), clock().toISOString())));
+  // The articles of a name found in them: plain matching of stored names, no model and no translation.
+  api.get("/mentions/articles", (c) => c.json(listMentionArticles(db, parse(mentionArticlesQuerySchema, c.req.query()), clock().toISOString())));
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
   api.get("/articles/:id", (c) => c.json(answered(getArticle(db, idParam(c, "article")))));
   api.patch("/articles/:id", async (c) =>

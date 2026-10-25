@@ -43,6 +43,7 @@ import {
   type ArticleListQuery,
   type ArticlePage,
   type ArticleSearchQuery,
+  type MentionArticlesQuery,
   type ArticleSearchResult,
   type ArticleTranslation,
   type FullContentResult,
@@ -226,6 +227,9 @@ export function createApi(options: ApiOptions) {
         articleSearchResultSchema,
         `/search${query({ q: params.q, category: params.category, feed: params.feed, unread: params.unread, cursor: params.cursor, limit: params.limit })}`,
       ),
+    /** The articles that have the name among the names found in them, newest first, read ones included, a page at a time. */
+    mentionArticles: (params: MentionArticlesQuery): Promise<ArticleList> =>
+      json(articleListSchema, `/mentions/articles${query({ name: params.name, cursor: params.cursor, limit: params.limit })}`),
     article: (id: number): Promise<Article> => json(articleSchema, `/articles/${id}`),
     updateArticle: (id: number, patch: ArticleUpdate): Promise<Article> =>
       json(articleSchema, `/articles/${id}`, body("PATCH", patch)),

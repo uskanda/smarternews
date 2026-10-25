@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { SUMMARIZE_INPUT_CHARS, tasks } from "./tasks.ts";
 
 const source = (text: string) => ({
@@ -187,5 +188,65 @@ describe("the translate task", () => {
 
   it("refuses an empty translation", () => {
     expect(tasks.translate.output.safeParse({ items: [{ n: 1, text: " " }] }).success).toBe(false);
+  });
+});
+
+describe("mentions in the write and summarize tasks", () => {
+  const schemaOf = (schema: z.ZodObject) => z.toJSONSchema(schema) as unknown as { properties: Record<string, unknown>; required: string[] };
+  const wireMentions = {
+    type: "array",
+    items: {
+      type: "object",
+      properties: { name: { type: "string" }, kind: { type: "string", enum: ["person", "organization", "product", "place"] } },
+      required: ["name", "kind"],
+      additionalProperties: false,
+    },
+  };
+
+  it("hands the provider a required list of names and kinds, without limits on count or length", () => {
+    for (const task of [tasks.write, tasks.summarize]) {
+      const schema = schemaOf(task.wire!);
+      expect(schema.properties.mentions).toEqual(wireMentions);
+      expect(schema.required).toContain("mentions");
+      expect(JSON.stringify(schema.properties.mentions)).not.toMatch(/max|min/i);
+    }
+    expect(schemaOf(tasks.write.wire!).required).toEqual(["title", "summary", "body", "unconfirmed", "impact", "event", "mentions"]);
+    expect(schemaOf(tasks.summarize.wire!).required).toEqual(["summary", "mentions"]);
+  });
+
+  it("keeps the schema of the other tasks as it was", () => {
+    for (const name of ["interpret", "search", "judge", "cluster", "translate"] as const) {
+      expect(tasks[name]).not.toHaveProperty("wire");
+      expect(JSON.stringify(z.toJSONSchema(tasks[name].output))).not.toContain("mentions");
+    }
+  });
+
+  it("accepts any mentions in the output and gives the parsed names, or null when they are not valid", () => {
+    const article = { title: "t", summary: "s", body: "b", unconfirmed: false, impact: null, event: null };
+    expect(tasks.write.output.parse({ ...article, mentions: [{ name: " 日本銀行 ", kind: "organization" }] }).mentions).toEqual([
+      { name: "日本銀行", kind: "organization" },
+    ]);
+    expect(tasks.write.output.parse({ ...article, mentions: "日本銀行" }).mentions).toBeNull();
+    expect(tasks.write.output.parse({ ...article, mentions: [{ name: "日本銀行" }] }).mentions).toBeNull();
+    expect(tasks.summarize.output.parse({ summary: "要約。" }).mentions).toBeNull();
+    expect(tasks.summarize.output.parse({ summary: "要約。", mentions: [] }).mentions).toEqual([]);
+  });
+
+  it("tells the write task to list the names of the article it wrote, in their official form and the output language", () => {
+    for (const input of [writeInput, { ...writeInput, existingArticle: { title: "Old", summary: "Old summary", body: "Old body" } }]) {
+      const { prompt } = tasks.write.build(input);
+      expect(prompt).toMatch(/- mentions: .*people, organizations, products and places .*article you wrote.*at most 10/i);
+      expect(prompt).toMatch(/official.*output language.*no established form.*original/i);
+      expect(prompt).toMatch(/abbreviation/i);
+      expect(prompt).toMatch(/empty list when/i);
+    }
+  });
+
+  it("tells the summarize task to list the names of the article, in their official form and the output language", () => {
+    const { prompt } = tasks.summarize.build({ outputLanguage: "ja", title: "Headline", text: "Text." });
+    expect(prompt).toMatch(/- mentions: .*people, organizations, products and places .*article.*at most 10/i);
+    expect(prompt).toMatch(/official.*output language.*no established form.*original/i);
+    expect(prompt).toMatch(/abbreviation/i);
+    expect(prompt).toMatch(/empty list when/i);
   });
 });

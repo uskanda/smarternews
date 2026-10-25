@@ -13,6 +13,7 @@ import {
   useFullContentFetch,
   useListSortChange,
   useListViews,
+  useMentionArticles,
   useReadPatch,
   useSettings,
   useTimeZone,
@@ -67,9 +68,11 @@ export type View =
   | "category-generated"
   | "feed"
   /** Search results: the words and the narrowing are in the query of the path. */
-  | "search";
+  | "search"
+  /** The articles of a name found in articles: the name is in the query of the path. */
+  | "mention";
 
-const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | "search">, string> = {
+const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | "search" | "mention">, string> = {
   unread: "未読",
   all: "すべて",
   starred: "スター",
@@ -121,6 +124,15 @@ function EmptyList({ view, hasSources }: { view: View; hasSources: boolean }) {
   return <p className="p-lg type-body-md text-on-surface-muted">{text}</p>;
 }
 
+/** What the list of a name says when no article has the name, or when there is no name to look for. */
+function MentionEmpty({ name }: { name: string }) {
+  return (
+    <p className="p-lg type-body-md text-on-surface-muted">
+      {name.length === 0 ? "名前が指定されていません。記事の本文の下の名前を選んでください。" : `「${name}」を含む記事はありません。`}
+    </p>
+  );
+}
+
 /** What the search results say when they are empty: why, and what the reader can do next. */
 function SearchEmpty({ words, narrowed, onWiden }: { words: string; narrowed: boolean; onWiden: () => void }) {
   if (words.length === 0) return <p className="p-lg type-body-md text-on-surface-muted">検索欄に語を入れて、Enterキーを押してください。</p>;
@@ -167,6 +179,7 @@ export function ReaderPage({ view }: { view: View }) {
   const feeds = useFeeds();
   const inCategory = view === "category" || view === "category-generated";
   const isSearch = view === "search";
+  const isMention = view === "mention";
   const isAnnotations = view === "annotations";
   const category: Category | undefined = inCategory ? categories.data?.find((entry) => entry.slug === params.slug) : undefined;
   const feed: Feed | undefined = view === "feed" ? feeds.data?.find((entry) => String(entry.id) === params.feedId) : undefined;
@@ -174,14 +187,15 @@ export function ReaderPage({ view }: { view: View }) {
   const target = useMemo<ListTarget | null>(() => {
     if (inCategory) return category ? { type: "category", categoryId: category.id, generatedOnly: view === "category-generated" } : null;
     if (view === "feed") return feed ? { type: "feed", feedId: feed.id } : null;
-    // Search results are no list of the left pane.
-    if (view === "search") return null;
+    // Search results and the articles of a name are no list of the left pane.
+    if (view === "search" || view === "mention") return null;
     return { type: view };
   }, [view, inCategory, category, feed]);
   const isEvents = view === "category" && category?.kind === "event";
   const readToggle = target !== null && hasReadToggle(target) && !isEvents;
-  // Search results never offer marking everything read: they are found articles, not a list to finish.
-  const listControls = !isSearch && (target === null || hasListControls(target));
+  // Search results and the articles of a name never offer marking everything read: they are found articles, not
+  // a list to finish.
+  const listControls = !isSearch && !isMention && (target === null || hasListControls(target));
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
@@ -226,15 +240,18 @@ export function ReaderPage({ view }: { view: View }) {
   // A category is named by its slug, so the search waits for the categories when it names one.
   const results = useArticleSearch(searchQuery, isSearch && words.length > 0 && (searchSlug === null || categories.data !== undefined));
   const terms = isSearch ? results.data?.pages[0]?.terms : undefined;
+  // The articles of a name: every one, read ones included, newest first, whatever the entry chosen before.
+  const mentionName = isMention ? (search.get("name") ?? "").trim() : "";
+  const mentionList = useMentionArticles(mentionName, isMention && mentionName.length > 0);
 
   const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = filter.recentlyRead === "true";
   const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
-  const active = isSearch ? results : list;
+  const active = isSearch ? results : isMention ? mentionList : list;
   const fetched = useMemo<ArticleSummary[]>(
-    () => (isSearch ? results.data?.pages.flatMap((page) => page.items) : list.data?.pages.flatMap((page) => page.items)) ?? EMPTY,
-    [isSearch, results.data, list.data],
+    () => (isSearch ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items) ?? EMPTY,
+    [isSearch, isMention, results.data, mentionList.data, list.data],
   );
   const excerpts = useMemo(
     () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
@@ -243,14 +260,15 @@ export function ReaderPage({ view }: { view: View }) {
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
   // change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(isSearch ? searchQuery : { ...filter, order: undefined });
+  const listKey = JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const sortKey = target ? sortKeyFor(target) : undefined;
   const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
-  // not in the recently read articles, which is where a mistake is put right, nor in search results or events.
+  // not in the recently read articles, which is where a mistake is put right, nor in search results, the
+  // articles of a name, or events. None of these but events has a target.
   const [refreshes, setRefreshes] = useState(0);
   const listScroll = useRef<HTMLDivElement>(null);
   const listRows = useRef<HTMLUListElement>(null);
@@ -281,7 +299,7 @@ export function ReaderPage({ view }: { view: View }) {
   });
   const listHeight = useListHeight(listScroll, scrollReadOn);
 
-  const basePath = (target && listPathOf(target, () => category?.slug)) ?? `/${view}`;
+  const basePath = isMention ? "/mentions" : ((target && listPathOf(target, () => category?.slug)) ?? `/${view}`);
   const query = search.toString() ? `?${search.toString()}` : "";
   const articlePath = (id: number) => `${basePath}/${id}${query}`;
   const listPath = `${basePath}${query}`;
@@ -512,7 +530,11 @@ export function ReaderPage({ view }: { view: View }) {
             ? words.length > 0
               ? `「${words}」の検索結果`
               : "検索"
-            : TITLES[view];
+            : view === "mention"
+              ? mentionName.length > 0
+                ? `「${mentionName}」を含む記事`
+                : "名前を含む記事"
+              : TITLES[view];
 
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
@@ -571,11 +593,12 @@ export function ReaderPage({ view }: { view: View }) {
       </header>
       <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
-        {active.isPending && !active.isError && !(isSearch && words.length === 0) ? <Loading /> : null}
+        {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
         ) : null}
-        {!isSearch && list.isSuccess && items.length === 0 ? (
+        {isMention && (mentionName.length === 0 || (mentionList.isSuccess && items.length === 0)) ? <MentionEmpty name={mentionName} /> : null}
+        {!isSearch && !isMention && list.isSuccess && items.length === 0 ? (
           <EmptyList view={view} hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0} />
         ) : null}
         <ul ref={listRows}>
