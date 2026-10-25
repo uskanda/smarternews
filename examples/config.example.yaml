@@ -65,5 +65,5 @@ images:
   cacheMaxBytes: 1000000000  # beyond this total, the oldest images are deleted
 
 newsSearch:
-  engine: google-news     # or bing-news
-  maxResultsPerQuery: 10  # newest results taken per query
+  engines: [google-news]  # or [bing-news], or [google-news, bing-news] to ask both
+  maxResultsPerQuery: 10  # newest results taken per query from each engine

@@ -75,7 +75,7 @@ describe("fetching pages", () => {
   });
 
   it("does not fetch a search result whose redirect link could not be resolved", async () => {
-    const h = pipelineHarness({ engine: "google-news" });
+    const h = pipelineHarness({ newsSearch: { engines: ["google-news"] } });
     h.addTopic("Topic", { newsSearch: true, queries: ["q"] });
     h.routes["https://news.google.com/rss/search"] = () =>
       new Response(
