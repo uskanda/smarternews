@@ -397,6 +397,65 @@ describe("bulk read state", () => {
   });
 });
 
+describe("POST /api/v1/articles/mark-read with the articles a screen showed", () => {
+  type Item = { id: number; updatedAt: string; readAt: string | null };
+  const shown = (items: Item[]) => items.map((item) => ({ id: item.id, updatedAt: item.updatedAt }));
+
+  it("marks the articles read with the server's time and names them, and lists them among the recently read", async () => {
+    const s = testServer();
+    const category = s.category();
+    const ids = [s.article(category.id), s.article(category.id), s.article(category.id)];
+    const listed: Item[] = (await (await s.get(`/api/v1/articles?category=${category.id}`)).json()).items;
+    s.clock.advance(MINUTE);
+    const readAt = s.clock().toISOString();
+
+    const response = await s.post("/api/v1/articles/mark-read", { articles: shown(listed.slice(0, 2)) });
+
+    expect(await response.json()).toEqual({ updated: 2, ids: listed.slice(0, 2).map((item) => item.id).sort((a, b) => a - b) });
+    const recent: Item[] = (await (await s.get("/api/v1/articles?recentlyRead=true")).json()).items;
+    expect(recent.map((item) => item.id).sort()).toEqual(listed.slice(0, 2).map((item) => item.id).sort());
+    expect(recent.map((item) => item.readAt)).toEqual([readAt, readAt]);
+    expect(ids).toContain(listed[2]!.id);
+    expect((await (await s.get(`/api/v1/articles/${listed[2]!.id}`)).json()).isRead).toBe(false);
+  });
+
+  it("leaves out an article that a follow-up updated after the version shown, and one that is gone", async () => {
+    const s = testServer();
+    const category = s.category();
+    const id = s.article(category.id);
+    const listed: Item[] = (await (await s.get(`/api/v1/articles?category=${category.id}`)).json()).items;
+    s.clock.advance(MINUTE);
+    s.db.prepare("UPDATE articles SET updated_at = ? WHERE id = ?").run(s.clock().toISOString(), id);
+
+    const response = await s.post("/api/v1/articles/mark-read", { articles: [...shown(listed), { id: 9999, updatedAt: listed[0]!.updatedAt }] });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ updated: 0, ids: [] });
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).isRead).toBe(false);
+  });
+
+  it("refuses more than 500 articles and marks none of them, saying there are too many", async () => {
+    const s = testServer();
+    const category = s.category();
+    const id = s.article(category.id);
+    const articles = Array.from({ length: 501 }, () => ({ id, updatedAt: s.clock().toISOString() }));
+
+    const response = await s.post("/api/v1/articles/mark-read", { articles });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([{ path: "articles", message: "too many articles: at most 500" }]);
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).isRead).toBe(false);
+  });
+
+  it("refuses a body that mixes the articles with a range, and an empty list", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    const articles = [{ id, updatedAt: s.clock().toISOString() }];
+    expect((await s.post("/api/v1/articles/mark-read", { articles, before: s.clock().toISOString() })).status).toBe(400);
+    expect((await s.post("/api/v1/articles/mark-read", { articles: [] })).status).toBe(400);
+  });
+});
+
 describe("read times and the recently read articles", () => {
   type Item = { id: number; readAt: string | null };
   const ids = (body: { items: Item[] }) => body.items.map((item) => item.id);

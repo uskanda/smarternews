@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { resetScrollReadState } from "../lib/scroll-read.ts";
 import { resetThemeState } from "../lib/theme.ts";
 import { qrPath } from "./ConnectCode.tsx";
 
@@ -578,7 +579,45 @@ describe("the colour scheme", () => {
   it("says that the choice is kept in this browser only", async () => {
     renderApp({ route: "/settings" });
 
-    expect(await section("配色")).toHaveTextContent("このブラウザーだけに保存");
+    expect(await section("この端末の設定")).toHaveTextContent("このブラウザーだけに保存");
     expect(await screen.findByRole("radiogroup", { name: "配色" })).toHaveAccessibleDescription(/このブラウザーだけに保存/);
+  });
+});
+
+describe("the settings of this device", () => {
+  const toggle = () => screen.findByRole("checkbox", { name: "スクロールした記事を既読にする" });
+
+  it("holds the colour scheme and the switch to mark read what is scrolled past, and says the server gets neither", async () => {
+    renderApp({ route: "/settings" });
+
+    const region = await section("この端末の設定");
+    expect(within(region).getByRole("radiogroup", { name: "配色" })).toBeInTheDocument();
+    expect(within(region).getByRole("checkbox", { name: "スクロールした記事を既読にする" })).toBeInTheDocument();
+    expect(region).toHaveTextContent("このブラウザーだけに保存し、サーバーには送りません");
+    expect(screen.queryByRole("region", { name: "配色" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("radiogroup", { name: "配色" })).toHaveLength(1);
+  });
+
+  it("shows the switch off until it is chosen, and says what it does", async () => {
+    renderApp({ route: "/settings" });
+
+    expect(await toggle()).not.toBeChecked();
+    expect(await toggle()).toHaveAccessibleDescription(/一覧の上端を越えた記事を既読にします/);
+  });
+
+  it("is turned on with the Space key, at once and without a save, and stays on over a reload", async () => {
+    const first = renderApp({ route: "/settings" });
+    (await toggle()).focus();
+
+    await first.user.keyboard(" ");
+
+    expect(await toggle()).toBeChecked();
+    expect(window.localStorage.getItem("smarternews.scrollRead")).toBe("on");
+    expect(first.requests.filter((request) => !request.startsWith("GET"))).toEqual([]);
+    first.unmount();
+    resetScrollReadState();
+
+    renderApp({ route: "/settings", server: first.server });
+    expect(await toggle()).toBeChecked();
   });
 });

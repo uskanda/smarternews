@@ -7,6 +7,7 @@ import { AppProvider } from "../api/AppProvider";
 import { ConnectionProvider, useConnection } from "../connection/ConnectionProvider";
 import { NotificationsBridge } from "../notifications/NotificationsBridge";
 import { ReaderSessionProvider } from "../reader/session";
+import { loadScrollRead } from "../settings/scroll-read";
 import { loadThemeChoice, useThemeChoice } from "../theme/store";
 import { useTheme } from "../theme/theme";
 import { ToastProvider } from "../ui/toast";
@@ -39,6 +40,7 @@ export function RootLayout() {
   const choice = useThemeChoice();
   useEffect(() => {
     void loadThemeChoice();
+    void loadScrollRead();
   }, []);
   // What the device draws itself follows the chosen scheme too: the bar at the bottom, and the keyboard.
   useEffect(() => {

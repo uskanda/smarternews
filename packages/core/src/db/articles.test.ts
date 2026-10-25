@@ -12,6 +12,7 @@ import {
   listFeedArticles,
   markArticlesRead,
   markArticlesUnread,
+  markSeenArticlesRead,
   nextArticleToSummarize,
   openEventArticles,
   recentNewsArticles,
@@ -208,6 +209,22 @@ describe("duplicates across feeds", () => {
     });
   });
 
+  describe("when the kept article is read with the version a screen showed", () => {
+    it("marks its unread duplicates read and returns them too", () => {
+      const s = withDuplicates();
+      const ids = markSeenArticlesRead(s.db, [{ id: s.kept, updatedAt: getArticle(s.db, s.kept).updatedAt }], NOW);
+      expect(ids).toEqual([s.kept, s.copyB, s.copyC].sort((left, right) => left - right));
+      expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([true, true]);
+    });
+
+    it("leaves the duplicates alone while removal is off", () => {
+      const s = withDuplicates();
+      updateSettings(s.db, { removeDuplicates: false });
+      expect(markSeenArticlesRead(s.db, [{ id: s.kept, updatedAt: getArticle(s.db, s.kept).updatedAt }], NOW)).toEqual([s.kept]);
+      expect([s.isRead(s.copyB), s.isRead(s.copyC)]).toEqual([false, false]);
+    });
+  });
+
   describe("summaries", () => {
     function summarizing() {
       const s = withDuplicates();
@@ -335,6 +352,44 @@ describe("read times", () => {
       topicIds: [],
     });
     expect(s.readAt(id)).toBeNull();
+  });
+
+  it("marks read what a screen showed, at one time, unless a follow-up came after the version shown", () => {
+    const s = reading();
+    const [first, second, revised] = [s.article(), s.article(), s.article()];
+    const shown = (id: number) => ({ id, updatedAt: getArticle(s.db, id).updatedAt });
+    const seen = [shown(first), shown(second), shown(revised)];
+    reviseArticle(s.db, revised, {
+      title: "Revised",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: TEN,
+      refs: [],
+      topicIds: [],
+    });
+    expect(markSeenArticlesRead(s.db, seen, ELEVEN)).toEqual([first, second]);
+    expect([s.readAt(first), s.readAt(second), s.readAt(revised)]).toEqual([ELEVEN, ELEVEN, null]);
+    expect(getArticle(s.db, revised).isRead).toBe(false);
+  });
+
+  it("takes the version shown in any offset, as the same instant", () => {
+    const s = reading();
+    const id = s.article();
+    expect(markSeenArticlesRead(s.db, [{ id, updatedAt: "2026-03-01T09:00:00+09:00" }], ELEVEN)).toEqual([id]);
+  });
+
+  it("leaves an article read already, with its time, out of what it returns, and skips one that is gone", () => {
+    const s = reading();
+    const [before, unread] = [s.article(), s.article()];
+    setArticleFlags(s.db, before, { isRead: true }, TEN);
+    const seen = [before, unread, 9999].map((id) => ({ id, updatedAt: "2026-03-01T00:00:00.000Z" }));
+    expect(markSeenArticlesRead(s.db, seen, ELEVEN)).toEqual([unread]);
+    expect([s.readAt(before), s.readAt(unread)]).toEqual([TEN, ELEVEN]);
   });
 
   it("gives the duplicates read with a kept article the same time", () => {

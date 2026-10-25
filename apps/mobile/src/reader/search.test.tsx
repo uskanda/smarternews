@@ -1,4 +1,5 @@
-import { fireEvent, screen, userEvent, waitFor, within } from "@testing-library/react-native";
+import { act, fireEvent, screen, userEvent, waitFor, within } from "@testing-library/react-native";
+import { chooseScrollRead } from "../settings/scroll-read";
 import { renderApp } from "../testing/app";
 import { eventually, MINUTE } from "../testing/queries";
 import { makeServer, type TestServer } from "../testing/server";
@@ -189,5 +190,26 @@ describe("the search results and the order of a list", () => {
     await screen.findByRole("header", { name: "「電池」の検索結果" });
     await waitFor(() => expect(titles()).toEqual(["News of the day", "電池の既読の話", "電池の古い話"]));
     expect(screen.queryByRole("button", { name: /^並び順/ })).toBeNull();
+  });
+});
+
+describe("scrolling the results", () => {
+  it("marks nothing read, even with the setting to mark read what the list is scrolled past", async () => {
+    await chooseScrollRead(true);
+    const { server, ids } = await seeded();
+    await renderApp({ server });
+    await searchFor("電池");
+    await waitFor(() => expect(titles()).toEqual(["News of the day", "電池の既読の話", "電池の古い話"]));
+    const list = screen.getByTestId("article-list");
+    const rows = list.props.data as Array<{ id: number }>;
+
+    for (const first of [0, 3]) {
+      const viewableItems = rows.slice(first).map((item, offset) => ({ item, key: String(item.id), index: first + offset, isViewable: true }));
+      await act(async () => list.props.onViewableItemsChanged({ viewableItems, changed: [] }));
+    }
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1200)));
+
+    expect([await isRead(server, ids.feed!), await isRead(server, ids.aOld!)]).toEqual([false, false]);
+    expect(screen.queryByTestId("scroll-read-room")).toBeNull();
   });
 });

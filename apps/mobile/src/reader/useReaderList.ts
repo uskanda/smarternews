@@ -17,7 +17,7 @@ import {
 import type { ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
-import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useListSortChange, useListViews } from "../api/queries";
+import { useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useListSortChange, useListViews, useReadPatch } from "../api/queries";
 import { useToast } from "../ui/toast";
 import { advanceCheckedAt } from "../notifications/store";
 import { useReaderSession } from "./session";
@@ -168,11 +168,28 @@ export function useReaderList(ref: ListRef) {
 
   const setRead = useCallback(
     (target: { id: number }, isRead: boolean) => {
+      // Put back to unread by the user: scrolling past it does not read it again in this visit to the list.
+      if (!isRead) session.exclude(listKey, target.id);
       const summary = items.find((item) => item.id === target.id);
       if ((unreadOnly || recentlyRead) && summary) session.keep(listKey, { ...summary, isRead });
       flags.mutate({ id: target.id, isRead });
     },
     [items, unreadOnly, recentlyRead, session, listKey, flags],
+  );
+  const readPatch = useReadPatch();
+  /** Shows rows read, or unread again, as the list was scrolled past them: before or without a request. */
+  const showRead = useCallback(
+    (rows: readonly ArticleSummary[], isRead: boolean) => {
+      for (const row of rows) {
+        if (unreadOnly) session.keep(listKey, { ...row, isRead });
+        else session.patch(row.id, { isRead });
+      }
+      readPatch(
+        rows.map((row) => row.id),
+        isRead,
+      );
+    },
+    [unreadOnly, session, listKey, readPatch],
   );
   const toggleStar = useCallback(
     (target: { id: number; starred: boolean }) => {
@@ -253,5 +270,13 @@ export function useReaderList(ref: ListRef) {
     setRead,
     toggleStar,
     refresh,
+    /** Which list this is, for what is kept and excluded during a visit to it. */
+    listKey,
+    /** False where scrolling past a row never reads it: the recently read articles, search results and events. */
+    scrollReadable: !isSearch && !recentlyRead && !isEvents,
+    showRead,
+    excluded: session.excludedFor(listKey),
+    /** Says that this list is the one shown, which ends the visit to the last one. */
+    visit: session.visit,
   };
 }

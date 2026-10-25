@@ -56,6 +56,7 @@ import {
   type ListViewUpdate,
   type MarkRead,
   type MarkReadResult,
+  type SeenArticle,
   type OpmlImportResult,
   type ProviderStatus,
   type Run,
@@ -228,6 +229,15 @@ export function createApi(options: ApiOptions) {
     /** Fetches the full content of a feed article from its page. Answers once the fetch is over, which can take seconds. */
     fetchFullContent: (id: number): Promise<FullContentResult> => json(fullContentResultSchema, `/articles/${id}/full-content`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
+    /**
+     * Marks read the articles as a screen showed them, each with the `updatedAt` it had on screen: one that a
+     * follow-up updated since stays unread. `keepalive` lets the request finish after the page has gone.
+     */
+    markSeenRead: (articles: SeenArticle[], options: { keepalive?: boolean } = {}): Promise<MarkReadResult> =>
+      json(markReadResultSchema, "/articles/mark-read", {
+        ...body("POST", { articles }),
+        ...(options.keepalive ? { keepalive: true } : {}),
+      }),
     markUnread: (ids: number[]): Promise<{ updated: number }> =>
       json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),
     counts: (): Promise<Counts> => json(countsSchema, "/counts"),

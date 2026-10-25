@@ -3,12 +3,13 @@ import type { ArticleSummary } from "@smarternews/core/api";
 import { DrawerActions } from "@react-navigation/native";
 import { useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BackHandler, FlatList, RefreshControl, ScrollView, SectionList, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../api/AppProvider";
 import { useCategories, useFeeds, useSettings, useTermMatcher, useTimeZone } from "../api/queries";
 import { openSource } from "../lib/links";
+import { useScrollRead } from "../settings/scroll-read";
 import { unfold } from "../shell/collapsed";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, IconButton, Loading, Toggle } from "../ui/controls";
@@ -18,6 +19,7 @@ import { useToast } from "../ui/toast";
 import { Txt } from "../ui/Txt";
 import { ArticleRow } from "./ArticleRow";
 import { EventRow } from "./EventRow";
+import { SCROLL_READ_VIEWABILITY, useScrollToRead } from "./scroll-read";
 import { listParams, listRefOf, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
 
 const SORT_LABELS = { newest: "新しい順", oldest: "古い順" } as const;
@@ -64,15 +66,34 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const [sorting, setSorting] = useState(false);
   const { height: windowHeight } = useWindowDimensions();
 
+  // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished.
+  const scrollReadOn = useScrollRead() && reader.scrollReadable;
+  const [pulls, setPulls] = useState(0);
+  const { visit, listKey: readerKey } = reader;
+  useEffect(() => visit(readerKey), [visit, readerKey]);
+  const scrollRead = useScrollToRead({
+    enabled: scrollReadOn,
+    items,
+    resetKey: `${readerKey}#${pulls}`,
+    excluded: reader.excluded,
+    show: reader.showRead,
+    onFailed: (retry) => toast({ message: "スクロールした記事を既読にできませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: retry } }),
+  });
+  // The room below the last row is as tall as the list, so that the last row too can go past the top.
+  const [listHeight, setListHeight] = useState(0);
+
   // The rows are drawn again only when their article changes, so what they call must not change either:
   // these three stay the same functions and reach the current state through a ref.
-  const current = useRef({ reader, ref, router });
-  current.current = { reader, ref, router };
+  const current = useRef({ reader, ref, router, drop: scrollRead.drop });
+  current.current = { reader, ref, router, drop: scrollRead.drop };
   const open = useCallback((article: ArticleSummary) => {
     const { ref: list, router: to } = current.current;
     to.push({ pathname: "/article/[id]", params: { id: String(article.id), list: list.key, ...listParams(list) } });
   }, []);
-  const toggleRead = useCallback((article: ArticleSummary) => current.current.reader.setRead(article, !article.isRead), []);
+  const toggleRead = useCallback((article: ArticleSummary) => {
+    if (article.isRead) current.current.drop(article.id);
+    current.current.reader.setRead(article, !article.isRead);
+  }, []);
   const showMenu = useCallback((article: ArticleSummary) => setMenuFor(article), []);
 
   // Back from another list returns to the unread list, where the app starts; back from there leaves the app.
@@ -114,6 +135,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
 
   async function pulled() {
     setRefreshing(true);
+    setPulls((count) => count + 1);
     try {
       await reader.refresh();
     } finally {
@@ -210,6 +232,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   );
   const refreshControl = <RefreshControl refreshing={refreshing} onRefresh={() => void pulled()} colors={[theme.colors.primary]} progressBackgroundColor={theme.colors.surface} />;
   const footer = list.isFetchingNextPage ? <Loading /> : null;
+  const room = scrollReadOn ? <View testID="scroll-read-room" style={{ height: listHeight }} /> : null;
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -288,10 +311,19 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               {status}
             </View>
           }
-          ListFooterComponent={footer}
+          ListFooterComponent={
+            <>
+              {footer}
+              {room}
+            </>
+          }
           refreshControl={refreshControl}
           onEndReached={more}
-          onEndReachedThreshold={0.5}
+          // The room below the last row is one screen: the next page is asked for as early as without it.
+          onEndReachedThreshold={scrollReadOn ? 1.5 : 0.5}
+          onLayout={(event) => setListHeight(event.nativeEvent.layout.height)}
+          onViewableItemsChanged={scrollRead.onViewableItemsChanged}
+          viewabilityConfig={SCROLL_READ_VIEWABILITY}
         />
       )}
       <Sheet title="並び順" visible={sorting} onClose={() => setSorting(false)}>
@@ -336,6 +368,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
             <Button
               label={menuFor.isRead ? "未読に戻す" : "既読にする"}
               onPress={() => {
+                if (menuFor.isRead) scrollRead.drop(menuFor.id);
                 reader.setRead(menuFor, !menuFor.isRead);
                 setMenuFor(null);
               }}

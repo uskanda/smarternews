@@ -164,6 +164,14 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"ids":[1,2]}' "$API/api/v1/articles/mark-unread"
+```
+
+`mark-read` also takes a list of the articles a screen showed instead of a range. Each entry names an article by `id` with the `updatedAt` it had in the list. The server marks an article only while it is unread and not updated after that time, so an article that a follow-up rewrote since then stays unread. An id that no longer exists is skipped. The list holds 1 to 500 articles; a longer one gets 400 and marks nothing, and so does a body that also has any field of the range. The response is the same `updated` and `ids`, duplicates included:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"articles":[{"id":1,"updatedAt":"2026-03-01T09:00:00.000Z"},{"id":2,"updatedAt":"2026-03-01T10:30:00.000Z"}]}' \
+  "$API/api/v1/articles/mark-read"
 
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
 ```

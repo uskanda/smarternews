@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
 import { AppState } from "react-native";
+import { chooseScrollRead } from "../settings/scroll-read";
 import { renderApp } from "../testing/app";
 import { eventually, listData, MINUTE, rowTitles } from "../testing/queries";
 import { makeServer, type ArticleOverrides, type TestServer } from "../testing/server";
@@ -400,5 +401,208 @@ describe("the order of a list", () => {
     offline = false;
     await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
     expect((await views(server)).items).toEqual([]);
+  });
+});
+
+describe("marking read what the list is scrolled past", () => {
+  type Row = { id: number; title: string; isRead: boolean };
+  const list = () => screen.getByTestId("article-list");
+  const label = (name: RegExp) => String(screen.getByRole("button", { name }).props.accessibilityLabel);
+  const isRead = async (server: TestServer, id: number) => (await server.core<{ isRead: boolean }>("getArticle", id)).isRead;
+
+  /** Says to the list what is on screen: four rows from `first`, or none when it is scrolled into the room below the last. */
+  async function show(first: number) {
+    const rows = listData<Row>();
+    const viewableItems = rows.slice(first, first + 4).map((item, offset) => ({ item, key: String(item.id), index: first + offset, isViewable: true }));
+    await act(async () => list().props.onViewableItemsChanged({ viewableItems, changed: [] }));
+  }
+
+  /** `total` unread articles in Security, listed newest first: "Story <total>" down to "Story 1". */
+  async function seeded(total = 6) {
+    const server = await makeServer();
+    const security = await server.category("Security");
+    const tools = await server.category("Tools");
+    const ids = await articles(server, security.id, Array.from({ length: total }, (_, index) => ({ title: `Story ${index + 1}` })));
+    await articles(server, tools.id, [{ title: "Tool news" }]);
+    return { server, security, tools, rows: [...ids].reverse() };
+  }
+
+  async function open(server: TestServer, url: string, first: string | RegExp = /^Story 1$/) {
+    const view = await renderApp({ server, url });
+    await screen.findByText(first);
+    await show(0);
+    return view;
+  }
+
+  it("marks read the rows above the first one on screen, keeps them as read, and lowers the count without an undo", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded();
+    await open(server, `/list/category-${security.id}`);
+
+    await show(3);
+
+    await waitFor(() => expect(label(/Story 4/)).toMatch(/既読$/));
+    expect(label(/Story 3/)).toMatch(/未読$/);
+    expect(rowTitles()).toEqual(["Story 6", "Story 5", "Story 4", "Story 3", "Story 2", "Story 1"]);
+    await eventually(async () => expect(await Promise.all(rows.map((id) => isRead(server, id)))).toEqual([true, true, true, false, false, false]));
+    await userEvent.setup().press(screen.getByRole("button", { name: "項目を開く" }));
+    expect(await screen.findByRole("button", { name: "Security、未読3件" })).toBeOnTheScreen();
+    expect(screen.queryByRole("button", { name: "取り消す" })).toBeNull();
+  });
+
+  it("leaves unread a row that is partly on screen", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded();
+    await open(server, `/list/category-${security.id}`);
+
+    await show(2);
+
+    await eventually(async () => expect(await isRead(server, rows[1]!)).toBe(true));
+    expect(await isRead(server, rows[2]!)).toBe(false);
+    expect(label(/Story 4/)).toMatch(/未読$/);
+  });
+
+  it("marks read every row of a strong swipe past thirty at once", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded(40);
+    // Only the rows near the screen are drawn.
+    await open(server, `/list/category-${security.id}`, "Story 40");
+
+    await show(30);
+
+    await eventually(async () => expect((await Promise.all(rows.map((id) => isRead(server, id)))).filter(Boolean)).toHaveLength(30));
+    expect(await isRead(server, rows[29]!)).toBe(true);
+    expect(await isRead(server, rows[30]!)).toBe(false);
+  }, 60_000);
+
+  it("marks a feed article read, and the feed has one fewer unread", async () => {
+    await chooseScrollRead(true);
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const blog = await server.feed("Blog", tools.id);
+    const posts: number[] = [];
+    for (const index of [1, 2, 3]) posts.push(await server.feedArticle(blog.id, { title: `Post ${index}`, at: `2026-03-01T0${index}:00:00.000Z` }));
+    await renderApp({ server, url: `/list/feed-${blog.id}` });
+    await screen.findByText("Post 1");
+    await show(0);
+
+    await show(1);
+
+    await eventually(async () => expect(await isRead(server, posts[2]!)).toBe(true));
+    await userEvent.setup().press(screen.getByRole("button", { name: "項目を開く" }));
+    expect(await screen.findByRole("button", { name: "Blog、未読2件" })).toBeOnTheScreen();
+  });
+
+  it("changes nothing while the setting is off, with no room below the list and the next page asked for as before", async () => {
+    const { server, security, rows } = await seeded();
+    await open(server, `/list/category-${security.id}`);
+
+    await show(6);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1200)));
+
+    expect(await Promise.all(rows.map((id) => isRead(server, id)))).toEqual(rows.map(() => false));
+    expect(screen.queryByTestId("scroll-read-room")).toBeNull();
+    expect(list().props.onEndReachedThreshold).toBe(0.5);
+  });
+
+  it("puts room as tall as the list below it, so that the last row too goes past the top, and asks for the next page as early as before", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded(5);
+    await open(server, `/list/category-${security.id}`);
+    await act(async () => fireEvent(list(), "layout", { nativeEvent: { layout: { x: 0, y: 0, width: 400, height: 640 } } }));
+
+    expect(flat(screen.getByTestId("scroll-read-room").props.style).height).toBe(640);
+    expect(list().props.onEndReachedThreshold).toBe(1.5);
+    await show(5);
+
+    await eventually(async () => expect(await Promise.all(rows.map((id) => isRead(server, id)))).toEqual([true, true, true, true, true]));
+  });
+
+  it("does not mark read in the recently read articles what was swiped back to unread there", async () => {
+    await chooseScrollRead(true);
+    const { server, rows } = await seeded(3);
+    for (const id of rows) await server.core("setArticleFlags", id, { isRead: true }, "$now");
+    await renderApp({ server, url: "/list/recently-read" });
+    await screen.findByText(/^Story 1$/);
+    await show(0);
+    await fireEvent(screen.getByTestId(`row-${rows[0]}`), "swipeableOpen", "right");
+    await eventually(async () => expect(await isRead(server, rows[0]!)).toBe(false));
+
+    await show(2);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1200)));
+
+    expect(await isRead(server, rows[0]!)).toBe(false);
+    expect(screen.queryByTestId("scroll-read-room")).toBeNull();
+  });
+
+  it("does not mark read the events scrolled past", async () => {
+    await chooseScrollRead(true);
+    const server = await makeServer("2026-03-10T12:00:00.000Z");
+    const meetups = await server.category("Meetups", "event");
+    const events: number[] = [];
+    for (const day of [1, 2, 3]) {
+      events.push(
+        await server.article(meetups.id, {
+          title: `Meetup ${day}`,
+          kind: "event",
+          event: { key: `meetup-${day}`, startsAt: `2026-04-0${day}T10:00:00.000Z`, endsAt: `2026-04-0${day}T12:00:00.000Z`, venue: null, fee: null, registration: "unknown" },
+        }),
+      );
+    }
+    await renderApp({ server, url: `/list/category-${meetups.id}` });
+    await screen.findByText("Meetup 3");
+
+    // The events are a list of sections, which is not looked at for rows that went past.
+    expect(list().props.onViewableItemsChanged).toBeUndefined();
+    expect(await Promise.all(events.map((id) => isRead(server, id)))).toEqual([false, false, false]);
+  });
+
+  it("sends at once what went past when another list is chosen", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded();
+    await open(server, `/list/category-${security.id}`);
+
+    await show(2);
+    const user = userEvent.setup();
+    await user.press(screen.getByRole("button", { name: "項目を開く" }));
+    await user.press(await screen.findByRole("button", { name: /^Tools/ }));
+
+    await eventually(async () => expect([await isRead(server, rows[0]!), await isRead(server, rows[1]!)]).toEqual([true, true]), 10);
+    await user.press(await screen.findByRole("button", { name: "項目を開く" }));
+    expect(await screen.findByRole("button", { name: "Security、未読4件" })).toBeOnTheScreen();
+  });
+
+  it("sends at once what went past when the app goes to the background", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded();
+    await open(server, `/list/category-${security.id}`);
+
+    await show(2);
+    const handlers = (AppState.addEventListener as jest.Mock).mock.calls.filter(([type]) => type === "change").map(([, handler]) => handler as (state: string) => void);
+    await act(async () => handlers.forEach((handler) => handler("background")));
+
+    await eventually(async () => expect([await isRead(server, rows[0]!), await isRead(server, rows[1]!)]).toEqual([true, true]), 10);
+  });
+
+  it("shows the rows unread again when the server cannot be reached, and reads them when asked to try again", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded();
+    let offline = false;
+    await renderApp({ server, url: `/list/category-${security.id}`, offline: () => offline });
+    await screen.findByText(/^Story 1$/);
+    await show(0);
+    offline = true;
+
+    await show(3);
+    await waitFor(() => expect(label(/Story 4/)).toMatch(/既読$/));
+
+    expect(await screen.findByText("スクロールした記事を既読にできませんでした")).toBeOnTheScreen();
+    await waitFor(() => expect(label(/Story 4/)).toMatch(/未読$/));
+    expect(label(/Story 6/)).toMatch(/未読$/);
+    offline = false;
+    await userEvent.setup().press(screen.getByRole("button", { name: "もう一度試す" }));
+
+    await eventually(async () => expect(await Promise.all(rows.slice(0, 3).map((id) => isRead(server, id)))).toEqual([true, true, true]));
+    await waitFor(() => expect(label(/Story 4/)).toMatch(/既読$/));
   });
 });

@@ -390,8 +390,28 @@ export const markReadSchema = z.object({
   feedId: z.number().int().optional(),
   minImportance: importanceSchema.optional(),
   before: z.iso.datetime({ offset: true }),
+  /** Belongs to the other shape: a body with both is refused. */
+  articles: z.never().optional(),
 });
 export type MarkRead = z.infer<typeof markReadSchema>;
+
+/** How many articles one request may name with the versions a screen showed. */
+export const MAX_MARK_SEEN = 500;
+
+/** An article as a screen showed it: `updatedAt` is the version on screen, so a later follow-up stays unread. */
+export const seenArticleSchema = z.object({ id: z.number().int(), updatedAt: z.iso.datetime({ offset: true }) });
+export type SeenArticle = z.infer<typeof seenArticleSchema>;
+
+export const markSeenSchema = z.strictObject({
+  articles: z
+    .array(seenArticleSchema)
+    .min(1, "name at least one article")
+    .max(MAX_MARK_SEEN, `too many articles: at most ${MAX_MARK_SEEN}`),
+});
+export type MarkSeen = z.infer<typeof markSeenSchema>;
+
+/** The body of `POST /articles/mark-read`: a range, or the articles a screen showed. */
+export const markReadBodySchema = z.union([markSeenSchema, markReadSchema]);
 
 export const markReadResultSchema = z.object({ updated: z.number().int(), ids: z.array(z.number().int()) });
 export type MarkReadResult = z.infer<typeof markReadResultSchema>;

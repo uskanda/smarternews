@@ -1,4 +1,5 @@
-import { screen, userEvent, waitFor } from "@testing-library/react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { screen, userEvent, waitFor, within } from "@testing-library/react-native";
 import { Linking } from "react-native";
 import { colors } from "../theme/tokens";
 import { loadConnection } from "../connection/store";
@@ -234,5 +235,74 @@ describe("the colour scheme", () => {
 
     await waitFor(async () => expect(await radio("ダークブルー")).toBeChecked());
     expect(await headingColor()).toBe(colors.darkblue["on-surface"]);
+  });
+});
+
+describe("the settings of this device", () => {
+  const toggle = () => screen.findByRole("switch", { name: "スクロールした記事を既読にする" });
+  const section = (title: string) => screen.getByTestId(`section-${title}`);
+
+  it("holds the colour scheme and the switch, says they stay on this device, and leaves the notifications where they were", async () => {
+    await renderApp({ url: "/settings" });
+    await toggle();
+
+    const device = section("この端末の設定");
+    expect(within(device).getByLabelText("配色").props.accessibilityRole).toBe("radiogroup");
+    expect(within(device).getByRole("switch", { name: "スクロールした記事を既読にする" })).toBeOnTheScreen();
+    expect(within(device).getByText(/この端末だけに保存し、サーバーには送りません/)).toBeOnTheScreen();
+    expect(within(section("通知")).getByLabelText("通知").props.accessibilityRole).toBe("radiogroup");
+    expect(within(device).queryByLabelText("通知")).toBeNull();
+    expect(screen.queryByTestId("section-配色")).toBeNull();
+  });
+
+  it("reads the switch out with its name, what it does, and whether it is on", async () => {
+    await renderApp({ url: "/settings" });
+
+    expect(await toggle()).not.toBeChecked();
+    expect((await toggle()).props.accessibilityHint).toMatch(/一覧の上端を越えた記事を既読にします/);
+    await userEvent.setup().press(await toggle());
+    await waitFor(async () => expect(await toggle()).toBeChecked());
+  });
+
+  it("is off until the stored setting has been read", async () => {
+    await AsyncStorage.setItem("smarternews.scrollRead", "on");
+    let finish: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (finish = resolve));
+    // The storage of the tests is a mock already: its own reading is kept, and held back for this key.
+    const getItem = AsyncStorage.getItem as jest.Mock;
+    const read = getItem.getMockImplementation()!;
+    getItem.mockImplementation(async (key: string) => {
+      if (key === "smarternews.scrollRead") await gate;
+      return read(key);
+    });
+    try {
+      await renderApp({ url: "/settings" });
+
+      expect(await toggle()).not.toBeChecked();
+      finish();
+      await waitFor(async () => expect(await toggle()).toBeChecked());
+    } finally {
+      getItem.mockImplementation(read);
+    }
+  });
+
+  it("is still on after the app was closed and opened again, and after leaving the server and connecting again", async () => {
+    const server = await makeServer();
+    const first = await renderApp({ server, url: "/settings" });
+    await userEvent.setup().press(await toggle());
+    await waitFor(async () => expect(await toggle()).toBeChecked());
+    first.unmount();
+    require("./scroll-read").resetScrollReadState();
+
+    const second = await renderApp({ server, url: "/settings" });
+    await waitFor(async () => expect(await toggle()).toBeChecked());
+    await press("接続を解除する");
+    await press("解除する");
+    await screen.findByRole("button", { name: "QRコードを読み取る" });
+    second.unmount();
+    require("./scroll-read").resetScrollReadState();
+
+    await renderApp({ server, url: "/settings" });
+    await waitFor(async () => expect(await toggle()).toBeChecked());
   });
 });

@@ -1,6 +1,6 @@
 import type { Article, ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   useArticle,
@@ -12,6 +12,7 @@ import {
   useFullContentFetch,
   useListSortChange,
   useListViews,
+  useReadPatch,
   useSettings,
   useTimeZone,
 } from "../api/queries.ts";
@@ -20,6 +21,7 @@ import { unfold } from "../lib/collapsed.ts";
 import { followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
+import { useScrollRead } from "../lib/scroll-read.ts";
 import {
   buildNav,
   GENERATED_LABEL,
@@ -46,6 +48,7 @@ import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
+import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
 export type View =
@@ -125,6 +128,20 @@ function SearchEmpty({ words, narrowed, onWiden }: { words: string; narrowed: bo
 }
 
 const SELECT = "rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
+
+/** The height of the list's visible area, followed as it changes while `active`. */
+function useListHeight(ref: RefObject<HTMLElement | null>, active: boolean): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const element = ref.current;
+    if (!active || !element) return;
+    setHeight(element.clientHeight);
+    const observer = new ResizeObserver(() => setHeight(element.clientHeight));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref, active]);
+  return height;
+}
 
 /** The reading screen: a list of articles for the chosen view, and the chosen article beside it. */
 export function ReaderPage({ view }: { view: View }) {
@@ -222,6 +239,38 @@ export function ReaderPage({ view }: { view: View }) {
   const sortKey = target ? sortKeyFor(target) : undefined;
   const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
 
+  // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
+  // not in the recently read articles, which is where a mistake is put right, nor in search results or events.
+  const [refreshes, setRefreshes] = useState(0);
+  const listScroll = useRef<HTMLDivElement>(null);
+  const listRows = useRef<HTMLUListElement>(null);
+  const readPatch = useReadPatch();
+  const scrollReadChosen = useScrollRead();
+  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && (layout !== "narrow" || articleId === null);
+  const scrollRead = useScrollToRead({
+    enabled: scrollReadOn,
+    scrollRef: listScroll,
+    rowsRef: listRows,
+    items,
+    resetKey: `${listKey}#${refreshes}`,
+    show: (ids, isRead) => {
+      const changed = new Set(ids);
+      setKept((current) => {
+        if (current.key !== listKey) return current;
+        const known = new Set(current.items.map((item) => item.id));
+        const added = unreadOnly ? items.filter((item) => changed.has(item.id) && !known.has(item.id)) : [];
+        return {
+          key: listKey,
+          items: [...current.items, ...added].map((item) => (changed.has(item.id) ? { ...item, isRead } : item)),
+        };
+      });
+      readPatch(ids, isRead);
+    },
+    onFailed: (retry) =>
+      toast({ message: "スクロールした記事を既読にできませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: retry } }),
+  });
+  const listHeight = useListHeight(listScroll, scrollReadOn);
+
   const basePath = (target && listPathOf(target, () => category?.slug)) ?? `/${view}`;
   const query = search.toString() ? `?${search.toString()}` : "";
   const articlePath = (id: number) => `${basePath}/${id}${query}`;
@@ -232,6 +281,8 @@ export function ReaderPage({ view }: { view: View }) {
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
   function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
+    // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
+    if (!isRead) scrollRead.exclude(target.id);
     const summary = items.find((item) => item.id === target.id);
     if ((unreadOnly || recentlyRead) && summary) {
       setKept((current) => ({
@@ -276,6 +327,7 @@ export function ReaderPage({ view }: { view: View }) {
 
   function refresh() {
     setKept({ key: listKey, items: [] });
+    setRefreshes((count) => count + 1);
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["counts"] });
   }
@@ -356,7 +408,6 @@ export function ReaderPage({ view }: { view: View }) {
     sortChange.mutate({ key: keyOf(target), sort: next });
   }
   // A list in another order starts at its top.
-  const listScroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (listScroll.current) listScroll.current.scrollTop = 0;
   }, [sort]);
@@ -511,7 +562,7 @@ export function ReaderPage({ view }: { view: View }) {
         {!isSearch && list.isSuccess && items.length === 0 ? (
           <EmptyList view={view} hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0} />
         ) : null}
-        <ul>
+        <ul ref={listRows}>
           {items.map((item) => (
             <ArticleRow
               key={item.id}
@@ -534,6 +585,8 @@ export function ReaderPage({ view }: { view: View }) {
             </Button>
           </div>
         ) : null}
+        {/* Room below the last row, so that it too can go past the top. */}
+        {scrollReadOn ? <div aria-hidden="true" data-scroll-read-room style={{ height: listHeight }} /> : null}
       </div>
     </section>
   );

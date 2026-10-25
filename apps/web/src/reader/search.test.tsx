@@ -1,7 +1,7 @@
 import { getArticle, saveTranslatedTitle, setArticleFlags, updateListView } from "@smarternews/core";
 import { seedFeed, seedFeedArticle } from "@smarternews/core/testing";
-import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const MINUTE = 60_000;
@@ -268,5 +268,34 @@ describe("the results and the order of a list", () => {
     await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
     await waitFor(() => expect(rowTitles()).toEqual(["News of the day", "電池の既読の話", "電池の古い話"]));
     expect(within(list()).queryByRole("button", { name: /^並び順/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("scrolling the results", () => {
+  it("marks nothing read, even with the setting to mark read what the list is scrolled past", async () => {
+    window.localStorage.setItem("smarternews.scrollRead", "on");
+    const { server, ids } = seeded();
+    // jsdom lays nothing out: every row is 50px tall, and the list shows 200px.
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const item = this.closest("[data-list-scroll] li");
+      const index = item?.parentElement ? [...item.parentElement.children].indexOf(item) : -1;
+      const top = index === -1 ? 0 : index * 50 - (item?.closest<HTMLElement>("[data-list-scroll]")?.scrollTop ?? 0);
+      const height = index === -1 ? 200 : 50;
+      return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) };
+    });
+    onTestFinished(() => rect.mockRestore());
+    renderApp({ server, route: `/search?q=${q("電池")}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["News of the day", "電池の既読の話", "電池の古い話"]));
+    const pane = list().querySelector<HTMLElement>("[data-list-scroll]")!;
+
+    for (const top of [0, 150]) {
+      pane.scrollTop = top;
+      fireEvent.scroll(pane);
+      await act(() => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    expect([getArticle(server.db, ids.feed!).isRead, getArticle(server.db, ids.aOld!).isRead]).toEqual([false, false]);
+    expect(pane.querySelector("[data-scroll-read-room]")).toBeNull();
   });
 });

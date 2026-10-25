@@ -160,12 +160,13 @@ export function Field({ ref, label, hint, error, multiline, ...props }: FieldPro
 }
 
 /** A switch with its words. The whole row is the control. */
-export function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
+export function Toggle({ label, hint, value, onChange }: { label: string; hint?: string; value: boolean; onChange: (value: boolean) => void }) {
   const theme = useTheme();
   return (
     <Pressable
       accessibilityRole="switch"
       accessibilityLabel={label}
+      accessibilityHint={hint}
       accessibilityState={{ checked: value }}
       onPress={() => onChange(!value)}
       style={{ minHeight: theme.spacing["touch-android"], flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}

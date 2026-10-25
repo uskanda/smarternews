@@ -51,7 +51,8 @@ import {
   categoryMoveSchema,
   feedMoveSchema,
   markArticlesUnread,
-  markReadSchema,
+  markReadBodySchema,
+  markSeenArticlesRead,
   markUnreadSchema,
   notFound,
   renderRss,
@@ -282,7 +283,9 @@ export function createApp(deps: AppDeps): Hono {
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
   api.post("/articles/mark-read", async (c) => {
-    const ids = markArticlesRead(db, parse(markReadSchema, await jsonBody(c)), clock().toISOString());
+    const input = parse(markReadBodySchema, await jsonBody(c));
+    const now = clock().toISOString();
+    const ids = "articles" in input && input.articles ? markSeenArticlesRead(db, input.articles, now) : markArticlesRead(db, input, now);
     return c.json({ updated: ids.length, ids });
   });
   api.post("/articles/mark-unread", async (c) =>

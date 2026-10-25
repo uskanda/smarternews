@@ -5,6 +5,7 @@ import { Link, useNavigate } from "react-router";
 import { ApiError, THEME_CHOICES, THEME_LABEL } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
@@ -219,26 +220,54 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   );
 }
 
-/** The colour scheme of this browser. A choice takes effect at once: it is not part of the settings on the server. */
-function ColorTheme() {
+/**
+ * What this browser keeps for itself: the colour scheme, and whether the list marks read what is scrolled past.
+ * A change takes effect at once: neither is part of the settings on the server.
+ */
+function DeviceSettings() {
   const choice = useThemeChoice();
+  const scrollRead = useScrollRead();
   const id = useId();
   return (
-    <section aria-label="配色" className={SECTION}>
+    <section aria-labelledby={`${id}-title`} className={SECTION}>
       <h2 id={`${id}-title`} className="type-headline-md">
-        配色
+        この端末の設定
       </h2>
-      <div role="radiogroup" aria-labelledby={`${id}-title`} aria-describedby={`${id}-hint`} className="flex flex-wrap gap-x-lg gap-y-xs type-body-md">
-        {THEME_CHOICES.map((value) => (
-          <label key={value} className="inline-flex cursor-pointer items-center gap-xs">
-            <input type="radio" name="theme" className="accent-primary" checked={choice === value} onChange={() => chooseTheme(value)} />
-            {THEME_LABEL[value]}
-          </label>
-        ))}
-      </div>
-      <p id={`${id}-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
-        「端末に従う」は、端末が暗い配色のとき「ダークブルー」で表示します。選んだ配色は、このブラウザーだけに保存します。
+      <p id={`${id}-hint`} className="max-w-measure type-body-md text-on-surface-muted">
+        この区画の設定は、このブラウザーだけに保存し、サーバーには送りません。
       </p>
+      <div className="flex flex-col gap-xs">
+        <span id={`${id}-theme`} className="type-label-md">
+          配色
+        </span>
+        <div
+          role="radiogroup"
+          aria-labelledby={`${id}-theme`}
+          aria-describedby={`${id}-theme-hint ${id}-hint`}
+          className="flex flex-wrap gap-x-lg gap-y-xs type-body-md"
+        >
+          {THEME_CHOICES.map((value) => (
+            <label key={value} className="inline-flex cursor-pointer items-center gap-xs">
+              <input type="radio" name="theme" className="accent-primary" checked={choice === value} onChange={() => chooseTheme(value)} />
+              {THEME_LABEL[value]}
+            </label>
+          ))}
+        </div>
+        <p id={`${id}-theme-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
+          「端末に従う」は、端末が暗い配色のとき「ダークブルー」で表示します。
+        </p>
+      </div>
+      <div className="flex flex-col gap-xs">
+        <Checkbox
+          label="スクロールした記事を既読にする"
+          checked={scrollRead}
+          aria-describedby={`${id}-scroll-hint`}
+          onChange={(event) => chooseScrollRead(event.target.checked)}
+        />
+        <p id={`${id}-scroll-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
+          記事の一覧を送ったとき、一覧の上端を越えた記事を既読にします。最近読んだ記事、検索の結果、イベントの一覧は対象にしません。
+        </p>
+      </div>
     </section>
   );
 }
@@ -431,7 +460,7 @@ export function SettingsPage() {
       ) : settings.isPending ? (
         <Loading />
       ) : null}
-      <ColorTheme />
+      <DeviceSettings />
       <SettingsFile />
       <Providers />
       <section aria-label="トークン" className={SECTION}>

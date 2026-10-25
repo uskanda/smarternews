@@ -264,6 +264,20 @@ export function useSummaryRequest(article: Article | undefined): "none" | "waiti
 }
 
 /** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */
+/**
+ * Shows articles read or unread in every list and in their detail, before or without a request: the rows the
+ * list was scrolled past, and those rows again when the request failed.
+ */
+export function useReadPatch(): (ids: readonly number[], isRead: boolean) => void {
+  const client = useQueryClient();
+  return useCallback(
+    (ids, isRead) => {
+      for (const id of ids) patchArticle(client, id, { isRead });
+    },
+    [client],
+  );
+}
+
 export function useArticleFlags() {
   const { api } = useApp();
   const client = useQueryClient();

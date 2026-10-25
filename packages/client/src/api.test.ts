@@ -152,6 +152,30 @@ describe("the API client", () => {
     expect(await api.feeds()).toEqual([]);
   });
 
+  it("marks read the articles a screen showed, sending each with its version, and can keep the request alive", async () => {
+    const server = testServer();
+    const sent: Array<{ body: unknown; keepalive: boolean | undefined }> = [];
+    const api = createApi({
+      fetchImpl: (input, init) => {
+        if (init?.body !== undefined) sent.push({ body: JSON.parse(String(init.body)), keepalive: init.keepalive });
+        return server.app.request(String(input), init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    const category = server.category();
+    const ids = [server.article(category.id), server.article(category.id)];
+    const shown = (await api.articles({ category: category.id })).items.map((item) => ({ id: item.id, updatedAt: item.updatedAt }));
+    sent.length = 0;
+
+    expect(await api.markSeenRead(shown)).toEqual({ updated: 2, ids: [...ids].sort((a, b) => a - b) });
+    expect(await api.markSeenRead(shown, { keepalive: true })).toEqual({ updated: 0, ids: [] });
+    expect(sent).toEqual([
+      { body: { articles: shown }, keepalive: undefined },
+      { body: { articles: shown }, keepalive: true },
+    ]);
+  });
+
   it("downloads the subscribed feeds as OPML and uploads the document back", async () => {
     const { api, server, seen } = setup();
     server.site.set("https://blog.example.org/feed.xml", `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title></channel></rss>`);

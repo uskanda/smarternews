@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  markReadBodySchema,
+  MAX_MARK_SEEN,
   articleSearchQuerySchema,
   articleSearchResultSchema, filterCreateSchema, listViewKey, listViewUpdateSchema, parseListViewKey, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
 
@@ -150,5 +152,31 @@ describe("the shape of a change to a list view", () => {
     expect(listViewUpdateSchema.parse({ sort: "oldest" })).toEqual({ sort: "oldest" });
     expect(listViewUpdateSchema.parse({})).toEqual({});
     expect(listViewUpdateSchema.safeParse({ sort: "relevance" }).success).toBe(false);
+  });
+});
+
+describe("the body of a mark-read request", () => {
+  const seen = (count: number) => Array.from({ length: count }, (_, i) => ({ id: i + 1, updatedAt: "2026-10-25T09:00:00.000Z" }));
+
+  it("takes a range, or the articles a screen showed with the versions it showed", () => {
+    expect(markReadBodySchema.parse({ categoryId: 3, before: "2026-10-25T09:00:00.000Z" })).toEqual({ categoryId: 3, before: "2026-10-25T09:00:00.000Z" });
+    expect(markReadBodySchema.parse({ articles: seen(2) })).toEqual({ articles: seen(2) });
+    expect(markReadBodySchema.safeParse({ articles: seen(MAX_MARK_SEEN) }).success).toBe(true);
+  });
+
+  it("refuses a body that mixes the two shapes", () => {
+    expect(markReadBodySchema.safeParse({ articles: seen(1), before: "2026-10-25T09:00:00.000Z" }).success).toBe(false);
+    expect(markReadBodySchema.safeParse({ articles: seen(1), categoryId: 3 }).success).toBe(false);
+  });
+
+  it("refuses no articles and more than the limit, saying there are too many", () => {
+    expect(markReadBodySchema.safeParse({ articles: [] }).success).toBe(false);
+    const result = markReadBodySchema.safeParse({ articles: seen(MAX_MARK_SEEN + 1) });
+    expect(issuesOf(result)).toEqual([{ path: "articles", message: `too many articles: at most ${MAX_MARK_SEEN}` }]);
+  });
+
+  it("refuses an article without the version the screen showed", () => {
+    expect(markReadBodySchema.safeParse({ articles: [{ id: 1 }] }).success).toBe(false);
+    expect(markReadBodySchema.safeParse({ articles: [{ id: 1, updatedAt: "yesterday" }] }).success).toBe(false);
   });
 });

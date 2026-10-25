@@ -20,6 +20,7 @@ import type {
   ListSort,
   Origin,
   Registration,
+  SeenArticle,
 } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
@@ -830,6 +831,22 @@ export function markArticlesRead(
       .prepare(`UPDATE articles SET is_read = 1, read_at = ? WHERE ${where.join(" AND ")} RETURNING id`)
       .all(now, ...params)
       .map((row) => num(row.id));
+    return [...marked, ...readDuplicatesOf(db, marked, now)].sort((a, b) => a - b);
+  });
+}
+
+/**
+ * Marks as read, at `now`, the named articles that a screen showed: each one only while it is unread and not
+ * updated after the version shown, so a follow-up that came in since stays unread. An article that is gone is
+ * skipped. What filters hide is not checked, as with one article: the screen showed it. Returns which ones
+ * changed, the hidden duplicates of those articles too.
+ */
+export function markSeenArticlesRead(db: Database, seen: SeenArticle[], now: string): number[] {
+  const statement = db.prepare("UPDATE articles SET is_read = 1, read_at = ? WHERE id = ? AND is_read = 0 AND updated_at <= ? RETURNING id");
+  return transaction(db, () => {
+    const marked = seen.flatMap((article) =>
+      statement.all(now, article.id, new Date(article.updatedAt).toISOString()).map((row) => num(row.id)),
+    );
     return [...marked, ...readDuplicatesOf(db, marked, now)].sort((a, b) => a - b);
   });
 }
