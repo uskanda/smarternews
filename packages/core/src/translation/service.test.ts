@@ -5,6 +5,7 @@ import { updateSettings } from "../db/settings.ts";
 import { createFilter } from "../db/filters.ts";
 import { translationCharsOf } from "../db/translations.ts";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
+import { resolvePricing, type ModelPricing } from "../llm/pricing.ts";
 import { fakeLlm, type FakeHandler } from "../testing/llm.ts";
 import { fakeTranslator } from "../testing/translation.ts";
 import type { TranslationItem } from "./adapter.ts";
@@ -19,7 +20,9 @@ const echo: FakeHandler = (request) => {
   return { items: sent.items.map((item) => ({ n: item.n, text: `[${item.text}]` })) };
 };
 
-function setup(options: { google?: "none" | "fails"; monthlyChars?: number; translate?: FakeHandler; llmCallsPerDay?: number; maxCharsPerArticle?: number } = {}) {
+function setup(
+  options: { google?: "none" | "fails"; monthlyChars?: number; translate?: FakeHandler; llmCallsPerDay?: number; maxCharsPerArticle?: number; pricing?: ModelPricing } = {},
+) {
   const db = createTestDb();
   const clock = fakeClock(START);
   updateSettings(db, { outputLanguage: "ja", timeZone: "UTC" });
@@ -27,7 +30,10 @@ function setup(options: { google?: "none" | "fails"; monthlyChars?: number; tran
     if (options.google === "fails") throw new Error("the translation API answered HTTP status 500");
     return `訳:${item.text}`;
   });
-  const llm = fakeLlm(db, clock, { translate: options.translate ?? echo }, { limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay ?? 300 } });
+  const llm = fakeLlm(db, clock, { translate: options.translate ?? echo }, {
+    limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay ?? 300 },
+    pricing: options.pricing,
+  });
   const log = vi.fn();
   const service = new TranslationService({
     db,
@@ -95,6 +101,16 @@ describe("choosing how to translate", () => {
     const full = setup({ monthlyChars: 3 });
     expect(await full.service.translate([plain("Hello")], { allowLlm: false })).toBeNull();
     expect(none.llmCalls() + failing.llmCalls() + full.llmCalls()).toBe(0);
+  });
+
+  it("does not call the model once the budget period has used its budget", async () => {
+    const s = setup({ google: "none", pricing: resolvePricing("claude-haiku-5-5")! });
+    s.db
+      .prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES ('write', 'write', 1, 1, ?, 100, 1)")
+      .run(s.clock().toISOString());
+
+    expect(await s.service.translate([plain("One")], { allowLlm: true })).toBeNull();
+    expect(s.llmCalls()).toBe(0);
   });
 
   it("does not call the model on a day that reached its limit of calls", async () => {

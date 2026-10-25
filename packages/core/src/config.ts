@@ -27,10 +27,34 @@ const openAiCompatibleSchema = z.strictObject({
   structuredOutput: z.enum(["json_schema", "prompt"]).default("json_schema"),
 });
 
-const providerSchema = z.discriminatedUnion("adapter", [claudeCliSchema, openAiCompatibleSchema]);
+const price = z.number().min(0);
+
+/** US dollars a million tokens, and a web search. Each field set here replaces the shipped price of the model. */
+const pricingSchema = z.strictObject({
+  inputPerMTok: price.optional(),
+  outputPerMTok: price.optional(),
+  cacheReadPerMTok: price.optional(),
+  cacheWritePerMTok: price.optional(),
+  webSearchPerSearch: price.optional(),
+});
+export type PricingConfig = z.infer<typeof pricingSchema>;
+
+const anthropicSchema = z.strictObject({
+  adapter: z.literal("anthropic"),
+  model: z.string().min(1),
+  /** Name of the environment variable that holds the key. The key itself never goes into the file. */
+  apiKeyEnv: z.string().min(1).default("ANTHROPIC_API_KEY"),
+  /** How much the model thinks. Left out, the model's own default applies. */
+  effort: z.enum(["low", "medium", "high"]).optional(),
+  /** Web searches one call of the search task may make. */
+  maxWebSearches: z.number().int().min(1).max(20).default(5),
+  pricing: pricingSchema.optional(),
+});
+
+const providerSchema = z.discriminatedUnion("adapter", [claudeCliSchema, openAiCompatibleSchema, anthropicSchema]);
+export type ProviderConfig = z.infer<typeof providerSchema>;
 
 const newsEngineSchema = z.enum(["google-news", "bing-news"]);
-export type ProviderConfig = z.infer<typeof providerSchema>;
 
 const tasksSchema = z.strictObject({
   default: z.string(),
@@ -60,6 +84,12 @@ const configSchema = z.strictObject({
       pagesPerRun: z.number().int().min(0).default(20),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */
       runRetries: z.number().int().min(0).max(3).default(2),
+      /** US dollars the providers that cost money may use in one budget period. */
+      monthlyBudgetUsd: z.number().min(0).default(100),
+      /** The share of the budget at which the screens warn. */
+      budgetWarnRatio: z.number().gt(0).max(1).default(0.8),
+      /** The day of the month on which a budget period starts, at midnight UTC. */
+      budgetResetDay: z.number().int().min(1).max(31).default(1),
     })
     .prefault({}),
   llm: z

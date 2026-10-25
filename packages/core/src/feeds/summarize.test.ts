@@ -5,6 +5,7 @@ import { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "../testing/db.ts";
 import { fakeFetch, html, xml } from "../testing/http.ts";
+import { resolvePricing, type ModelPricing } from "../llm/pricing.ts";
 import { fakeLlm, type FakeHandler } from "../testing/llm.ts";
 import { FullContentWorker } from "./full-content.ts";
 import { FeedPoller } from "./poller.ts";
@@ -25,12 +26,13 @@ function setup(
   summarize: FakeHandler = () => ({ summary: "A summary." }),
   limits: { summariesPerDay?: number } = {},
   feedOptions: { fetchFullContent?: boolean } = {},
+  pricing?: ModelPricing,
 ) {
   const db = createTestDb();
   const clock = fakeClock(START);
   const fake = fakeFetch(routes, clock);
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
-  const llm = fakeLlm(db, clock, { summarize }, { limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, ...limits } });
+  const llm = fakeLlm(db, clock, { summarize }, { limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, ...limits }, pricing });
   const fullContent = new FullContentWorker({ db, clock, fetcher });
   const deps = { db, clock, fetcher, runner: llm.runner, fullContent };
   const feed = insertFeed(db, { url: FEED_URL, title: "Feed", autoSummarize: true, ...feedOptions }, clock);
@@ -212,6 +214,22 @@ describe("summarizeNext, when a call fails", () => {
     const id = s.article();
     expect(await summarizeNext(s.deps, s.pages)).toBe("failed");
     expect(getArticle(s.db, id).autoSummaryPending).toBe(true);
+  });
+
+  it("calls no model once the budget period has used its budget, and summarises in the next period", async () => {
+    const s = setup({}, () => ({ summary: "A summary." }), {}, {}, resolvePricing("claude-haiku-5-5")!);
+    const waiting = s.article();
+    s.db
+      .prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES ('write', 'write', 1, 1, ?, 100, 1)")
+      .run(s.clock().toISOString());
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("limit");
+    expect(s.prompts()).toHaveLength(0);
+    expect(getArticle(s.db, waiting)).toMatchObject({ autoSummary: null, autoSummaryPending: true });
+
+    s.clock.set("2026-04-01T00:00:00.000Z");
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+    expect(getArticle(s.db, waiting).autoSummary?.text).toBe("A summary.");
   });
 
   it("calls no model and fetches no page once the day has used its allowance, and goes on the next day", async () => {

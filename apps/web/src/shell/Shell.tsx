@@ -1,9 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { buildNav, listKey, nextEventCategory, stepTarget, type ListTarget, type NavEntry, type NavModel } from "@smarternews/client";
+import { budgetWarningLabel, buildNav, listKey, nextEventCategory, stepTarget, type ListTarget, type NavEntry, type NavModel } from "@smarternews/client";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { useArticle, useCategories, useCounts, useFeeds } from "../api/queries.ts";
+import { useArticle, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
 import { useHotkeys } from "../lib/keys.ts";
@@ -344,6 +344,24 @@ function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: b
   );
 }
 
+/**
+ * The warning above every page once the budget period spent the warning share of the monthly budget. Only
+ * shown while a provider costs money: without one, nothing counts towards the budget.
+ */
+function BudgetWarning() {
+  const status = useProviders().data;
+  const text = status?.providers.some((provider) => provider.billable) ? budgetWarningLabel(status.budget) : null;
+  if (!text) return null;
+  return (
+    <div role="status" aria-label="月の予算の警告" className="flex flex-wrap items-baseline gap-x-md gap-y-xs border-b border-warning bg-surface px-lg py-sm type-body-md text-warning">
+      <span>{text}</span>
+      <Link to="/settings#providers" className="underline underline-offset-2">
+        プロバイダーの設定
+      </Link>
+    </div>
+  );
+}
+
 /** The frame around every page: the navigation pane, or a button that opens it on narrower screens. */
 export function Shell() {
   const layout = useLayout();
@@ -431,6 +449,7 @@ export function Shell() {
             <span className="type-label-md">smarternews</span>
           </header>
         ) : null}
+        <BudgetWarning />
         <main id="content" tabIndex={-1} className="min-h-0 flex-1 focus:outline-none">
           <Outlet />
         </main>

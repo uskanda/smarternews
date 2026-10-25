@@ -66,7 +66,7 @@ export function createClaudeCliAdapter(options: ClaudeCliOptions): LlmAdapter {
     async complete(request) {
       const cwd = await mkdtemp(join(tmpdir(), "smarternews-llm-"));
       try {
-        return await new Promise<unknown>((resolve, reject) => {
+        const answer = await new Promise<unknown>((resolve, reject) => {
           const child = spawn(options.command, claudeArgs(options, request), {
             cwd,
             env: options.env ?? process.env,
@@ -98,6 +98,8 @@ export function createClaudeCliAdapter(options: ClaudeCliOptions): LlmAdapter {
           child.stdin.on("error", () => {});
           child.stdin.end(request.prompt);
         });
+        // The command runs on the subscription: what it reports spending is not money the server spends.
+        return { answer, usage: null };
       } finally {
         await rm(cwd, { recursive: true, force: true });
       }

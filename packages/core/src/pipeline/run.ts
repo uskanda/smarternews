@@ -486,7 +486,7 @@ export async function executeRun(deps: PipelineDeps, runId: number): Promise<Run
     sources: { attempted: 0, failed: 0 },
   };
 
-  let stoppedByLimit = false;
+  let stoppedBy: LlmLimitError["scope"] | null = null;
   let crashed = false;
   try {
     const topics = await interpretTopics(ctx);
@@ -495,7 +495,7 @@ export async function executeRun(deps: PipelineDeps, runId: number): Promise<Run
     await writeStories(ctx);
   } catch (error) {
     if (error instanceof LlmLimitError) {
-      stoppedByLimit = true;
+      stoppedBy = error.scope;
     } else {
       crashed = true;
       ctx.failures.push({ stage: "run", target: null, message: message(error) });
@@ -504,7 +504,7 @@ export async function executeRun(deps: PipelineDeps, runId: number): Promise<Run
 
   const nothingCameIn =
     ctx.sources.attempted > 0 && ctx.sources.failed === ctx.sources.attempted && ctx.stats.created + ctx.stats.updated === 0;
-  const status = stoppedByLimit
+  const status = stoppedBy
     ? "stopped_by_limit"
     : crashed || nothingCameIn
       ? "failed"
@@ -514,6 +514,7 @@ export async function executeRun(deps: PipelineDeps, runId: number): Promise<Run
   return finishRun(deps.db, runId, {
     status,
     finishedAt: deps.clock().toISOString(),
+    stoppedBy,
     collected: ctx.stats.collected,
     rejected: ctx.stats.rejected,
     articlesCreated: ctx.stats.created,

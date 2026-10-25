@@ -1,6 +1,7 @@
 // Retries carried out by the real pipeline: what a retry may spend, and what it must not write twice.
 import { describe, expect, it, vi } from "vitest";
 import { listRuns, recoverInterruptedRuns } from "../db/runs.ts";
+import { resolvePricing } from "../llm/pricing.ts";
 import { defaultHandlers, pipelineHarness, sourcesIn, type HarnessOptions } from "../testing/pipeline.ts";
 import { RunQueue } from "./queue.ts";
 import { CATCH_UP_MS, Scheduler } from "./scheduler.ts";
@@ -43,6 +44,27 @@ describe("a retry and the limits of model calls", () => {
     scheduler.tick();
     await queue.idle();
     expect(listRuns(s.h.db)[0]).toMatchObject({ attempt: 1, status: "stopped_by_limit", llmCalls: 0, retryAt: null, retrySkipped: null });
+    expect(s.h.requests.judge).toHaveLength(0);
+
+    s.h.clock.advance(120 * MINUTE);
+    scheduler.tick();
+    await queue.idle();
+    expect(listRuns(s.h.db)).toHaveLength(2);
+  });
+
+  it("stops at the monthly budget like any run, and is not retried after that", async () => {
+    const s = setup({ llmPricing: resolvePricing("claude-sonnet-5-5")! });
+    const { queue, scheduler } = await failAtFive(s);
+    // Other calls used up the budget of the period in the meantime.
+    s.h.db
+      .prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES ('write', 'write', 10, 1, ?, 100, 1)")
+      .run(s.h.clock().toISOString());
+    s.h.feed(FEED, [{ title: "Story", link: "https://example.org/story" }]);
+
+    s.h.clock.advance(10 * MINUTE);
+    scheduler.tick();
+    await queue.idle();
+    expect(listRuns(s.h.db)[0]).toMatchObject({ attempt: 1, status: "stopped_by_limit", stoppedBy: "budget", llmCalls: 0, retryAt: null, retrySkipped: null });
     expect(s.h.requests.judge).toHaveLength(0);
 
     s.h.clock.advance(120 * MINUTE);

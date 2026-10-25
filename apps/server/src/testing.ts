@@ -15,6 +15,7 @@ import {
   type ArticleContent,
   type Category,
   type Kind,
+  type ModelPricing,
   type Translator,
 } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm, fakeTranslator, type FakeHandler } from "@smarternews/core/testing";
@@ -50,6 +51,9 @@ export function testServer(
     monthlyChars?: number;
     llmCallsPerDay?: number;
     summariesPerDay?: number;
+    /** Makes every provider one that costs money, at these prices. */
+    pricing?: ModelPricing;
+    budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
   } = {},
 ) {
   const db = createTestDb();
@@ -60,6 +64,8 @@ export function testServer(
     { ...(options.summarize ? { summarize: options.summarize } : {}), ...(options.translate ? { translate: options.translate } : {}) },
     {
       webSearch: options.webSearch,
+      pricing: options.pricing,
+      budget: options.budget,
       ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined
         ? {}
         : { limits: { llmCallsPerRun: 40, llmCallsPerDay: options.llmCallsPerDay ?? 300, ...(options.summariesPerDay === undefined ? {} : { summariesPerDay: options.summariesPerDay }) } }),

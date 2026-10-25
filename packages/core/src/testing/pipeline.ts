@@ -7,6 +7,7 @@ import { updateSettings } from "../db/settings.ts";
 import { createTopic } from "../db/topics.ts";
 import { Fetcher } from "../fetch/http.ts";
 import type { LlmRequest } from "../llm/adapter.ts";
+import type { ModelPricing } from "../llm/pricing.ts";
 import type { JudgeOutput, WriteOutput } from "../llm/tasks.ts";
 import { executeRun, type PipelineConfig } from "../pipeline/run.ts";
 import { createTestDb, fakeClock } from "./db.ts";
@@ -165,6 +166,8 @@ export interface HarnessOptions {
   newsSearch?: Partial<PipelineConfig["newsSearch"]>;
   llmLimits?: { llmCallsPerRun: number; llmCallsPerDay: number };
   webSearch?: boolean;
+  /** Makes every provider one that costs money, at these prices. */
+  llmPricing?: ModelPricing;
 }
 
 export function pipelineHarness(options: HarnessOptions = {}) {
@@ -183,7 +186,7 @@ export function pipelineHarness(options: HarnessOptions = {}) {
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1_000_000, fetchImpl: fake.fetchImpl });
 
   const handlers: Partial<Record<TaskName, FakeHandler>> = { ...defaultHandlers };
-  const llm = fakeLlm(db, clock, handlers, { limits: options.llmLimits, webSearch: options.webSearch });
+  const llm = fakeLlm(db, clock, handlers, { limits: options.llmLimits, webSearch: options.webSearch, pricing: options.llmPricing });
   const config: PipelineConfig = {
     limits: { judgeBatchSize: 30, pagesPerRun: 20, ...options.config },
     newsSearch: { engines: ["bing-news"], maxResultsPerQuery: 20, ...options.newsSearch },

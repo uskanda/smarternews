@@ -21,8 +21,9 @@ Restart=always
 RestartSec=30
 # The default provider runs the `claude` command, so it must be on this PATH.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# Optional: the key of the translation API, when config.yaml names GOOGLE_TRANSLATE_API_KEY under
-# translation.google.apiKeyEnv. Keep the key out of this unit: put the line GOOGLE_TRANSLATE_API_KEY=<key>
+# Optional: API keys the providers and the translation API read, such as ANTHROPIC_API_KEY for a provider
+# with `adapter: anthropic` and GOOGLE_TRANSLATE_API_KEY when config.yaml names it under
+# translation.google.apiKeyEnv. Keep the keys out of this unit: put lines such as ANTHROPIC_API_KEY=<key>
 # into a file only you can read (chmod 600). The "-" lets the service start without the file.
 EnvironmentFile=-%h/.config/smarternews/env
 

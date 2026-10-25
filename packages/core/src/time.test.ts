@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { endOfLocalDay, localParts, startOfLocalDay, zonedToUtc } from "./time.ts";
+import { budgetPeriod, endOfLocalDay, localParts, startOfLocalDay, zonedToUtc } from "./time.ts";
 
 describe("localParts", () => {
   it("gives the calendar date and wall-clock time in the zone", () => {
@@ -27,5 +27,37 @@ describe("startOfLocalDay and endOfLocalDay", () => {
     const instant = new Date("2026-03-01T20:05:00Z"); // 05:05 on March 2 in Tokyo
     expect(startOfLocalDay(instant, "Asia/Tokyo").toISOString()).toBe("2026-03-01T15:00:00.000Z");
     expect(endOfLocalDay(instant, "Asia/Tokyo").toISOString()).toBe("2026-03-02T14:59:59.999Z");
+  });
+});
+
+describe("budgetPeriod", () => {
+  const period = (now: string, resetDay: number) => {
+    const { start, end, firstDay, lastDay } = budgetPeriod(new Date(now), resetDay);
+    return { start: start.toISOString(), end: end.toISOString(), firstDay, lastDay };
+  };
+
+  it("runs from the reset day to the day before it a month later", () => {
+    expect(period("2026-10-25T12:00:00Z", 10)).toEqual({
+      start: "2026-10-10T00:00:00.000Z",
+      end: "2026-11-10T00:00:00.000Z",
+      firstDay: "2026-10-10",
+      lastDay: "2026-11-09",
+    });
+  });
+
+  it("starts at midnight UTC, so the evening before the reset day belongs to the period that ends", () => {
+    expect(period("2026-11-09T23:00:00Z", 10)).toMatchObject({ firstDay: "2026-10-10", lastDay: "2026-11-09" });
+    expect(period("2026-11-10T00:00:00Z", 10)).toMatchObject({ firstDay: "2026-11-10", lastDay: "2026-12-09" });
+    expect(period("2026-10-05T00:00:00Z", 10)).toMatchObject({ firstDay: "2026-09-10", lastDay: "2026-10-09" });
+  });
+
+  it("starts on the last day of a month that has no such day", () => {
+    expect(period("2027-02-15T00:00:00Z", 31)).toMatchObject({ firstDay: "2027-01-31", lastDay: "2027-02-27" });
+    expect(period("2027-03-05T00:00:00Z", 31)).toMatchObject({ firstDay: "2027-02-28", lastDay: "2027-03-30" });
+    expect(period("2027-03-31T00:00:00Z", 31)).toMatchObject({ firstDay: "2027-03-31", lastDay: "2027-04-29" });
+  });
+
+  it("is the calendar month with the reset on the 1st", () => {
+    expect(period("2026-12-31T23:59:59Z", 1)).toMatchObject({ firstDay: "2026-12-01", lastDay: "2026-12-31" });
   });
 });

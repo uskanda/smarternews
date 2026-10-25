@@ -21,7 +21,7 @@ LLMを呼ぶのは、トピックの解釈、Webの検索、候補の判定、�
 ## 必要なもの
 
 - LinuxまたはmacOS、Node.js 24以降、pnpm。
-- LLMのプロバイダー。既定は [Claude Code](https://claude.com/claude-code) の `claude` コマンドで、サーバーを動かすユーザーで導入とログインを済ませておく。OllamaやLM StudioのようなOpenAI互換のサーバーも使える。設定は [docs/providers.md](docs/providers.md) にある。
+- LLMのプロバイダー。既定は [Claude Code](https://claude.com/claude-code) の `claude` コマンドで、サーバーを動かすユーザーで導入とログインを済ませておく。APIキーを使うAnthropicのAPIと、OllamaやLM StudioのようなOpenAI互換のサーバーも使える。設定は [docs/providers.md](docs/providers.md) にある。
 
 サーバーはNodeでTypeScriptを直接実行するので、ビルドは要らない。ビルドするのはWebの画面だけで、コマンド1つで済む。
 
@@ -340,6 +340,11 @@ LLMのプロバイダーへの呼び出しは制限しない。その宛先は�
 配信記事の要約は、これとは別に数える。その日の要約が `summariesPerDay`（既定は100）回に達すると、翌日まで要約しない。翌日は、待っている記事を新しい順に要約する。
 要約は `llmCallsPerDay` に数えず、実行の呼び出しは `summariesPerDay` に数えない。
 `summarize` のタスクは、`config.yaml` の `tasks` で割り当てなければ、`fast` という名前のプロバイダーで動く。詳しくは [docs/providers.md](docs/providers.md) に書いてある。
+
+アダプターが `anthropic` のプロバイダーは呼び出しごとに料金がかかり、サーバーは呼び出しごとの金額を記録する。
+予算の期間に使った金額が `monthlyBudgetUsd`（既定は100米ドル）に達すると、次の期間までそのプロバイダーを呼ばない。期間は、`budgetResetDay` の日のUTCの0時に切り替わる。
+こうして止まった実行は、月の予算で止まったものとして記録する。
+使った金額が月の予算の `budgetWarnRatio`（既定は0.8）に達すると、Webの画面はどのページでも上部に警告を出す。設定の画面には、タスク別とプロバイダー別の金額が出る。
 
 やり直しも、ほかの実行と同じく2つの上限に従う。やり直しが2回のとき、失敗が続くカテゴリは、定時の時刻1つにつき最大3回分の呼び出しを使う。
 

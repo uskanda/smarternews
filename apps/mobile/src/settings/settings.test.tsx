@@ -130,6 +130,19 @@ describe("the runs of each category", () => {
     expect(screen.getByText("HTTP status 500")).toBeOnTheScreen();
   });
 
+  it("says which allowance stopped the latest run, and shows no money", async () => {
+    const server = await makeServer();
+    const first = await server.category("Category A");
+    const second = await server.category("Category B");
+    await finish(server, await startRun(server, first.id), { status: "stopped_by_limit", stoppedBy: "day" });
+    await finish(server, await startRun(server, second.id), { status: "stopped_by_limit", stoppedBy: "budget" });
+    await renderApp({ server, url: "/settings" });
+
+    expect(await screen.findByText("その日のLLMの呼び出し回数が上限に達したため、途中で止まりました。")).toBeOnTheScreen();
+    expect(screen.getByText("月の予算に達したため、途中で止まりました。")).toBeOnTheScreen();
+    expect(screen.queryByText(/\$/)).not.toBeOnTheScreen();
+  });
+
   it("starts a run, cannot start a second one meanwhile, and shows the result without being asked", async () => {
     const server = await makeServer();
     const category = await server.category("Category A");
