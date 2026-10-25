@@ -8,8 +8,9 @@ import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, Loading } from "../ui/controls";
 import { Txt } from "../ui/Txt";
 import { Badge } from "./ArticleRow";
+import { AnnotatedBody, ArticleNote } from "./annotations";
 import { Highlighted, highlight } from "./highlight";
-import { Markdown } from "./Markdown";
+import { Markdown, type AnnotationMarks } from "./Markdown";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
   const theme = useTheme();
@@ -44,7 +45,18 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * original right under it, smaller and quieter. The pairs come from the server as they are shown. A segment
  * without a translation, and one whose translation is the same text, is shown once as content.
  */
-function TranslatedBody({ translation, terms, groups }: { translation: ArticleTranslation; terms?: readonly string[]; groups: TermMatcher }) {
+function TranslatedBody({
+  translation,
+  terms,
+  groups,
+  marksFor,
+}: {
+  translation: ArticleTranslation;
+  terms?: readonly string[];
+  groups: TermMatcher;
+  /** The reader's highlights of each original. Translations have none. */
+  marksFor: (index: number) => AnnotationMarks | undefined;
+}) {
   const theme = useTheme();
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -54,10 +66,10 @@ function TranslatedBody({ translation, terms, groups }: { translation: ArticleTr
           {segment.translated !== null && segment.translated.trim() !== segment.original.trim() ? (
             <View style={{ gap: theme.spacing.xs }}>
               <Markdown text={segment.translated} images highlight={terms} groups={groups} />
-              <Markdown text={segment.original} images quiet highlight={terms} groups={groups} />
+              <Markdown text={segment.original} images quiet highlight={terms} groups={groups} annotations={marksFor(index)} />
             </View>
           ) : (
-            <Markdown text={segment.original} images highlight={terms} groups={groups} />
+            <Markdown text={segment.original} images highlight={terms} groups={groups} annotations={marksFor(index)} />
           )}
           {translation.truncated && index === lastTranslated ? (
             <Txt variant="label-sm" color="on-surface-muted">
@@ -171,6 +183,9 @@ export const ArticlePage = memo(function ArticlePage({
   const delivered = article.origin === "feed";
   // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
   const fullShown = article.fullContent !== null && !deliveredShown;
+  const translated = article.translation !== null && (fullShown || article.fullContent === null);
+  // The originals the body is drawn from, in which highlights are found.
+  const parts = translated ? article.translation!.segments.map((segment) => segment.original) : [fullShown ? article.fullContent!.body : article.body];
   const note = delivered ? fullContentNote(article, fullContentFetching, fullContentRequestFailed, deliveredShown) : null;
   const meta = (
     delivered
@@ -297,12 +312,21 @@ export const ArticlePage = memo(function ArticlePage({
           {note}
         </Txt>
       ) : null}
-      {article.translation && (fullShown || article.fullContent === null) ? (
-        // The translation is of the full content when there is one: what the feed delivered is then shown without one.
-        <TranslatedBody translation={article.translation} terms={terms} groups={groups} />
-      ) : (
-        <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} groups={groups} />
-      )}
+      <ArticleNote article={article} />
+      {/* Highlights are on the full content when there is one: while what the feed delivered is shown instead, none is. */}
+      <AnnotatedBody
+        article={article}
+        parts={parts}
+        enabled={article.fullContent === null || fullShown}
+        render={(marksFor) =>
+          translated ? (
+            // The translation is of the full content when there is one: what the feed delivered is then shown without one.
+            <TranslatedBody translation={article.translation!} terms={terms} groups={groups} marksFor={marksFor} />
+          ) : (
+            <Markdown text={parts[0]!} images={delivered} highlight={terms} groups={groups} annotations={marksFor(0)} />
+          )
+        }
+      />
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>
           <Txt variant="label-sm" color="on-surface-muted">

@@ -1,6 +1,14 @@
 // The only code in the web app and the Android app that talks to the server. Every answer is checked against
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
+  annotationListSchema,
+  articleNoteSchema,
+  highlightSchema,
+  type AnnotationList,
+  type AnnotationListQuery,
+  type ArticleNote,
+  type Highlight,
+  type HighlightCreate,
   articleListSchema,
   articlePageSchema,
   articleSearchResultSchema,
@@ -236,6 +244,17 @@ export function createApi(options: ApiOptions) {
      */
     openArticle: (id: number): Promise<{ openedAt: string }> =>
       json(z.object({ openedAt: z.string() }), `/articles/${id}/open`, { method: "POST" }),
+    /** The annotations of every article, the last made first, a page at a time. */
+    annotations: (page: AnnotationListQuery = {}): Promise<AnnotationList> => json(annotationListSchema, `/annotations${query(page)}`),
+    /** Highlights a part of an article's body, with a note or none. */
+    addHighlight: (articleId: number, input: HighlightCreate): Promise<Highlight> =>
+      json(highlightSchema, `/articles/${articleId}/highlights`, body("POST", input)),
+    /** Puts a note on a highlight in place of the one it has; null removes the note and keeps the highlight. */
+    updateHighlight: (id: number, note: string | null): Promise<Highlight> => json(highlightSchema, `/highlights/${id}`, body("PATCH", { note })),
+    deleteHighlight: async (id: number): Promise<void> => void (await request(`/highlights/${id}`, { method: "DELETE" })),
+    /** Writes the note on a whole article, or replaces the one it has. */
+    saveArticleNote: (articleId: number, text: string): Promise<ArticleNote> => json(articleNoteSchema, `/articles/${articleId}/note`, body("PUT", { text })),
+    deleteArticleNote: async (articleId: number): Promise<void> => void (await request(`/articles/${articleId}/note`, { method: "DELETE" })),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     /**
      * Marks read the articles as a screen showed them, each with the `updatedAt` it had on screen: one that a

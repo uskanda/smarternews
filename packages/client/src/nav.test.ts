@@ -35,6 +35,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   nextFetchAt: null,
   articleCount: 0,
   starredCount: 0,
+  annotatedCount: 0,
   createdAt: "2026-03-01T00:00:00.000Z",
   lastNewItemAt: null,
   stale: false,
@@ -66,14 +67,14 @@ function outline(model: ReturnType<typeof buildNav>): string[] {
 }
 
 describe("buildNav", () => {
-  it("lists the five views, then each category with the generated articles and its feeds below it", () => {
+  it("lists the six views, then each category with the generated articles and its feeds below it", () => {
     const model = buildNav({
       categories: [category(1, "Tools"), category(2, "Cars")],
       feeds: [feed(10, "Blog", 1), feed(11, "Releases", 1)],
       counts,
     });
     expect(model.starred).toBe(2);
-    expect(outline(model)).toEqual(["未読 12", "すべて 0", "スター 0", "AI生成 3", "最近読んだ記事 0", "Tools 6", "  AI生成 1", "  Blog 5", "  Releases 0", "Cars 2"]);
+    expect(outline(model)).toEqual(["未読 12", "すべて 0", "スター 0", "AI生成 3", "最近読んだ記事 0", "注釈 0", "Tools 6", "  AI生成 1", "  Blog 5", "  Releases 0", "Cars 2"]);
   });
 
   it("puts nothing below a category without feeds", () => {
@@ -83,7 +84,7 @@ describe("buildNav", () => {
 
   it("gathers feeds without a category under 未分類, last, without an entry for generated articles", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(12, "Loose", null)], counts });
-    expect(outline(model).slice(5)).toEqual(["Tools 6", "未分類 4", "  Loose 4"]);
+    expect(outline(model).slice(6)).toEqual(["Tools 6", "未分類 4", "  Loose 4"]);
     expect(model.groups.at(-1)!.entry.target).toEqual({ type: "uncategorized" });
   });
 
@@ -99,7 +100,7 @@ describe("buildNav", () => {
 
   it("shows zeros until the counts have arrived", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(10, "Blog", 1)], counts: undefined });
-    expect(outline(model)).toEqual(["未読 0", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "Tools 0", "  AI生成 0", "  Blog 0"]);
+    expect(outline(model)).toEqual(["未読 0", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "注釈 0", "Tools 0", "  AI生成 0", "  Blog 0"]);
   });
 
   it("gives each entry the list it opens", () => {
@@ -110,7 +111,10 @@ describe("buildNav", () => {
       { type: "starred" },
       { type: "generated" },
       { type: "recentlyRead" },
+      { type: "annotations" },
     ]);
+    // "注釈" counts nothing: no number stands beside it.
+    expect(model.views.at(-1)).toEqual({ target: { type: "annotations" }, label: "注釈", unread: 0 });
     const [tools] = model.groups;
     expect(tools!.entry.target).toEqual({ type: "category", categoryId: 1, generatedOnly: false });
     expect(tools!.children.map((child) => child.target)).toEqual([
@@ -128,6 +132,7 @@ describe("the key of a list", () => {
     [{ type: "generated" }, "generated"],
     [{ type: "uncategorized" }, "uncategorized"],
     [{ type: "recentlyRead" }, "recently-read"],
+    [{ type: "annotations" }, "annotations"],
     [{ type: "category", categoryId: 7, generatedOnly: false }, "category-7"],
     [{ type: "category", categoryId: 7, generatedOnly: true }, "category-7-generated"],
     [{ type: "feed", feedId: 31 }, "feed-31"],
@@ -171,6 +176,7 @@ describe("what a list asks the server for", () => {
     expect(hasReadToggle({ type: "generated" })).toBe(true);
     expect(hasReadToggle({ type: "feed", feedId: 1 })).toBe(true);
     expect(hasReadToggle({ type: "recentlyRead" })).toBe(false);
+    expect(hasReadToggle({ type: "annotations" })).toBe(false);
   });
 
   it("offers mark all as read and the importance toggle everywhere but in the recently read articles", () => {
@@ -179,6 +185,7 @@ describe("what a list asks the server for", () => {
     expect(hasListControls({ type: "category", categoryId: 7, generatedOnly: false })).toBe(true);
     expect(hasListControls({ type: "feed", feedId: 1 })).toBe(true);
     expect(hasListControls({ type: "recentlyRead" })).toBe(false);
+    expect(hasListControls({ type: "annotations" })).toBe(false);
   });
 });
 
@@ -219,9 +226,9 @@ describe("the order of a list", () => {
   it("is kept under a key the server reads for every entry of the list but the recently read articles", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(12, "A", 1), feed(13, "B", null)], counts });
     const keys = [...model.views, ...model.groups.flatMap((group) => [group.entry, ...group.children])].map((entry) => listKey(entry.target));
-    expect(keys).toEqual(["unread", "all", "starred", "generated", "recently-read", "category-1", "category-1-generated", "feed-12", "uncategorized", "feed-13"]);
+    expect(keys).toEqual(["unread", "all", "starred", "generated", "recently-read", "annotations", "category-1", "category-1-generated", "feed-12", "uncategorized", "feed-13"]);
     for (const key of keys) {
-      if (key === "recently-read") expect(parseListViewKey(key)).toBeNull();
+      if (key === "recently-read" || key === "annotations") expect(parseListViewKey(key)).toBeNull();
       else expect(parseListViewKey(key), key).not.toBeNull();
     }
   });

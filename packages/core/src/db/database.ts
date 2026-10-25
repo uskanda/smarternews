@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { searchText } from "../search/plain.ts";
+import { annotationText, searchText } from "../search/plain.ts";
 
 export type Database = DatabaseSync;
 
@@ -13,8 +13,9 @@ const textOrNull = (value: unknown): string | null => (value === null || value =
 /**
  * Registers `sn_search_text`, which the triggers on `articles` call to keep the search index. It takes
  * origin, title, translated_title, summary, auto_summary, body, content_text, impact and event_venue, and
- * returns the text the index holds. Every connection that writes articles must have it: without it, the
- * triggers fail.
+ * returns the text the index holds. Also `sn_annotation_text`, which takes the quote and the note of an
+ * annotation and returns what the index holds of it. Every connection that writes articles or annotations must
+ * have them: without them, the triggers fail.
  */
 function registerFunctions(db: Database): void {
   db.function("sn_search_text", { deterministic: true }, (origin, title, translatedTitle, summary, autoSummary, body, contentText, impact, venue) =>
@@ -30,6 +31,7 @@ function registerFunctions(db: Database): void {
       venue: textOrNull(venue),
     }),
   );
+  db.function("sn_annotation_text", { deterministic: true }, (quote, note) => annotationText(textOrNull(quote), textOrNull(note)));
 }
 
 export function openDatabase(path: string): Database {

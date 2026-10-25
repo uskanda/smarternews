@@ -184,7 +184,8 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
           router.navigate({ pathname: "/search", params: { q: words, category: undefined, feed: undefined, unread: undefined } });
         }}
       />
-      {model.views.map((entry) => (
+      {/* The app shows annotations in the article only: the drawer has no entry for them. */}
+      {model.views.filter((entry) => entry.target.type !== "annotations").map((entry) => (
         <View key={listKey(entry.target)} style={{ flexDirection: "row" }}>
           {item(entry)}
         </View>

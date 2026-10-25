@@ -1,7 +1,10 @@
 import { relayedImageUrl, type TermMatcher } from "@smarternews/client";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
-import { rehypeHighlights } from "./highlight.tsx";
+import { rehypeHighlights, SKIP_ATTRIBUTE, type AnnotationMarks } from "./highlight.tsx";
+
+/** The attribute that keeps a description out of the text highlights are found in. */
+const skip = { [SKIP_ATTRIBUTE]: "" };
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
@@ -14,7 +17,12 @@ const relayed = (url: string): string => relayedImageUrl("", url) ?? "";
  */
 function ArticleImage({ src, alt }: { src: string; alt: string }) {
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
-  if (state === "failed") return alt ? <span className="article-image-missing">{alt}</span> : null;
+  if (state === "failed")
+    return alt ? (
+      <span className="article-image-missing" {...skip}>
+        {alt}
+      </span>
+    ) : null;
   return (
     <img
       src={src}
@@ -39,6 +47,8 @@ function ArticleImage({ src, alt }: { src: string; alt: string }) {
  * must not be a second heading in the outline of the page.
  * With `highlight`, the words of an article opened from search results are marked wherever they are in the text.
  * With `groups`, the terms of the term groups are coloured in the text, never in the address of a link or image.
+ * With `annotations`, the reader's highlights are marked around both, and the text they are counted in is told
+ * after each drawing. The description of an image is no part of that text.
  */
 export function Markdown({
   text,
@@ -46,15 +56,23 @@ export function Markdown({
   plainHeadings = false,
   highlight,
   groups,
+  annotations,
 }: {
   text: string;
   images?: boolean;
   plainHeadings?: boolean;
   highlight?: readonly string[];
   groups?: TermMatcher | null;
+  annotations?: AnnotationMarks;
 }) {
   const colored = groups && !groups.empty ? groups : null;
   const searched = highlight && highlight.length > 0 ? highlight : undefined;
+  // The plugin runs while the tree is drawn; the text it finds is told once the drawing is done.
+  const told = useRef<string | null>(null);
+  const onText = annotations?.onText;
+  useEffect(() => {
+    if (told.current !== null) onText?.(told.current);
+  });
   const plain = ({ children }: { children?: ReactNode }) => (
     <p>
       <strong>{children}</strong>
@@ -62,7 +80,11 @@ export function Markdown({
   );
   return (
     <ReactMarkdown
-      rehypePlugins={searched || colored ? [rehypeHighlights(searched, colored)] : []}
+      rehypePlugins={
+        searched || colored || annotations
+          ? [rehypeHighlights(searched, colored, annotations ? { ranges: annotations.ranges, onText: (found) => (told.current = found) } : undefined)]
+          : []
+      }
       urlTransform={(url, key) => (key === "src" ? relayed(url) : SAFE_LINK.test(url) ? url : "")}
       components={{
         a: ({ href, children }) =>
@@ -76,7 +98,8 @@ export function Markdown({
         // The headline of the article is the page's own; a heading inside the content never outranks it.
         h1: ({ children }) => <h2>{children}</h2>,
         ...(plainHeadings ? { h1: plain, h2: plain, h3: plain, h4: plain, h5: plain, h6: plain } : {}),
-        img: ({ src, alt }) => (images && typeof src === "string" && src.length > 0 ? <ArticleImage src={src} alt={alt ?? ""} /> : <>{alt}</>),
+        img: ({ src, alt }) =>
+          images && typeof src === "string" && src.length > 0 ? <ArticleImage src={src} alt={alt ?? ""} /> : alt ? <span {...skip}>{alt}</span> : null,
       }}
     >
       {text}

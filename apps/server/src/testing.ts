@@ -144,6 +144,7 @@ export function testServer(
     get: (path: string, token?: string | null) => request("GET", path, undefined, token),
     post: (path: string, body?: unknown, token?: string | null) => request("POST", path, body, token),
     patch: (path: string, body: unknown, token?: string | null) => request("PATCH", path, body, token),
+    put: (path: string, body: unknown, token?: string | null) => request("PUT", path, body, token),
     delete: (path: string, token?: string | null) => request("DELETE", path, undefined, token),
     category(name = "Security", kind: Kind = "news"): Category {
       return createCategory(db, { name, kind }, clock);

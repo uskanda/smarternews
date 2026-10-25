@@ -74,7 +74,7 @@ describe("the list of views and categories", () => {
     expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2");
   });
 
-  it("lists the views in order, with 最近読んだ記事 last and without a number", async () => {
+  it("lists the views in order, with 最近読んだ記事 and 注釈 last and without a number", async () => {
     const server = makeServer();
     const a = server.category("Security");
     setArticleFlags(server.db, server.article(a.id), { isRead: true }, server.clock().toISOString());
@@ -83,11 +83,14 @@ describe("the list of views and categories", () => {
 
     const views = await within(nav()).findAllByRole("list");
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
-    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事"]);
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"]);
     expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
+    expect(within(nav()).getByRole("link", { name: "注釈" })).toHaveTextContent(/^注釈$/);
 
     await user.click(within(nav()).getByRole("link", { name: "最近読んだ記事" }));
     expect(path()).toBe("/recently-read");
+    await user.click(within(nav()).getByRole("link", { name: "注釈" }));
+    expect(path()).toBe("/annotations");
   });
 
   it("links to the settings and the run history", async () => {
@@ -342,7 +345,11 @@ describe("moving between the entries with keys", () => {
     await user.keyboard("{Shift>}K{/Shift}");
     await waitFor(() => expect(path()).toBe(`/c/${alpha.slug}`));
     await user.keyboard("{Shift>}K{/Shift}");
+    await waitFor(() => expect(path()).toBe("/annotations"));
+    await user.keyboard("{Shift>}K{/Shift}");
     await waitFor(() => expect(path()).toBe("/recently-read"));
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe("/annotations"));
   });
 
   it("goes into the entries below a category, and past them once it is folded", async () => {

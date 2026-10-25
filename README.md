@@ -210,7 +210,7 @@ The server counts the characters it sends per month and sends nothing beyond `mo
 
 [examples/smarternews.service](examples/smarternews.service) is a systemd user unit. The comments at its top give the install commands.
 
-After an upgrade that changes the database, the server copies the database file before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copy once the new version works for you.
+Copy the database file before you upgrade. An older version cannot write to a database that a newer one has changed, so going back means going back to that copy. When an upgrade rebuilds tables, the server also copies the file itself before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copies once the new version works for you.
 
 Change the articles in the database only through the server. Search keeps its index with triggers that call a function the server registers, so another connection, such as the `sqlite3` command, can read the database but fails when it writes articles.
 

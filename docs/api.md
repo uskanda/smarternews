@@ -125,6 +125,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/:id/translation` | The translation of a feed article's content, made and stored when there is none yet |
 | `POST /api/v1/articles/:id/full-content` | Fetch the full content of a feed article from its page, and answer when that is done |
 | `GET /api/v1/translation` | How much the translation API was used this month |
+| `GET /api/v1/annotations` | The reader's highlights and notes on every article, the last made first: see [Annotations](#annotations) |
 
 Query parameters of the list:
 
@@ -228,6 +229,7 @@ The detail adds these:
 | `fullContent` | The full content of a feed article, taken from its page: `body` (Markdown), `bodyHtml` and `fetchedAt`. It comes apart from `body`, which stays what the feed delivered. `null` when there is none, and always for a generated article |
 | `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
+| `annotations` | The reader's annotations on the article: `note`, the note on the whole article or `null`, and `highlights`, the oldest first. See [Annotations](#annotations). The list does not have this field |
 
 ### Open times
 
@@ -241,7 +243,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 
 ### Search
 
-`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event. It does not match source URLs or the targets of links. Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
+`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs or the targets of links. Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
 
 | Parameter | Effect |
 |---|---|
@@ -254,7 +256,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 
 Words are compared in the form the filters use: full-width and half-width alike, upper and lower case alike. Hiragana and katakana stay different. Every word is a part of the text to find, and signs and words such as `OR` or `NOT` are matched as they are; there is no phrase or exclusion syntax. A word of three or more characters uses the trigram index; a search with only one- and two-character words reads the articles one by one, newest first, and can be slow on a large database.
 
-The response has `items`, `nextCursor`, `asOf` (as in the list) and `terms`. Each item has the fields of an article in the list and `excerpt`: about 120 characters around the first match in the summary, automatic summary, body, impact or venue, without Markdown, with `…` where it was cut. `excerpt` is `null` when only the title matches. `terms` are the words as they were matched, normalized and each once, for marking the matches.
+The response has `items`, `nextCursor`, `asOf` (as in the list) and `terms`. Each item has the fields of an article in the list and `excerpt`: about 120 characters around the first match in the summary, automatic summary, body, impact or venue, without Markdown, with `…` where it was cut. When none of these has a word and a note of the reader's has one, `excerpt` is taken from the first such note (the note on the whole article first, then the notes on highlights, oldest first), as it was written, and `excerptFromNote` is `true`; otherwise `excerptFromNote` is `false`. `excerpt` is `null` when only the title or a highlighted text matches. `terms` are the words as they were matched, normalized and each once, for marking the matches.
 
 ```bash
 curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "q=battery factory" "$API/api/v1/search"
@@ -262,7 +264,50 @@ curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "q=battery factory
 
 The search index is kept by triggers that call a function the server registers when it opens the database. A connection without that function, such as the `sqlite3` command, can read the database but cannot insert, change or delete articles.
 
-Generated articles without a star are deleted 180 days after their last update, feed articles without a star 90 days after the time they sort by. Starred articles are kept.
+Generated articles without a star or an annotation are deleted 180 days after their last update, feed articles without a star or an annotation 90 days after the time they sort by. Starred and annotated articles are kept. An article whose last annotation is removed is deleted at the next purge once its time has passed.
+
+## Annotations
+
+The reader's highlights on the body of an article, each with a note or none, and one note on the whole article. They are kept as they were written, whatever becomes of the body: a follow-up, a rewrite by the feed or the full content changes the body and leaves the annotations as they are. They go with their article when it is deleted. No operation calls a model or the translation API.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/annotations` | Every annotation of every article, the last made first. `limit` (1 to 200, default 50) and `cursor`, as in the article list. Answers `items` and `nextCursor` |
+| `POST /api/v1/articles/:id/highlights` | Highlight a part of the body. Answers the highlight with status 201 |
+| `PATCH /api/v1/highlights/:id` | Change the note of a highlight: `{"note":"..."}`, or `{"note":null}` to remove the note and keep the highlight |
+| `DELETE /api/v1/highlights/:id` | Remove a highlight with its note. Answers 204 |
+| `PUT /api/v1/articles/:id/note` | Write the note on the whole article, `{"text":"..."}`, or replace the one it has. Answers the note |
+| `DELETE /api/v1/articles/:id/note` | Remove the note on the whole article. Answers 204, also when there was none |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"quote":"a new battery plant","prefix":"Thecompanywillbuild","suffix":"nearthecoast.","position":19,"note":"Check the size"}' \
+  "$API/api/v1/articles/1/highlights"
+
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"Compare with last year"}' "$API/api/v1/articles/1/note"
+
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/annotations?limit=20"
+```
+
+A highlight has these fields:
+
+| Field | Content |
+|---|---|
+| `id`, `articleId` | The highlight and its article |
+| `quote` | The highlighted text as the screen drew it. 1 to 5000 characters, not only spaces |
+| `prefix`, `suffix` | Up to 32 characters right before and right after the quote, without spaces and line breaks |
+| `position` | Where the quote starts, counted in characters of the drawn body without spaces and line breaks. 0 or more |
+| `note` | The note, trimmed, up to 5000 characters. `null` when there is none: a note of spaces only is none |
+| `createdAt`, `updatedAt` | When it was made, and when its note last changed. Changing the note keeps `createdAt` |
+
+The note on the whole article has `id`, `articleId`, `text` (1 to 5000 characters, trimmed; spaces only get 400), `createdAt` and `updatedAt`. Replacing its text keeps `createdAt`.
+
+The server does not look for the quote in the body: the text a screen draws differs a little from the text the server holds. A screen finds a highlight again in the body it draws, comparing without spaces and line breaks, and telling case and width apart. Where the quote occurs more than once, it takes the occurrence whose text around it matches `prefix` and `suffix` best, and of equals the one nearest `position`. A highlight whose quote is no longer in the body is shown apart from the body.
+
+An item of `GET /api/v1/annotations` has `kind` (`highlight` or `note`), `id`, `articleId`, `origin`, `title` and `translatedTitle` of the article, `quote` (`null` for a note on the whole article), `note` and `createdAt`. The list holds the annotations of every article, a hidden duplicate's included: an annotated feed article is never hidden by filters.
+
+Status 400 answers an empty quote, a quote or note over 5000 characters, `prefix` or `suffix` over 32 characters and a `position` below 0. Status 404 answers an article or a highlight that does not exist.
 
 ## Subscribed feeds
 
@@ -321,6 +366,7 @@ Fields of a feed:
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused |
 | `articleCount`, `starredCount` | How many articles it has, and how many of them are starred |
+| `annotatedCount` | How many of its articles have an annotation, each counted once. Deleting the feed deletes them with their annotations |
 | `lastNewItemAt` | When a fetch last found an item the feed had never listed, or `null` when none was found yet |
 | `stale` | True when the feed is enabled and no new item came for more than `staleFeedDays` of the settings |
 | `recentArticleCount` | How many articles it delivered in the last 30 days: `received` of its stats |
@@ -345,7 +391,7 @@ A feed is `stale` while it is enabled and more than `staleFeedDays` days have pa
 | `received` | Every article stored, hidden ones included |
 | `opened` | The ones with an `openedAt`. Open times are recorded from this version on, so the count is low for the first 30 days after the update |
 | `starred` | The ones starred now |
-| `hiddenByFilters` | The ones the enabled filters hide now, without the starred ones. It follows the filters as they are now: adding or deleting a filter changes the count for the whole period |
+| `hiddenByFilters` | The ones the enabled filters hide now, without the starred and annotated ones. It follows the filters as they are now: adding or deleting a filter changes the count for the whole period |
 | `hiddenAsDuplicates` | The ones recorded as duplicates while `removeDuplicates` is on, and `0` while it is off. A duplicate that a filter also hides counts here and in `hiddenByFilters` |
 | `lastNewItemAt` | As in the feed |
 
@@ -450,7 +496,7 @@ When the feed rewrites an item, the translation of what changed is dropped. The 
 
 ## Filters
 
-Filters hide feed articles. A hide filter hides the articles that meet all its conditions. Keep filters hide the articles of their scope that meet none of them: two keep filters of one feed keep what either matches. When the keep filters of a category and of one of its feeds both apply, an article must pass both. An article that a hide filter matches is hidden even when a keep filter keeps it. Generated articles and starred articles are never hidden.
+Filters hide feed articles. A hide filter hides the articles that meet all its conditions. Keep filters hide the articles of their scope that meet none of them: two keep filters of one feed keep what either matches. When the keep filters of a category and of one of its feeds both apply, an article must pass both. An article that a hide filter matches is hidden even when a keep filter keeps it. Generated articles, starred articles and articles with an annotation are never hidden; removing the star or the last annotation hides such an article again when a filter matches it.
 
 | Operation | Purpose |
 |---|---|
@@ -484,7 +530,7 @@ Filter fields:
 | `scope` | `{"type":"all"}`, `{"type":"category","categoryId":1}` or `{"type":"feed","feedId":2}`. A keep filter cannot have `all` |
 | `conditions` | 1 to 10 conditions; an article must meet all of them |
 | `enabled` | `false` keeps the filter without applying it. `true` by default |
-| `hiddenCount` | Articles without a star that the filter hides now. An article that several filters hide counts for each. 0 while the filter is off |
+| `hiddenCount` | Articles without a star or an annotation that the filter hides now. An article that several filters hide counts for each. 0 while the filter is off |
 
 A condition has `fields` (one or more of `title`, `content`, `author` and `url`), `match` and `value` (up to 200 characters). An article meets the condition when any of the chosen fields matches. With `match` set to `contains`, the value is plain text found anywhere in the field; with `regex`, it is a JavaScript regular expression that may match anywhere in the field. Neither method tells upper case from lower case or full-width from half-width characters. `content` is the delivered content without markup and link targets, `url` is the address of the article's page, and an article without an author never meets an `author` condition. Translations are never matched.
 

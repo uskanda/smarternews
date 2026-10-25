@@ -291,6 +291,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               onToggleRead={toggleRead}
               onLongPress={showMenu}
               excerpt={reader.excerptOf(item.id)}
+              excerptFromNote={reader.excerptFromNote(item.id)}
               terms={reader.terms}
               groups={groups}
             />

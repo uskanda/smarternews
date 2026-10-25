@@ -7,6 +7,8 @@ export type ListTarget =
   | { type: "unread" | "all" | "starred" | "generated" | "uncategorized" }
   /** The articles read in the last seven days, last read first. */
   | { type: "recentlyRead" }
+  /** The reader's highlights and notes on every article, the last made first. The web app has it; the Android app does not. */
+  | { type: "annotations" }
   /** A category: everything in it, or only the articles the model wrote. */
   | { type: "category"; categoryId: number; generatedOnly: boolean }
   | { type: "feed"; feedId: number };
@@ -15,8 +17,8 @@ export interface NavEntry {
   target: ListTarget;
   label: string;
   /**
-   * Unread articles behind the entry. Zero for "すべて", "スター" and "最近読んだ記事", which do not count unread
-   * articles.
+   * Unread articles behind the entry. Zero for "すべて", "スター", "最近読んだ記事" and "注釈", which do not count
+   * unread articles.
    */
   unread: number;
 }
@@ -40,6 +42,7 @@ export interface NavModel {
 export const GENERATED_LABEL = "AI生成";
 export const UNCATEGORIZED_LABEL = "未分類";
 export const RECENTLY_READ_LABEL = "最近読んだ記事";
+export const ANNOTATIONS_LABEL = "注釈";
 
 export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts: Counts | undefined }): NavModel {
   const { categories, feeds, counts } = input;
@@ -79,6 +82,7 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
       { target: { type: "starred" }, label: "スター", unread: 0 },
       { target: { type: "generated" }, label: GENERATED_LABEL, unread: counts?.generatedUnread ?? 0 },
       { target: { type: "recentlyRead" }, label: RECENTLY_READ_LABEL, unread: 0 },
+      { target: { type: "annotations" }, label: ANNOTATIONS_LABEL, unread: 0 },
     ],
     groups,
     starred: counts?.starred ?? 0,
@@ -96,6 +100,7 @@ export function listKey(target: ListTarget): string {
 export function parseListKey(key: string): ListTarget | null {
   if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { type: key };
   if (key === "recently-read") return { type: "recentlyRead" };
+  if (key === "annotations") return { type: "annotations" };
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
   if (category) return { type: "category", categoryId: Number(category[1]), generatedOnly: category[2] !== undefined };
   const feed = /^feed-(\d{1,15})$/.exec(key);
@@ -128,6 +133,9 @@ function filterOf(target: ListTarget): ArticleListQuery {
       return { feed: target.feedId };
     case "recentlyRead":
       return { recentlyRead: "true" };
+    case "annotations":
+      // A list of annotations, not of articles: it is read with `annotations` of the API.
+      return {};
   }
 }
 
@@ -157,7 +165,7 @@ function isEventCategory(target: ListTarget, categories: Category[] | undefined)
  * event category, ordered by start. Search results have no target and no menu either.
  */
 export function hasSortMenu(target: ListTarget, categories: Category[] | undefined): boolean {
-  return target.type !== "recentlyRead" && !isEventCategory(target, categories);
+  return target.type !== "recentlyRead" && target.type !== "annotations" && !isEventCategory(target, categories);
 }
 
 /**
@@ -172,7 +180,7 @@ export function listSortOf(target: ListTarget, views: ListView[] | undefined, ca
 
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */
 export function hasReadToggle(target: ListTarget): boolean {
-  return target.type !== "unread" && target.type !== "all" && target.type !== "starred" && target.type !== "recentlyRead";
+  return target.type !== "unread" && target.type !== "all" && target.type !== "starred" && target.type !== "recentlyRead" && target.type !== "annotations";
 }
 
 /**
@@ -181,5 +189,5 @@ export function hasReadToggle(target: ListTarget): boolean {
  * article in a list meant for finding what was read.
  */
 export function hasListControls(target: ListTarget): boolean {
-  return target.type !== "recentlyRead";
+  return target.type !== "recentlyRead" && target.type !== "annotations";
 }

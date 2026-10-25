@@ -3,7 +3,13 @@ import {
   markReadBodySchema,
   MAX_MARK_SEEN,
   articleSearchQuerySchema,
-  articleSearchResultSchema, filterCreateSchema, listViewKey, listViewUpdateSchema, parseListViewKey, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
+  articleSearchResultSchema,
+  ANCHOR_CONTEXT_CHARS,
+  annotationListQuerySchema,
+  articleNoteUpdateSchema,
+  highlightCreateSchema,
+  highlightUpdateSchema,
+  MAX_ANNOTATION_CHARS, filterCreateSchema, listViewKey, listViewUpdateSchema, parseListViewKey, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
 
 const condition = { fields: ["title"], match: "contains", value: "特売" } as const;
 
@@ -106,8 +112,17 @@ describe("the shape of a search", () => {
   } as const;
 
   it("gives each article of the list an excerpt, and the result its terms", () => {
-    const result = articleSearchResultSchema.parse({ items: [{ ...summary, excerpt: "…電池…" }, { ...summary, id: 2, excerpt: null }], nextCursor: null, asOf: "2026-03-02T00:00:00.000Z", terms: ["電池"] });
-    expect(result.items.map((item) => item.excerpt)).toEqual(["…電池…", null]);
+    const result = articleSearchResultSchema.parse({
+      items: [
+        { ...summary, excerpt: "…電池…", excerptFromNote: false },
+        { ...summary, id: 2, excerpt: null, excerptFromNote: false },
+        { ...summary, id: 3, excerpt: "比較する", excerptFromNote: true },
+      ],
+      nextCursor: null,
+      asOf: "2026-03-02T00:00:00.000Z",
+      terms: ["電池"],
+    });
+    expect(result.items.map((item) => [item.excerpt, item.excerptFromNote])).toEqual([["…電池…", false], [null, false], ["比較する", true]]);
     expect(result.terms).toEqual(["電池"]);
     expect(articleSearchResultSchema.safeParse({ items: [summary], nextCursor: null, asOf: "2026-03-02T00:00:00.000Z", terms: [] }).success).toBe(false);
     expect(articleSearchResultSchema.safeParse({ items: [], nextCursor: null }).success).toBe(false);
@@ -179,5 +194,53 @@ describe("the body of a mark-read request", () => {
   it("refuses an article without the version the screen showed", () => {
     expect(markReadBodySchema.safeParse({ articles: [{ id: 1 }] }).success).toBe(false);
     expect(markReadBodySchema.safeParse({ articles: [{ id: 1, updatedAt: "yesterday" }] }).success).toBe(false);
+  });
+});
+
+describe("the shape of annotations", () => {
+  const anchor = { quote: "電池の工場を新設する", prefix: "同社は", suffix: "と発表した。", position: 12 };
+
+  it("takes a highlight with or without a note, and trims the note", () => {
+    expect(highlightCreateSchema.parse(anchor)).toEqual({ ...anchor, note: null });
+    expect(highlightCreateSchema.parse({ ...anchor, note: "  規模を確かめる \n" })).toEqual({ ...anchor, note: "規模を確かめる" });
+    expect(highlightCreateSchema.parse({ ...anchor, note: "   " })).toEqual({ ...anchor, note: null });
+    expect(highlightCreateSchema.parse({ ...anchor, note: null })).toEqual({ ...anchor, note: null });
+  });
+
+  it("refuses an empty quote, and a quote or note over the limit", () => {
+    expect(issuesOf(highlightCreateSchema.safeParse({ ...anchor, quote: "" }))).toEqual([{ path: "quote", message: "is empty" }]);
+    expect(issuesOf(highlightCreateSchema.safeParse({ ...anchor, quote: " \n " }))).toEqual([{ path: "quote", message: "is empty" }]);
+    expect(highlightCreateSchema.safeParse({ ...anchor, quote: "あ".repeat(MAX_ANNOTATION_CHARS) }).success).toBe(true);
+    expect(issuesOf(highlightCreateSchema.safeParse({ ...anchor, quote: "あ".repeat(MAX_ANNOTATION_CHARS + 1) })).map((issue) => issue.path)).toEqual(["quote"]);
+    expect(highlightCreateSchema.safeParse({ ...anchor, note: "あ".repeat(MAX_ANNOTATION_CHARS) }).success).toBe(true);
+    expect(issuesOf(highlightCreateSchema.safeParse({ ...anchor, note: "あ".repeat(MAX_ANNOTATION_CHARS + 1) })).map((issue) => issue.path)).toEqual(["note"]);
+  });
+
+  it("refuses text around the quote over the limit, and a position that is not a whole number from 0", () => {
+    const issues = (patch: object) => issuesOf(highlightCreateSchema.safeParse({ ...anchor, ...patch })).map((issue) => issue.path);
+    expect(issues({ prefix: "x".repeat(ANCHOR_CONTEXT_CHARS), suffix: "x".repeat(ANCHOR_CONTEXT_CHARS) })).toEqual([]);
+    expect(issues({ prefix: "x".repeat(ANCHOR_CONTEXT_CHARS + 1) })).toEqual(["prefix"]);
+    expect(issues({ suffix: "x".repeat(ANCHOR_CONTEXT_CHARS + 1) })).toEqual(["suffix"]);
+    expect(issues({ prefix: "", suffix: "", position: 0 })).toEqual([]);
+    expect(issues({ position: -1 })).toEqual(["position"]);
+    expect(issues({ position: 1.5 })).toEqual(["position"]);
+  });
+
+  it("changes a note to a text or to none", () => {
+    expect(highlightUpdateSchema.parse({ note: " 数字を確かめる " })).toEqual({ note: "数字を確かめる" });
+    expect(highlightUpdateSchema.parse({ note: null })).toEqual({ note: null });
+    expect(highlightUpdateSchema.parse({ note: "" })).toEqual({ note: null });
+    expect(highlightUpdateSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("refuses a note on the whole article that is only spaces or too long", () => {
+    expect(articleNoteUpdateSchema.parse({ text: " あとで比べる\n" })).toEqual({ text: "あとで比べる" });
+    expect(issuesOf(articleNoteUpdateSchema.safeParse({ text: "  " }))).toEqual([{ path: "text", message: "is empty" }]);
+    expect(issuesOf(articleNoteUpdateSchema.safeParse({ text: "あ".repeat(MAX_ANNOTATION_CHARS + 1) })).map((issue) => issue.path)).toEqual(["text"]);
+  });
+
+  it("takes the page of the annotation list from a query string", () => {
+    expect(annotationListQuerySchema.parse({ limit: "50", cursor: "abc" })).toEqual({ limit: 50, cursor: "abc" });
+    expect(annotationListQuerySchema.safeParse({ limit: "0" }).success).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DomainError } from "../errors.ts";
-import { excerptOf, matchRanges, MAX_QUERY_CHARS, normalizeForMatch, parseSearchTerms } from "./text.ts";
+import { excerptOf, matchRanges, searchExcerpt, MAX_QUERY_CHARS, normalizeForMatch, parseSearchTerms } from "./text.ts";
 
 describe("normalizeForMatch", () => {
   it("makes full-width and half-width, upper and lower case alike", () => {
@@ -118,5 +118,24 @@ describe("excerptOf", () => {
 
   it("is null when no field but the title matches", () => {
     expect(excerptOf(fields({ summary: "別の話", body: "別の本文" }), ["電池"])).toBeNull();
+  });
+});
+
+describe("searchExcerpt", () => {
+  const fields = { summary: "", autoSummary: null, body: "", impact: null, venue: null };
+
+  it("takes the fields first, and says it did not take a note", () => {
+    expect(searchExcerpt({ ...fields, body: "本文に電池", notes: ["メモに電池"] }, ["電池"])).toEqual({ excerpt: "本文に電池", excerptFromNote: false });
+  });
+
+  it("takes the first note that matches when no field does, and says so", () => {
+    expect(searchExcerpt({ ...fields, body: "別の話", notes: ["全体へのメモ", "ハイライトへのメモで\n比較する"] }, ["比較"])).toEqual({
+      excerpt: "ハイライトへのメモで 比較する",
+      excerptFromNote: true,
+    });
+  });
+
+  it("is null when only the title or a highlighted text matches", () => {
+    expect(searchExcerpt({ ...fields, notes: [] }, ["電池"])).toEqual({ excerpt: null, excerptFromNote: false });
   });
 });

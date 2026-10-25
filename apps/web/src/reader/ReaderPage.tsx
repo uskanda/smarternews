@@ -24,6 +24,7 @@ import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
 import {
+  ANNOTATIONS_LABEL,
   buildNav,
   GENERATED_LABEL,
   hasListControls,
@@ -46,6 +47,7 @@ import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
@@ -59,6 +61,8 @@ export type View =
   | "generated"
   | "uncategorized"
   | "recentlyRead"
+  /** The reader's annotations: a list of annotations, not of articles. */
+  | "annotations"
   | "category"
   | "category-generated"
   | "feed"
@@ -72,6 +76,7 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   generated: GENERATED_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
+  annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
@@ -162,6 +167,7 @@ export function ReaderPage({ view }: { view: View }) {
   const feeds = useFeeds();
   const inCategory = view === "category" || view === "category-generated";
   const isSearch = view === "search";
+  const isAnnotations = view === "annotations";
   const category: Category | undefined = inCategory ? categories.data?.find((entry) => entry.slug === params.slug) : undefined;
   const feed: Feed | undefined = view === "feed" ? feeds.data?.find((entry) => String(entry.id) === params.feedId) : undefined;
   // Null until the category or the feed the path names is known.
@@ -179,6 +185,9 @@ export function ReaderPage({ view }: { view: View }) {
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
+  // The annotation chosen in the list of annotations, which the article is brought to.
+  const annotationParam = isAnnotations ? search.get("annotation") : null;
+  const focusAnnotation = annotationParam && /^\d{1,15}$/.test(annotationParam) ? Number(annotationParam) : null;
   const includeRead = search.get("read") === "1";
   const importantOnly = importanceFilter && search.get("min") === "4";
   // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
@@ -221,14 +230,14 @@ export function ReaderPage({ view }: { view: View }) {
   const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = filter.recentlyRead === "true";
-  const list = useArticleList(filter, target !== null && viewsSettled);
+  const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
   const active = isSearch ? results : list;
   const fetched = useMemo<ArticleSummary[]>(
     () => (isSearch ? results.data?.pages.flatMap((page) => page.items) : list.data?.pages.flatMap((page) => page.items)) ?? EMPTY,
     [isSearch, results.data, list.data],
   );
   const excerpts = useMemo(
-    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item.excerpt] as const)) ?? []),
+    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
     [results.data],
   );
 
@@ -460,8 +469,9 @@ export function ReaderPage({ view }: { view: View }) {
   const canMarkAll = listControls && (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
   useHotkeys(
     {
-      j: () => move(1),
-      k: () => move(-1),
+      // The list of annotations moves through its own rows.
+      j: isAnnotations ? undefined : () => move(1),
+      k: isAnnotations ? undefined : () => move(-1),
       Space: () => page(1),
       "Shift+Space": () => page(-1),
       // The same as the buttons and the toggle beside the list, and only while they are offered.
@@ -504,7 +514,9 @@ export function ReaderPage({ view }: { view: View }) {
               : "検索"
             : TITLES[view];
 
-  const listPane = isEvents ? (
+  const listPane = isAnnotations ? (
+    <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
+  ) : isEvents ? (
     <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
@@ -577,7 +589,8 @@ export function ReaderPage({ view }: { view: View }) {
               timeZone={timeZone}
               now={now()}
               time={recentlyRead ? "read" : "updated"}
-              excerpt={excerpts.get(item.id) ?? null}
+              excerpt={excerpts.get(item.id)?.excerpt ?? null}
+              excerptFromNote={excerpts.get(item.id)?.excerptFromNote ?? false}
               terms={terms}
             />
           ))}
@@ -638,6 +651,7 @@ export function ReaderPage({ view }: { view: View }) {
                 onToggle: () => toggleDelivered(articleId),
               }}
               terms={terms}
+              focusAnnotation={focusAnnotation}
             />
           )}
         </div>

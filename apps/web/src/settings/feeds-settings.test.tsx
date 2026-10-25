@@ -1,4 +1,4 @@
-import { getFeed, getSettings, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
+import { addHighlight, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -278,12 +278,29 @@ describe("deleting a feed", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("配信記事40件が消えます");
     expect(dialog).toHaveTextContent("うち2件にはスターが付いています");
+    expect(dialog).not.toHaveTextContent("注釈");
     expect(listFeeds(server.db)).toHaveLength(1);
 
     await user.click(within(dialog).getByRole("button", { name: "削除する" }));
 
     expect(await screen.findByText("購読フィードを削除しました")).toBeInTheDocument();
     expect(listFeeds(server.db)).toEqual([]);
+  });
+
+  it("names how many articles with annotations go with their annotations", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const ids = Array.from({ length: 40 }, () => seedFeedArticle(server.db, feed.id));
+    const now = server.clock().toISOString();
+    for (const id of ids.slice(0, 3)) addHighlight(server.db, id, { quote: "Content", prefix: "", suffix: "", position: 0, note: null }, now);
+    saveArticleNote(server.db, ids[0]!, "メモ", now);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("「Blog」と、その配信記事40件が消えます。注釈のある3件も、注釈とともに消えます。元に戻せません。");
+    expect(listFeeds(server.db)).toHaveLength(1);
   });
 
   it("keeps the feed when the user backs out", async () => {

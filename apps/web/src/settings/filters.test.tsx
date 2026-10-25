@@ -34,7 +34,7 @@ describe("the filter page", () => {
     renderApp({ route: "/settings/filters" });
     const form = await section("フィルターの追加");
     expect(form).toHaveTextContent("購読フィードの配信記事だけを隠します");
-    expect(form).toHaveTextContent("スターのある記事は隠しません");
+    expect(form).toHaveTextContent("スターまたは注釈のある記事は隠しません");
     expect(form).toHaveTextContent("隠すフィルターと残すフィルターの両方に当たる記事は隠します");
   });
 

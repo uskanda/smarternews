@@ -6,6 +6,7 @@ export * from "./markdown.ts";
 export * from "./paths.ts";
 export * from "./settings-file.ts";
 export * from "./time.ts";
+export * from "./db/annotations.ts";
 export * from "./db/articles.ts";
 export * from "./db/candidates.ts";
 export * from "./db/categories.ts";

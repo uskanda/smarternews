@@ -25,9 +25,10 @@ import type {
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { searchBody } from "../search/plain.ts";
-import { charCount, excerptOf, parseSearchTerms, SHORT_TERM_CHARS } from "../search/text.ts";
+import { charCount, parseSearchTerms, searchExcerpt, SHORT_TERM_CHARS } from "../search/text.ts";
 import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
+import { annotationsOf } from "./annotations.ts";
 import { deleteArticleTranslation, findArticleTranslation } from "./translations.ts";
 
 /**
@@ -36,13 +37,26 @@ import { deleteArticleTranslation, findArticleTranslation } from "./translations
  */
 const GENERATED = "origin = 'generated'";
 
+/** Whether the article of the given table alias has an annotation: a highlight or a note on the whole article. */
+export function hasAnnotation(alias: string): string {
+  return `EXISTS (SELECT 1 FROM annotations ann WHERE ann.article_id = ${alias}.id)`;
+}
+
+/**
+ * Whether the article of the given table alias is one the reader keeps: it has a star or an annotation. Such
+ * an article is never hidden by filters, nor counted as hidden, and outlives the retention period.
+ */
+export function keptByReader(alias: string): string {
+  return `(${alias}.starred = 1 OR ${hasAnnotation(alias)})`;
+}
+
 /**
  * Whether the article of the given table alias is hidden by filters: a feed article that an enabled filter
- * hides, unless it has a star. Every list, count, "mark all as read" and the summaries leave such a row out.
- * A generated article is never hidden.
+ * hides, unless the reader keeps it with a star or an annotation. Every list, count, "mark all as read" and
+ * the summaries leave such a row out. A generated article is never hidden.
  */
 export function hiddenByFilters(alias: string): string {
-  return `(${alias}.filtered = 1 AND ${alias}.starred = 0)`;
+  return `(${alias}.filtered = 1 AND NOT ${keptByReader(alias)})`;
 }
 
 /**
@@ -194,6 +208,7 @@ function toArticle(db: Database, row: Row): Article {
       .prepare("SELECT t.id, t.text FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ? ORDER BY t.id")
       .all(id)
       .map((topic) => ({ id: num(topic.id), text: str(topic.text) })),
+    annotations: annotationsOf(db, id),
   };
 }
 
@@ -704,7 +719,9 @@ function likePattern(term: string): string {
  * A page of the articles that have every term of the query, newest first by last update, generated and
  * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
  * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
- * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt.
+ * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt, taken
+ * from the reader's notes when no field of the article has the terms. The index holds the highlighted texts
+ * and notes of every article, so they are matched like the fields.
  * `asOf` is `now`, when the result was read, as in the article list.
  */
 export function searchArticles(db: Database, query: ArticleSearchQuery, now: string = new Date().toISOString()): ArticleSearchResult {
@@ -743,19 +760,34 @@ export function searchArticles(db: Database, query: ArticleSearchQuery, now: str
       .all(JSON.stringify(ids))
       .map((row) => [num(row.id), row] as const),
   );
+  // The notes of every article of the page in one query: the note on the whole article first, then those on
+  // highlights in the order they were made.
+  const notes = new Map<number, string[]>();
+  for (const row of db
+    .prepare(
+      `SELECT article_id, note FROM annotations
+        WHERE article_id IN (SELECT value FROM json_each(?)) AND note IS NOT NULL
+        ORDER BY article_id, kind = 'highlight', created_at, id`,
+    )
+    .all(JSON.stringify(ids))) {
+    const list = notes.get(num(row.article_id)) ?? [];
+    list.push(str(row.note));
+    notes.set(num(row.article_id), list);
+  }
   const items = page.items.map((item): ArticleSearchHit => {
     const row = fields.get(item.id)!;
-    const excerpt = excerptOf(
+    const excerpt = searchExcerpt(
       {
         summary: str(row.summary),
         autoSummary: strOrNull(row.auto_summary),
         body: searchBody({ origin: str(row.origin), body: str(row.body), contentText: str(row.content_text) }),
         impact: strOrNull(row.impact),
         venue: strOrNull(row.event_venue),
+        notes: notes.get(item.id) ?? [],
       },
       terms,
     );
-    return { ...item, excerpt };
+    return { ...item, ...excerpt };
   });
   return { items, nextCursor: page.nextCursor, asOf: now, terms };
 }
@@ -944,12 +976,12 @@ export function listFeedArticles(db: Database, filter: { categoryId: number | nu
     .map((row) => toArticle(db, row));
 }
 
-/** Removes generated articles without a star that were last updated before the given time. */
+/** Removes generated articles without a star or an annotation that were last updated before the given time. */
 export function deleteUnstarredArticlesBefore(db: Database, before: string): number {
-  return num(db.prepare(`DELETE FROM articles WHERE ${GENERATED} AND starred = 0 AND updated_at < ?`).run(before).changes);
+  return num(db.prepare(`DELETE FROM articles WHERE ${GENERATED} AND NOT ${keptByReader("articles")} AND updated_at < ?`).run(before).changes);
 }
 
-/** Removes feed articles without a star whose sort time lies before the given time. */
+/** Removes feed articles without a star or an annotation whose sort time lies before the given time. */
 export function deleteUnstarredFeedArticlesBefore(db: Database, before: string): number {
-  return num(db.prepare("DELETE FROM articles WHERE origin = 'feed' AND starred = 0 AND updated_at < ?").run(before).changes);
+  return num(db.prepare(`DELETE FROM articles WHERE origin = 'feed' AND NOT ${keptByReader("articles")} AND updated_at < ?`).run(before).changes);
 }

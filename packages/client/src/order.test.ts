@@ -35,6 +35,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   nextFetchAt: null,
   articleCount: 0,
   starredCount: 0,
+  annotatedCount: 0,
   createdAt: "2026-03-01T00:00:00.000Z",
   lastNewItemAt: null,
   stale: false,
@@ -264,8 +265,10 @@ describe("stepTarget", () => {
   it("goes down and up through the views at the top", () => {
     expect(stepTarget(model(), views("unread"), 1, open)).toEqual(views("all"));
     expect(stepTarget(model(), views("starred"), -1, open)).toEqual(views("all"));
-    expect(stepTarget(model(), { type: "recentlyRead" }, 1, open)).toEqual(cat(1));
-    expect(stepTarget(model(), cat(1), -1, open)).toEqual({ type: "recentlyRead" });
+    expect(stepTarget(model(), { type: "recentlyRead" }, 1, open)).toEqual({ type: "annotations" });
+    expect(stepTarget(model(), { type: "annotations" }, 1, open)).toEqual(cat(1));
+    expect(stepTarget(model(), cat(1), -1, open)).toEqual({ type: "annotations" });
+    expect(stepTarget(model(), { type: "annotations" }, -1, open)).toEqual({ type: "recentlyRead" });
   });
 
   it("goes from a category into the entries below it, and on to the next category", () => {
@@ -284,7 +287,7 @@ describe("stepTarget", () => {
 
   it("moves from a folded category when an entry hidden below it is open", () => {
     expect(stepTarget(model(), fd(12), 1, folded("category-1"))).toEqual(cat(2));
-    expect(stepTarget(model(), fd(12), -1, folded("category-1"))).toEqual({ type: "recentlyRead" });
+    expect(stepTarget(model(), fd(12), -1, folded("category-1"))).toEqual({ type: "annotations" });
   });
 
   it("goes nowhere past the ends", () => {

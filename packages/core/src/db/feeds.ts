@@ -2,7 +2,7 @@ import { FEED_STATS_DAYS, type Feed, type FeedMove, type FeedStats, type FeedUpd
 import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
-import { hiddenByFilters, hiddenDuplicate } from "./articles.ts";
+import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { refreshFiltered } from "./filters.ts";
@@ -13,7 +13,7 @@ const MINUTE = 60_000;
 const DAY = 86_400_000;
 const MAX_WAIT_MS = 24 * 60 * MINUTE;
 
-/** Feed articles without a star are kept this long, counted from the time they sort by. */
+/** Feed articles without a star or an annotation are kept this long, counted from the time they sort by. */
 export const FEED_RETENTION_DAYS = 90;
 
 /**
@@ -26,7 +26,8 @@ const recentArticles = (alias: string, feed: string) => `${alias}.origin = 'feed
 const FEED_COLUMNS = `f.*,
   (SELECT count(*) FROM articles a WHERE ${recentArticles("a", "f.id")}) AS recent_article_count,
   (SELECT count(*) FROM articles a WHERE a.feed_id = f.id) AS article_count,
-  (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND a.starred = 1) AS starred_count`;
+  (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND a.starred = 1) AS starred_count,
+  (SELECT count(*) FROM articles a WHERE a.feed_id = f.id AND ${hasAnnotation("a")}) AS annotated_count`;
 
 /** The start of the stats period that ends at `now`. */
 function statsSince(now: Date): string {
@@ -86,6 +87,7 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     nextFetchAt: enabled ? nextFetchFrom(row, baseMinutes).toISOString() : null,
     articleCount: num(row.article_count),
     starredCount: num(row.starred_count),
+    annotatedCount: num(row.annotated_count),
     createdAt: str(row.created_at),
     lastNewItemAt: strOrNull(row.last_new_item_at),
     stale: isStale(row, staleDays, now),

@@ -139,13 +139,9 @@ function onCharBoundary(text: string, at: number): number {
   return at > 0 && at < text.length && code >= 0xdc00 && code <= 0xdfff ? at - 1 : at;
 }
 
-/**
- * The text around the first match, from the first field that has one, on one line. About 40 characters come
- * before the match and about 120 in all; a cut end is marked with "…". Null when no field matches, as when the
- * terms are only in the title.
- */
-export function excerptOf(fields: ExcerptFields, terms: readonly string[]): string | null {
-  for (const raw of [fields.summary, fields.autoSummary, fields.body, fields.impact, fields.venue]) {
+/** The text around the first match in the first of the texts that has one, or null. */
+function firstExcerpt(texts: ReadonlyArray<string | null>, terms: readonly string[]): string | null {
+  for (const raw of texts) {
     if (!raw) continue;
     const text = raw.replace(/\s+/gu, " ").trim();
     const first = matchRanges(text, terms)[0];
@@ -155,4 +151,32 @@ export function excerptOf(fields: ExcerptFields, terms: readonly string[]): stri
     return `${start > 0 ? CUT : ""}${text.slice(start, end).trim()}${end < text.length ? CUT : ""}`;
   }
   return null;
+}
+
+/**
+ * The text around the first match, from the first field that has one, on one line. About 40 characters come
+ * before the match and about 120 in all; a cut end is marked with "…". Null when no field matches, as when the
+ * terms are only in the title.
+ */
+export function excerptOf(fields: ExcerptFields, terms: readonly string[]): string | null {
+  return firstExcerpt([fields.summary, fields.autoSummary, fields.body, fields.impact, fields.venue], terms);
+}
+
+/** The excerpt of a search result, and whether it was taken from a note of the reader's. */
+export interface SearchExcerpt {
+  excerpt: string | null;
+  excerptFromNote: boolean;
+}
+
+/**
+ * The excerpt of a search result: from the fields of the article as `excerptOf` takes it, or, when none of them
+ * matches, from the reader's notes in the order given (the note on the whole article first, then those on
+ * highlights oldest first). A note is taken as it was written, its Markdown marks included, on one line. A
+ * highlighted text is never an excerpt: it is a copy of the body, not the reader's words.
+ */
+export function searchExcerpt(fields: ExcerptFields & { notes: readonly string[] }, terms: readonly string[]): SearchExcerpt {
+  const excerpt = excerptOf(fields, terms);
+  if (excerpt !== null) return { excerpt, excerptFromNote: false };
+  const fromNote = firstExcerpt(fields.notes, terms);
+  return { excerpt: fromNote, excerptFromNote: fromNote !== null };
 }

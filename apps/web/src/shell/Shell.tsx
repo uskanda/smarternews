@@ -12,6 +12,7 @@ import { PANES, usePanes } from "../lib/panes.ts";
 import { usePageTitle } from "../lib/title.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
+import { feedDeletionText } from "../settings/feed-deletion.ts";
 import { ScopedFiltersNote } from "../settings/ScopedFiltersNote.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
@@ -25,6 +26,7 @@ const KEYS: Array<[string, string]> = [
   ["m", "既読と未読の切り替え"],
   ["o", "主な出典を新しいタブで開く"],
   ["w", "全文の取得と、配信された内容との切り替え"],
+  ["h", "選んだ文字列をハイライトする"],
   ["Space", "本文を1画面分送る。本文の末尾なら次の記事"],
   ["Shift+Space", "本文を1画面分戻す。本文の先頭なら前の記事"],
   ["Shift+A", "表示中の一覧をすべて既読にする"],
@@ -288,10 +290,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       >
         {leavingFeed ? (
           <>
-            <p>
-              「{leavingFeed.title}」と、その配信記事{leavingFeed.articleCount}件が消えます。
-              {leavingFeed.starredCount > 0 ? `うち${leavingFeed.starredCount}件にはスターが付いています。` : ""}元に戻せません。
-            </p>
+            <p>{feedDeletionText(leavingFeed)}</p>
             <ScopedFiltersNote target={{ feedId: leavingFeed.id }} />
             <p>記事を残したまま取得だけを止めるには、設定の購読フィードで一時停止にしてください。</p>
           </>

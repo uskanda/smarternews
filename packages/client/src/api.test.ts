@@ -246,7 +246,7 @@ describe("searching articles", () => {
 
     const result = await api.search({ q: "電池" });
     expect(seen.at(-1)!.url).toBe(`/api/v1/search?q=${encodeURIComponent("電池")}`);
-    expect(result).toMatchObject({ items: [{ id, excerpt: null }], nextCursor: null, terms: ["電池"] });
+    expect(result).toMatchObject({ items: [{ id, excerpt: null, excerptFromNote: false }], nextCursor: null, terms: ["電池"] });
 
     // The server refuses a cursor it did not issue; what matters here is what was sent.
     await api.search({ q: "電池 工場", category: 3, feed: 4, unread: "true", cursor: "c", limit: 20 }).catch(() => undefined);
@@ -428,5 +428,42 @@ describe("list views", () => {
     expect(seen.at(-1)!.url).toBe(`/api/v1/articles?category=${category.id}&order=oldest`);
     expect(list.items.map((item) => item.id)).toEqual([older, newer]);
     expect(list.asOf).toBe(server.clock().toISOString());
+  });
+});
+
+describe("annotations", () => {
+  const anchor = { quote: "電池の工場", prefix: "同社は", suffix: "を新設する", position: 3 };
+
+  it("adds, changes and removes a highlight, and reads it in the article and the list", async () => {
+    const { server, api, seen } = setup();
+    const id = server.article(server.category().id);
+    const highlight = await api.addHighlight(id, anchor);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/articles/${id}/highlights`);
+    expect(highlight).toMatchObject({ articleId: id, ...anchor, note: null });
+    expect(await api.updateHighlight(highlight.id, "規模を確かめる")).toMatchObject({ note: "規模を確かめる" });
+    expect((await api.article(id)).annotations.highlights).toEqual([{ ...highlight, note: "規模を確かめる", updatedAt: expect.any(String) }]);
+    expect((await api.annotations({ limit: 10 })).items.map((item) => [item.kind, item.quote, item.note])).toEqual([["highlight", "電池の工場", "規模を確かめる"]]);
+    expect(seen.at(-1)!.url).toBe("/api/v1/annotations?limit=10");
+    await api.deleteHighlight(highlight.id);
+    await expect(api.deleteHighlight(highlight.id)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("saves and removes the note on a whole article", async () => {
+    const { server, api } = setup();
+    const id = server.article(server.category().id);
+    expect(await api.saveArticleNote(id, "あとで比べる")).toMatchObject({ articleId: id, text: "あとで比べる" });
+    expect((await api.article(id)).annotations.note?.text).toBe("あとで比べる");
+    await api.deleteArticleNote(id);
+    expect((await api.article(id)).annotations.note).toBeNull();
+    await expect(api.saveArticleNote(id, " ")).rejects.toMatchObject({ kind: "invalid", fields: [{ path: "text", message: "is empty" }] });
+  });
+
+  it("refuses an answer that does not have the shape of a highlight", async () => {
+    const api = createApi({
+      fetchImpl: () => new Response(JSON.stringify({ id: 1 }), { headers: { "content-type": "application/json" } }),
+      getToken: () => null,
+      onUnauthorized: () => {},
+    });
+    await expect(api.addHighlight(1, anchor)).rejects.toThrow();
   });
 });

@@ -8,6 +8,7 @@ import {
   mergeKept,
   parseListKey,
   RECENTLY_READ_LABEL,
+  ANNOTATIONS_LABEL,
   sortKeyFor,
   targetFilter,
   targetScope,
@@ -75,6 +76,8 @@ const TITLES: Record<Exclude<View, "category" | "feed">, string> = {
   generated: GENERATED_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
+  // Not in the drawer: the app shows annotations in the article only.
+  annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
@@ -153,7 +156,7 @@ export function useReaderList(ref: ListRef) {
     [isSearch, results.data, articleList.data],
   );
   const excerpts = useMemo(
-    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item.excerpt] as const)) ?? []),
+    () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
     [results.data],
   );
   // What was listed on screen has been seen: the periodic check does not notify it later. Only generated
@@ -232,7 +235,9 @@ export function useReaderList(ref: ListRef) {
     /** The words the server matched, normalized: what a search result marks. Undefined outside the search results. */
     terms: isSearch ? results.data?.pages[0]?.terms : undefined,
     /** The excerpt of a search result, or null when only its title matched or it is no search result. */
-    excerptOf: (id: number) => excerpts.get(id) ?? null,
+    excerptOf: (id: number) => excerpts.get(id)?.excerpt ?? null,
+    /** Whether the excerpt of a search result was taken from a note of the reader's. */
+    excerptFromNote: (id: number) => excerpts.get(id)?.excerptFromNote ?? false,
     title,
     category,
     missing,

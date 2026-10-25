@@ -1,5 +1,15 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  addHighlight,
+  annotationListQuerySchema,
+  articleNoteUpdateSchema,
+  deleteArticleNote,
+  deleteHighlight,
+  highlightCreateSchema,
+  highlightUpdateSchema,
+  listAnnotations,
+  saveArticleNote,
+  updateHighlightNote,
   articleListQuerySchema,
   articleSearchQuerySchema,
   articleUpdateSchema,
@@ -317,6 +327,29 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(result.status === "fetched" ? { ...result, fullContent: relayFullContent(result.fullContent, images.key) } : result);
   });
   api.get("/translation", (c) => c.json(translation.status()));
+
+  // annotations: plain storage, no model and no translation is involved
+  api.get("/annotations", (c) => c.json(listAnnotations(db, parse(annotationListQuerySchema, c.req.query()))));
+  api.post("/articles/:id/highlights", async (c) => {
+    const id = idParam(c, "article");
+    return c.json(addHighlight(db, id, parse(highlightCreateSchema, await jsonBody(c)), clock().toISOString()), 201);
+  });
+  api.patch("/highlights/:id", async (c) => {
+    const id = idParam(c, "highlight");
+    return c.json(updateHighlightNote(db, id, parse(highlightUpdateSchema, await jsonBody(c)).note, clock().toISOString()));
+  });
+  api.delete("/highlights/:id", (c) => {
+    deleteHighlight(db, idParam(c, "highlight"));
+    return c.body(null, 204);
+  });
+  api.put("/articles/:id/note", async (c) => {
+    const id = idParam(c, "article");
+    return c.json(saveArticleNote(db, id, parse(articleNoteUpdateSchema, await jsonBody(c)).text, clock().toISOString()));
+  });
+  api.delete("/articles/:id/note", (c) => {
+    deleteArticleNote(db, idParam(c, "article"));
+    return c.body(null, 204);
+  });
 
   // subscribed feeds
   api.get("/feeds", (c) => c.json(listFeeds(db, clock())));

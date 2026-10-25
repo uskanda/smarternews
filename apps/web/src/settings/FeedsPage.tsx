@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { feedDeletionText } from "./feed-deletion.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -485,10 +486,7 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
           </>
         }
       >
-        <p>
-          「{feed.title}」と、その配信記事{feed.articleCount}件が消えます。
-          {feed.starredCount > 0 ? `うち${feed.starredCount}件にはスターが付いています。` : ""}元に戻せません。
-        </p>
+        <p>{feedDeletionText(feed)}</p>
         <ScopedFiltersNote target={{ feedId: feed.id }} />
         <p>記事を残したまま取得だけを止めるには、編集で一時停止にしてください。</p>
       </ConfirmDialog>

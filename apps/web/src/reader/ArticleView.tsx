@@ -5,8 +5,12 @@ import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullConte
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { listPathOf } from "../lib/paths.ts";
-import { Highlighted } from "./highlight.tsx";
+import { AnnotatedBody, ArticleNoteSection, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
+import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
+
+/** The attribute that makes an element an original part of the body, in which a selection can be highlighted. */
+const segmentAttribute = (index: number) => ({ [SEGMENT_ATTRIBUTE]: String(index) });
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
   const event = article.event!;
@@ -44,8 +48,19 @@ function EventDetails({ article, timeZone }: { article: Article; timeZone: strin
  * The content of a translated feed article: segment by segment, the translation as the text to read and the
  * original right under it. The pairs come from the server as they are shown; nothing is matched up here.
  * A segment without a translation, and one whose translation says the same in the same words, is shown once.
+ * Only the originals carry the reader's highlights: `marksFor` gives each its marks.
  */
-function TranslatedBody({ translation, terms, groups }: { translation: ArticleTranslation; terms?: readonly string[]; groups: TermMatcher }) {
+function TranslatedBody({
+  translation,
+  terms,
+  groups,
+  marksFor,
+}: {
+  translation: ArticleTranslation;
+  terms?: readonly string[];
+  groups: TermMatcher;
+  marksFor: (index: number) => AnnotationMarks | undefined;
+}) {
   const lang = translation.sourceLanguage ?? undefined;
   const lastTranslated = translation.segments.findLastIndex((segment) => segment.translated !== null);
   return (
@@ -57,12 +72,14 @@ function TranslatedBody({ translation, terms, groups }: { translation: ArticleTr
             <div>
               <Markdown text={segment.translated!} images highlight={terms} groups={groups} />
             </div>
-            <div className="segment-original" lang={lang}>
-              <Markdown text={segment.original} images plainHeadings highlight={terms} groups={groups} />
+            <div className="segment-original" lang={lang} {...segmentAttribute(index)}>
+              <Markdown text={segment.original} images plainHeadings highlight={terms} groups={groups} annotations={marksFor(index)} />
             </div>
           </div>
         ) : (
-          <Markdown key={index} text={segment.original} images highlight={terms} groups={groups} />
+          <div key={index} className="segment-alone" {...segmentAttribute(index)}>
+            <Markdown text={segment.original} images highlight={terms} groups={groups} annotations={marksFor(index)} />
+          </div>
         );
         return translation.truncated && index === lastTranslated
           ? [
@@ -147,6 +164,7 @@ export function ArticleView({
   onToggleRead,
   fullContent,
   terms,
+  focusAnnotation = null,
 }: {
   id: number;
   categoryName: (categoryId: number | null) => string;
@@ -161,6 +179,8 @@ export function ArticleView({
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
   terms?: readonly string[];
+  /** The annotation chosen in the list of annotations: the body is brought to it. */
+  focusAnnotation?: number | null;
 }) {
   const query = useArticle(id);
   const article = query.data;
@@ -202,6 +222,7 @@ export function ArticleView({
   const delivered = article.origin === "feed";
   // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
   const fullShown = article.fullContent !== null && !fullContent.showDelivered;
+  const translated = article.translation !== null && (fullShown || article.fullContent === null);
 
   return (
     <article aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
@@ -301,14 +322,31 @@ export function ArticleView({
           </div>
         ) : null}
         {delivered ? <FullContentBar article={article} control={fullContent} /> : null}
-        {article.translation && (fullShown || article.fullContent === null) ? (
-          // The translation is of the full content when there is one: what the feed delivered is then shown without one.
-          <TranslatedBody translation={article.translation} terms={terms} groups={groups} />
-        ) : (
-          <div className="article-body type-body-lg">
-            <Markdown text={fullShown ? article.fullContent!.body : article.body} images={delivered} highlight={terms} groups={groups} />
-          </div>
-        )}
+        <ArticleNoteSection article={article} />
+        {/* Highlights are on the full content when there is one: while what the feed delivered is shown instead, none is. */}
+        <AnnotatedBody
+          key={`${fullShown}-${translated ? "translated" : "original"}`}
+          article={article}
+          count={translated ? article.translation!.segments.length : 1}
+          enabled={article.fullContent === null || fullShown}
+          focusId={focusAnnotation}
+          render={(marksFor) =>
+            translated ? (
+              // The translation is of the full content when there is one: what the feed delivered is then shown without one.
+              <TranslatedBody translation={article.translation!} terms={terms} groups={groups} marksFor={marksFor} />
+            ) : (
+              <div className="article-body type-body-lg" {...segmentAttribute(0)}>
+                <Markdown
+                  text={fullShown ? article.fullContent!.body : article.body}
+                  images={delivered}
+                  highlight={terms}
+                  groups={groups}
+                  annotations={marksFor(0)}
+                />
+              </div>
+            )
+          }
+        />
         {previous ? (
           <p className="type-body-md">
             <span className="text-on-surface-muted">この話題の前の記事 </span>
