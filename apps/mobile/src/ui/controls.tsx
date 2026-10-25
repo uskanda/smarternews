@@ -14,11 +14,13 @@ export interface ButtonProps {
   disabled?: boolean;
   /** Shown instead of the label while the action runs; the button cannot be pressed then. */
   busyLabel?: string | null;
+  /** For one choice among several: the chosen one is marked with a check, not by colour alone. */
+  selected?: boolean;
   style?: StyleProp<ViewStyle>;
 }
 
 /** A button with words on it. At least 48dp high and wide. */
-export function Button({ label, onPress, variant = "secondary", disabled = false, busyLabel = null, style }: ButtonProps) {
+export function Button({ label, onPress, variant = "secondary", disabled = false, busyLabel = null, selected, style }: ButtonProps) {
   const theme = useTheme();
   const off = disabled || busyLabel !== null;
   const background = { primary: theme.colors.primary, secondary: theme.colors.surface, danger: theme.colors.error, quiet: "transparent" }[variant];
@@ -27,7 +29,8 @@ export function Button({ label, onPress, variant = "secondary", disabled = false
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ disabled: off, busy: busyLabel !== null }}
+      accessibilityLabel={busyLabel ?? label}
+      accessibilityState={{ disabled: off, busy: busyLabel !== null, ...(selected === undefined ? {} : { selected }) }}
       disabled={off}
       onPress={onPress}
       android_ripple={{ color: theme.colors.selected }}
@@ -48,7 +51,7 @@ export function Button({ label, onPress, variant = "secondary", disabled = false
       ]}
     >
       <Txt variant="label-md" color={text}>
-        {busyLabel ?? label}
+        {selected ? `✓ ${busyLabel ?? label}` : (busyLabel ?? label)}
       </Txt>
     </Pressable>
   );

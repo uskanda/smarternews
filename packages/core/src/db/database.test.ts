@@ -737,3 +737,61 @@ describe("the migration to term highlights", () => {
     expect(db.prepare("SELECT count(*) AS n FROM highlight_terms").get()).toEqual({ n: 0 });
   });
 });
+
+describe("the migration to list views", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("adds the table and leaves the rows that exist as they were", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "015")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, category_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, is_read, starred)
+       VALUES (1, 'feed', 5, 3, 'k1', 'news', 't', 's', 'b', ?, ?, ?, 1, 1)`,
+    ).run(now, now, now);
+    const rows = () => ({
+      articles: db.prepare("SELECT * FROM articles ORDER BY id").all(),
+      categories: db.prepare("SELECT * FROM categories ORDER BY id").all(),
+      feeds: db.prepare("SELECT * FROM feeds ORDER BY id").all(),
+      settings: db.prepare("SELECT * FROM settings").all(),
+    });
+    const before = rows();
+
+    for (const name of readdirSync(SHIPPED).filter((file) => file >= "015")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(before);
+    expect(db.prepare("SELECT count(*) AS n FROM list_views").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+  });
+
+  it("holds one row per entry, and only the pairs of entry kind and target that make sense", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    const insert = (list: string, categoryId: number | null, feedId: number | null, sort = "oldest") =>
+      db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, ?, ?, ?)").run(list, categoryId, feedId, sort);
+
+    insert("unread", null, null);
+    insert("category", 3, null);
+    insert("category_generated", 3, null);
+    insert("feed", null, 5);
+    expect(db.prepare("SELECT sort FROM list_views WHERE list = 'unread'").get()).toEqual({ sort: "oldest" });
+
+    expect(() => insert("unread", null, null)).toThrow();
+    expect(() => insert("category", 3, null)).toThrow();
+    expect(() => insert("feed", null, 5)).toThrow();
+    expect(() => insert("unread", 3, null)).toThrow();
+    expect(() => insert("category", null, null)).toThrow();
+    expect(() => insert("category", 3, 5)).toThrow();
+    expect(() => insert("feed", 3, null)).toThrow();
+    expect(() => insert("recently_read", null, null)).toThrow();
+    expect(() => insert("all", null, null, "random")).toThrow();
+  });
+});

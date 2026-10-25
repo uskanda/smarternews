@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   articleSearchQuerySchema,
-  articleSearchResultSchema, filterCreateSchema, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
+  articleSearchResultSchema, filterCreateSchema, listViewKey, listViewUpdateSchema, parseListViewKey, filterPreviewSchema, filterUpdateSchema, MAX_FILTER_CONDITIONS, MAX_FILTER_VALUE_CHARS, settingsFileSchema } from "./api.ts";
 
 const condition = { fields: ["title"], match: "contains", value: "特売" } as const;
 
@@ -103,10 +103,10 @@ describe("the shape of a search", () => {
   } as const;
 
   it("gives each article of the list an excerpt, and the result its terms", () => {
-    const result = articleSearchResultSchema.parse({ items: [{ ...summary, excerpt: "…電池…" }, { ...summary, id: 2, excerpt: null }], nextCursor: null, terms: ["電池"] });
+    const result = articleSearchResultSchema.parse({ items: [{ ...summary, excerpt: "…電池…" }, { ...summary, id: 2, excerpt: null }], nextCursor: null, asOf: "2026-03-02T00:00:00.000Z", terms: ["電池"] });
     expect(result.items.map((item) => item.excerpt)).toEqual(["…電池…", null]);
     expect(result.terms).toEqual(["電池"]);
-    expect(articleSearchResultSchema.safeParse({ items: [summary], nextCursor: null, terms: [] }).success).toBe(false);
+    expect(articleSearchResultSchema.safeParse({ items: [summary], nextCursor: null, asOf: "2026-03-02T00:00:00.000Z", terms: [] }).success).toBe(false);
     expect(articleSearchResultSchema.safeParse({ items: [], nextCursor: null }).success).toBe(false);
   });
 
@@ -119,5 +119,36 @@ describe("the shape of a search", () => {
       limit: 20,
     });
     expect(articleSearchQuerySchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("the key of a list view", () => {
+  it("reads every entry that keeps a view, and gives back the same key", () => {
+    const keys = ["unread", "all", "starred", "generated", "uncategorized", "category-3", "category-3-generated", "feed-12"];
+    expect(keys.map(parseListViewKey)).toEqual([
+      { list: "unread" },
+      { list: "all" },
+      { list: "starred" },
+      { list: "generated" },
+      { list: "uncategorized" },
+      { list: "category", categoryId: 3 },
+      { list: "category_generated", categoryId: 3 },
+      { list: "feed", feedId: 12 },
+    ]);
+    expect(keys.map((key) => listViewKey(parseListViewKey(key)!))).toEqual(keys);
+  });
+
+  it("refuses the recently read articles, which keep no view, and any other text", () => {
+    for (const key of ["recently-read", "", "category-", "category-x", "feed-3-generated", "feed--1", "Unread", "category-3-generated-"]) {
+      expect(parseListViewKey(key)).toBeNull();
+    }
+  });
+});
+
+describe("the shape of a change to a list view", () => {
+  it("takes the newest or the oldest first, and a body without it", () => {
+    expect(listViewUpdateSchema.parse({ sort: "oldest" })).toEqual({ sort: "oldest" });
+    expect(listViewUpdateSchema.parse({})).toEqual({});
+    expect(listViewUpdateSchema.safeParse({ sort: "relevance" }).success).toBe(false);
   });
 });

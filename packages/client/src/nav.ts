@@ -1,6 +1,6 @@
 // What the list of entries holds — the left pane of the web app, the drawer of the Android app — and which
 // articles each entry opens. Both apps draw this one model, so they cannot disagree.
-import type { ArticleListQuery, Category, Counts, Feed, MarkRead } from "@smarternews/core/api";
+import type { ArticleListQuery, Category, Counts, Feed, ListSort, ListView, MarkRead } from "@smarternews/core/api";
 
 /** A list of articles a reader can open. */
 export type ListTarget =
@@ -102,8 +102,15 @@ export function parseListKey(key: string): ListTarget | null {
   return feed ? { type: "feed", feedId: Number(feed[1]) } : null;
 }
 
-/** The part of the article list query that the target decides. */
-export function targetFilter(target: ListTarget): ArticleListQuery {
+/**
+ * The part of the article list query that the target decides, with the order of its list. Newest first is
+ * the server's default and is not sent.
+ */
+export function targetFilter(target: ListTarget, sort: ListSort = "newest"): ArticleListQuery {
+  return { ...filterOf(target), ...(sort === "oldest" ? { order: "oldest" as const } : {}) };
+}
+
+function filterOf(target: ListTarget): ArticleListQuery {
   switch (target.type) {
     case "unread":
       return { unread: "true" };
@@ -138,6 +145,29 @@ export function targetScope(target: ListTarget): Omit<MarkRead, "before" | "minI
     default:
       return {};
   }
+}
+
+/** Whether the target is a category whose list holds events, ordered by start. */
+function isEventCategory(target: ListTarget, categories: Category[] | undefined): boolean {
+  return target.type === "category" && categories?.find((category) => category.id === target.categoryId)?.kind === "event";
+}
+
+/**
+ * Whether the list offers the menu of its order. Not the recently read articles, ordered by read time, nor an
+ * event category, ordered by start. Search results have no target and no menu either.
+ */
+export function hasSortMenu(target: ListTarget, categories: Category[] | undefined): boolean {
+  return target.type !== "recentlyRead" && !isEventCategory(target, categories);
+}
+
+/**
+ * The order the list of the target is shown in: the one its list view keeps, newest first for an entry
+ * without one, and always newest first where the order cannot be chosen.
+ */
+export function listSortOf(target: ListTarget, views: ListView[] | undefined, categories: Category[] | undefined): ListSort {
+  if (!hasSortMenu(target, categories)) return "newest";
+  const key = listKey(target);
+  return views?.find((view) => view.key === key)?.sort ?? "newest";
 }
 
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */

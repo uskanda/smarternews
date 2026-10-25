@@ -387,3 +387,21 @@ describe("an article that other feeds delivered too", () => {
     await eventually(() => expect(screen.getByRole("header", { name: "Big news" })).toBeOnTheScreen());
   });
 });
+
+describe("swiping through a list oldest first", () => {
+  it("shows the next older article after a swipe to the left from the first", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    await articles(server, category.id, [{ title: "Oldest" }, { title: "Middle" }, { title: "Newest" }]);
+    await server.core("updateListView", `category-${category.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${category.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Oldest", "Middle", "Newest"]));
+
+    await press(/Oldest/);
+    await screen.findByRole("header", { name: "Oldest" });
+    await swipeTo(1, 3);
+
+    expect(await screen.findByRole("header", { name: "Middle" })).toBeOnTheScreen();
+    expect(screen.getByLabelText("3件のうち2件目")).toBeOnTheScreen();
+  });
+});

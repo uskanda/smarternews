@@ -1,4 +1,4 @@
-import { getArticle, insertArticle, insertFeed, markArticlesRead, setArticleFlags } from "@smarternews/core";
+import { getArticle, insertArticle, insertFeed, listListViews, markArticlesRead, setArticleFlags, updateListView } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -858,5 +858,186 @@ describe("Space through the article", () => {
     expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     expect(pane.scrollTop).toBe(0);
     expect(path()).toBe(`/all/${newer}`);
+  });
+});
+
+describe("the order of a list", () => {
+  const sortButton = () => within(list()).getByRole("button", { name: /^並び順/ });
+
+  /** Tools holds three generated articles a minute apart and a feed with two older articles. */
+  function seeded() {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const blog = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: tools.id }, server.clock);
+    seedFeedArticle(server.db, blog.id, { title: "Blog old", at: "2026-02-27T00:00:00.000Z" });
+    seedFeedArticle(server.db, blog.id, { title: "Blog new", at: "2026-02-28T00:00:00.000Z" });
+    const ids = articles(server, tools.id, [{ title: "First" }, { title: "Second" }, { title: "Third" }]);
+    return { server, tools, blog, ids };
+  }
+
+  it("names the order in use before it is opened: newest first for a feed never changed", async () => {
+    const { server, blog } = seeded();
+    renderApp({ server, route: `/f/${blog.id}` });
+    await screen.findByRole("link", { name: /Blog new/ });
+
+    expect(sortButton()).toHaveAccessibleName("並び順：新しい順");
+    expect(sortButton()).toHaveTextContent("新しい順");
+    expect(sortButton()).toHaveAttribute("aria-expanded", "false");
+    expect(rowTitles()).toEqual(["Blog new", "Blog old"]);
+  });
+
+  it("lists the entry from its oldest article once oldest first is chosen, keeps the open article, and stores the choice", async () => {
+    const { server, tools } = seeded();
+    const { user } = renderApp({ server, route: "/c/tools" });
+    await user.click(await within(list()).findByRole("link", { name: /Second/ }));
+    await screen.findByRole("heading", { level: 2, name: "Second" });
+    expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog new", "Blog old"]);
+
+    await user.click(sortButton());
+    const menu = screen.getByRole("menu", { name: "並び順" });
+    expect(within(menu).getAllByRole("menuitemradio").map((item) => [item.textContent, item.getAttribute("aria-checked")])).toEqual([
+      ["✓新しい順", "true"],
+      ["古い順", "false"],
+    ]);
+    await user.click(within(menu).getByRole("menuitemradio", { name: "古い順" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Second", "Third"]));
+    expect(sortButton()).toHaveAccessibleName("並び順：古い順");
+    expect(screen.getByRole("heading", { level: 2, name: "Second" })).toBeInTheDocument();
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "oldest" }]));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("is chosen with the keyboard alone", async () => {
+    const { server, ids } = seeded();
+    const { user } = renderApp({ server, route: "/c/tools" });
+    await screen.findByRole("link", { name: /Third/ });
+
+    sortButton().focus();
+    await user.keyboard("{Enter}");
+    const menu = await screen.findByRole("menu", { name: "並び順" });
+    expect(within(menu).getByRole("menuitemradio", { name: "新しい順" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(within(menu).getByRole("menuitemradio", { name: "古い順" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Second", "Third"]));
+    expect(sortButton()).toHaveFocus();
+    expect(getArticle(server.db, ids[0]!).isRead).toBe(false);
+
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu", { name: "並び順" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(sortButton()).toHaveAccessibleName("並び順：古い順");
+  });
+
+  it("is offered neither for an event category nor for the recently read articles", async () => {
+    const server = makeServer("2026-03-10T12:00:00.000Z");
+    const events = server.category("Local events", "event");
+    server.article(events.id, {
+      title: "Morning class",
+      kind: "event",
+      event: { key: "class", startsAt: "2026-03-11T10:00:00.000Z", endsAt: "2026-03-11T12:00:00.000Z", venue: null, fee: null, registration: "unknown" },
+    });
+    const read = server.article(server.category("Tools").id, { title: "Read one" });
+    setArticleFlags(server.db, read, { isRead: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/c/local-events" });
+    await screen.findByRole("link", { name: /Morning class/ });
+    expect(screen.queryByRole("button", { name: /^並び順/ })).not.toBeInTheDocument();
+
+    await user.click(within(nav()).getByRole("link", { name: /最近読んだ記事/ }));
+    await within(list()).findByRole("link", { name: /Read one/ });
+    expect(screen.queryByRole("button", { name: /^並び順/ })).not.toBeInTheDocument();
+  });
+
+  it("opens an entry in the order stored for it, whichever app stored it, and keeps it when the read articles are added", async () => {
+    const { server, tools, ids } = seeded();
+    setArticleFlags(server.db, ids[1]!, { isRead: true }, server.clock().toISOString());
+    updateListView(server.db, `category-${tools.id}`, { sort: "oldest" });
+    const { user } = renderApp({ server });
+    await screen.findByRole("link", { name: /Third/ });
+    expect(rowTitles()[0]).toBe("Third");
+
+    await user.click(within(nav()).getByRole("link", { name: /^Tools/ }));
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Third"]));
+    expect(sortButton()).toHaveAccessibleName("並び順：古い順");
+
+    await user.click(screen.getByRole("checkbox", { name: "既読も表示" }));
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Second", "Third"]));
+    expect(sortButton()).toHaveAccessibleName("並び順：古い順");
+  });
+
+  it("moves with j to the next older article", async () => {
+    const { server, tools } = seeded();
+    updateListView(server.db, `category-${tools.id}`, { sort: "oldest" });
+    const { user } = renderApp({ server, route: "/c/tools" });
+    await waitFor(() => expect(rowTitles()[0]).toBe("Blog old"));
+
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Blog old" })).toBeInTheDocument();
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Blog new" })).toBeInTheDocument();
+  });
+
+  it("marks all 120 articles read from an oldest first list of which 50 are loaded, and not one that came after", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const ids: number[] = [];
+    for (let index = 0; index < 120; index += 1) {
+      ids.push(server.article(category.id, { title: `Story ${index}` }));
+      server.clock.advance(MINUTE);
+    }
+    updateListView(server.db, `category-${category.id}`, { sort: "oldest" });
+    const { user } = renderApp({ server, route: "/c/security" });
+    await waitFor(() => expect(rowTitles()[0]).toBe("Story 0"));
+    expect(rowTitles()).toHaveLength(50);
+    server.clock.advance(MINUTE);
+    const late = server.article(category.id, { title: "Arrived late" });
+
+    await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("120件を既読にしました");
+    expect(ids.every((id) => getArticle(server.db, id).isRead)).toBe(true);
+    expect(getArticle(server.db, late).isRead).toBe(false);
+  });
+
+  it("adds what arrives to the end of an oldest first list with the refresh every minute, and keeps the article and the selection", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { server, tools, ids } = seeded();
+      updateListView(server.db, `category-${tools.id}`, { sort: "oldest" });
+      const { user } = renderApp({ server, route: `/c/tools/${ids[0]}?read=1` });
+      await screen.findByRole("heading", { level: 2, name: "First" });
+      await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Second", "Third"]));
+      server.clock.advance(MINUTE);
+      server.article(tools.id, { title: "Arrived later" });
+
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Second", "Third", "Arrived later"]));
+      expect(screen.getByRole("heading", { level: 2, name: "First" })).toBeInTheDocument();
+      expect(within(list()).getByRole("link", { name: /First/ })).toHaveAttribute("aria-current", "true");
+      void user;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes back to the order it had, and says so, when the order cannot be stored", async () => {
+    const { server } = seeded();
+    let offline = false;
+    const { user } = renderApp({ server, route: "/c/tools", offline: () => offline });
+    await screen.findByRole("link", { name: /Third/ });
+
+    offline = true;
+    await user.click(sortButton());
+    await user.click(screen.getByRole("menuitemradio", { name: "古い順" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("並び順を保存できませんでした");
+    expect(sortButton()).toHaveAccessibleName("並び順：新しい順");
+    offline = false;
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog new", "Blog old"]));
+    expect(listListViews(server.db).items).toEqual([]);
   });
 });

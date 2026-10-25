@@ -1,8 +1,20 @@
-import type { Article, ArticleListQuery, ArticleSummary, Category, Feed } from "@smarternews/core/api";
+import type { Article, ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { useArticle, useArticleFlags, useArticleList, useArticleSearch, useCategories, useFeeds, useFullContentFetch, useSettings, useTimeZone } from "../api/queries.ts";
+import {
+  useArticle,
+  useArticleFlags,
+  useArticleList,
+  useArticleSearch,
+  useCategories,
+  useFeeds,
+  useFullContentFetch,
+  useListSortChange,
+  useListViews,
+  useSettings,
+  useTimeZone,
+} from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
 import { followScroll } from "../lib/follow.ts";
@@ -13,7 +25,9 @@ import {
   GENERATED_LABEL,
   hasListControls,
   hasReadToggle,
+  hasSortMenu,
   listKey as keyOf,
+  listSortOf,
   mergeKept,
   nextTarget,
   RECENTLY_READ_LABEL,
@@ -32,6 +46,7 @@ import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
+import { SortMenu } from "./SortMenu.tsx";
 
 export type View =
   | "unread"
@@ -148,16 +163,22 @@ export function ReaderPage({ view }: { view: View }) {
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
   const includeRead = search.get("read") === "1";
   const importantOnly = importanceFilter && search.get("min") === "4";
+  // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
+  const listViews = useListViews();
+  const viewsSettled = listViews.isSuccess || listViews.isError;
+  const sortMenu = target !== null && !isSearch && hasSortMenu(target, categories.data);
+  const sort: ListSort = target !== null && sortMenu ? listSortOf(target, listViews.data?.items, categories.data) : "newest";
+  const sortChange = useListSortChange(() => toast({ message: "並び順を保存できませんでした。もう一度試してください。" }));
 
   const filter = useMemo<ArticleListQuery>(() => {
     if (target === null) return {};
     if (isEvents) return { category: category!.id, kind: "event" };
     return {
       ...(importantOnly ? { minImportance: 4 } : {}),
-      ...targetFilter(target),
+      ...targetFilter(target, sort),
       ...(readToggle && !includeRead ? { unread: "true" as const } : {}),
     };
-  }, [target, category, isEvents, readToggle, includeRead, importantOnly]);
+  }, [target, category, isEvents, readToggle, includeRead, importantOnly, sort]);
   // The search: the words, a category by its slug or a feed by its id, and whether only unread articles count.
   const words = isSearch ? (search.get("q") ?? "").trim() : "";
   const searchSlug = isSearch ? search.get("category") : null;
@@ -182,7 +203,7 @@ export function ReaderPage({ view }: { view: View }) {
   const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = filter.recentlyRead === "true";
-  const list = useArticleList(filter, target !== null);
+  const list = useArticleList(filter, target !== null && viewsSettled);
   const active = isSearch ? results : list;
   const fetched = useMemo<ArticleSummary[]>(
     () => (isSearch ? results.data?.pages.flatMap((page) => page.items) : list.data?.pages.flatMap((page) => page.items)) ?? EMPTY,
@@ -193,12 +214,13 @@ export function ReaderPage({ view }: { view: View }) {
     [results.data],
   );
 
-  // Articles read during this visit stay in an unread list until the user changes the list or refreshes.
-  const listKey = JSON.stringify(isSearch ? searchQuery : filter);
+  // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
+  // change of order is the same list: what was kept moves to its place in the new order.
+  const listKey = JSON.stringify(isSearch ? searchQuery : { ...filter, order: undefined });
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const sortKey = target ? sortKeyFor(target) : undefined;
-  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey), [fetched, kept, listKey, sortKey]);
+  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
 
   const basePath = (target && listPathOf(target, () => category?.slug)) ?? `/${view}`;
   const query = search.toString() ? `?${search.toString()}` : "";
@@ -283,10 +305,10 @@ export function ReaderPage({ view }: { view: View }) {
 
   async function markAllRead() {
     if (!listControls) return;
-    const newest = fetched.reduce<string | null>((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null);
-    if (newest === null) return;
-    // "Before" is just after the newest article on screen, so one that arrives later stays unread.
-    const before = new Date(new Date(newest).getTime() + 1).toISOString();
+    // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
+    // marked too, whatever the order. A refetch reads the first page again, and moves the time with it.
+    const before = list.data?.pages[0]?.asOf;
+    if (before === undefined || fetched.length === 0) return;
     try {
       const result = await api.markRead({ before, ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
       refresh();
@@ -327,6 +349,17 @@ export function ReaderPage({ view }: { view: View }) {
     setSearch(next, { replace: true });
   }
   const narrowingId = useId();
+
+  /** Lists the entry in the other order, from its start; the article open stays open. */
+  function changeSort(next: ListSort) {
+    if (target === null) return;
+    sortChange.mutate({ key: keyOf(target), sort: next });
+  }
+  // A list in another order starts at its top.
+  const listScroll = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (listScroll.current) listScroll.current.scrollTop = 0;
+  }, [sort]);
   const narrowing = searchSlug !== null ? `c:${searchSlug}` : searchFeedId !== undefined ? `f:${searchFeedId}` : "";
 
   const index = items.findIndex((item) => item.id === articleId);
@@ -437,6 +470,7 @@ export function ReaderPage({ view }: { view: View }) {
           {importanceFilter ? (
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
+          {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">
@@ -468,7 +502,7 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
-      <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (

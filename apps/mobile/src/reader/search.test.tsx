@@ -175,3 +175,19 @@ describe("an article opened from the search results", () => {
     expect(within(page).queryAllByTestId("search-match")).toHaveLength(0);
   });
 });
+
+describe("the search results and the order of a list", () => {
+  it("are newest first, without the menu of the order, though the category open before is oldest first", async () => {
+    const { server, a } = await seeded();
+    await server.core("updateListView", `category-${a.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${a.id}` });
+    await waitFor(() => expect(titles()).toEqual(["電池の古い話", "News of the day"]));
+    expect(screen.getByRole("button", { name: "並び順：古い順" })).toBeOnTheScreen();
+
+    await searchFor("電池");
+
+    await screen.findByRole("header", { name: "「電池」の検索結果" });
+    await waitFor(() => expect(titles()).toEqual(["News of the day", "電池の既読の話", "電池の古い話"]));
+    expect(screen.queryByRole("button", { name: /^並び順/ })).toBeNull();
+  });
+});

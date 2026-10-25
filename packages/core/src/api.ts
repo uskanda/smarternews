@@ -300,6 +300,10 @@ export const articleSchema = articleSummarySchema.extend({
 });
 export type Article = z.infer<typeof articleSchema>;
 
+/** The order of an article list: by the time lists sort by, newest first or oldest first. */
+export const listSortSchema = z.enum(["newest", "oldest"]);
+export type ListSort = z.infer<typeof listSortSchema>;
+
 export const articleListQuerySchema = z.object({
   category: z.coerce.number().int().optional(),
   /** Only articles of feeds without a category. */
@@ -316,14 +320,29 @@ export const articleListQuerySchema = z.object({
    * with any other narrowing of the list.
    */
   recentlyRead: z.enum(["true"]).optional(),
+  /**
+   * Newest first when left out. Refused with `kind=event` and `recentlyRead=true`, whose order is fixed, even
+   * as `newest`.
+   */
+  order: listSortSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });
 export type ArticleListQuery = z.infer<typeof articleListQuerySchema>;
 
-export const articleListSchema = z.object({
+/** A page of articles and the cursor to the next one. */
+export const articlePageSchema = z.object({
   items: z.array(articleSummarySchema),
   nextCursor: z.string().nullable(),
+});
+export type ArticlePage = z.infer<typeof articlePageSchema>;
+
+export const articleListSchema = articlePageSchema.extend({
+  /**
+   * When the server read the list. Given as `before` to mark all as read, it covers the articles updated
+   * until then, whatever the order and however many pages were loaded.
+   */
+  asOf: z.string(),
 });
 export type ArticleList = z.infer<typeof articleListSchema>;
 
@@ -354,6 +373,8 @@ export type ArticleSearchHit = z.infer<typeof articleSearchHitSchema>;
 export const articleSearchResultSchema = z.object({
   items: z.array(articleSearchHitSchema),
   nextCursor: z.string().nullable(),
+  /** When the server read the result, as in the article list. */
+  asOf: z.string(),
   /** The terms as they were matched: normalized, each once. A screen marks them with `matchRanges`. */
   terms: z.array(z.string()),
 });
@@ -396,6 +417,50 @@ export const countsSchema = z.object({
   feeds: z.array(z.object({ feedId: z.number().int(), unread: z.number().int() })),
 });
 export type Counts = z.infer<typeof countsSchema>;
+
+// ---- list views --------------------------------------------------------------------------------
+
+/**
+ * An entry of the left pane and the drawer that keeps its own list view: a fixed entry, a category, the
+ * generated articles of a category, or a subscribed feed. The recently read articles keep none.
+ */
+export type ListViewTarget =
+  | { list: "unread" | "all" | "starred" | "generated" | "uncategorized" }
+  | { list: "category" | "category_generated"; categoryId: number }
+  | { list: "feed"; feedId: number };
+
+/**
+ * The entry a key names, in the form the apps make for a route: `unread`, `all`, `starred`, `generated`,
+ * `uncategorized`, `category-3`, `category-3-generated`, `feed-12`. Null for `recently-read`, which keeps no
+ * list view, and for anything else.
+ */
+export function parseListViewKey(key: string): ListViewTarget | null {
+  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { list: key };
+  const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
+  if (category) return { list: category[2] === undefined ? "category" : "category_generated", categoryId: Number(category[1]) };
+  const feed = /^feed-(\d{1,15})$/.exec(key);
+  return feed ? { list: "feed", feedId: Number(feed[1]) } : null;
+}
+
+/** The key of an entry, as `parseListViewKey` reads it. */
+export function listViewKey(target: ListViewTarget): string {
+  if (target.list === "category") return `category-${target.categoryId}`;
+  if (target.list === "category_generated") return `category-${target.categoryId}-generated`;
+  if (target.list === "feed") return `feed-${target.feedId}`;
+  return target.list;
+}
+
+/** How one entry shows its articles. An entry the server does not answer has every default: newest first. */
+export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema });
+export type ListView = z.infer<typeof listViewSchema>;
+
+/** The entries whose view differs from the defaults. */
+export const listViewsSchema = z.object({ items: z.array(listViewSchema) });
+export type ListViews = z.infer<typeof listViewsSchema>;
+
+/** A change to one entry's view. What is left out stays as it is. */
+export const listViewUpdateSchema = z.object({ sort: listSortSchema }).partial();
+export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 
 // ---- subscribed feeds --------------------------------------------------------------------------
 
@@ -760,6 +825,24 @@ const settingsFileTermGroupSchema = z.object({
 });
 export type SettingsFileTermGroup = z.infer<typeof settingsFileTermGroupSchema>;
 
+/**
+ * The entry of a list view in the file: a fixed entry by its name, a category by its slug, the generated
+ * articles of a category with `generatedOnly`, a feed by its URL.
+ */
+const settingsFileListViewTargetSchema = z.union([
+  z.enum(["unread", "all", "starred", "generated", "uncategorized"]),
+  z.object({ category: slugSchema, generatedOnly: z.boolean().optional() }).strict(),
+  z.object({ feed: feedUrlSchema }).strict(),
+]);
+export type SettingsFileListViewTarget = z.infer<typeof settingsFileListViewTargetSchema>;
+
+/** A list view in the file. A setting left out keeps the stored value; the defaults are left out when written. */
+const settingsFileListViewSchema = z.object({
+  list: settingsFileListViewTargetSchema,
+  sort: listSortSchema.optional(),
+});
+export type SettingsFileListView = z.infer<typeof settingsFileListViewSchema>;
+
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema.partial().optional(),
@@ -771,6 +854,8 @@ export const settingsFileSchema = z.object({
   stopWords: z.array(settingsFileStopWordSchema).default([]),
   /** In the order of the groups. Left out when there are none. */
   termGroups: z.array(settingsFileTermGroupSchema).default([]),
+  /** The entries whose list view differs from the defaults. Left out when there are none. */
+  listViews: z.array(settingsFileListViewSchema).default([]),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 /** The file as it is written: lists that are empty may be left out. */
@@ -786,6 +871,8 @@ export const importResultSchema = z.object({
   filtersCreated: z.number().int(),
   termGroupsCreated: z.number().int(),
   highlightTermsCreated: z.number().int(),
+  /** The entries of `listViews` that were applied. */
+  listViewsUpdated: z.number().int(),
 });
 export type ImportResult = z.infer<typeof importResultSchema>;
 

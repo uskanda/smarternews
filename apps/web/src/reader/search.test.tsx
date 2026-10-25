@@ -1,4 +1,4 @@
-import { getArticle, saveTranslatedTitle, setArticleFlags } from "@smarternews/core";
+import { getArticle, saveTranslatedTitle, setArticleFlags, updateListView } from "@smarternews/core";
 import { seedFeed, seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -252,5 +252,21 @@ describe("an article opened from the results", () => {
     const body = article().querySelector(".article-body") as HTMLElement;
     expect(body.querySelector("b")).toBeNull();
     expect(body.querySelector("img")).toBeNull();
+  });
+});
+
+describe("the results and the order of a list", () => {
+  it("are newest first, without the menu of the order, though the category open before is oldest first", async () => {
+    const { server, a } = seeded();
+    updateListView(server.db, `category-${a.id}`, { sort: "oldest" });
+    const { user } = renderApp({ server, route: `/c/${a.slug}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["電池の古い話", "News of the day"]));
+    expect(within(list()).getByRole("button", { name: "並び順：古い順" })).toBeInTheDocument();
+
+    await user.type(box(), "電池{Enter}");
+
+    await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
+    await waitFor(() => expect(rowTitles()).toEqual(["News of the day", "電池の既読の話", "電池の古い話"]));
+    expect(within(list()).queryByRole("button", { name: /^並び順/ })).not.toBeInTheDocument();
   });
 });

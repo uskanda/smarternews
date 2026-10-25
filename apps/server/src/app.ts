@@ -38,6 +38,8 @@ import {
   listCategories,
   listFeedArticles,
   listFeeds,
+  listListViews,
+  listViewUpdateSchema,
   listRunCandidates,
   listFilters,
   listFilterArticles,
@@ -81,6 +83,7 @@ import {
   updateFeed,
   updateSettings,
   updateFilter,
+  updateListView,
   updateTopic,
   zodFieldErrors,
   type ApiError,
@@ -286,7 +289,7 @@ export function createApp(deps: AppDeps): Hono {
     c.json({ updated: markArticlesUnread(db, parse(markUnreadSchema, await jsonBody(c)).ids) }),
   );
   // Plain matching against the search index: no model and no translation is involved.
-  api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()))));
+  api.get("/search", (c) => c.json(searchArticles(db, parse(articleSearchQuerySchema, c.req.query()), clock().toISOString())));
   api.get("/counts", (c) => c.json(getCounts(db, clock().toISOString())));
   api.get("/articles/:id", (c) => c.json(answered(getArticle(db, idParam(c, "article")))));
   api.patch("/articles/:id", async (c) =>
@@ -344,6 +347,12 @@ export function createApp(deps: AppDeps): Hono {
   api.delete("/filters/:id", (c) => c.json(deleteFilter(db, idParam(c, "filter"))));
   api.get("/filters/:id/articles", (c) =>
     c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
+  );
+
+  // list views: how each entry of the left pane and the drawer orders its articles, shared by both apps
+  api.get("/list-views", (c) => c.json(listListViews(db)));
+  api.patch("/list-views/:key", async (c) =>
+    c.json(updateListView(db, c.req.param("key"), parse(listViewUpdateSchema, await jsonBody(c)))),
   );
 
   // term highlights: only stored and answered here; the apps match the terms against what they show

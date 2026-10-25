@@ -101,3 +101,10 @@ termGroups:
   - name: Standards
     color: purple
     terms: [RFC]
+# List views: how an entry of the left pane and the drawer orders its articles, newest or oldest first. Only
+# the entries that are not newest first are listed. An entry is unread, all, starred, generated or
+# uncategorized; a category by its slug, with `generatedOnly: true` for its generated articles; or a feed by
+# its URL. Event categories are always ordered by start.
+listViews:
+  - list: { feed: "https://www.rfc-editor.org/rfcrss.xml" }
+    sort: oldest

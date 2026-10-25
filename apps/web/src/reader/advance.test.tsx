@@ -29,6 +29,8 @@ function seeded(advance = true) {
   seedFeedArticle(server.db, x.id, { title: "From X" });
   seedFeedArticle(server.db, y.id, { title: "From Y" });
   seedFeedArticle(server.db, p.id, { title: "From P" });
+  // The list is read a moment after the last article is stored, as it is on a server: marking it all covers them all.
+  server.clock.advance(1);
   return { server, a, b, c, x, y, p };
 }
 

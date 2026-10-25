@@ -43,6 +43,8 @@ function seeded() {
   const stray = seedFeedArticle(server.db, loose.id, { title: "Stray", at: at(10) });
   const generated = server.article(tools.id, { title: "Generated", importance: 5 });
   const carNews = server.article(cars.id, { title: "Car news" });
+  // The list is read a moment after the last article is stored, as it is on a server: marking it all covers them all.
+  server.clock.advance(1);
   return { server, tools, cars, blog, releases, loose, oldPost, newPost, release, stray, generated, carNews };
 }
 

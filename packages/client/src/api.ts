@@ -2,6 +2,7 @@
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
   articleListSchema,
+  articlePageSchema,
   articleSearchResultSchema,
   articleSchema,
   articleTranslationSchema,
@@ -14,6 +15,8 @@ import {
   feedFetchResultSchema,
   feedSchema,
   importResultSchema,
+  listViewSchema,
+  listViewsSchema,
   markReadResultSchema,
   opmlImportResultSchema,
   providerStatusSchema,
@@ -29,6 +32,7 @@ import {
   type Article,
   type ArticleList,
   type ArticleListQuery,
+  type ArticlePage,
   type ArticleSearchQuery,
   type ArticleSearchResult,
   type ArticleTranslation,
@@ -47,6 +51,9 @@ import {
   type FeedMove,
   type FeedUpdate,
   type ImportResult,
+  type ListView,
+  type ListViews,
+  type ListViewUpdate,
   type MarkRead,
   type MarkReadResult,
   type OpmlImportResult,
@@ -244,10 +251,16 @@ export function createApi(options: ApiOptions) {
     updateFilter: (id: number, patch: FilterUpdate): Promise<FilterUpdateResult> => json(filterUpdateResultSchema, `/filters/${id}`, body("PATCH", patch)),
     deleteFilter: (id: number): Promise<FilterDeleteResult> => json(filterDeleteResultSchema, `/filters/${id}`, { method: "DELETE" }),
     /** The feed articles a filter hides, newest first, a page at a time. */
-    filterArticles: (id: number, page: FilterArticlesQuery = {}): Promise<ArticleList> =>
-      json(articleListSchema, `/filters/${id}/articles${query(page)}`),
+    filterArticles: (id: number, page: FilterArticlesQuery = {}): Promise<ArticlePage> =>
+      json(articlePageSchema, `/filters/${id}/articles${query(page)}`),
     /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
     previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
+
+    /** The entries whose list view differs from the defaults. Any other entry is newest first. */
+    listViews: (): Promise<ListViews> => json(listViewsSchema, "/list-views"),
+    /** Changes the list view of the entry a key of `listKey` names. Answers with the entry's view. */
+    updateListView: (key: string, patch: ListViewUpdate): Promise<ListView> =>
+      json(listViewSchema, `/list-views/${encodeURIComponent(key)}`, body("PATCH", patch)),
 
     /** The term groups in their order, each with its terms. */
     termGroups: (): Promise<TermGroup[]> => json(z.array(termGroupSchema), "/term-groups"),

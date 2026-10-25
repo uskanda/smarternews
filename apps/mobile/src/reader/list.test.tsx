@@ -1,6 +1,7 @@
-import { fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
+import { AppState } from "react-native";
 import { renderApp } from "../testing/app";
-import { listData, MINUTE, rowTitles } from "../testing/queries";
+import { eventually, listData, MINUTE, rowTitles } from "../testing/queries";
 import { makeServer, type ArticleOverrides, type TestServer } from "../testing/server";
 
 /** Stores articles one minute apart, so that their order in a list is known. Returns their ids. */
@@ -284,5 +285,120 @@ describe("the recently read articles", () => {
     await userEvent.setup().press(await screen.findByRole("button", { name: "すべて" }));
     await screen.findByRole("header", { name: "すべて" });
     await waitFor(() => expect(row(/Generated story/).props.accessibilityLabel).toContain("。昨日。"));
+  });
+});
+
+describe("the order of a list", () => {
+  const press = async (name: string | RegExp) => userEvent.setup().press(await screen.findByRole("button", { name }));
+  const views = (server: TestServer) => server.core<{ items: Array<{ key: string; sort: string }> }>("listListViews");
+
+  /** Tools holds three generated articles a minute apart, after a feed article of the day before. */
+  async function seeded() {
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const blog = await server.feed("Blog", tools.id);
+    await server.feedArticle(blog.id, { title: "Blog post", at: "2026-02-28T12:00:00.000Z" });
+    const ids = await articles(server, tools.id, [{ title: "First" }, { title: "Second" }, { title: "Third" }]);
+    return { server, tools, blog, ids };
+  }
+
+  it("names the order in use at the top of the list: newest first for a feed never changed", async () => {
+    const { server, blog } = await seeded();
+    await renderApp({ server, url: `/list/feed-${blog.id}` });
+    await screen.findByText("Blog post");
+    expect(screen.getByRole("button", { name: "並び順：新しい順" })).toBeOnTheScreen();
+  });
+
+  it("lists the entry from its oldest article once oldest first is chosen, and stores the choice", async () => {
+    const { server, tools } = await seeded();
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
+
+    await press("並び順：新しい順");
+    expect(screen.getByRole("button", { name: "新しい順", selected: true })).toBeOnTheScreen();
+    await press("古い順");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Second", "Third"]));
+    expect(screen.getByRole("button", { name: "並び順：古い順" })).toBeOnTheScreen();
+    await eventually(async () => expect((await views(server)).items).toEqual([{ key: `category-${tools.id}`, sort: "oldest" }]));
+  });
+
+  it("is offered neither for an event category nor for the recently read articles", async () => {
+    const server = await makeServer("2026-03-10T12:00:00.000Z");
+    const events = await server.category("Local events", "event");
+    await server.article(events.id, {
+      title: "Morning class",
+      kind: "event",
+      event: { key: "class", startsAt: "2026-03-11T10:00:00.000Z", endsAt: "2026-03-11T12:00:00.000Z", venue: null, fee: null, registration: "unknown" },
+    });
+    const read = await server.article((await server.category("Tools")).id, { title: "Read one" });
+    await server.core("setArticleFlags", read, { isRead: true }, "$now");
+    await renderApp({ server, url: `/list/category-${events.id}` });
+    await screen.findByText("Morning class");
+    expect(screen.queryByRole("button", { name: /^並び順/ })).toBeNull();
+
+    await press("項目を開く");
+    await press(/^最近読んだ記事/);
+    await screen.findByText("Read one");
+    expect(screen.queryByRole("button", { name: /^並び順/ })).toBeNull();
+  });
+
+  it("opens an entry in the order stored for it, and keeps it when the read articles are added", async () => {
+    const { server, tools, ids } = await seeded();
+    await server.core("setArticleFlags", ids[1], { isRead: true }, "$now");
+    await server.core("updateListView", `category-${tools.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Third"]));
+
+    await userEvent.setup().press(screen.getByRole("switch", { name: "既読も表示" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Second", "Third"]));
+    expect(screen.getByRole("button", { name: "並び順：古い順" })).toBeOnTheScreen();
+  });
+
+  it("takes an order changed on the web page when the app comes back to the foreground", async () => {
+    const { server, tools } = await seeded();
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
+
+    await server.core("updateListView", `category-${tools.id}`, { sort: "oldest" });
+    const handlers = (AppState.addEventListener as jest.Mock).mock.calls.filter(([type]) => type === "change").map(([, handler]) => handler as (state: string) => void);
+    await act(async () => handlers.forEach((handler) => handler("background")));
+    await act(async () => handlers.forEach((handler) => handler("active")));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Second", "Third"]));
+    expect(screen.getByRole("button", { name: "並び順：古い順" })).toBeOnTheScreen();
+  });
+
+  it("adds what arrived to the end of an oldest first list when it is pulled, and keeps its top", async () => {
+    const { server, tools } = await seeded();
+    await server.core("updateListView", `category-${tools.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Second", "Third"]));
+
+    await server.article(tools.id, { title: "New 1" });
+    await server.advance(MINUTE);
+    await server.article(tools.id, { title: "New 2" });
+    const { refreshControl } = screen.getByTestId("article-list").props as { refreshControl: { props: { onRefresh: () => void } } };
+    await act(async () => refreshControl.props.onRefresh());
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Second", "Third", "New 1", "New 2"]));
+  });
+
+  it("goes back to the order it had, and says so, when the order cannot be stored", async () => {
+    const { server, tools } = await seeded();
+    let offline = false;
+    await renderApp({ server, url: `/list/category-${tools.id}`, offline: () => offline });
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
+
+    offline = true;
+    await press("並び順：新しい順");
+    await press("古い順");
+
+    expect(await screen.findByText("並び順を保存できませんでした。もう一度試してください。")).toBeOnTheScreen();
+    expect(screen.getByRole("button", { name: "並び順：新しい順" })).toBeOnTheScreen();
+    offline = false;
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
+    expect((await views(server)).items).toEqual([]);
   });
 });

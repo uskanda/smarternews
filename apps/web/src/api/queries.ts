@@ -1,4 +1,4 @@
-import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary } from "@smarternews/core/api";
+import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary, ListSort, ListViews } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { createTermMatcher, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -62,6 +62,37 @@ export function useTermGroups() {
 export function useTermMatcher(): TermMatcher {
   const groups = useTermGroups().data;
   return useMemo(() => createTermMatcher(groups ?? []), [groups]);
+}
+
+/**
+ * The list views of the entries: the order each lists its articles in. Fetched when the page loads and not
+ * again by itself, so that a change on another device does not reorder the list being read.
+ */
+export function useListViews() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["list-views"], queryFn: () => api.listViews(), staleTime: Number.POSITIVE_INFINITY });
+}
+
+/**
+ * Changes the order of an entry. The screen takes it at once, and goes back to the order it had when the
+ * server cannot store it; `onFailed` then says so.
+ */
+export function useListSortChange(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, sort }: { key: string; sort: ListSort }) => api.updateListView(key, { sort }),
+    onMutate: ({ key, sort }) => {
+      const before = client.getQueryData<ListViews>(["list-views"]);
+      const others = (before?.items ?? []).filter((view) => view.key !== key);
+      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      return { before };
+    },
+    onError: (_error, _variables, context) => {
+      client.setQueryData<ListViews>(["list-views"], context?.before ?? { items: [] });
+      onFailed();
+    },
+  });
 }
 
 export function useCounts() {

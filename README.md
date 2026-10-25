@@ -56,6 +56,7 @@ curl -s "$API/rss/all.xml?token=$FEED_TOKEN"
 The web app is a three-pane reader: views and categories on the left, the list of articles in the middle, the article on the right. On a narrow screen it shows one pane at a time. The settings offer four choices for how it looks: follow the device, light, dark, or dark blue. Following the device is the default: light on a light device, dark blue on a dark one. The choice is kept in the browser. Drag the border of the left or the middle pane to change its width, or focus the border and use the arrow keys; a double click restores the usual width. The widths are kept in the browser.
 
 - Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
+- The button "並び順" at the top of the list switches it between newest first and oldest first. Each entry of the left pane keeps its own order on the server, so the Android app opens it the same way. Oldest first goes by the same time: a generated article that a follow-up rewrites moves to the end, and new articles join at the end. In an oldest first list, "すべて既読にする" also marks the articles not loaded yet, up to the time the list was loaded. Event categories, 最近読んだ記事 and search results keep their own order.
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
 - An event category is shown as a list of upcoming events grouped by day.
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category. Feeds without a category are under "未分類".
@@ -79,6 +80,7 @@ In the drawer, a long press on a category or a feed picks it up; drag it to reor
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 
+- "並び順" at the top of a list switches it between newest first and oldest first, as on the web app, and the two share the order of each entry.
 - The button on top of a feed article fetches its full content, and switches between it and what the feed delivered once it is there.
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
 - The drawer on the left lists the same views, categories and subscribed feeds as the web app, with unread counts.

@@ -1,5 +1,5 @@
 import type {
-  ArticleList,
+  ArticlePage,
   Filter,
   FilterAction,
   FilterArticlesQuery,
@@ -346,7 +346,7 @@ export function deleteFilter(db: Database, id: number): FilterDeleteResult {
 // ---- reading what a filter hides ---------------------------------------------------------------
 
 /** The feed articles the filter counts as hidden, newest first, a page at a time like the article list. */
-export function listFilterArticles(db: Database, id: number, query: FilterArticlesQuery): ArticleList {
+export function listFilterArticles(db: Database, id: number, query: FilterArticlesQuery): ArticlePage {
   getFilter(db, id);
   return pageArticles(db, `EXISTS (SELECT 1 FROM filters f WHERE f.id = ? AND ${hiddenByFilter("f", "a")})`, [id], query);
 }

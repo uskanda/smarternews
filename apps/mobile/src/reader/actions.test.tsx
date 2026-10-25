@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
 import * as WebBrowser from "expo-web-browser";
 import { renderApp } from "../testing/app";
-import { eventually, MINUTE, rowTitles } from "../testing/queries";
+import { eventually, listData, MINUTE, rowTitles } from "../testing/queries";
 import { makeServer, type ArticleOverrides, type TestServer } from "../testing/server";
 
 async function articles(server: TestServer, categoryId: number, list: ArticleOverrides[]): Promise<number[]> {
@@ -272,6 +272,8 @@ describe("moving on after marking all as read", () => {
     const y = await server.feed("Y", a.id);
     await server.feedArticle(x.id, { title: "From X" });
     await server.feedArticle(y.id, { title: "From Y" });
+    // The list is read a moment after the last article is stored, as it is on a server: marking it all covers them all.
+    await server.advance(1);
     return { server, a, c, x, y };
   }
 
@@ -365,5 +367,28 @@ describe("putting back to unread in the recently read articles", () => {
     await eventually(async () => expect((await article(server, ids[1]!)).isRead).toBe(false));
     await press("一覧へ戻る");
     await keptThenDropped(server, ids[1]!);
+  });
+});
+
+describe("marking everything as read in a list oldest first", () => {
+  it("marks all 120 articles of which 50 are loaded, and not one that came after", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    for (let index = 0; index < 120; index += 1) {
+      await server.article(category.id, { title: `Story ${index}` });
+      await server.advance(MINUTE);
+    }
+    await server.core("updateListView", `category-${category.id}`, { sort: "oldest" });
+    await renderApp({ server, url: `/list/category-${category.id}` });
+    await waitFor(() => expect(rowTitles()[0]).toBe("Story 0"));
+    expect(listData()).toHaveLength(50);
+    await server.advance(MINUTE);
+    const late = await server.article(category.id, { title: "Arrived late" });
+
+    await press("すべて既読にする");
+
+    expect(await screen.findByText("120件を既読にしました")).toBeOnTheScreen();
+    expect((await server.core<{ unread: number }>("getCounts", server.now().toISOString())).unread).toBe(1);
+    expect((await article(server, late)).isRead).toBe(false);
   });
 });

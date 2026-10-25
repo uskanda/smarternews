@@ -7,6 +7,7 @@ import { getSettings, updateSettings } from "./db/settings.ts";
 import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
 import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
+import { getListView, listListViews, updateListView } from "./db/list-views.ts";
 import { exportSettings, importSettings } from "./settings-file.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "./testing/db.ts";
 
@@ -74,7 +75,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -455,6 +456,7 @@ describe("the example settings file", () => {
       filtersCreated: 2,
       termGroupsCreated: 2,
       highlightTermsCreated: 3,
+      listViewsUpdated: 1,
     });
     expect(listTermGroups(db).map((group) => [group.name, group.color, group.terms.map((term) => term.text)])).toEqual([
       ["Rust", "orange", ["Rust", "cargo"]],
@@ -701,5 +703,117 @@ describe("term groups in the settings file", () => {
     const other = createTestDb();
     importSettings(other, written, clock);
     expect(exportSettings(other)).toBe(written);
+  });
+});
+
+describe("list views in the settings file", () => {
+  const FEED = "https://a.example.org/feed.xml";
+  function changed() {
+    const db = createTestDb();
+    const tools = createCategory(db, { name: "Tools", slug: "tools", kind: "news" }, clock);
+    const feed = insertFeed(db, { url: FEED, title: "A", categoryId: tools.id }, clock);
+    return { db, tools, feed };
+  }
+  const views = (db: ReturnType<typeof createTestDb>) => listListViews(db).items;
+
+  it("are written for the entries that were changed, a category by its slug and a feed by its URL", () => {
+    const { db, tools, feed } = changed();
+    updateListView(db, "unread", { sort: "oldest" });
+    updateListView(db, `category-${tools.id}`, { sort: "oldest" });
+    updateListView(db, `category-${tools.id}-generated`, { sort: "oldest" });
+    updateListView(db, `feed-${feed.id}`, { sort: "oldest" });
+    updateListView(db, "starred", { sort: "oldest" });
+    updateListView(db, "starred", { sort: "newest" });
+
+    expect(parse(exportSettings(db)).listViews).toEqual([
+      { list: "unread", sort: "oldest" },
+      { list: { category: "tools" }, sort: "oldest" },
+      { list: { category: "tools", generatedOnly: true }, sort: "oldest" },
+      { list: { feed: FEED }, sort: "oldest" },
+    ]);
+  });
+
+  it("are not written by a server where nothing was changed", () => {
+    expect(parse(exportSettings(changed().db))).not.toHaveProperty("listViews");
+  });
+
+  it("tie an entry to a feed the same file subscribes to, and count what they set", () => {
+    const db = createTestDb();
+    const text = [
+      "version: 1",
+      "categories:",
+      "  - { slug: tools, name: Tools, kind: news, subscriptions: [{ url: 'https://g.example.org/feed.xml' }] }",
+      "listViews:",
+      "  - { list: { feed: 'https://g.example.org/feed.xml' }, sort: oldest }",
+      "  - { list: { category: tools, generatedOnly: true }, sort: oldest }",
+      "  - { list: all, sort: oldest }",
+    ].join("\n");
+
+    const result = importSettings(db, text, clock);
+
+    const feed = listFeeds(db)[0]!;
+    const tools = findCategoryBySlug(db, "tools")!;
+    expect(views(db)).toEqual([
+      { key: `feed-${feed.id}`, sort: "oldest" },
+      { key: `category-${tools.id}-generated`, sort: "oldest" },
+      { key: "all", sort: "oldest" },
+    ]);
+    expect(result.listViewsUpdated).toBe(3);
+  });
+
+  it("leave the entries the file does not name as they are, and take the defaults the file names", () => {
+    const { db, tools } = changed();
+    updateListView(db, "starred", { sort: "oldest" });
+    updateListView(db, `category-${tools.id}`, { sort: "oldest" });
+
+    importSettings(db, "version: 1\nlistViews: [{ list: { category: tools }, sort: newest }, { list: unread }]\n", clock);
+
+    expect(views(db)).toEqual([{ key: "starred", sort: "oldest" }]);
+    expect(parse(exportSettings(db)).listViews).toEqual([{ list: "starred", sort: "oldest" }]);
+  });
+
+  it("refuse the whole file for a category or feed found nowhere, an event category, or an entry named twice", () => {
+    const { db } = changed();
+    createCategory(db, { name: "Events", slug: "events", kind: "event" }, clock);
+    const refused: Array<[string, string]> = [
+      ["{ list: { category: nowhere }, sort: oldest }", "listViews.0.list.category"],
+      ["{ list: { feed: 'https://nowhere.example.org/feed.xml' }, sort: oldest }", "listViews.0.list.feed"],
+      ["{ list: { category: events }, sort: oldest }", "listViews.0.list.category"],
+      ["{ list: { category: events, generatedOnly: true }, sort: oldest }", "listViews.0.list.category"],
+      [`{ list: { feed: '${FEED}' }, sort: oldest }, { list: { feed: '${FEED}' }, sort: newest }`, "listViews.1.list"],
+      ["{ list: unread, sort: oldest }, { list: unread, sort: oldest }", "listViews.1.list"],
+      ["{ list: recentlyRead, sort: oldest }", "listViews.0.list"],
+      ["{ list: unread, sort: random }", "listViews.0.sort"],
+    ];
+    for (const [entries, path] of refused) {
+      const text = `version: 1\nsettings: { readerInfo: changed }\nlistViews: [${entries}]\n`;
+      expect(() => importSettings(db, text, clock), entries).toThrow(
+        expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: expect.stringMatching(new RegExp(`^${path.replaceAll(".", "\\.")}`)) })] }),
+      );
+      expect(views(db)).toEqual([]);
+      expect(getSettings(db).readerInfo).not.toBe("changed");
+    }
+  });
+
+  it("make the same file again on an empty server, with the same entries oldest first and the others newest first", () => {
+    const { db, tools, feed } = changed();
+    updateListView(db, "all", { sort: "oldest" });
+    updateListView(db, `category-${tools.id}-generated`, { sort: "oldest" });
+    updateListView(db, `feed-${feed.id}`, { sort: "oldest" });
+    const written = exportSettings(db);
+
+    const other = createTestDb();
+    importSettings(other, written, clock);
+
+    expect(exportSettings(other)).toBe(written);
+    const otherTools = findCategoryBySlug(other, "tools")!;
+    const otherFeed = listFeeds(other)[0]!;
+    expect(views(other)).toEqual([
+      { key: "all", sort: "oldest" },
+      { key: `category-${otherTools.id}-generated`, sort: "oldest" },
+      { key: `feed-${otherFeed.id}`, sort: "oldest" },
+    ]);
+    expect(getListView(other, `category-${otherTools.id}`).sort).toBe("newest");
+    expect(getListView(other, "unread").sort).toBe("newest");
   });
 });

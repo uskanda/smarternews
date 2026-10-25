@@ -20,6 +20,8 @@ import { ArticleRow } from "./ArticleRow";
 import { EventRow } from "./EventRow";
 import { listParams, listRefOf, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
 
+const SORT_LABELS = { newest: "新しい順", oldest: "古い順" } as const;
+
 function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): string {
   if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
   if (isEvents) return "これから開催されるイベントはありません。";
@@ -59,6 +61,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   const [refreshing, setRefreshing] = useState(false);
   const [menuFor, setMenuFor] = useState<ArticleSummary | null>(null);
   const [narrowing, setNarrowing] = useState(false);
+  const [sorting, setSorting] = useState(false);
   const { height: windowHeight } = useWindowDimensions();
 
   // The rows are drawn again only when their article changes, so what they call must not change either:
@@ -134,10 +137,10 @@ export function ListScreen({ search = false }: { search?: boolean }) {
   }
 
   async function markAllRead() {
-    const newest = fetched.reduce<string | null>((latest, item) => (latest === null || item.updatedAt > latest ? item.updatedAt : latest), null);
-    if (newest === null) return;
-    // "Before" is just after the newest article on screen, so one that arrives later stays unread.
-    const before = new Date(new Date(newest).getTime() + 1).toISOString();
+    // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
+    // marked too, whatever the order. A refetch reads the first page again, and moves the time with it.
+    const before = reader.asOf;
+    if (before === undefined || fetched.length === 0) return;
     try {
       const result = await api.markRead({ before, ...reader.scope, ...(reader.importantOnly ? { minImportance: 4 } : {}) });
       await reader.refresh();
@@ -247,7 +250,8 @@ export function ListScreen({ search = false }: { search?: boolean }) {
         <FlatList
           accessibilityLabel="記事の一覧"
           testID="article-list"
-          key={ref.key}
+          // Another order starts at the top as well.
+          key={`${ref.key}:${reader.sort}`}
           data={items}
           contentContainerStyle={listPadding}
           keyExtractor={(item) => String(item.id)}
@@ -273,6 +277,7 @@ export function ListScreen({ search = false }: { search?: boolean }) {
               <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: theme.spacing.lg, paddingHorizontal: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.outline }}>
                 {reader.readToggle ? <Toggle label="既読も表示" value={ref.includeRead} onChange={(on) => setFilter("read", "1", on)} /> : null}
                 {reader.importanceFilter ? <Toggle label="重要度4以上だけ" value={ref.importantOnly} onChange={(on) => setFilter("min", "4", on)} /> : null}
+                {reader.sortMenu ? <Button label={`並び順：${SORT_LABELS[reader.sort]}`} variant="quiet" onPress={() => setSorting(true)} /> : null}
                 {searchRef ? (
                   <>
                     <Button label={`絞り込み：${narrowedTo}`} variant="quiet" onPress={() => setNarrowing(true)} />
@@ -289,6 +294,22 @@ export function ListScreen({ search = false }: { search?: boolean }) {
           onEndReachedThreshold={0.5}
         />
       )}
+      <Sheet title="並び順" visible={sorting} onClose={() => setSorting(false)}>
+        <View style={{ gap: theme.spacing.sm }}>
+          {(["newest", "oldest"] as const).map((option) => (
+            <Button
+              key={option}
+              label={SORT_LABELS[option]}
+              selected={option === reader.sort}
+              onPress={() => {
+                setSorting(false);
+                if (option !== reader.sort) reader.changeSort(option);
+              }}
+            />
+          ))}
+          <Button label="閉じる" variant="quiet" onPress={() => setSorting(false)} />
+        </View>
+      </Sheet>
       <Sheet title="絞り込み" visible={narrowing} onClose={() => setNarrowing(false)}>
         {/* Many categories and feeds scroll inside the sheet, which keeps the screen above it in view. */}
         <ScrollView style={{ maxHeight: windowHeight * 0.6 }} contentContainerStyle={{ gap: theme.spacing.sm }}>

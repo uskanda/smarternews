@@ -1,6 +1,7 @@
 import { parse, stringify } from "yaml";
 import type { z } from "zod";
 import {
+  listViewKey,
   settingsFileSchema,
   type Feed,
   type FilterCondition,
@@ -11,6 +12,9 @@ import {
   type SettingsFileFilter,
   type SettingsFileFilterScope,
   type SettingsFileInput,
+  type ListViewTarget,
+  type SettingsFileListView,
+  type SettingsFileListViewTarget,
   type SettingsFileSubscription,
 } from "./api.ts";
 import type { Clock } from "./clock.ts";
@@ -18,6 +22,7 @@ import { createCategory, findCategory, findCategoryBySlug, listCategories, order
 import { transaction, type Database } from "./db/database.ts";
 import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
 import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
+import { checkListViewTarget, listViewEntries, setListView } from "./db/list-views.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
 import { normalizeForMatch } from "./search/text.ts";
@@ -59,8 +64,23 @@ function toFileFilters(db: Database): SettingsFileFilter[] {
   }));
 }
 
+/** The list views that differ from the defaults, each entry named as the file names it, the defaults left out. */
+function toFileListViews(db: Database): SettingsFileListView[] {
+  return listViewEntries(db).map(({ target, sort }) => {
+    const list: SettingsFileListViewTarget =
+      target.list === "category"
+        ? { category: findCategory(db, target.categoryId)!.slug }
+        : target.list === "category_generated"
+          ? { category: findCategory(db, target.categoryId)!.slug, generatedOnly: true }
+          : target.list === "feed"
+            ? { feed: findFeed(db, target.feedId)!.url }
+            : target.list;
+    return { list, ...(sort === "newest" ? {} : { sort }) };
+  });
+}
+
 /**
- * Writes categories, topics, subscribed feeds, filters, term groups, reader information and global settings as YAML.
+ * Writes categories, topics, subscribed feeds, filters, term groups, list views, reader information and global settings as YAML.
  * Holds no secrets, no articles and no fetch state.
  */
 export function exportSettings(db: Database): string {
@@ -71,6 +91,7 @@ export function exportSettings(db: Database): string {
   };
   const filters = toFileFilters(db);
   const termGroups = listTermGroups(db).map((group) => ({ name: group.name, color: group.color, terms: group.terms.map((term) => term.text) }));
+  const listViews = toFileListViews(db);
   const file: SettingsFileInput = {
     version: 1,
     settings: getSettings(db),
@@ -97,6 +118,7 @@ export function exportSettings(db: Database): string {
     ...subscriptionsOf(null),
     ...(filters.length > 0 ? { filters } : {}),
     ...(termGroups.length > 0 ? { termGroups } : {}),
+    ...(listViews.length > 0 ? { listViews } : {}),
   };
   return stringify(file, { lineWidth: 0 });
 }
@@ -185,7 +207,7 @@ function fromStopWord(word: SettingsFile["stopWords"][number]): SettingsFileFilt
   return { action: "hide", scope: "all", conditions: [{ fields, match: "contains", value: word.text }] };
 }
 
-function refuseFilter(path: string, message: string): DomainError {
+function refuseAt(path: string, message: string): DomainError {
   return new DomainError("invalid", `${path}: ${message}`, [{ path, message }]);
 }
 
@@ -205,11 +227,11 @@ function importFilters(db: Database, file: SettingsFile, result: ImportResult, c
     let scope: FilterScope = { type: "all" };
     if (filter.scope !== "all" && "category" in filter.scope) {
       const category = findCategoryBySlug(db, filter.scope.category);
-      if (!category) throw refuseFilter(`${path}.scope.category`, `no category "${filter.scope.category}" in the file or on the server`);
+      if (!category) throw refuseAt(`${path}.scope.category`, `no category "${filter.scope.category}" in the file or on the server`);
       scope = { type: "category", categoryId: category.id };
     } else if (filter.scope !== "all") {
       const feed = findFeedByUrl(db, filter.scope.feed);
-      if (!feed) throw refuseFilter(`${path}.scope.feed`, `no feed ${filter.scope.feed} in the file or on the server`);
+      if (!feed) throw refuseAt(`${path}.scope.feed`, `no feed ${filter.scope.feed} in the file or on the server`);
       scope = { type: "feed", feedId: feed.id };
     }
     const input: FilterCreate = { action: filter.action, scope, conditions: filter.conditions, enabled: filter.enabled ?? true };
@@ -248,8 +270,39 @@ function importTermGroups(db: Database, file: SettingsFile, result: ImportResult
 }
 
 /**
+ * Stores the list views of the file, once its categories and feeds are stored: a category is tied to the one
+ * of that slug, a feed to the one of that URL, on the server. An entry found nowhere, an event category, and
+ * an entry named twice refuse the file. What an entry leaves out, and every entry the file does not name, stays.
+ */
+function importListViews(db: Database, file: SettingsFile, result: ImportResult): void {
+  const seen = new Set<string>();
+  file.listViews.forEach((entry, index) => {
+    const path = `listViews.${index}.list`;
+    let target: ListViewTarget;
+    if (typeof entry.list === "string") {
+      target = { list: entry.list };
+    } else if ("category" in entry.list) {
+      const category = findCategoryBySlug(db, entry.list.category);
+      if (!category) throw refuseAt(`${path}.category`, `no category "${entry.list.category}" in the file or on the server`);
+      if (category.kind === "event") throw refuseAt(`${path}.category`, `"${category.slug}" is an event category, which lists its events by start`);
+      target = { list: entry.list.generatedOnly ? "category_generated" : "category", categoryId: category.id };
+    } else {
+      const feed = findFeedByUrl(db, entry.list.feed);
+      if (!feed) throw refuseAt(`${path}.feed`, `no feed ${entry.list.feed} in the file or on the server`);
+      target = { list: "feed", feedId: feed.id };
+    }
+    const key = listViewKey(target);
+    if (seen.has(key)) throw refuseAt(path, "the entry is named twice");
+    seen.add(key);
+    checkListViewTarget(db, target);
+    setListView(db, target, entry.sort === undefined ? {} : { sort: entry.sort });
+    result.listViewsUpdated += 1;
+  });
+}
+
+/**
  * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL,
- * filters by action, scope and conditions, and term groups by name; whatever the file does not mention stays
+ * filters by action, scope and conditions, term groups by name, and list views by their entry; whatever the file does not mention stays
  * as it is. Nothing is stored when any part of the file is refused.
  */
 export function importSettings(db: Database, text: string, clock: Clock): ImportResult {
@@ -264,6 +317,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     filtersCreated: 0,
     termGroupsCreated: 0,
     highlightTermsCreated: 0,
+    listViewsUpdated: 0,
   };
   transaction(db, () => {
     if (file.settings) updateSettings(db, file.settings);
@@ -308,6 +362,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
 
     importFilters(db, file, result, clock);
     importTermGroups(db, file, result, clock);
+    importListViews(db, file, result);
   });
   return result;
 }

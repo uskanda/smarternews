@@ -1,6 +1,6 @@
-import type { Category, Counts, Feed } from "@smarternews/core/api";
+import { parseListViewKey, type Category, type Counts, type Feed } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
-import { buildNav, hasListControls, hasReadToggle, listKey, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
+import { buildNav, hasListControls, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
 
 const category = (id: number, name: string, overrides: Partial<Category> = {}): Category => ({
   id,
@@ -176,5 +176,50 @@ describe("what a list asks the server for", () => {
     expect(hasListControls({ type: "category", categoryId: 7, generatedOnly: false })).toBe(true);
     expect(hasListControls({ type: "feed", feedId: 1 })).toBe(true);
     expect(hasListControls({ type: "recentlyRead" })).toBe(false);
+  });
+});
+
+describe("the order of a list", () => {
+  const categories = [category(1, "Tools"), category(2, "Events", { kind: "event" })];
+  const views = [
+    { key: "feed-12", sort: "oldest" as const },
+    { key: "category-1", sort: "oldest" as const },
+    // The server would refuse these; a list whose order is fixed ignores them all the same.
+    { key: "category-2", sort: "oldest" as const },
+    { key: "recently-read", sort: "oldest" as const },
+  ];
+
+  it("follows the view of the entry, and is newest first for an entry without one", () => {
+    expect(listSortOf({ type: "feed", feedId: 12 }, views, categories)).toBe("oldest");
+    expect(listSortOf({ type: "category", categoryId: 1, generatedOnly: false }, views, categories)).toBe("oldest");
+    expect(listSortOf({ type: "category", categoryId: 1, generatedOnly: true }, views, categories)).toBe("newest");
+    expect(listSortOf({ type: "unread" }, views, categories)).toBe("newest");
+    expect(listSortOf({ type: "unread" }, undefined, categories)).toBe("newest");
+  });
+
+  it("is newest first, without a menu, for an event category and the recently read articles", () => {
+    expect(listSortOf({ type: "category", categoryId: 2, generatedOnly: false }, views, categories)).toBe("newest");
+    expect(listSortOf({ type: "recentlyRead" }, views, categories)).toBe("newest");
+    expect(hasSortMenu({ type: "category", categoryId: 2, generatedOnly: false }, categories)).toBe(false);
+    expect(hasSortMenu({ type: "recentlyRead" }, categories)).toBe(false);
+    for (const target of [{ type: "unread" }, { type: "all" }, { type: "starred" }, { type: "generated" }, { type: "uncategorized" }, { type: "feed", feedId: 12 }, { type: "category", categoryId: 1, generatedOnly: false }, { type: "category", categoryId: 1, generatedOnly: true }] as ListTarget[]) {
+      expect(hasSortMenu(target, categories)).toBe(true);
+    }
+  });
+
+  it("is asked of the server only when it is oldest first", () => {
+    expect(targetFilter({ type: "feed", feedId: 12 }, "oldest")).toEqual({ feed: 12, order: "oldest" });
+    expect(targetFilter({ type: "feed", feedId: 12 }, "newest")).toEqual({ feed: 12 });
+    expect(targetFilter({ type: "unread" })).toEqual({ unread: "true" });
+  });
+
+  it("is kept under a key the server reads for every entry of the list but the recently read articles", () => {
+    const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(12, "A", 1), feed(13, "B", null)], counts });
+    const keys = [...model.views, ...model.groups.flatMap((group) => [group.entry, ...group.children])].map((entry) => listKey(entry.target));
+    expect(keys).toEqual(["unread", "all", "starred", "generated", "recently-read", "category-1", "category-1-generated", "feed-12", "uncategorized", "feed-13"]);
+    for (const key of keys) {
+      if (key === "recently-read") expect(parseListViewKey(key)).toBeNull();
+      else expect(parseListViewKey(key), key).not.toBeNull();
+    }
   });
 });

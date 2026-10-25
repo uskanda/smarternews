@@ -127,7 +127,7 @@ describe("the API client", () => {
     server.category("Security");
     const text = await api.exportSettings();
     expect(text).toContain("slug: security");
-    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0 });
+    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
   });
 
   it("subscribes to a feed, changes it, fetches it now and deletes it", async () => {
@@ -347,5 +347,32 @@ describe("term groups", () => {
       onUnauthorized: () => {},
     });
     await expect(api.termGroups()).rejects.toBeInstanceOf(Error);
+  });
+});
+
+describe("list views", () => {
+  it("are read, and one entry is changed, in the shared shape", async () => {
+    const { api, seen } = setup();
+    expect(await api.listViews()).toEqual({ items: [] });
+    expect(seen.at(-1)!.url).toBe("/api/v1/list-views");
+
+    expect(await api.updateListView("unread", { sort: "oldest" })).toEqual({ key: "unread", sort: "oldest" });
+    expect(seen.at(-1)!.url).toBe("/api/v1/list-views/unread");
+    expect(await api.listViews()).toEqual({ items: [{ key: "unread", sort: "oldest" }] });
+    await expect(api.updateListView("recently-read", { sort: "oldest" })).rejects.toMatchObject({ kind: "invalid" });
+  });
+
+  it("order the article list when the list sends its order, and the answer says when it was read", async () => {
+    const { server, api, seen } = setup();
+    const category = server.category();
+    const older = server.article(category.id);
+    server.clock.advance(60_000);
+    const newer = server.article(category.id);
+
+    const list = await api.articles({ category: category.id, order: "oldest" });
+
+    expect(seen.at(-1)!.url).toBe(`/api/v1/articles?category=${category.id}&order=oldest`);
+    expect(list.items.map((item) => item.id)).toEqual([older, newer]);
+    expect(list.asOf).toBe(server.clock().toISOString());
   });
 });

@@ -76,6 +76,63 @@ describe("GET /api/v1/articles", () => {
   });
 });
 
+describe("oldest first and the time a list was read", () => {
+  it("pages oldest first, and refuses a cursor of the other order and an order for events", async () => {
+    const s = testServer();
+    const category = s.category();
+    const ids: number[] = [];
+    for (let index = 0; index < 120; index += 1) {
+      ids.push(s.article(category.id));
+      if (index % 3 === 0) s.clock.advance(MINUTE);
+    }
+    const pages: number[][] = [];
+    let cursor: string | null = null;
+    do {
+      const body = (await (await s.get(`/api/v1/articles?order=oldest&limit=50${cursor ? `&cursor=${cursor}` : ""}`)).json()) as {
+        items: Array<{ id: number }>;
+        nextCursor: string | null;
+      };
+      pages.push(body.items.map((item) => item.id));
+      cursor = body.nextCursor;
+    } while (cursor);
+    expect(pages.map((page) => page.length)).toEqual([50, 50, 20]);
+    expect(pages.flat()).toEqual(ids);
+
+    const newest = (await (await s.get("/api/v1/articles?limit=50")).json()) as { nextCursor: string };
+    expect((await s.get(`/api/v1/articles?order=oldest&cursor=${newest.nextCursor}`)).status).toBe(400);
+    expect((await s.get("/api/v1/articles?kind=event&order=oldest")).status).toBe(400);
+    expect((await s.get("/api/v1/articles?recentlyRead=true&order=newest")).status).toBe(400);
+    expect((await s.get("/api/v1/articles?order=random")).status).toBe(400);
+  });
+
+  it("marks all 120 articles read with the time of a list oldest first of which only 50 were read, and not one that came later", async () => {
+    const s = testServer();
+    const category = s.category();
+    for (let index = 0; index < 120; index += 1) {
+      s.article(category.id);
+      s.clock.advance(MINUTE);
+    }
+    const first = await (await s.get(`/api/v1/articles?category=${category.id}&unread=true&order=oldest&limit=50`)).json();
+    expect(first.items).toHaveLength(50);
+    expect(first.asOf).toBe(s.clock().toISOString());
+    s.clock.advance(MINUTE);
+    const later = s.article(category.id);
+
+    const marked = await (await s.post("/api/v1/articles/mark-read", { categoryId: category.id, before: first.asOf })).json();
+
+    expect(marked.updated).toBe(120);
+    const unread = await (await s.get(`/api/v1/articles?category=${category.id}&unread=true`)).json();
+    expect(unread.items.map((item: { id: number }) => item.id)).toEqual([later]);
+  });
+
+  it("says when the recently read articles and a search were read", async () => {
+    const s = testServer();
+    s.article(s.category().id, { title: "電池の話" });
+    expect((await (await s.get("/api/v1/articles?recentlyRead=true")).json()).asOf).toBe(s.clock().toISOString());
+    expect((await (await s.get("/api/v1/search?q=電池")).json()).asOf).toBe(s.clock().toISOString());
+  });
+});
+
 describe("GET /api/v1/articles/:id", () => {
   it("returns an updated article with its revision, new body and every reference", async () => {
     const s = testServer();

@@ -450,3 +450,120 @@ describe("the list of recently read articles", () => {
     expect(() => listArticles(s.db, { recentlyRead: "true", includeEnded: "false", limit: 10 }, NOW)).not.toThrow();
   });
 });
+
+describe("the list oldest first", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function listing() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const article = (title: string, at: string) => generated(db, category, { title }, at);
+    const titles = (query: ArticleListQuery) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, article, titles };
+  }
+
+  it("orders by the time lists sort by, oldest first, and leaves the newest first list as it was", () => {
+    const s = listing();
+    s.article("A", ago(HOUR));
+    s.article("B", ago(48 * HOUR));
+    s.article("C", ago(HOUR / 2));
+    expect(s.titles({ order: "oldest" })).toEqual(["B", "A", "C"]);
+    expect(s.titles({})).toEqual(["C", "A", "B"]);
+    expect(s.titles({ order: "newest" })).toEqual(["C", "A", "B"]);
+  });
+
+  it("orders a feed article by its sort time among the generated ones, narrowed as the newest first list is", () => {
+    const s = listing();
+    s.article("Generated", ago(3 * HOUR));
+    const feed = seedFeed(s.db, { categoryId: s.category });
+    seedFeedArticle(s.db, feed, { title: "Feed", at: ago(5 * HOUR) });
+    seedFeedArticle(s.db, feed, { title: "Read feed", at: ago(4 * HOUR), isRead: true });
+    expect(s.titles({ category: s.category, order: "oldest" })).toEqual(["Feed", "Read feed", "Generated"]);
+    expect(s.titles({ category: s.category, unread: "true", order: "oldest" })).toEqual(["Feed", "Generated"]);
+  });
+
+  it("moves a generated article that a follow-up updates to the end", () => {
+    const s = listing();
+    const old = s.article("Two days old", ago(48 * HOUR));
+    s.article("An hour old", ago(HOUR));
+    reviseArticle(s.db, old, {
+      title: "Two days old, followed up",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: NOW,
+      refs: [],
+      topicIds: [],
+    });
+    expect(s.titles({ order: "oldest" })).toEqual(["An hour old", "Two days old, followed up"]);
+  });
+
+  it("pages oldest first without repeating or skipping articles of the same time", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) s.article(`#${index}`, ago(index < 60 ? 200 * 60_000 : (120 - index) * 60_000));
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    const times: string[] = [];
+    let cursor: string | undefined;
+    let last: ReturnType<typeof listArticles> | undefined;
+    do {
+      last = listArticles(s.db, { order: "oldest", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(last.items.length);
+      seen.push(...last.items.map((item) => item.title));
+      times.push(...last.items.map((item) => item.updatedAt));
+      cursor = last.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    expect(times).toEqual([...times].sort());
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it("reads a cursor without a direction as newest first, and refuses a cursor of the other direction", () => {
+    const s = listing();
+    for (let index = 0; index < 5; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR));
+    const newest = listArticles(s.db, { limit: 2 }, NOW);
+    const oldest = listArticles(s.db, { order: "oldest", limit: 2 }, NOW);
+    // A cursor this server issued before lists had an order: the time and the id, nothing else.
+    const legacy = Buffer.from(JSON.stringify([newest.items[1]!.updatedAt, newest.items[1]!.id])).toString("base64url");
+
+    expect(listArticles(s.db, { limit: 2, cursor: legacy }, NOW).items.map((item) => item.title)).toEqual(["#2", "#3"]);
+    expect(listArticles(s.db, { limit: 2, cursor: newest.nextCursor! }, NOW).items.map((item) => item.title)).toEqual(["#2", "#3"]);
+    expect(listArticles(s.db, { order: "oldest", limit: 2, cursor: oldest.nextCursor! }, NOW).items.map((item) => item.title)).toEqual(["#2", "#1"]);
+
+    for (const query of [
+      { order: "oldest", cursor: newest.nextCursor! },
+      { order: "oldest", cursor: legacy },
+      { cursor: oldest.nextCursor! },
+      { order: "newest", cursor: oldest.nextCursor! },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid" }));
+    }
+  });
+
+  it("refuses an order for the list of events and the recently read articles, even newest first", () => {
+    const s = listing();
+    for (const query of [
+      { kind: "event", order: "oldest" },
+      { kind: "event", order: "newest" },
+      { recentlyRead: "true", order: "oldest" },
+      { recentlyRead: "true", order: "newest" },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "order" })] }));
+    }
+  });
+
+  it("says when the list was read, whatever the order and the page", () => {
+    const s = listing();
+    for (let index = 0; index < 3; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR));
+    expect(listArticles(s.db, { order: "oldest", limit: 1 }, NOW).asOf).toBe(NOW);
+    expect(listArticles(s.db, {}, NOW).asOf).toBe(NOW);
+    expect(listArticles(s.db, { kind: "event" }, NOW).asOf).toBe(NOW);
+    expect(listArticles(s.db, { recentlyRead: "true" }, NOW).asOf).toBe(NOW);
+  });
+});
