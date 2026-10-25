@@ -14,6 +14,7 @@ import {
   feedDiscoveryResultSchema,
   feedFetchResultSchema,
   feedSchema,
+  feedStatsSchema,
   importResultSchema,
   listViewSchema,
   listViewsSchema,
@@ -49,6 +50,7 @@ import {
   type FeedDiscoveryResult,
   type FeedFetchResult,
   type FeedMove,
+  type FeedStats,
   type FeedUpdate,
   type ImportResult,
   type ListView,
@@ -228,6 +230,12 @@ export function createApi(options: ApiOptions) {
     translateArticle: (id: number): Promise<ArticleTranslation> => json(articleTranslationSchema, `/articles/${id}/translation`, { method: "POST" }),
     /** Fetches the full content of a feed article from its page. Answers once the fetch is over, which can take seconds. */
     fetchFullContent: (id: number): Promise<FullContentResult> => json(fullContentResultSchema, `/articles/${id}/full-content`, { method: "POST" }),
+    /**
+     * Records that the article's body is shown to the reader. Only a screen that shows the body sends it; marking
+     * read is a separate request. Answers with the time of the first opening.
+     */
+    openArticle: (id: number): Promise<{ openedAt: string }> =>
+      json(z.object({ openedAt: z.string() }), `/articles/${id}/open`, { method: "POST" }),
     markRead: (input: MarkRead): Promise<MarkReadResult> => json(markReadResultSchema, "/articles/mark-read", body("POST", input)),
     /**
      * Marks read the articles as a screen showed them, each with the `updatedAt` it had on screen: one that a
@@ -250,6 +258,8 @@ export function createApi(options: ApiOptions) {
     /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
     moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),
     deleteFeed: async (id: number): Promise<void> => void (await request(`/feeds/${id}`, { method: "DELETE" })),
+    /** What became of the articles the feed delivered in the last 30 days. */
+    feedStats: (id: number): Promise<FeedStats> => json(feedStatsSchema, `/feeds/${id}/stats`),
     fetchFeed: (id: number): Promise<FeedFetchResult> => json(feedFetchResultSchema, `/feeds/${id}/fetch`, { method: "POST" }),
     exportOpml: async (): Promise<string> => (await request("/feeds/opml")).text(),
     importOpml: (text: string): Promise<OpmlImportResult> =>

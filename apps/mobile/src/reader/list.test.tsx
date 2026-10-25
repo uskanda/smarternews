@@ -450,6 +450,19 @@ describe("marking read what the list is scrolled past", () => {
     expect(screen.queryByRole("button", { name: "取り消す" })).toBeNull();
   });
 
+  it("records no opening for the rows it marks read", async () => {
+    await chooseScrollRead(true);
+    const { server, security, rows } = await seeded();
+    const { requests } = await open(server, `/list/category-${security.id}`);
+
+    await show(3);
+
+    await eventually(async () => expect(await Promise.all(rows.slice(0, 3).map((id) => isRead(server, id)))).toEqual([true, true, true]));
+    const opened = await Promise.all(rows.slice(0, 3).map(async (id) => (await server.core<{ openedAt: string | null }>("getArticle", id)).openedAt));
+    expect(opened).toEqual([null, null, null]);
+    expect(requests.filter((request) => request.endsWith("/open"))).toEqual([]);
+  });
+
   it("leaves unread a row that is partly on screen", async () => {
     await chooseScrollRead(true);
     const { server, security, rows } = await seeded();

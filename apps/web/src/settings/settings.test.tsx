@@ -1,4 +1,4 @@
-import { applyInterpretation, createTopic, getCategory, getSettings, getTopic, listCategories, listTopics, updateCategory } from "@smarternews/core";
+import { applyInterpretation, createTopic, getCategory, getSettings, getTopic, insertFeed, listCategories, listTopics, updateCategory } from "@smarternews/core";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
@@ -619,5 +619,50 @@ describe("the settings of this device", () => {
 
     renderApp({ route: "/settings", server: first.server });
     expect(await toggle()).toBeChecked();
+  });
+});
+
+describe("the days after which a feed counts as stale", () => {
+  const label = "更新が止まったとみなす日数";
+
+  it("shows 60 on a server that never changed it", async () => {
+    renderApp({ server: makeServer(), route: "/settings" });
+    const global = await section("全体設定");
+    expect(within(global).getByLabelText(label)).toHaveValue(60);
+  });
+
+  it("is saved, and the list of feeds then drops the mark of a feed without new items for 61 days", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
+    server.db
+      .prepare("UPDATE feeds SET created_at = ?, last_new_item_at = ? WHERE id = ?")
+      .run("2025-01-01T00:00:00.000Z", new Date(server.clock().getTime() - 61 * 86_400_000).toISOString(), feed.id);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+    const row = async () => (await within(await section("購読フィードの一覧")).findByText("Blog")).closest("li")!;
+    expect(await row()).toHaveTextContent("更新が止まっています");
+
+    await user.click(screen.getByRole("link", { name: "設定へ戻る" }));
+    const global = await section("全体設定");
+    const field = within(global).getByLabelText(label);
+    await user.clear(field);
+    await user.type(field, "90");
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(90));
+
+    await user.click(await screen.findByRole("link", { name: "購読フィードを設定する" }));
+    await waitFor(async () => expect(await row()).not.toHaveTextContent("更新が止まっています"));
+  });
+
+  it("is not saved outside 1 to 365, and the field says what is allowed", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const field = within(global).getByLabelText(label);
+    await user.clear(field);
+    await user.type(field, "0");
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    expect(await within(global).findByText("1から365までの日数を入れてください。")).toBeInTheDocument();
+    expect(field).toHaveAccessibleDescription(/1から365までの日数/);
+    expect(getSettings(server.db).staleFeedDays).toBe(60);
   });
 });

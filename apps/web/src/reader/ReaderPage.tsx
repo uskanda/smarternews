@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   useArticle,
   useArticleFlags,
+  useRecordOpened,
   useArticleList,
   useArticleSearch,
   useCategories,
@@ -307,12 +308,15 @@ export function ReaderPage({ view }: { view: View }) {
   useEffect(() => setDeliveredShown(null), [articleId]);
 
   // Opening an unread article marks it as read, once per visit to that article. An article that waits for its
-  // full content has it asked for: once read, it would no longer be fetched by itself.
+  // full content has it asked for: once read, it would no longer be fetched by itself. Its body is shown now, so
+  // the server records the opening; marking read anywhere else does not.
   const opened = useArticle(articleId).data;
+  const recordOpened = useRecordOpened();
   const autoMarked = useRef<number | null>(null);
   useEffect(() => {
     if (!opened || autoMarked.current === opened.id) return;
     autoMarked.current = opened.id;
+    recordOpened(opened);
     if (opened.fullContentStatus === "waiting") fullContent.fetch(opened.id);
     if (!opened.isRead) setRead(opened, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when another article is opened, not on every change

@@ -1335,3 +1335,100 @@ describe("marking read what the list is scrolled past", () => {
     expect(row(/Story 4/)).toHaveAttribute("data-read", "true");
   });
 });
+
+describe("recording that an article was opened", () => {
+  /** Counts the requests that record an opening; `fail` makes them answer with a server error. */
+  function watchOpens(server: TestServer, options: { fail?: boolean } = {}) {
+    const opens: string[] = [];
+    const original = server.app.request.bind(server.app);
+    server.app.request = ((input: string, init?: RequestInit) => {
+      if (/\/articles\/\d+\/open$/.test(String(input))) {
+        opens.push(String(input));
+        if (options.fail) return Promise.resolve(new Response(JSON.stringify({ error: { code: "internal", message: "boom" } }), { status: 500 }));
+      }
+      return original(input, init);
+    }) as typeof server.app.request;
+    onTestFinished(() => {
+      server.app.request = original;
+    });
+    return opens;
+  }
+
+  it("records an article chosen in the list once, also when it is opened again", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const [first, second] = articles(server, category.id, [{ title: "First" }, { title: "Second" }]);
+    const opens = watchOpens(server);
+    const { user } = renderApp({ server, route: "/c/security" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    await waitFor(() => expect(getArticle(server.db, first!).openedAt).toBe(server.clock().toISOString()));
+    expect(getArticle(server.db, first!).isRead).toBe(true);
+
+    await user.click(screen.getByRole("link", { name: /Second/ }));
+    await waitFor(() => expect(getArticle(server.db, second!).openedAt).not.toBeNull());
+    await user.click(screen.getByRole("link", { name: /First/ }));
+    await screen.findByRole("heading", { level: 2, name: "First" });
+    await waitFor(() => expect(getArticle(server.db, first!).isRead).toBe(true));
+    expect(opens.filter((path) => path.endsWith(`/articles/${first}/open`))).toHaveLength(1);
+  });
+
+  it("records the next article that j moves to", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const [older, newer] = articles(server, category.id, [{ title: "Older" }, { title: "Newer" }]);
+    const { user } = renderApp({ server, route: "/c/security" });
+    await screen.findByRole("link", { name: /Newer/ });
+
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Newer" })).toBeInTheDocument();
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Older" })).toBeInTheDocument();
+    await waitFor(() => expect([newer, older].map((id) => getArticle(server.db, id!).openedAt === null)).toEqual([false, false]));
+  });
+
+  it("records an article read by mark all as read once it is opened from the recently read articles", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const [id] = articles(server, category.id, [{ title: "Read in bulk" }]);
+    markArticlesRead(server.db, { categoryId: category.id, before: server.clock().toISOString() }, server.clock().toISOString());
+    const { user } = renderApp({ server });
+
+    await user.click(await within(nav()).findByRole("link", { name: "最近読んだ記事" }));
+    await user.click(await screen.findByRole("link", { name: /Read in bulk/ }));
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Read in bulk" })).toBeInTheDocument();
+    await waitFor(() => expect(getArticle(server.db, id!).openedAt).not.toBeNull());
+  });
+
+  it("records nothing when the list is marked read without opening an article", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const ids = articles(server, category.id, [{ title: "One" }, { title: "Two" }, { title: "Three" }]);
+    const opens = watchOpens(server);
+    const { user } = renderApp({ server, route: "/c/security" });
+    await screen.findByRole("link", { name: /Three/ });
+
+    await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true, true]));
+    expect(ids.map((id) => getArticle(server.db, id).openedAt)).toEqual([null, null, null]);
+    expect(opens).toEqual([]);
+  });
+
+  it("shows the article and marks it read without a word about it when the record fails", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const [id] = articles(server, category.id, [{ title: "First", body: "The body of the first." }]);
+    const opens = watchOpens(server, { fail: true });
+    const { user } = renderApp({ server, route: "/c/security" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+
+    expect(await within(article()).findByText("The body of the first.")).toBeInTheDocument();
+    await waitFor(() => expect(getArticle(server.db, id!).isRead).toBe(true));
+    await waitFor(() => expect(opens).toHaveLength(1));
+    expect(getArticle(server.db, id!).openedAt).toBeNull();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

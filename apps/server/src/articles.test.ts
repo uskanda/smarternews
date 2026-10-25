@@ -500,3 +500,45 @@ describe("read times and the recently read articles", () => {
     expect((await response.json()).error.fields[0].path).toBe("category");
   });
 });
+
+describe("POST /api/v1/articles/:id/open", () => {
+  it("records the server's time the first time, answers the first time after that, and leaves the article unread", async () => {
+    const s = testServer();
+    const category = s.category();
+    const id = s.article(category.id);
+    const openedAt = s.clock().toISOString();
+
+    const first = await s.post(`/api/v1/articles/${id}/open`);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ openedAt });
+    s.clock.advance(MINUTE);
+    expect(await (await s.post(`/api/v1/articles/${id}/open`)).json()).toEqual({ openedAt });
+
+    expect(await (await s.get(`/api/v1/articles/${id}`)).json()).toMatchObject({ isRead: false, openedAt });
+    expect((await (await s.get("/api/v1/counts")).json()).unread).toBe(1);
+  });
+
+  it("is set neither by reading nor by mark all as read, and both lists and the detail give it", async () => {
+    const s = testServer();
+    const category = s.category();
+    const opened = s.article(category.id);
+    const bulk = s.article(category.id);
+    const openedAt = s.clock().toISOString();
+    await s.post(`/api/v1/articles/${opened}/open`);
+    s.clock.advance(MINUTE);
+    await s.patch(`/api/v1/articles/${opened}`, { isRead: true });
+    await s.post("/api/v1/articles/mark-read", { before: s.clock().toISOString() });
+
+    const items = (await (await s.get("/api/v1/articles?unread=false")).json()).items as Array<{ id: number; openedAt: string | null }>;
+    expect(items.find((item) => item.id === opened)!.openedAt).toBe(openedAt);
+    expect(items.find((item) => item.id === bulk)!.openedAt).toBeNull();
+    expect((await (await s.get(`/api/v1/articles/${bulk}`)).json()).openedAt).toBeNull();
+  });
+
+  it("answers 404 for an article that does not exist", async () => {
+    const s = testServer();
+    const response = await s.post("/api/v1/articles/999/open");
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+  });
+});

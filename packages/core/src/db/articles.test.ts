@@ -14,6 +14,7 @@ import {
   markArticlesUnread,
   markSeenArticlesRead,
   nextArticleToSummarize,
+  recordArticleOpened,
   openEventArticles,
   recentNewsArticles,
   reviseArticle,
@@ -620,5 +621,109 @@ describe("the list oldest first", () => {
     expect(listArticles(s.db, {}, NOW).asOf).toBe(NOW);
     expect(listArticles(s.db, { kind: "event" }, NOW).asOf).toBe(NOW);
     expect(listArticles(s.db, { recentlyRead: "true" }, NOW).asOf).toBe(NOW);
+  });
+});
+
+describe("open times", () => {
+  const TEN = "2026-03-01T10:00:00.000Z";
+  const ELEVEN = "2026-03-01T11:00:00.000Z";
+  const NOON = "2026-03-01T12:00:00.000Z";
+
+  function opening() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const feed = seedFeed(db, { categoryId: category });
+    const openedAt = (id: number) => getArticle(db, id).openedAt;
+    return { db, category, feed, openedAt, generated: () => generated(db, category, {}, "2026-03-01T00:00:00.000Z") };
+  }
+
+  it("records when a feed article and a generated one are first opened, and keeps that time", () => {
+    const s = opening();
+    const feedArticle = seedFeedArticle(s.db, s.feed);
+    const generatedArticle = s.generated();
+    expect(s.openedAt(feedArticle)).toBeNull();
+
+    expect(recordArticleOpened(s.db, feedArticle, TEN)).toBe(TEN);
+    expect(recordArticleOpened(s.db, generatedArticle, TEN)).toBe(TEN);
+    expect(recordArticleOpened(s.db, feedArticle, ELEVEN)).toBe(TEN);
+    expect(s.openedAt(feedArticle)).toBe(TEN);
+    expect(s.openedAt(generatedArticle)).toBe(TEN);
+  });
+
+  it("leaves read and unread as they are, and records an article that is read already", () => {
+    const s = opening();
+    const unread = seedFeedArticle(s.db, s.feed);
+    const read = seedFeedArticle(s.db, s.feed, { isRead: true });
+    recordArticleOpened(s.db, unread, TEN);
+    recordArticleOpened(s.db, read, TEN);
+    expect(getArticle(s.db, unread)).toMatchObject({ isRead: false, readAt: null, openedAt: TEN });
+    expect(getArticle(s.db, read)).toMatchObject({ isRead: true, openedAt: TEN });
+    expect(getCounts(s.db, NOON).unread).toBe(1);
+  });
+
+  it("refuses an article that does not exist", () => {
+    const s = opening();
+    expect(() => recordArticleOpened(s.db, 999, TEN)).toThrow(expect.objectContaining({ code: "not_found" }));
+  });
+
+  it("is set by none of the ways of marking read: one article, mark all as read, what a screen showed, duplicates", () => {
+    const s = opening();
+    const one = seedFeedArticle(s.db, s.feed);
+    setArticleFlags(s.db, one, { isRead: true }, TEN);
+    const all = [seedFeedArticle(s.db, s.feed), seedFeedArticle(s.db, s.feed), seedFeedArticle(s.db, s.feed)];
+    markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN);
+    const shown = seedFeedArticle(s.db, s.feed);
+    markSeenArticlesRead(s.db, [{ id: shown, updatedAt: getArticle(s.db, shown).updatedAt }], NOON);
+    const other = seedFeed(s.db);
+    const kept = seedFeedArticle(s.db, s.feed);
+    const copy = seedFeedArticle(s.db, other, { duplicateOf: kept });
+    recordArticleOpened(s.db, kept, NOON);
+    setArticleFlags(s.db, kept, { isRead: true }, NOON);
+
+    expect(getArticle(s.db, copy)).toMatchObject({ isRead: true, openedAt: null });
+    expect([one, ...all, shown].map(s.openedAt)).toEqual([null, null, null, null, null]);
+  });
+
+  it("is kept when the article is put back to unread, alone or by undoing mark all as read, and by a follow-up", () => {
+    const s = opening();
+    const one = seedFeedArticle(s.db, s.feed);
+    recordArticleOpened(s.db, one, TEN);
+    setArticleFlags(s.db, one, { isRead: true }, TEN);
+    setArticleFlags(s.db, one, { isRead: false }, NOON);
+    expect(getArticle(s.db, one)).toMatchObject({ isRead: false, readAt: null, openedAt: TEN });
+
+    const undone = seedFeedArticle(s.db, s.feed);
+    recordArticleOpened(s.db, undone, TEN);
+    markArticlesUnread(s.db, markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN));
+    expect(s.openedAt(undone)).toBe(TEN);
+
+    const revised = s.generated();
+    recordArticleOpened(s.db, revised, TEN);
+    setArticleFlags(s.db, revised, { isRead: true }, TEN);
+    reviseArticle(s.db, revised, {
+      title: "Revised",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: ELEVEN,
+      refs: [],
+      topicIds: [],
+    });
+    expect(getArticle(s.db, revised)).toMatchObject({ isRead: false, openedAt: TEN });
+  });
+
+  it("is given in the list: the opened article has it, one marked read in bulk has none", () => {
+    const s = opening();
+    const opened = seedFeedArticle(s.db, s.feed, { title: "Opened" });
+    const bulk = seedFeedArticle(s.db, s.feed, { title: "Bulk" });
+    recordArticleOpened(s.db, opened, TEN);
+    markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, ELEVEN);
+    const items = listArticles(s.db, { unread: "false" }, NOON).items;
+    expect(items.find((item) => item.id === opened)!.openedAt).toBe(TEN);
+    expect(items.find((item) => item.id === bulk)!.openedAt).toBeNull();
   });
 });

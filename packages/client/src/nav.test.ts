@@ -36,6 +36,9 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   articleCount: 0,
   starredCount: 0,
   createdAt: "2026-03-01T00:00:00.000Z",
+  lastNewItemAt: null,
+  stale: false,
+  recentArticleCount: 0,
 });
 
 const counts: Counts = {

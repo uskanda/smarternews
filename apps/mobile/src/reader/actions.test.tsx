@@ -494,3 +494,27 @@ describe("an article put back to unread while the list marks read what it is scr
     await eventually(async () => expect((await article(server, ids[0]!)).isRead).toBe(true));
   });
 });
+
+describe("marking read without opening", () => {
+  const opens = (requests: string[]) => requests.filter((request) => /\/articles\/\d+\/open$/.test(request));
+
+  it("records no opening when a row is swiped, when the long press marks it read, or when everything is marked read", async () => {
+    const server = await makeServer();
+    const [swiped, held, rest] = await articles(server, (await server.category()).id, [{ title: "Swiped" }, { title: "Held" }, { title: "Rest" }]);
+    const { requests } = await renderApp({ server });
+    await screen.findByText("Rest");
+    const user = userEvent.setup();
+
+    await fireEvent(screen.getByTestId(`row-${swiped}`), "swipeableOpen", "right");
+    await eventually(async () => expect((await article(server, swiped!)).isRead).toBe(true));
+    await user.longPress(screen.getByRole("button", { name: /Held/ }));
+    await user.press(await screen.findByRole("button", { name: "既読にする" }));
+    await eventually(async () => expect((await article(server, held!)).isRead).toBe(true));
+    await press("すべて既読にする");
+    await eventually(async () => expect((await article(server, rest!)).isRead).toBe(true));
+
+    const opened = await Promise.all([swiped!, held!, rest!].map(async (id) => (await server.core<{ openedAt: string | null }>("getArticle", id)).openedAt));
+    expect(opened).toEqual([null, null, null]);
+    expect(opens(requests)).toEqual([]);
+  });
+});

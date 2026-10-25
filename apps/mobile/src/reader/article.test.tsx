@@ -405,3 +405,64 @@ describe("swiping through a list oldest first", () => {
     expect(screen.getByLabelText("3件のうち2件目")).toBeOnTheScreen();
   });
 });
+
+describe("recording that an article was opened", () => {
+  const openedAt = async (server: TestServer, id: number) => (await server.core<{ openedAt: string | null }>("getArticle", id)).openedAt;
+  const opens = (requests: string[]) => requests.filter((request) => /^POST \/api\/v1\/articles\/\d+\/open$/.test(request));
+
+  it("records the article whose row is pressed, and not the neighbours loaded beside it", async () => {
+    const server = await makeServer();
+    const [third, second, first] = await articles(server, (await server.category()).id, [{ title: "Third" }, { title: "Second" }, { title: "First" }]);
+    const { requests } = await renderApp({ server });
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Second", "Third"]));
+
+    await press(/Second/);
+    await screen.findByRole("header", { name: "Second" });
+
+    await eventually(async () => expect(await openedAt(server, second!)).toBe(server.now().toISOString()));
+    expect(await isRead(server, second!)).toBe(true);
+    expect(await openedAt(server, first!)).toBeNull();
+    expect(await openedAt(server, third!)).toBeNull();
+    expect(opens(requests)).toEqual([`POST /api/v1/articles/${second}/open`]);
+  });
+
+  it("records the next article after a swipe", async () => {
+    const server = await makeServer();
+    const [older, newer] = await articles(server, (await server.category()).id, [{ title: "Older" }, { title: "Newer" }]);
+    await renderApp({ server });
+    await waitFor(() => expect(rowTitles()).toEqual(["Newer", "Older"]));
+
+    await press(/Newer/);
+    await screen.findByRole("header", { name: "Newer" });
+    await eventually(async () => expect(await openedAt(server, newer!)).not.toBeNull());
+    expect(await openedAt(server, older!)).toBeNull();
+    await swipeTo(1, 2);
+
+    expect(await screen.findByRole("header", { name: "Older" })).toBeOnTheScreen();
+    await eventually(async () => expect(await openedAt(server, older!)).not.toBeNull());
+  });
+
+  it("records an article opened from a notification", async () => {
+    const server = await makeServer();
+    const [, notified] = await articles(server, (await server.category()).id, [{ title: "Other" }, { title: "Notified" }]);
+    await renderApp({ server, url: `/article/${notified}` });
+    await screen.findByRole("header", { name: "Notified" });
+
+    await eventually(async () => expect(await openedAt(server, notified!)).not.toBeNull());
+  });
+
+  it("shows the article and marks it read without a word about it when the record fails", async () => {
+    const server = await makeServer();
+    const [id] = await articles(server, (await server.category()).id, [{ title: "First", body: "The body of the first." }]);
+    const { requests } = await renderApp({ server, failing: (request) => request.endsWith("/open") });
+
+    await press(/First/);
+
+    expect(await screen.findByText("The body of the first.")).toBeOnTheScreen();
+    await eventually(async () => expect(await isRead(server, id!)).toBe(true));
+    await waitFor(() => expect(opens(requests)).toHaveLength(1));
+    expect(await openedAt(server, id!)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/できませんでした|エラー/)).toBeNull();
+  });
+});

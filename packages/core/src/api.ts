@@ -38,6 +38,8 @@ export const settingsSchema = z.object({
    * everything and over categories, as a duplicate of the one stored first.
    */
   removeDuplicates: z.boolean(),
+  /** After how many days without a new item an enabled feed counts as stale. */
+  staleFeedDays: z.number().int("must be a whole number of days").min(1, "must be between 1 and 365 days").max(365, "must be between 1 and 365 days"),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -256,6 +258,11 @@ export const articleSummarySchema = z.object({
   isRead: z.boolean(),
   /** When the article was last marked read. Null for an unread article, and for one read before read times were kept. */
   readAt: z.string().nullable(),
+  /**
+   * When the article's body was first shown to a reader. Marking it read or unread leaves it as it is. Null for an
+   * article never opened, and for one opened before open times were kept.
+   */
+  openedAt: z.string().nullable(),
   starred: z.boolean(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
@@ -511,8 +518,38 @@ export const feedSchema = z.object({
   articleCount: z.number().int(),
   starredCount: z.number().int(),
   createdAt: z.string(),
+  /**
+   * When a fetch last found an item the feed had never listed, stored as an article or not. Null until one is
+   * found; a feed without one is judged from `createdAt`.
+   */
+  lastNewItemAt: z.string().nullable(),
+  /** Whether the feed is enabled and no new item came for more than `staleFeedDays` of the settings. */
+  stale: z.boolean(),
+  /** The articles of this feed stored within the last 30 days: `received` of its stats. */
+  recentArticleCount: z.number().int(),
 });
 export type Feed = z.infer<typeof feedSchema>;
+
+/** How many days the stats of a feed look back, counted from when its articles were stored. */
+export const FEED_STATS_DAYS = 30;
+
+/** What became of the articles a feed delivered within the last `FEED_STATS_DAYS` days. */
+export const feedStatsSchema = z.object({
+  /** The start of the period: articles stored at or after it are counted. */
+  since: z.string(),
+  /** Every article stored, hidden ones included. */
+  received: z.number().int(),
+  /** The ones with an open time. */
+  opened: z.number().int(),
+  /** The ones with a star now. */
+  starred: z.number().int(),
+  /** The ones the filters hide now, without the starred ones. */
+  hiddenByFilters: z.number().int(),
+  /** The ones recorded as duplicates, while duplicate removal is on; 0 while it is off. */
+  hiddenAsDuplicates: z.number().int(),
+  lastNewItemAt: z.string().nullable(),
+});
+export type FeedStats = z.infer<typeof feedStatsSchema>;
 
 export const feedCreateSchema = z.object({
   url: feedUrlSchema,

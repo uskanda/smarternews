@@ -150,6 +150,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
 
   const inDocument = new Set<string>();
   const fresh: Prepared[] = [];
+  let foundNew = false;
   for (const item of parsed.items) {
     const url = pageUrl(item, feed.url);
     const key = (item.key ?? url)?.slice(0, KEY_CHARS);
@@ -158,6 +159,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     markSeen.run(feed.id, key, nowIso);
 
     const known = stored.get(key);
+    // The feed never listed it: new, whether or not it is stored as an article below.
+    if (!known && !seenBefore.has(key)) foundNew = true;
     // An item whose article was purged is still listed by the feed; it must not come back as new.
     if (!known && seenBefore.has(key)) continue;
     if (!known && item.publishedAt && item.publishedAt < cutoff) continue;
@@ -229,6 +232,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     applyFilters(db, id);
     if (kept === null) titled.push(id);
   }
+  // What tells a feed that stopped delivering from one that delivers what is too old to store.
+  if (foundNew) db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run(nowIso, feed.id);
   return { created: fresh.length, titled: feed.translate ? titled : [] };
 }
 
@@ -319,7 +324,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
     );
     const { titled } = storeItems(db, feed, result.parsed, now);
     recordFetchSuccess(db, feed.id, { now: now.toISOString(), etag: result.etag, lastModified: result.lastModified, siteUrl: result.parsed.siteUrl });
-    return { feed: getFeed(db, feed.id), titled };
+    return { feed: getFeed(db, feed.id, now), titled };
   });
   if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
   return stored.feed;

@@ -19,6 +19,7 @@ import {
   feedCreateSchema,
   feedDiscoverSchema,
   feedUpdateSchema,
+  feedStats,
   findCategoryBySlug,
   getArticle,
   ImageFetchError,
@@ -66,6 +67,7 @@ import {
   filterPreviewSchema,
   filterUpdateSchema,
   previewFilter,
+  recordArticleOpened,
   addHighlightTerm,
   createTermGroup,
   deleteHighlightTerm,
@@ -298,6 +300,8 @@ export function createApp(deps: AppDeps): Hono {
   api.patch("/articles/:id", async (c) =>
     c.json(answered(setArticleFlags(db, idParam(c, "article"), parse(articleUpdateSchema, await jsonBody(c)), clock().toISOString()))),
   );
+  // Sent by a screen that shows the article's body; marking read is a separate request.
+  api.post("/articles/:id/open", (c) => c.json({ openedAt: recordArticleOpened(db, idParam(c, "article"), clock().toISOString()) }));
   // Translates the content when it has no translation yet, so the answer can take as long as that does.
   api.post("/articles/:id/summary", (c) => {
     if (!requestAutoSummary(db, idParam(c, "article"), clock().toISOString())) return c.json({ status: "none" });
@@ -315,7 +319,7 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/translation", (c) => c.json(translation.status()));
 
   // subscribed feeds
-  api.get("/feeds", (c) => c.json(listFeeds(db)));
+  api.get("/feeds", (c) => c.json(listFeeds(db, clock())));
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
@@ -324,11 +328,13 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
-  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"))));
+  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
+  // Counted from what the articles are now: no model is involved.
+  api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
   api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
-    return c.json(listFeeds(db));
+    return c.json(listFeeds(db, clock()));
   });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
@@ -337,7 +343,7 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/:id/fetch", async (c) => {
     const id = idParam(c, "feed");
     const outcome = await poller.fetchNow(id);
-    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id) };
+    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id, clock()) };
     return c.json(result);
   });
 

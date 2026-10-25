@@ -144,6 +144,18 @@ describe("settings", () => {
     expect((await (await s.get("/api/v1/settings")).json()).removeDuplicates).toBe(false);
   });
 
+  it("reads and changes the days after which a feed counts as stale, and refuses 0 and 30.5 with the field", async () => {
+    const s = testServer();
+    expect((await (await s.get("/api/v1/settings")).json()).staleFeedDays).toBe(60);
+    expect((await (await s.patch("/api/v1/settings", { staleFeedDays: 90 })).json()).staleFeedDays).toBe(90);
+    for (const days of [0, 30.5]) {
+      const response = await s.patch("/api/v1/settings", { staleFeedDays: days });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "staleFeedDays" })]);
+    }
+    expect((await (await s.get("/api/v1/settings")).json()).staleFeedDays).toBe(90);
+  });
+
   it("answers 400 for an unknown time zone and keeps the stored settings", async () => {
     const s = testServer();
     await s.patch("/api/v1/settings", { timeZone: "Asia/Tokyo" });

@@ -66,6 +66,7 @@ Settings fields:
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
 | `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `true` by default |
 | `removeDuplicates` | `true` hides a feed article that another feed delivered first from the lists over everything and over categories. `true` by default; see [Duplicates across feeds](#duplicates-across-feeds) |
+| `staleFeedDays` | After how many days without a new item an enabled subscribed feed counts as stale, a whole number from 1 to 365. `60` by default; see [Stale feeds and feed stats](#stale-feeds-and-feed-stats) |
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. An invalid file changes nothing. The response counts what was created and updated.
 
@@ -119,6 +120,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
 | `GET /api/v1/search` | Search the articles by words |
+| `POST /api/v1/articles/:id/open` | Record that the article's body was shown to a reader. Returns `openedAt` |
 | `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
 | `POST /api/v1/articles/:id/translation` | The translation of a feed article's content, made and stored when there is none yet |
 | `POST /api/v1/articles/:id/full-content` | Fetch the full content of a feed article from its page, and answer when that is done |
@@ -203,6 +205,7 @@ Fields of an article in the list:
 | `revision` | How many times a follow-up rewrote it |
 | `isRead`, `starred` | The reader's marks |
 | `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
+| `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
 | `event` | For events: `startsAt`, `endsAt`, `venue`, `fee`, `registration` |
 
@@ -225,6 +228,16 @@ The detail adds these:
 | `fullContent` | The full content of a feed article, taken from its page: `body` (Markdown), `bodyHtml` and `fetchedAt`. It comes apart from `body`, which stays what the feed delivered. `null` when there is none, and always for a generated article |
 | `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
+
+### Open times
+
+A screen that shows the body of an article calls `POST /api/v1/articles/:id/open`. The first call stores the server's time as `openedAt`; later calls keep it and answer it again, as `{"openedAt":"2026-03-01T10:00:00.000Z"}`. The call works for generated and feed articles, read or unread, and changes neither the read mark nor any count. An article that does not exist gets 404.
+
+Nothing else sets `openedAt`: marking an article read, "mark all as read", marking what a screen showed and reading the duplicates of a kept article leave it as it is. Putting an article back to unread and a follow-up that rewrites it keep it too. The server started to record open times with this version; articles opened before have none, and are not given one from their read time.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
+```
 
 ### Search
 
@@ -265,6 +278,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
+| `GET /api/v1/feeds/:id/stats` | What became of the articles it delivered in the last 30 days |
 | `GET /api/v1/feeds/opml` | Download every subscribed feed as OPML |
 | `POST /api/v1/feeds/opml` | Subscribe to the feeds of an OPML document sent as the request body |
 
@@ -307,12 +321,39 @@ Fields of a feed:
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused |
 | `articleCount`, `starredCount` | How many articles it has, and how many of them are starred |
+| `lastNewItemAt` | When a fetch last found an item the feed had never listed, or `null` when none was found yet |
+| `stale` | True when the feed is enabled and no new item came for more than `staleFeedDays` of the settings |
+| `recentArticleCount` | How many articles it delivered in the last 30 days: `received` of its stats |
 
 A fetch that fails is recorded on the feed and not in the run history. After each failure in a row the wait before the next try doubles, up to one day; a success brings it back to the interval. `fetch` answers with `status` (`updated`, `not_modified` or `failed`), `created` (the number of new articles), `error` when it failed, and `feed`.
 
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
 The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders.
+
+### Stale feeds and feed stats
+
+A fetch that finds an item the feed has never listed sets `lastNewItemAt` to the time of the fetch. That holds whether or not the item is stored: an item published more than 90 days ago, an item past the limit of one fetch and an item recorded as a duplicate count as new. A rewritten item, an item whose article was deleted after the retention period while the feed still lists it, and a `304` answer change nothing. The fetch at subscription sets it too, unless the feed delivers no item. A feed that existed before this version got the time its newest article was stored.
+
+A feed is `stale` while it is enabled and more than `staleFeedDays` days have passed since `lastNewItemAt`, or since `createdAt` when no new item came yet. The server works this out on every request, so a change of `staleFeedDays` shows at once. A failing feed can be stale too, and a disabled one never is. Nothing is switched off: a stale feed is fetched as before.
+
+`stats` counts the feed's articles stored in the last 30 days, by the time they were stored, and returns these fields:
+
+| Field | Content |
+|---|---|
+| `since` | The start of the period |
+| `received` | Every article stored, hidden ones included |
+| `opened` | The ones with an `openedAt`. Open times are recorded from this version on, so the count is low for the first 30 days after the update |
+| `starred` | The ones starred now |
+| `hiddenByFilters` | The ones the enabled filters hide now, without the starred ones. It follows the filters as they are now: adding or deleting a filter changes the count for the whole period |
+| `hiddenAsDuplicates` | The ones recorded as duplicates while `removeDuplicates` is on, and `0` while it is off. A duplicate that a filter also hides counts here and in `hiddenByFilters` |
+| `lastNewItemAt` | As in the feed |
+
+Nothing of this calls a model. A feed that does not exist gets 404.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/feeds/1/stats"
+```
 
 ### Duplicates across feeds
 

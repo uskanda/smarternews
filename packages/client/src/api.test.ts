@@ -176,6 +176,36 @@ describe("the API client", () => {
     ]);
   });
 
+  it("records that an article was opened with a POST to its path, and reads the time", async () => {
+    const server = testServer();
+    const sent: Array<{ url: string; method: string | undefined }> = [];
+    const api = createApi({
+      fetchImpl: (input, init) => {
+        sent.push({ url: String(input), method: init?.method });
+        return server.app.request(String(input), init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    const id = server.article(server.category().id);
+
+    expect(await api.openArticle(id)).toEqual({ openedAt: server.clock().toISOString() });
+    expect(sent.at(-1)).toEqual({ url: `/api/v1/articles/${id}/open`, method: "POST" });
+    expect((await api.article(id)).openedAt).toBe(server.clock().toISOString());
+    await expect(api.openArticle(999)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("reads the stats of a feed and whether it is stale", async () => {
+    const { api, server, seen } = setup();
+    const url = "https://blog.example.org/feed.xml";
+    server.site.set(url, `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>One</title><guid>1</guid><link>https://blog.example.org/1</link></item></channel></rss>`);
+    const feed = await api.createFeed({ url });
+    expect(feed).toMatchObject({ stale: false, lastNewItemAt: server.clock().toISOString(), recentArticleCount: 1 });
+
+    expect(await api.feedStats(feed.id)).toMatchObject({ received: 1, opened: 0, starred: 0, hiddenByFilters: 0, hiddenAsDuplicates: 0 });
+    expect(seen.at(-1)!.url).toBe(`/api/v1/feeds/${feed.id}/stats`);
+  });
+
   it("downloads the subscribed feeds as OPML and uploads the document back", async () => {
     const { api, server, seen } = setup();
     server.site.set("https://blog.example.org/feed.xml", `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title></channel></rss>`);

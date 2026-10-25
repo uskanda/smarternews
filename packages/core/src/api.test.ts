@@ -98,6 +98,7 @@ describe("the shape of a search", () => {
     revision: 0,
     isRead: false,
     readAt: null,
+    openedAt: null,
     starred: false,
     primaryUrl: null,
     refCount: 0,

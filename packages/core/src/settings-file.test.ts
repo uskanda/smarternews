@@ -43,6 +43,7 @@ describe("exportSettings", () => {
       feedIntervalMinutes: 30,
       advanceAfterMarkAll: true,
       removeDuplicates: true,
+      staleFeedDays: 60,
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -437,6 +438,23 @@ describe("order and the move-on setting in the settings file", () => {
     updateSettings(db, { removeDuplicates: false });
     importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
     expect(getSettings(db).removeDuplicates).toBe(false);
+  });
+
+  it("carries the days after which a feed counts as stale to an empty server", () => {
+    const db = createTestDb();
+    updateSettings(db, { staleFeedDays: 90 });
+    const written = exportSettings(db);
+    expect(parse(written).settings.staleFeedDays).toBe(90);
+    const empty = createTestDb();
+    importSettings(empty, written, clock);
+    expect(getSettings(empty).staleFeedDays).toBe(90);
+  });
+
+  it("leaves the days after which a feed counts as stale alone when the file does not mention them", () => {
+    const db = createTestDb();
+    updateSettings(db, { staleFeedDays: 90 });
+    importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
+    expect(getSettings(db).staleFeedDays).toBe(90);
   });
 });
 

@@ -278,6 +278,28 @@ export function useReadPatch(): (ids: readonly number[], isRead: boolean) => voi
   );
 }
 
+/**
+ * Records that an article's body is shown, for an article without an open time. The time that comes back goes
+ * into every cached copy, so the same article is not sent again. A failure is not shown: the next opening sends
+ * it again.
+ */
+export function useRecordOpened() {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const sending = useRef(new Set<number>());
+  return useCallback(
+    (article: Pick<Article, "id" | "openedAt">) => {
+      if (article.openedAt !== null || sending.current.has(article.id)) return;
+      sending.current.add(article.id);
+      api.openArticle(article.id).then(
+        ({ openedAt }) => patchArticle(client, article.id, { openedAt }),
+        () => sending.current.delete(article.id),
+      );
+    },
+    [api, client],
+  );
+}
+
 export function useArticleFlags() {
   const { api } = useApp();
   const client = useQueryClient();

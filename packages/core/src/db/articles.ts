@@ -118,6 +118,7 @@ function toSummary(row: Row): ArticleSummary {
     revision: num(row.revision),
     isRead: bool(row.is_read),
     readAt: strOrNull(row.read_at),
+    openedAt: strOrNull(row.opened_at),
     starred: bool(row.starred),
     primaryUrl: strOrNull(row.primary_url),
     refCount: num(row.ref_count),
@@ -849,6 +850,16 @@ export function markSeenArticlesRead(db: Database, seen: SeenArticle[], now: str
     );
     return [...marked, ...readDuplicatesOf(db, marked, now)].sort((a, b) => a - b);
   });
+}
+
+/**
+ * Records that a reader opened the article: its body was shown. The first time is kept; read and unread stay as
+ * they are. Returns the open time.
+ */
+export function recordArticleOpened(db: Database, id: number, now: string): string {
+  const row = db.prepare("UPDATE articles SET opened_at = coalesce(opened_at, ?) WHERE id = ? RETURNING opened_at").get(now, id);
+  if (!row) throw notFound("article", id);
+  return str(row.opened_at);
 }
 
 /** Puts the named articles back to unread, without their read times. Returns how many changed. */

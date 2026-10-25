@@ -724,7 +724,7 @@ describe("the migration to term highlights", () => {
     const settings = () => db.prepare("SELECT * FROM settings").all();
     const before = { articles: articles(), settings: settings() };
 
-    for (const name of readdirSync(SHIPPED).filter((file) => file >= "014")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file >= "014" && file < "016")) copyFileSync(join(SHIPPED, name), join(dir, name));
     migrate(db, dir);
 
     expect({ articles: articles(), settings: settings() }).toEqual(before);
@@ -761,7 +761,7 @@ describe("the migration to list views", () => {
     });
     const before = rows();
 
-    for (const name of readdirSync(SHIPPED).filter((file) => file >= "015")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    copyFileSync(join(SHIPPED, "015_list_views.sql"), join(dir, "015_list_views.sql"));
     migrate(db, dir);
 
     expect(rows()).toEqual(before);
@@ -793,5 +793,41 @@ describe("the migration to list views", () => {
     expect(() => insert("feed", 3, null)).toThrow();
     expect(() => insert("recently_read", null, null)).toThrow();
     expect(() => insert("all", null, null, "random")).toThrow();
+  });
+});
+
+describe("the migration to feed stats", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives each feed the time its newest article was stored, leaves open times empty, and adds the days", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "016")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const created = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO settings (id, reader_info, output_language, time_zone, search_language, search_region) VALUES (1, '', 'ja', 'UTC', 'ja', 'JP')").run();
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (5, 'https://example.org/5', 'five', ?)").run(created);
+    db.prepare("INSERT INTO feeds (id, url, title, created_at) VALUES (6, 'https://example.org/6', 'six', ?)").run(created);
+    const insert = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, is_read, read_at)
+       VALUES (?, 'feed', 5, ?, 'news', 't', 's', 'b', ?, ?, ?, ?, ?)`,
+    );
+    insert.run(1, "k1", created, created, "2026-02-01T00:00:00.000Z", 1, "2026-02-02T00:00:00.000Z");
+    insert.run(2, "k2", created, created, "2026-03-01T00:00:00.000Z", 0, null);
+
+    copyFileSync(join(SHIPPED, "016_feed_stats.sql"), join(dir, "016_feed_stats.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, last_new_item_at FROM feeds ORDER BY id").all()).toEqual([
+      { id: 5, last_new_item_at: "2026-03-01T00:00:00.000Z" },
+      { id: 6, last_new_item_at: null },
+    ]);
+    expect(db.prepare("SELECT id, is_read, opened_at FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, is_read: 1, opened_at: null },
+      { id: 2, is_read: 0, opened_at: null },
+    ]);
+    expect(db.prepare("SELECT stale_feed_days FROM settings").get()).toEqual({ stale_feed_days: 60 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'articles_feed_created'").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
   });
 });

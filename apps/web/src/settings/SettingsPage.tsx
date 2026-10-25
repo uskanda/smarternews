@@ -14,6 +14,14 @@ import { ConnectCode } from "./ConnectCode.tsx";
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const TASK_LABEL = { interpret: "解釈", search: "検索", judge: "判定", cluster: "集約", write: "本文の生成" } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
+const STALE_RANGE = "1から365までの日数を入れてください。";
+
+/** A whole number of days from 1 to 365, or null. */
+function daysOf(text: string): number | null {
+  if (!/^\d+$/.test(text.trim())) return null;
+  const value = Number(text.trim());
+  return value >= 1 && value <= 365 ? value : null;
+}
 
 /** The reason the server gave for refusing a value, introduced in the app's own words. */
 export function refusal(error: unknown, path: string): string | null {
@@ -144,11 +152,18 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
   const duplicatesHint = useId();
+  const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
+  const [staleError, setStaleError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const staleFeedDays = daysOf(staleDays);
+    if (staleFeedDays === null) {
+      setStaleError(STALE_RANGE);
+      return;
+    }
     try {
       const saved = await api.updateSettings({
         outputLanguage: form.outputLanguage.trim(),
@@ -156,8 +171,11 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         search: { language: form.language.trim(), region: form.region.trim() },
         advanceAfterMarkAll: advance,
         removeDuplicates,
+        staleFeedDays,
       });
       client.setQueryData(["settings"], saved);
+      // Which feeds are stale follows the days at once.
+      void client.invalidateQueries({ queryKey: ["feeds"] });
       setError(null);
       toast({ message: "全体設定を保存しました" });
     } catch (caught) {
@@ -168,7 +186,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   return (
     <section aria-label="全体設定" className={SECTION}>
       <h2 className="type-headline-md">全体設定</h2>
-      <form onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
+      <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
         <Field
           label="出力言語"
           value={form.outputLanguage}
@@ -208,6 +226,22 @@ function GlobalSettings({ settings }: { settings: Settings }) {
           <p id={duplicatesHint} className="type-label-sm text-on-surface-muted">
             7日以内に同じURLか同じタイトルで届いた記事を、先に届いた1件にまとめます。まとめた記事も、それぞれの購読フィードの一覧には出ます。
           </p>
+        </div>
+        <div className="sm:col-span-2">
+          <Field
+            label="更新が止まったとみなす日数"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={365}
+            value={staleDays}
+            onChange={(event) => {
+              setStaleDays(event.target.value);
+              setStaleError(null);
+            }}
+            error={staleError ?? refusal(error, "staleFeedDays")}
+            hint="新しい記事がこの日数届いていない購読フィードに、購読フィードの一覧で印を付けます。取得は続けます。"
+          />
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
