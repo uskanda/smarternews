@@ -212,6 +212,8 @@ The server counts the characters it sends per month and sends nothing beyond `mo
 
 [examples/smarternews.service](examples/smarternews.service) is a systemd user unit. The comments at its top give the install commands.
 
+The unit starts Node with `--max-old-space-size=256 --max-semi-space-size=4`. Node otherwise sizes its heap from the machine's memory, and on a host with many gigabytes the server can hold several hundred MB it no longer uses. With the flags, the server stays near 140 MB while idle and stays below 500 MB even while it extracts the largest page it accepts (2 MB). A small VPS with 1 GB of memory runs it. Keep the first value at 160 or more: a 2 MB page of many small elements ran out of memory at 128.
+
 Copy the database file before you upgrade. An older version cannot write to a database that a newer one has changed, so going back means going back to that copy. When an upgrade rebuilds tables, the server also copies the file itself before it starts, next to the original, as `db.sqlite.before-<number>`. Delete the copies once the new version works for you.
 
 Change the articles in the database only through the server. Search keeps its index with triggers that call a function the server registers, so another connection, such as the `sqlite3` command, can read the database but fails when it writes articles.
