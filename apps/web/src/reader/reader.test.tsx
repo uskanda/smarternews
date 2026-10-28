@@ -448,7 +448,10 @@ describe("stars", () => {
     await user.click(await screen.findByRole("button", { name: "スターを付ける" }));
 
     expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
-    await waitFor(() => expect(row(/Keep me/)).toHaveTextContent("スター"));
+    // The star is drawn as an icon, named for screen readers, in the row and above the article.
+    await waitFor(() => expect(within(row(/Keep me/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
+    expect(row(/Keep me/)).not.toHaveTextContent("スター");
+    expect(within(screen.getByRole("article")).getByRole("img", { name: "スター" })).toBeInTheDocument();
     await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
     await waitFor(() => expect(rowTitles()).toEqual(["Keep me"]));

@@ -2,7 +2,7 @@ import type { ArticleSummary } from "@smarternews/core/api";
 import { Link } from "react-router";
 import { formatShort } from "@smarternews/client";
 import { useTermMatcher } from "../api/queries.ts";
-import { Badge } from "../ui/controls.tsx";
+import { Badge, StarMark } from "../ui/controls.tsx";
 import { Highlighted } from "./highlight.tsx";
 
 /**
@@ -79,7 +79,7 @@ export function ArticleRow({
           {article.origin === "generated" ? <span>出典{article.refCount}件</span> : null}
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
-          {article.starred ? <span>スター</span> : null}
+          {article.starred ? <StarMark /> : null}
           {groups.map((group) => (
             <span key={group.id} data-term-badge className="term-badge" data-term={group.color}>
               {group.name}

@@ -4,6 +4,7 @@ import { memo, useRef } from "react";
 import { Pressable, View } from "react-native";
 import Swipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useTheme } from "../theme/theme";
+import { Icon } from "../ui/Icon";
 import { Txt } from "../ui/Txt";
 import { highlight } from "./highlight";
 
@@ -17,6 +18,12 @@ export function Badge({ children, tone = "plain" }: { children: string; tone?: "
       </Txt>
     </View>
   );
+}
+
+/** The star of a starred article: `star-mark` in DESIGN.md, as large as the text beside it. The name around it says "スター". */
+export function StarMark() {
+  const theme = useTheme();
+  return <Icon testID="star-mark" name="star" color={theme.colors["star-line"]} fill={theme.colors.star} size={theme.type["label-sm"].fontSize} />;
 }
 
 /** The badge of a term group a row matched: its name on the group's fill, with a line of its colour on the left. */
@@ -200,11 +207,7 @@ export const ArticleRow = memo(function ArticleRow({
             ) : null}
             {article.revision > 0 ? <Badge>更新</Badge> : null}
             {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
-            {article.starred ? (
-              <Txt variant="label-sm" color="on-surface-muted">
-                スター
-              </Txt>
-            ) : null}
+            {article.starred ? <StarMark /> : null}
             {matched.map((group) => (
               <TermBadge key={group.id} group={group} />
             ))}

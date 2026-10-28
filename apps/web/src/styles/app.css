@@ -378,6 +378,16 @@
     -webkit-box-decoration-break: clone;
   }
 
+  /* The star of a starred article, as large as the text beside it: filled yellow, with a line that stands out from the surface. */
+  .star-mark {
+    width: 1em;
+    height: 1em;
+    fill: var(--color-star);
+    stroke: var(--color-star-line);
+    stroke-width: 1.8;
+    stroke-linejoin: round;
+  }
+
   /* The icon after a highlight with a note. */
   .annotation-note-icon {
     display: inline-block;

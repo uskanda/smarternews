@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, screen, userEvent, waitFor, within } from "@testing-library/react-native";
 import { AppState } from "react-native";
 import { chooseScrollRead } from "../settings/scroll-read";
 import { renderApp } from "../testing/app";
@@ -77,6 +77,10 @@ describe("choosing a view", () => {
     await renderApp({ server, url: "/list/starred" });
 
     await waitFor(() => expect(rowTitles()).toEqual(["A starred", "A unread"]));
+    // The star is an icon in the row; the row's name still says it.
+    expect(within(row(/A starred/)).getByTestId("star-mark", { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(within(row(/A starred/)).queryByText("スター")).toBeNull();
+    expect(row(/A starred/).props.accessibilityLabel).toContain("スター");
   });
 
   it("says so when the category does not exist", async () => {

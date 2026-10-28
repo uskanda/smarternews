@@ -31,6 +31,15 @@ export function Badge({ tone = "muted", children }: { tone?: "muted" | "warning"
   return <span className={`rounded-sm border border-current px-xs type-label-sm ${color}`}>{children}</span>;
 }
 
+/** The star of a starred article: `star-mark` in DESIGN.md, an icon read out as "スター". */
+export function StarMark() {
+  return (
+    <svg role="img" aria-label="スター" viewBox="0 0 24 24" className="star-mark">
+      <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" />
+    </svg>
+  );
+}
+
 const INPUT =
   "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error";
 
