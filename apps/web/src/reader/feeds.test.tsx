@@ -295,8 +295,19 @@ describe("images", () => {
     fireEvent.error(image);
 
     expect(within(article()).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(article()).getByText(/画像を表示できませんでした/)).toBeInTheDocument();
     expect(within(article()).getByText("A chart")).toBeInTheDocument();
     expect(within(article()).getByText("After.")).toBeInTheDocument();
+  });
+
+  it("without a description leave a word in their place when they cannot be loaded", async () => {
+    renderApp(withImage("Before.\n\n![](https://img.example.org/a.png)\n\nAfter."));
+    await within(await opened()).findByText("After.");
+
+    fireEvent.error(article().querySelector("img")!);
+
+    expect(article().querySelector("img")).toBeNull();
+    expect(within(article()).getByText("画像を表示できませんでした")).toBeInTheDocument();
   });
 
   it("over plain HTTP are shown through the relay too", async () => {

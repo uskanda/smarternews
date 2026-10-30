@@ -281,8 +281,16 @@ describe("images", () => {
     await withImage("Before.\n\n![A chart](https://img.example.org/a.png)");
     await fireEvent(await screen.findByRole("image", { name: "A chart" }), "error", { nativeEvent: { error: "404" } });
     expect(screen.queryByRole("image")).toBeNull();
+    expect(screen.getByText(/画像を表示できませんでした/)).toBeOnTheScreen();
     expect(screen.getByText("A chart")).toBeOnTheScreen();
     expect(screen.getByText("Before.")).toBeOnTheScreen();
+  });
+
+  it("without a description leave a word in their place when they cannot be loaded", async () => {
+    await withImage("Before.\n\n![](https://img.example.org/a.png)");
+    await fireEvent(await screen.findByRole("image"), "error", { nativeEvent: { error: "403" } });
+    expect(screen.queryByRole("image")).toBeNull();
+    expect(screen.getByText("画像を表示できませんでした")).toBeOnTheScreen();
   });
 
   it("over plain HTTP are loaded from the relay too, never from the other site", async () => {

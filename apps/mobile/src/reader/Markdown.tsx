@@ -93,13 +93,18 @@ function words(text: string, theme: Drawing, key?: string): ReactNode {
 
 /**
  * An image of a feed article, as wide as the text, loaded from the server's relay. Its height follows from its
- * proportions once it has loaded; when it cannot be loaded, its description takes its place.
+ * proportions once it has loaded; when it cannot be loaded, a word that it could not, with its description,
+ * takes its place: a site that refuses the relay would otherwise leave no trace of the image.
  */
 function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
   const [ratio, setRatio] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   if (failed) {
-    return alt ? <Text style={[theme.type["label-sm"], { color: theme.colors["on-surface-muted"] }]}>{alt}</Text> : null;
+    return (
+      <Text style={[theme.type["label-sm"], { color: theme.colors["on-surface-muted"] }]}>
+        画像を表示できませんでした{alt ? <>（<Text>{alt}</Text>）</> : null}
+      </Text>
+    );
   }
   return (
     <Image
