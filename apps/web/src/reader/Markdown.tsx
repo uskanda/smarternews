@@ -13,16 +13,17 @@ const relayed = (url: string): string => relayedImageUrl("", url) ?? "";
 
 /**
  * An image of a feed article, loaded from the server's relay, which fetches it from the other site. The
- * request carries no referrer. When it cannot be loaded, its description takes its place.
+ * request carries no referrer. When it cannot be loaded, a word that it could not, with its description, takes
+ * its place: a site that refuses the relay would otherwise leave no trace of the image.
  */
 function ArticleImage({ src, alt }: { src: string; alt: string }) {
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
   if (state === "failed")
-    return alt ? (
+    return (
       <span className="article-image-missing" {...skip}>
-        {alt}
+        画像を表示できませんでした{alt ? <>（<span>{alt}</span>）</> : null}
       </span>
-    ) : null;
+    );
   return (
     <img
       src={src}
