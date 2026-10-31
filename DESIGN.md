@@ -29,6 +29,8 @@ colors:
   term-orange-fill: "#FFE2CC"
   annotation: "#1F69A3"
   annotation-fill: "#CFE6FA"
+  star: "#F5B800"
+  star-line: "#8F6200"
   text-selection: "#C5CDD8"
   warning: "#8A5200"
   error: "#A1260D"
@@ -56,6 +58,8 @@ colors:
   term-orange-fill-darkblue: "#502F16"
   annotation-darkblue: "#86C5F2"
   annotation-fill-darkblue: "#1A3D5C"
+  star-darkblue: "#F2C230"
+  star-line-darkblue: "#F2C230"
   text-selection-darkblue: "#3A4656"
   warning-darkblue: "#F0B45C"
   error-darkblue: "#FFA08F"
@@ -185,6 +189,10 @@ components:
   annotation-mark:
     backgroundColor: "{colors.annotation-fill}"
     textColor: "{colors.on-surface}"
+  star-mark:
+    backgroundColor: "{colors.star}"
+    textColor: "{colors.star-line}"
+    size: 1em
   term-badge:
     backgroundColor: "{colors.term-green-fill}"
     textColor: "{colors.on-surface}"
@@ -228,7 +236,7 @@ components:
 この2つの役割の違いを、書体の違いで示す。一覧と操作はゴシック、本文と記事の見出しは明朝にする。
 
 画面の中で目立つ色は、重要度を示す黄色の印だけにする。蛍光ペンで見出しに線を引く見立てで、重要な記事だけが一覧の中で目に入る。
-例外は、利用者が登録した語の色付けと、利用者が本文に付けたハイライトである。利用者が自分で選んだ語と色なので、気になる語を見つける手がかりとして、薄い地の色と下線を許す。ハイライトも利用者が自分で付けた印なので、空色の薄い地の色を許す。
+例外は、利用者が登録した語の色付けと、利用者が本文に付けたハイライトである。利用者が自分で選んだ語と色なので、気になる語を見つける手がかりとして、薄い地の色と下線を許す。ハイライトも利用者が自分で付けた印なので、空色の薄い地の色を許す。スターも利用者が自分で付けた印なので、黄色の星のアイコンを許す。
 それ以外は、青みのある灰色の濃淡と、操作を示す藍色だけで組み立てる。
 
 ## Colors
@@ -254,12 +262,13 @@ components:
 - `search-match`（`#CBEEDD`）と `search-match-line`（`#1D6B4C`）は、検索で一致した語の強調だけに使う。`search-match` を語の地に塗り、`search-match-line` で語の下に線を引く。`mark` を使わないのは、`mark` が重要度の印だからである。緑みの色にしたのは、重要度の黄色とも、選択中の行の青みの灰色とも色相を離すためである。語の色付け（#54）の色とも分ける。
 - `term-<色>-fill` と `term-<色>` は、語の色付けだけに使う。色は `green`、`purple`、`pink`、`orange` の4つで、利用者が語のまとまりごとに選ぶ。`term-<色>-fill` を一致した箇所と一覧の行の印の地に塗り、`term-<色>` で下線と印の左の線を引く。文字は `on-surface` のままにする。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。線は `surface` に対して3対1以上を保つ。黄色と青は使わない。黄色は重要度の印と、青はリンクの藍色と見分けられなくなるからである。緑は、検索の `search-match` の青みのある緑から色相を黄の側へ離す。
 - `annotation-fill`（`#CFE6FA`）と `annotation`（`#1F69A3`）は、利用者が本文に付けたハイライトだけに使う。`annotation-fill` をハイライトした文字の地に塗り、`annotation` でメモの印のアイコンを描く。色相は空色にする。重要度の黄色、検索の青みのある緑、語の色付けの4色から離し、リンクの藍色の文字とも見分けられるようにするためである。地は、`on-surface` と `on-surface-muted` の文字に対して、3つの配色のそれぞれで4.5対1以上を保つ。アイコンは `surface` に対して3対1以上を保つ。
+- `star`（`#F5B800`）と `star-line`（`#8F6200`）は、スターの印だけに使う。`star` で星の形を塗り、`star-line` で輪郭を引く。黄色の塗りは `surface` に対して3対1に届かないので、輪郭で3対1以上を保つ。暗い配色では塗りだけで3対1以上を保つので、輪郭も塗りと同じ色にする。重要度の印（`mark`）と同じ黄色の系統だが、星の形で見分けられる。
 - `text-selection`（`#C5CDD8`）は、本文の中で文字を選んでいる間の地の色に使う。ブラウザーの既定の選択の色は青く、ハイライトの空色と見分けにくいからである。色相を持たない灰色にして、ハイライトと区別する。文字は `on-surface` のままにする。
 - `warning`（`#8A5200`）は、未確認の印と、一部失敗の状態に使う。月の予算の警告にも使い、`banner-warning` は `surface` の地に `warning` の文字と枠で描く。失敗ではなく、利用者が設定を見直す時機を伝える表示だからである。
 - `error`（`#A1260D`）は、失敗の表示と、削除を確定するボタンに使う。
 
 暗い配色では、`mark` を地の塗りに使うと文字が読めなくなる。`mark-fill-darkblue`（`#5C4B12`）を重ね、文字は `on-surface` の暗い配色の値のままにする。
-印の色は、「ダーク」の値を定義しない。`mark`、`mark-fill`、`search-match`、`search-match-line`、`term-<色>`、`term-<色>-fill`、`warning`、`error` である。`annotation` と `annotation-fill` も同じく扱う。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
+印の色は、「ダーク」の値を定義しない。`mark`、`mark-fill`、`search-match`、`search-match-line`、`term-<色>`、`term-<色>-fill`、`warning`、`error` である。`annotation`、`annotation-fill`、`star`、`star-line` も同じく扱う。「ダーク」でも「ダークブルー」の値を使う。意味を持つ色なので、暗い配色の間では変えない。
 
 ## Typography
 
@@ -334,6 +343,7 @@ components:
 - `mention-link` は、抜き出した名前の1つで、その名前の記事の一覧へのリンクである。名前を `body-md` の文字と `primary` の色で書き、`outline-strong` の1pxの枠で四方を囲み、角は `lg` にする。内側の余白は上下を `xs`、左右を `sm` にする。地は塗らない。名前どうしは横に並べ、間隔は `xs` にし、幅が足りなければ折り返す。語の色付けの `term-badge` と形で見分けられるようにするため、色付けの地の色と左の線は使わない。`term-badge` は左の線と色の地を持つ小さな印で、`mention-link` は地のない枠で囲んだ押せる部品である。リンクなので、マウスを載せたときに下線を引く。指で操作する端末とAndroidアプリでは、高さを `touch` と `touch-android` 以上にする。
 - 名前の記事の一覧の上部には、名前を見出しとして出す。一括の既読、既読を含める切り替え、重要度4以上の切り替え、並び順のメニューは出さない。
 - 検索の結果の1行は、要約1行の代わりに、一致した箇所の抜粋を2行まで出す。抜粋は一致した語の前に40字ほどを含むので、1行では語が幅から外れることがあるからである。抜粋がないときは、いつもの要約を1行で出す。
+- `star-mark` は、スターの付いた記事の印である。一覧の行の補足と、本文の上部の補足に、文字の「スター」の代わりに星のアイコンを置く。大きさは周りの文字と同じ1emで、`star` で塗り、`star-line` で輪郭を引く。読み上げでは「スター」と読む。
 - `badge-warning` は「未確認」の印。「更新」の印は同じ形で、文字を `on-surface-muted` にする。
 - `banner-error` は失敗の表示。何ができなかったかと、次にできる操作を1つ並べる。
 - フォーカスのある部品は、`primary` の2pxの枠を2px外側に出す。

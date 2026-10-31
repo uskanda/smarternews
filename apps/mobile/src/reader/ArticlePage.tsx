@@ -7,7 +7,7 @@ import { openSource } from "../lib/links";
 import { useTheme } from "../theme/theme";
 import { Button, ErrorNotice, Loading } from "../ui/controls";
 import { Txt } from "../ui/Txt";
-import { Badge } from "./ArticleRow";
+import { Badge, StarMark } from "./ArticleRow";
 import { AnnotatedBody, ArticleNote } from "./annotations";
 import { Highlighted, highlight } from "./highlight";
 import { Markdown, type AnnotationMarks } from "./Markdown";
@@ -197,26 +197,25 @@ export const ArticlePage = memo(function ArticlePage({
           sourceName || (feeds.data?.find((entry) => entry.id === article.feedId)?.title ?? ""),
           article.author,
           `${formatFull(article.updatedAt, timeZone)} に公開`,
-          article.starred ? "スター" : null,
         ]
       : [
           sourceName || (categories.data?.find((entry) => entry.id === article.categoryId)?.name ?? ""),
           `${formatFull(article.updatedAt, timeZone)} に更新`,
           `重要度 ${article.importance}`,
           article.revision > 0 ? `更新 ${article.revision}回` : null,
-          article.starred ? "スター" : null,
         ]
   ).filter((part): part is string => Boolean(part));
 
   return (
     <ScrollView accessibilityLabel="記事" style={{ width }} contentContainerStyle={{ gap: theme.spacing.lg, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.xl }}>
       {/* One stop for a screen reader, not one per fact. */}
-      <View accessible accessibilityLabel={meta.join("、")} style={{ flexDirection: "row", flexWrap: "wrap", columnGap: theme.spacing.md, rowGap: theme.spacing.xs }}>
+      <View accessible accessibilityLabel={[...meta, ...(article.starred ? ["スター"] : [])].join("、")} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: theme.spacing.md, rowGap: theme.spacing.xs }}>
         {meta.map((part) => (
           <Txt key={part} variant="label-sm" color="on-surface-muted">
             {part}
           </Txt>
         ))}
+        {article.starred ? <StarMark /> : null}
       </View>
       <View style={{ gap: theme.spacing.xs }}>
         <Txt variant="headline-lg" heading>

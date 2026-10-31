@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
-import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { Badge, Button, ErrorNotice, Loading, StarMark } from "../ui/controls.tsx";
 import { listPathOf } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
@@ -245,7 +245,7 @@ export function ArticleView({
             </>
           )}
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
-          {article.starred ? <span>スター</span> : null}
+          {article.starred ? <StarMark /> : null}
         </div>
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
