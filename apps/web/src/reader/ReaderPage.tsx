@@ -48,10 +48,12 @@ import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { AddFeedDialog } from "./AddFeedDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
+import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -560,6 +562,10 @@ export function ReaderPage({ view }: { view: View }) {
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
           {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
+          {/* Beside the switches rather than beside 更新: a third button there leaves the list's name no room.
+              An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
+          {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
+          {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">

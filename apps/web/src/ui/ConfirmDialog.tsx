@@ -28,6 +28,8 @@ export function ConfirmDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-on-surface/40" />
         <Dialog.Content
           role="alertdialog"
+          // The keys of the list behind never act while the question is open.
+          data-hotkeys="off"
           onOpenAutoFocus={(event) => {
             opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             // The last button is the safest choice: a second Enter must not confirm something that cannot be undone.

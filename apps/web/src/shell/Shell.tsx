@@ -318,7 +318,10 @@ function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: b
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 max-h-[90dvh] w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-outline bg-surface p-xl">
+        <Dialog.Content
+          data-hotkeys="off"
+          className="fixed top-1/2 left-1/2 z-50 max-h-[90dvh] w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-outline bg-surface p-xl"
+        >
           <Dialog.Title className="type-headline-md">キー操作</Dialog.Title>
           <Dialog.Description className="pt-xs type-label-sm text-on-surface-muted">
             入力欄で文字を打っている間は働きません。
