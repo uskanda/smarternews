@@ -354,6 +354,53 @@ describe("reader information and global settings", () => {
   });
 });
 
+describe("the times digests are made", () => {
+  it("shows the stored times, and saves new ones written with commas and spaces", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const field = within(global).getByLabelText("ダイジェストを作る時刻");
+    await waitFor(() => expect(field).toHaveValue(getSettings(server.db).digestSchedule.join(", ")));
+    await user.clear(field);
+    await user.type(field, "18:30, 06:30");
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+
+    await waitFor(() => expect(getSettings(server.db).digestSchedule).toEqual(["06:30", "18:30"]));
+    await waitFor(() => expect(field).toHaveValue("06:30, 18:30"));
+  });
+
+  it("saves an empty field as no times", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const field = within(global).getByLabelText("ダイジェストを作る時刻");
+    await waitFor(() => expect(field).not.toHaveValue(""));
+    await user.clear(field);
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+
+    await waitFor(() => expect(getSettings(server.db).digestSchedule).toEqual([]));
+  });
+
+  it("shows the reason next to a time that does not exist and keeps the stored times", async () => {
+    const server = makeServer();
+    const before = getSettings(server.db).digestSchedule;
+    const { user } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const field = within(global).getByLabelText("ダイジェストを作る時刻");
+    await waitFor(() => expect(field).not.toHaveValue(""));
+    await user.clear(field);
+    await user.type(field, "25:00");
+    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+
+    await waitFor(() => expect(field).toBeInvalid());
+    expect(field).toHaveAccessibleDescription(/保存できません/);
+    expect(getSettings(server.db).digestSchedule).toEqual(before);
+  });
+});
+
 describe("moving on after marking all as read", () => {
   it("is a switch in the global settings that is saved with them", async () => {
     const server = makeServer();

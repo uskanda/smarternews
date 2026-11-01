@@ -198,6 +198,10 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             <ListItem entry={entry} to={pathOf(entry)} count={entry.target.type === "starred" ? model.starred : entry.unread} onNavigate={onNavigate} />
           </li>
         ))}
+        {/* Not a list of articles: it stays below 注釈, and Shift+J and Shift+K pass it by. */}
+        <li className="flex">
+          <NavItem to="/digests" label="ダイジェスト" onNavigate={onNavigate} />
+        </li>
       </ul>
       <div className="flex flex-col gap-px">
         <h2 className="px-sm pb-xs type-label-sm text-on-surface-muted">カテゴリ</h2>

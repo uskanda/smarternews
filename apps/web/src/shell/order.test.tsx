@@ -323,12 +323,12 @@ describe("dragging an entry", () => {
     await release(mid("A") - 5);
   });
 
-  it("starts no drag from 最近読んだ記事 or 注釈, and moves nothing above the categories in front of it", async () => {
+  it("starts no drag from 最近読んだ記事, 注釈 or ダイジェスト, and moves nothing above the categories in front of it", async () => {
     const { server } = seeded();
     const { path } = await ready({ server, route: "/all" });
     layOut();
     const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/\d+$/, ""));
-    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"];
+    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈", "ダイジェスト"];
 
     const recent = within(nav()).getByRole("link", { name: "最近読んだ記事" });
     fireEvent.pointerDown(recent, mouse(40));
@@ -342,6 +342,14 @@ describe("dragging an entry", () => {
     fireEvent.pointerDown(annotations, mouse(40));
     await dragTo(mid("B"));
     expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    await release(mid("B"));
+    expect(views()).toEqual(ORDER);
+
+    const digests = within(nav()).getByRole("link", { name: "ダイジェスト" });
+    fireEvent.pointerDown(digests, mouse(40));
+    await dragTo(mid("B"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    expect(nav().querySelector("[data-drop-line]")).not.toBeInTheDocument();
     await release(mid("B"));
     expect(views()).toEqual(ORDER);
 

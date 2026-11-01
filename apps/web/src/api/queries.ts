@@ -383,6 +383,25 @@ export function useRun(id: number | null) {
   });
 }
 
+/** How often the digests are fetched again while one is being made. */
+export const DIGEST_BUILDING_MS = 5000;
+
+/** The digests, the latest first. Fetched every few seconds while one is being made, and every minute otherwise. */
+export function useDigests() {
+  const { api } = useApp();
+  return useQuery({
+    queryKey: ["digests"],
+    queryFn: () => api.digests({ limit: 200 }),
+    refetchInterval: (query) => (query.state.data?.building ? DIGEST_BUILDING_MS : REFRESH_MS),
+  });
+}
+
+/** One digest with its sections and the source articles that are still stored. */
+export function useDigest(id: number | null) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["digest", id], queryFn: () => api.digest(id!), enabled: id !== null });
+}
+
 /** The annotations of every article, the last made first, a page at a time. */
 export function useAnnotationList() {
   const { api } = useApp();
