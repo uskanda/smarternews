@@ -49,6 +49,7 @@ describe("the drawer with subscribed feeds", () => {
       "スター",
       "AI生成、未読2件",
       "最近読んだ記事",
+      "ダイジェスト",
       "Tools、未読4件",
       "ToolsのAI生成、未読1件",
       "Blog、未読2件",
