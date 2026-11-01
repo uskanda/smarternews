@@ -164,17 +164,19 @@ describe("highlighting a selection", () => {
     const article = await opened();
     await waitFor(() => expect(marked(article)).toEqual(["The plant opens."]));
 
-    const tryKey = async (root: Element, text: string) => {
+    const tryKey = async (root: Element, text: string, offered: string[] = []) => {
       selectText(root, text);
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(menu()).toBeNull();
+      // A feed article offers a hide filter where a filter matches, without the highlights.
+      if (offered.length === 0) expect(menu()).toBeNull();
+      else expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(offered);
       await user.keyboard("h");
       expect(stored(server)).toHaveLength(1);
     };
     await tryKey(article.querySelector(".segment > div:first-child")!, "工場が開く");
     await tryKey(within(article).getByRole("region", { name: "AIによる要約" }), "要約の文");
     await tryKey(within(article).getByRole("heading", { level: 2 }), "電池の工場");
-    await tryKey(article.querySelector(".segment-original")!, "opens. It is");
+    await tryKey(article.querySelector(".segment-original")!, "opens. It is", ["隠すフィルターを作る…"]);
     // Across the original and its translation.
     const both = document.createRange();
     both.setStart(article.querySelector(".segment > div:first-child")!.firstChild!, 0);
@@ -324,7 +326,7 @@ describe("a highlight in the body", () => {
     await waitFor(() => expect(within(article).queryByRole("region", { name: "元の本文にあった箇所" })).toBeNull());
   });
 
-  it("is not shown, nor offered, while what the feed delivered is shown in place of the full content", async () => {
+  it("is not shown, nor offered beside a hide filter, while what the feed delivered is shown in place of the full content", async () => {
     const server = makeServer();
     const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
     const id = seedFeedArticle(server.db, feed.id, { title: "Post", body: "配信された短い文。" });
@@ -340,7 +342,9 @@ describe("a highlight in the body", () => {
     expect(within(article).queryByRole("region", { name: "元の本文にあった箇所" })).toBeNull();
     selectText(article.querySelector(".article-body")!, "配信された");
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(menu()).toBeNull();
+    expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["隠すフィルターを作る…"]);
+    await user.keyboard("h");
+    expect(stored(server)).toHaveLength(1);
 
     await user.click(within(article).getByRole("button", { name: "全文を表示" }));
     await waitFor(() => expect(marked(article)).toEqual(["配信された短い文。"]));

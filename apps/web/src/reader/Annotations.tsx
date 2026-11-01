@@ -1,12 +1,15 @@
+import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { anchorOf, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
-import type { Article, Highlight } from "@smarternews/core/api";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button } from "../ui/controls.tsx";
+import { MENU, MENU_ITEM } from "../shell/order.tsx";
+import { FilterFromSelectionDialog } from "./FilterFromSelection.tsx";
 import { ANNOTATION_MARK, SKIP_ATTRIBUTE, type AnnotationMarks } from "./highlight.tsx";
 
 // The reader's annotations in the article pane: highlights on the body, the menu of a selection, the dialog of a
@@ -15,6 +18,8 @@ import { ANNOTATION_MARK, SKIP_ATTRIBUTE, type AnnotationMarks } from "./highlig
 
 /** What a rendered original carries: the number of its part of the body. A selection must lie inside one. */
 export const SEGMENT_ATTRIBUTE = "data-annotation-segment";
+/** What the original title of a feed article carries: a hide filter can be made of a selection in it. */
+export const FILTER_SOURCE_ATTRIBUTE = "data-filter-source";
 const isSkipped = (node: Node): boolean => (node instanceof Element ? node : node.parentElement)?.closest(`[${SKIP_ATTRIBUTE}]`) != null;
 
 /**
@@ -80,21 +85,27 @@ export function useBodyAnnotations(highlights: readonly Highlight[], count: numb
   return { marksFor, located, current };
 }
 
-/** What a selection in the body would make: its anchor, and where it is on the screen. */
+/**
+ * What a selection in the article offers: the text selected, without the spaces around it; its anchor when it
+ * can be highlighted; whether a hide filter can be made of it; and where it is on the screen.
+ */
 interface Selected {
-  anchor: HighlightAnchor;
+  value: string;
+  anchor: HighlightAnchor | null;
+  filterable: boolean;
   rect: { top: number; bottom: number; left: number };
 }
 
+/** The elements a selection must start and end in, the same one, to be one paragraph. */
+const BLOCK = "p, li, h1, h2, h3, h4, h5, h6, td, th, pre, blockquote, dt, dd, figcaption";
+const elementOf = (node: Node): Element | null => (node instanceof Element ? node : node.parentElement);
+
 /**
- * The selection inside the original parts of the body under `root`, as an anchor in their text. Null when
- * nothing is selected, when the selection reaches outside the originals or into a skipped element, and when it
- * overlaps a highlight that is shown.
+ * The selection inside the original parts of the body under `root`, as an anchor in their text. Null when the
+ * selection reaches outside the originals or into a skipped element, and when it overlaps a highlight that is
+ * shown.
  */
-function selectionIn(root: Element, body: { text: string; starts: number[] }, ranges: LocatedHighlights<Highlight>["ranges"]): Selected | null {
-  const selection = document.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
-  const range = selection.getRangeAt(0);
+function anchorIn(range: Range, root: Element, body: { text: string; starts: number[] }, ranges: LocatedHighlights<Highlight>["ranges"]): HighlightAnchor | null {
   const first = segmentOf(root, range.startContainer);
   const last = segmentOf(root, range.endContainer);
   if (!first || !last) return null;
@@ -106,12 +117,57 @@ function selectionIn(root: Element, body: { text: string; starts: number[] }, ra
   if (end <= start) return null;
   const anchor = anchorOf(body.text, start, end);
   if (!anchor) return null;
-  // One character never has two highlights: a selection over one offers nothing.
+  // One character never has two highlights: a selection over one cannot be highlighted.
   const from = body.text.indexOf(anchor.quote, start);
   if (ranges.some((shown) => shown.start < from + anchor.quote.length && shown.end > from)) return null;
+  return anchor;
+}
+
+/**
+ * Whether a hide filter can be made of the selection: it lies in one paragraph of one original part of the body
+ * under `root`, or of the original title under `scope`, and is at most a filter's value long without a line
+ * break. What a filter matches is the title and what the feed delivered, never a translation or a summary.
+ */
+function filterableIn(range: Range, scope: Element, root: Element, value: string): boolean {
+  if (value.length === 0 || value.length > MAX_FILTER_VALUE_CHARS || /[\r\n]/.test(value)) return false;
+  if (isSkipped(range.startContainer) || isSkipped(range.endContainer)) return false;
+  const host = (node: Node) => {
+    const segment = segmentOf(root, node);
+    if (segment) return segment;
+    const title = elementOf(node)?.closest(`[${FILTER_SOURCE_ATTRIBUTE}]`) ?? null;
+    return title && scope.contains(title) ? title : null;
+  };
+  const first = host(range.startContainer);
+  if (!first || first !== host(range.endContainer)) return false;
+  const block = elementOf(range.startContainer)?.closest(BLOCK) ?? first;
+  return block === (elementOf(range.endContainer)?.closest(BLOCK) ?? first);
+}
+
+/**
+ * What the selection in the article offers, or null when nothing is selected or it offers nothing. It can be
+ * highlighted with `highlights`, and made a filter of with `filters`.
+ */
+function selectionIn(
+  scope: Element,
+  root: Element,
+  options: { highlights: boolean; filters: boolean; body: { text: string; starts: number[] }; ranges: LocatedHighlights<Highlight>["ranges"] },
+): Selected | null {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0);
+  const value = range.toString().trim();
+  const anchor = options.highlights ? anchorIn(range, root, options.body, options.ranges) : null;
+  const filterable = options.filters && filterableIn(range, scope, root, value);
+  if (!anchor && !filterable) return null;
   // Where the selection is on the screen; a browser without the measure puts the menu at the top.
   const box = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : { top: 0, bottom: 0, left: 0 };
-  return { anchor, rect: { top: box.top, bottom: box.bottom, left: box.left } };
+  return { value, anchor, filterable, rect: { top: box.top, bottom: box.bottom, left: box.left } };
+}
+
+/** Copies the text selected, as the browser's own menu would. */
+function copy(value: string) {
+  if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => document.execCommand("copy"));
+  else document.execCommand("copy");
 }
 
 /** The first mark of a highlight, which takes the focus, or its entry among those the body no longer holds. */
@@ -288,20 +344,27 @@ function MissingHighlights({ highlights, onOpen }: { highlights: readonly Highli
 /**
  * The body of an article with the reader's highlights. `render` draws the body, giving each original part the
  * marks `marksFor` returns and the attribute `SEGMENT_ATTRIBUTE` with its number. With `enabled` false, as while
- * what the feed delivered is shown in place of the full content, nothing is marked and nothing can be selected.
+ * what the feed delivered is shown in place of the full content, nothing is marked and nothing can be highlighted.
  * `focusId` names a highlight to scroll to and focus, as when it was chosen in the list of annotations.
+ *
+ * In a feed article a hide filter can also be made of a selection in an original part, whether `enabled` or not,
+ * and in the original title: the element under `scope` that carries `FILTER_SOURCE_ATTRIBUTE`. A right click on
+ * `scope` over a selection that offers something opens the same actions as a menu; otherwise the browser's own.
  */
 export function AnnotatedBody({
   article,
   count,
   enabled,
   focusId,
+  scope,
   render,
 }: {
   article: Article;
   count: number;
   enabled: boolean;
   focusId: number | null;
+  /** The element of the whole article, where the title is. */
+  scope?: RefObject<HTMLElement | null>;
   render: (marksFor: (index: number) => AnnotationMarks | undefined) => ReactNode;
 }) {
   const highlights = article.annotations.highlights;
@@ -309,8 +372,14 @@ export function AnnotatedBody({
   const actions = useAnnotationActions();
   const toast = useToast();
   const root = useRef<HTMLDivElement>(null);
+  const filters = article.origin === "feed";
   const [selected, setSelected] = useState<Selected | null>(null);
   const [writingFor, setWritingFor] = useState<HighlightAnchor | null>(null);
+  const [filteringFor, setFilteringFor] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<Selected | null>(null);
+  const trigger = useRef<HTMLSpanElement>(null);
+  const latest = useRef<Selected | null>(null);
+  latest.current = selected;
   const [opened, setOpened] = useState<number | null>(null);
   const [removing, setRemoving] = useState<Highlight | null>(null);
   // Where the focus goes back to once a dialog closes: the highlight, or the body when the highlight is gone.
@@ -320,15 +389,55 @@ export function AnnotatedBody({
   const missing = located?.missing ?? [];
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled && !filters) {
       setSelected(null);
       return;
     }
-    const look = () => setSelected(root.current ? selectionIn(root.current, current(), ranges) : null);
+    const look = () =>
+      setSelected(
+        root.current ? selectionIn(scope?.current ?? root.current, root.current, { highlights: enabled, filters, body: current(), ranges }) : null,
+      );
+    look();
     document.addEventListener("selectionchange", look);
     return () => document.removeEventListener("selectionchange", look);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `current` reads the texts kept in a ref
-  }, [enabled, ranges]);
+  }, [enabled, filters, ranges, scope]);
+
+  // A right click over a selection that offers something opens its menu at the pointer; the menu key and
+  // Shift+F10 open it under the selection. The menu opens from a trigger of its own, as a right click on it would.
+  useEffect(() => {
+    // The menu keeps the selection it opened for: opening it may take the selection away.
+    const open = (x: number, y: number) => {
+      setMenuFor(latest.current);
+      trigger.current?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    };
+    const area = () => scope?.current ?? root.current;
+    // A field keeps the browser's own menu and keys: its text is not the selection in the article.
+    const typing = (target: EventTarget | null) => target instanceof Element && target.closest("input, textarea, select, [contenteditable]") !== null;
+    const onMenu = (event: MouseEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (!latest.current || !target || target === trigger.current || typing(target)) return;
+      // A menu opened from the keyboard is aimed at the element with the focus, which may be outside the article.
+      // A Control-click opens it with the main button.
+      const fromKeyboard = event.button !== 2 && !event.ctrlKey;
+      if (!fromKeyboard && !area()?.contains(target)) return;
+      event.preventDefault();
+      if (fromKeyboard) open(latest.current.rect.left, latest.current.rect.bottom);
+      else open(event.clientX, event.clientY);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+      if (!latest.current || typing(event.target)) return;
+      event.preventDefault();
+      open(latest.current.rect.left, latest.current.rect.bottom);
+    };
+    document.addEventListener("contextmenu", onMenu);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("contextmenu", onMenu);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [scope]);
 
   async function add(anchor: HighlightAnchor, note: string | null) {
     try {
@@ -351,7 +460,19 @@ export function AnnotatedBody({
     }
   }
 
-  useHotkeys({ h: selected ? () => void add(selected.anchor, null) : undefined });
+  const anchor = selected?.anchor ?? null;
+  useHotkeys({ h: anchor ? () => void add(anchor, null) : undefined });
+
+  /** The actions a selection offers, the same in its menu and in the menu of a right click. */
+  const choices = (selection: Selected) => [
+    ...(selection.anchor
+      ? [
+          { label: "ハイライト", run: () => void add(selection.anchor!, null) },
+          { label: "メモを書く", run: () => setWritingFor(selection.anchor) },
+        ]
+      : []),
+    ...(selection.filterable ? [{ label: "隠すフィルターを作る…", run: () => setFilteringFor(selection.value) }] : []),
+  ];
 
   // From the list of annotations: the highlight is brought into view and focused, once it is drawn.
   const focused = useRef<number | null>(null);
@@ -402,7 +523,7 @@ export function AnnotatedBody({
           />
         ) : null}
       </div>
-      {selected && !writingFor ? (
+      {selected && !writingFor && filteringFor === null ? (
         <div
           role="toolbar"
           aria-label="選んだ文字列"
@@ -411,9 +532,46 @@ export function AnnotatedBody({
           // Pressing a button must not lose the selection before the button reads it.
           onMouseDown={(event) => event.preventDefault()}
         >
-          <Button onClick={() => void add(selected.anchor, null)}>ハイライト</Button>
-          <Button onClick={() => setWritingFor(selected.anchor)}>メモを書く</Button>
+          {choices(selected).map((choice) => (
+            <Button key={choice.label} onClick={choice.run}>
+              {choice.label}
+            </Button>
+          ))}
         </div>
+      ) : null}
+      <ContextMenu.Root>
+        <ContextMenu.Trigger asChild>
+          <span ref={trigger} aria-hidden className="pointer-events-none fixed top-0 left-0 size-0" />
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content className={MENU} aria-label="選んだ文字列の操作" onCloseAutoFocus={(event) => event.preventDefault()}>
+            {menuFor
+              ? [
+                  ...choices(menuFor).map((choice) => (
+                    <ContextMenu.Item key={choice.label} className={MENU_ITEM} onSelect={choice.run}>
+                      {choice.label}
+                    </ContextMenu.Item>
+                  )),
+                  <ContextMenu.Separator key="separator" className="my-xs border-t border-outline" />,
+                  <ContextMenu.Item key="copy" className={MENU_ITEM} onSelect={() => copy(menuFor.value)}>
+                    コピー
+                  </ContextMenu.Item>,
+                ]
+              : null}
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+      {filteringFor !== null ? (
+        <FilterFromSelectionDialog
+          value={filteringFor}
+          article={article}
+          onClose={() => setFilteringFor(null)}
+          onCreated={() => {
+            setFilteringFor(null);
+            document.getSelection()?.removeAllRanges();
+            setSelected(null);
+          }}
+        />
       ) : null}
       {writingFor ? (
         <NewHighlightDialog
