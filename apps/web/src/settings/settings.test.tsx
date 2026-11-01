@@ -491,6 +491,19 @@ describe("connecting the Android app", () => {
   });
 });
 
+describe("keys while the connection code is shown", () => {
+  it("does not leave the settings with g a", async () => {
+    const { user, path } = renderApp({ route: "/settings" });
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+    const dialog = await screen.findByRole("dialog", { name: "アプリを接続する" });
+    within(dialog).getByRole("button", { name: "閉じる" }).focus();
+    await user.keyboard("ga");
+
+    expect(path()).toBe("/settings");
+    expect(screen.getByRole("dialog", { name: "アプリを接続する" })).toBeInTheDocument();
+  });
+});
+
 describe("qrPath", () => {
   it("draws the three corner squares every QR code has, inside a quiet border", () => {
     const { size, d } = qrPath("smarternews://connect?v=1&url=http%3A%2F%2Fnews.example&token=t");

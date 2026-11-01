@@ -55,7 +55,7 @@ export function FilterFromSelectionDialog({ value, article, onClose, onCreated }
     <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content aria-describedby={undefined} className={PANEL}>
+        <Dialog.Content data-hotkeys="off" aria-describedby={undefined} className={PANEL}>
           <Dialog.Title className="type-headline-md">隠すフィルターを作る</Dialog.Title>
           <p className="type-label-sm text-on-surface-muted">配信記事のタイトルと配信された内容を照合します。スターまたは注釈のある記事は隠しません。</p>
           <FilterForm
