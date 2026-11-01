@@ -66,6 +66,7 @@ Settings fields:
 | `feedIntervalMinutes` | How often subscribed feeds are fetched, 5 to 1440 minutes, 30 by default |
 | `advanceAfterMarkAll` | `true` makes the web app and the Android app open the next list with unread articles after "mark all as read". `true` by default |
 | `removeDuplicates` | `true` hides a feed article that another feed delivered first from the lists over everything and over categories. `true` by default; see [Duplicates across feeds](#duplicates-across-feeds) |
+| `digestSchedule` | The times of day, as `HH:MM` in `timeZone`, at which a [digest](#digests) is made. At most 24; stored once each and in the order of the day. `["07:00","19:00"]` by default; `[]` makes digests by hand only |
 | `staleFeedDays` | After how many days without a new item an enabled subscribed feed counts as stale, a whole number from 1 to 365. `60` by default; see [Stale feeds and feed stats](#stale-feeds-and-feed-stats) |
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
@@ -692,13 +693,34 @@ A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been q
 
 `GET /api/v1/runs/:id/candidates` accepts `status=rejected` (the default), `pending`, `accepted` or `all`. Each candidate has `title`, `url`, `siteName`, `publishedAt`, `sourceKind`, `topics`, `importance` and `reason`. Runs and candidates are deleted after 30 days.
 
+## Digests
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/digests` | List the digests, the latest first |
+| `GET /api/v1/digests/:id` | Read one digest |
+| `POST /api/v1/digests` | Make a digest of the period that ends now |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests"
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests?limit=1"
+```
+
+A digest sums up the generated and feed articles of a period in one call of the `digest` task. The server makes one at the times of `digestSchedule` in the settings, and makes up at start-up for a time missed in the last six hours. A period runs from the end of the last digest to the time the digest is started, at most 24 hours back.
+
+The list answers `items` and `building`, `true` while a digest is being made. `limit` takes 1 to 200 and is 30 by default. Each item has `id`, `createdAt`, `periodStart`, `periodEnd`, `trigger` (`schedule`, `catch-up` or `manual`), `articleCount`, the number of articles the model read, and `executiveSummary`.
+
+One digest adds `sections` and `articles`. A section has `categoryId`, `categoryName`, the name the category had when the digest was made, and `lines`, each with `text` and `articleIds`, the articles it is drawn from. Ids the model was not given are dropped before the digest is stored. `articles` gives `id`, `title` and `origin` of the source articles that are still stored; an id of a deleted article stays in its line and is missing from `articles`. Digests are deleted after 180 days.
+
+`POST` answers at once. It answers 202 with `{"status":"queued"}` when a digest is started, and 409 while one is being made. It answers 200 with `limit` when the day has made `digestsPerDay` calls for digests, `budget` when the provider of the task costs money and the budget period is used up, and `empty` when the period holds no article; the model is not called then. Digests are never in the RSS output.
+
 ## Providers
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/providers"
 ```
 
-`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`, `billable`) and the provider assigned to each task. It also returns the model calls made today for runs and proposals of selectors (`llmCallsToday`), the summaries made today (`summariesToday`) and the three limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
+`GET /api/v1/providers` returns the configured providers (`name`, `adapter`, `model`, `webSearch`, `billable`) and the provider assigned to each task. It also returns the model calls made today for runs and proposals of selectors (`llmCallsToday`), the summaries made today (`summariesToday`), the calls made today for digests (`digestsToday`) and the limits (`llmCallsPerRun`, `llmCallsPerDay`, `summariesPerDay`, `selectorProposalsPerDay`, `digestsPerDay`). It returns no credentials. Providers are changed in `config.yaml`, not through the API.
 
 A provider is `billable` when calling it costs money: today that means the `anthropic` adapter. The server works out the cost of each call from the token counts the API reports and the unit prices of the model. `budget` gives what the current budget period has spent:
 

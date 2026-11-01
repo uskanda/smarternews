@@ -40,7 +40,7 @@ GitHubのissueの68番は、1日2回ほど、期間内の記事のうち重要�
 
 ## Impact
 
-- `packages/core`: 移行で、ダイジェストの表と、全体設定の時刻の列を足す。ダイジェストのタスク、入力の集め方、保存、作る処理（`DigestWorker`）、保存期間での削除を足す。設定に `limits.digestsPerDay` と `tasks.digest` を足す。
+- `packages/core`: 移行で、ダイジェストの表と、全体設定の時刻の列を足す。ダイジェストのタスク、入力の集め方、保存、作る処理（`DigestWorker`）、保存期間での削除を足す。設定に `limits.digestsPerDay` と、`tasks` の `digest` を足す。
 - `apps/server`: `DigestWorker` の組み立てと起動、ダイジェストのAPIのルートを足す。
 - `packages/client`: ダイジェストのAPIの呼び出しと、ダイジェストの通知を出すかどうかの判断を足す。
 - `apps/web`: 左のペインの項目、ダイジェストの画面、設定の画面の時刻の欄を足す。

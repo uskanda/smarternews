@@ -181,6 +181,15 @@ Duplicate removal is on by default. Switch it off in the global settings to see 
 
 `readerInfo` is free text about who reads the articles. The model uses it to judge relevance and importance, and to add one sentence on what a story means for that reader. Leave it empty and articles carry no such sentence.
 
+### Digests
+
+A digest sums up what arrived since the last one: an executive summary of up to 800 characters, then about three lines for each category with something worth telling. Each line links to the articles it is drawn from. Digests are made at the times of "ダイジェストを作る時刻" in the global settings, 7:00 and 19:00 by default in the configured time zone; an empty list makes them by hand only, with "今すぐ作る" on the page "ダイジェスト".
+
+- One digest is one call of the `digest` task. It reads at most 200 articles of the period: generated articles by importance, then feed articles newest first. Of a feed article only its title and its summary, or the first 300 characters of what the feed delivered, are given to the model; the full content never is. Feed articles of a feed without a category feed the executive summary only.
+- A period runs from the end of the last digest to now, and never more than 24 hours back. A period without an article makes no digest and calls no model. A digest that fails is not tried again by itself; the next one covers its period.
+- A time missed while the server was down is made up for at start-up when it lies within the last six hours; after a longer stop only the latest such time is.
+- Digests are read in the web app, the Android app and the API, and are never in the RSS output, because they draw on feed articles. The Android app notifies a new digest unless notifications are off. Digests are deleted after 180 days.
+
 ## Feeds and API
 
 | URL | Content |
@@ -273,6 +282,8 @@ Providers with the `anthropic` adapter cost money per call, and the server keeps
 Retries obey both limits like any other run. With two retries, a category that keeps failing uses up to three runs' worth of calls for one scheduled time.
 
 Translation by the model counts towards `llmCallsPerDay`. On a day that has reached it, an article that needs the model is shown in the original, with a button to try again.
+
+Digests are counted apart as well: `digestsPerDay` (4 by default, 0 makes none) bounds the calls of one day, a second attempt after an invalid answer included. They do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `digestsPerDay`. The `digest` task runs on the provider named `smart` unless `tasks` assigns another, and obeys the monthly budget like every task.
 
 Proposals of selectors for web feeds count towards `llmCallsPerDay` as well, and have a limit of their own: `selectorProposalsPerDay` (50 by default). The default of `llmCallsPerDay` was 300 before web feeds; it grew by these 50. On a day that has reached either limit, the candidates come from the server's own guess, and the page says so.
 

@@ -13,7 +13,7 @@
 ## 2. タスクとランナー
 
 - [ ] 2.1 `packages/core/src/llm/tasks.ts` に `digest` を足し、`taskNameSchema` と `TASK_NAMES` を9つにする。プロンプトに記事とカテゴリが入ること、`check` が入力にないカテゴリと重複した区画を拒むことを `tasks.test.ts` で確かめる
-- [ ] 2.2 `config.ts` に `limits.digestsPerDay` と `tasks.digest` を足し、割り当ての既定を `smart` にする。`config.test.ts` で確かめる
+- [ ] 2.2 `config.ts` に `limits.digestsPerDay` と、`tasks` の `digest` を足し、割り当ての既定を `smart` にする。`config.test.ts` で確かめる
 - [ ] 2.3 `TaskRunner` に `digestsToday` と `canDigest` を足し、`callsToday` から `digest` を除く。仕様 `llm-tasks` の「ダイジェストの1日の上限」「予算に達したときのダイジェスト」の各場面を `runner.test.ts` で確かめる
 
 ## 3. 作る処理
