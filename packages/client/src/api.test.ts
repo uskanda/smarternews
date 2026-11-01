@@ -123,6 +123,22 @@ describe("the API client", () => {
     expect(list.items).toMatchObject([{ title: "Read", isRead: true, readAt: server.clock().toISOString() }]);
   });
 
+  it("asks for a digest, lists the digests and reads one, in the shared shape", async () => {
+    const { api, server, seen } = setup(API_TOKEN, {
+      digest: () => ({ executiveSummary: "What happened.", sections: [] }),
+    });
+    await expect(api.requestDigest()).resolves.toEqual({ status: "empty" });
+    server.article(server.category().id);
+
+    await expect(api.requestDigest()).resolves.toEqual({ status: "queued" });
+    await server.digests.idle();
+    const list = await api.digests({ limit: 1 });
+
+    expect(seen.at(-1)!.url).toContain("/digests?limit=1");
+    expect(list).toMatchObject({ building: false, items: [{ executiveSummary: "What happened.", trigger: "manual" }] });
+    await expect(api.digest(list.items[0]!.id)).resolves.toMatchObject({ sections: [], articles: [] });
+  });
+
   it("downloads the settings file as text and uploads it back", async () => {
     const { api, server } = setup();
     server.category("Security");
