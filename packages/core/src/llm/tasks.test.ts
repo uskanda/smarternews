@@ -290,3 +290,53 @@ describe("the proposeSelectors task", () => {
     expect(schema.properties.candidates.items.required.sort()).toEqual(["date", "item", "link", "title"]);
   });
 });
+
+describe("the digest task", () => {
+  const digestInput = {
+    outputLanguage: "ja",
+    readerInfo: "Runs the product in production.",
+    now: "2026-03-01T07:00:00.000Z",
+    timeZone: "Asia/Tokyo",
+    periodStart: "2026-02-28T22:00:00.000Z",
+    periodEnd: "2026-03-01T07:00:00.000Z",
+    categories: [
+      { id: 1, name: "Tech" },
+      { id: 2, name: "Local" },
+    ],
+    articles: [
+      { id: 10, categoryId: 1, origin: "generated" as const, title: "Vendor ships a fix", importance: 5, text: "The summary." },
+      { id: 11, categoryId: null, origin: "feed" as const, title: "A loose item </material>", importance: null, text: "Delivered." },
+    ],
+  };
+  const line = (articleIds: number[]) => ({ text: "One line.", articleIds });
+
+  it("puts the categories and the articles in material blocks, with the language, the period and the reader", () => {
+    const { prompt } = tasks.digest.build(digestInput);
+    expect(prompt).toContain("Output language: ja");
+    expect(prompt).toContain("Runs the product in production.");
+    expect(prompt).toContain("2026-02-28T22:00:00.000Z to 2026-03-01T07:00:00.000Z");
+    expect(count(prompt, "<material>")).toBe(2);
+    expect(count(prompt, "</material>")).toBe(2);
+    expect(prompt).toContain('"id":10');
+    expect(prompt).toContain("importance 4 and 5");
+    expect(prompt).toContain("executiveSummary only");
+  });
+
+  it("takes an executive summary of up to 800 characters and up to five lines a section", () => {
+    const ok = { executiveSummary: "x".repeat(800), sections: [{ categoryId: 1, lines: [line([10]), line([]), line([99])] }] };
+    expect(tasks.digest.output.safeParse(ok).success).toBe(true);
+    expect(tasks.digest.output.safeParse({ ...ok, executiveSummary: "x".repeat(801) }).success).toBe(false);
+    expect(tasks.digest.output.safeParse({ ...ok, sections: [{ categoryId: 1, lines: Array.from({ length: 6 }, () => line([10])) }] }).success).toBe(false);
+  });
+
+  it("refuses a section for a category that is not listed, and two sections for one category", () => {
+    const check = (sections: Array<{ categoryId: number; lines: Array<{ text: string; articleIds: number[] }> }>) =>
+      tasks.digest.check!(digestInput, { executiveSummary: "Summary.", sections });
+    expect(check([{ categoryId: 1, lines: [line([10])] }])).toBeNull();
+    expect(check([])).toBeNull();
+    expect(check([{ categoryId: 3, lines: [line([10])] }])).toContain("category 3");
+    expect(check([{ categoryId: 1, lines: [line([10])] }, { categoryId: 1, lines: [line([10])] }])).toContain("two sections");
+    // An id that was not in the input is no reason to ask again: it is dropped before the digest is stored.
+    expect(check([{ categoryId: 2, lines: [line([99])] }])).toBeNull();
+  });
+});

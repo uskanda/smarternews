@@ -4,6 +4,7 @@ import {
   buildProviders,
   CATCH_UP_MS,
   defaultUserAgent,
+  DigestWorker,
   executeRun,
   FeedPoller,
   Fetcher,
@@ -50,6 +51,8 @@ export interface Runtime {
   summarizer: SummaryWorker;
   /** Fetches the full content of feed articles, apart from the fetching of feeds and from the summaries. */
   fullContent: FullContentWorker;
+  /** Makes the digests at the times of the settings, apart from the queue of runs. */
+  digests: DigestWorker;
   app: Hono;
   /** Token files this call created, to be announced once. */
   newTokenFiles: string[];
@@ -60,7 +63,7 @@ export interface Runtime {
    * as failed, and the runs that were waiting are put back in line. Says how many of each there were.
    */
   recover(): { closed: number; resumed: number };
-  /** Starts the scheduler, the fetching of feeds, the full content and the summaries. */
+  /** Starts the scheduler, the fetching of feeds, the full content, the summaries and the digests. */
   start(): void;
   close(): void;
 }
@@ -120,6 +123,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
       llmCallsPerDay: config.limits.llmCallsPerDay,
       summariesPerDay: config.limits.summariesPerDay,
       selectorProposalsPerDay: config.limits.selectorProposalsPerDay,
+      digestsPerDay: config.limits.digestsPerDay,
     },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,
@@ -158,6 +162,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
   // Made before the summaries, which read a page through it when a feed fetches full content.
   const fullContent = new FullContentWorker({ db, clock, fetcher });
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner, fullContent });
+  const digests = new DigestWorker({ db, clock, runner });
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
@@ -173,6 +178,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     translation,
     summarizer,
     fullContent,
+    digests,
     images: { key: imageKey.key, proxy: imageProxy },
     tokens: { api: api.token, feed: feed.token },
     version,
@@ -188,6 +194,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     poller,
     summarizer,
     fullContent,
+    digests,
     app,
     newTokenFiles: [...(api.created ? [paths.apiTokenFile] : []), ...(feed.created ? [paths.feedTokenFile] : [])],
     newKeyFiles: imageKey.created ? [paths.imageKeyFile] : [],
@@ -202,12 +209,14 @@ export function createRuntime(options: { env: Record<string, string | undefined>
       poller.start();
       fullContent.start();
       summarizer.start();
+      digests.start();
     },
     close() {
       scheduler.stop();
       poller.stop();
       fullContent.stop();
       summarizer.stop();
+      digests.stop();
       db.close();
     },
   };

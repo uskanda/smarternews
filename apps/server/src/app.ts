@@ -34,6 +34,9 @@ import {
   feedStats,
   findCategoryBySlug,
   getArticle,
+  getDigest,
+  listDigests,
+  digestListQuerySchema,
   ImageFetchError,
   verifyImageProxyPath,
   relayArticleImages,
@@ -109,6 +112,8 @@ import {
   type Candidate,
   type Clock,
   type Database,
+  type DigestList,
+  type DigestWorker,
   type FeedFetchResult,
   type FeedPoller,
   type Fetcher,
@@ -138,6 +143,8 @@ export interface AppDeps {
   summarizer: SummaryWorker;
   /** Fetches the full content of feed articles, one at a time; an article a reader asks for goes first. */
   fullContent: FullContentWorker;
+  /** Makes the digests; asked here to make one now. */
+  digests: DigestWorker;
   /** The relay of images: the key that signs their URLs, and what fetches and keeps them. */
   images: { key: Uint8Array; proxy: ImageProxy };
   tokens: { api: string; feed: string };
@@ -184,7 +191,7 @@ function idParam(c: Context, what: string, name = "id"): number {
 const RELAY_HEADERS = { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" };
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, images } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, digests, images } = deps;
   /** An article as it is answered: the images of a feed article's content load through the relay. */
   const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
   const app = new Hono();
@@ -457,12 +464,26 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(listRunCandidates(db, run.id, status === "all" ? undefined : (status as Candidate["status"])));
   });
 
+  // digests
+  api.get("/digests", (c) => {
+    const query = parse(digestListQuerySchema, c.req.query());
+    const list: DigestList = { items: listDigests(db, { limit: query.limit }), building: digests.building };
+    return c.json(list);
+  });
+  api.get("/digests/:id", (c) => c.json(getDigest(db, idParam(c, "digest"))));
+  api.post("/digests", (c) => {
+    const status = digests.buildNow();
+    if (status === "busy") throw new DomainError("conflict", "a digest is being made");
+    return c.json({ status }, status === "queued" ? 202 : 200);
+  });
+
   // providers
   api.get("/providers", (c) => {
     const status: ProviderStatus = {
       ...runner.describe(),
       llmCallsToday: runner.callsToday(),
       summariesToday: runner.summariesToday(),
+      digestsToday: runner.digestsToday(),
       limits: runner.limits,
       budget: runner.budgetStatus(),
     };

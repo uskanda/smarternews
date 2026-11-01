@@ -14,6 +14,8 @@ export * from "./db/database.ts";
 export * from "./db/feeds.ts";
 export * from "./db/runs.ts";
 export * from "./db/settings.ts";
+export * from "./db/digests.ts";
+export * from "./digests/worker.ts";
 export * from "./db/term-highlights.ts";
 export * from "./db/filters.ts";
 export * from "./db/list-views.ts";

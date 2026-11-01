@@ -66,6 +66,7 @@ const tasksSchema = z.strictObject({
   summarize: z.string().optional(),
   translate: z.string().optional(),
   proposeSelectors: z.string().optional(),
+  digest: z.string().optional(),
 });
 
 const configSchema = z.strictObject({
@@ -84,6 +85,8 @@ const configSchema = z.strictObject({
       summariesPerDay: z.number().int().min(1).default(100),
       /** Proposals of selectors for web feeds, counted in `llmCallsPerDay` as well. 0 leaves them to the program. */
       selectorProposalsPerDay: z.number().int().min(0).default(50),
+      /** Calls for digests, counted apart from the calls of runs. 0 makes no digest. */
+      digestsPerDay: z.number().int().min(0).default(4),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */
@@ -205,9 +208,12 @@ export function translationApiKey(config: Config, env: Record<string, string | u
 const CHEAP_PROVIDER = "fast";
 const CHEAP_TASKS: readonly TaskName[] = ["summarize", "translate"];
 
-/** A proposal of selectors reads a long page once, and is asked for seldom: it goes to this provider when there is one. */
+/**
+ * A proposal of selectors reads a long page once, and a digest weighs many articles at once; both are asked
+ * for seldom. They go to this provider when there is one.
+ */
 const CAPABLE_PROVIDER = "smart";
-const CAPABLE_TASKS: readonly TaskName[] = ["proposeSelectors"];
+const CAPABLE_TASKS: readonly TaskName[] = ["proposeSelectors", "digest"];
 
 /** The provider of a task without an assignment. */
 function fallbackFor(task: TaskName, config: Config): string {

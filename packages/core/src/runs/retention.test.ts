@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getArticle, setArticleFlags } from "../db/articles.ts";
+import { getDigest, saveDigest } from "../db/digests.ts";
 import { getRun } from "../db/runs.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 import { purgeExpired } from "./retention.ts";
@@ -70,5 +71,29 @@ describe("purgeExpired", () => {
     const run = await h.run();
 
     expect(run).toMatchObject({ collected: 0, llmCalls: 0 });
+  });
+
+  it("removes a digest 180 days after it was made, and keeps it when its source articles are gone", async () => {
+    const { h, plain } = await seeded();
+    const digest = (createdAt: string) =>
+      saveDigest(h.db, {
+        periodStart: createdAt,
+        periodEnd: createdAt,
+        createdAt,
+        trigger: "manual",
+        slot: null,
+        executiveSummary: "Summary.",
+        sections: [{ categoryId: 1, categoryName: "C", lines: [{ text: "Line.", articleIds: [plain.id] }] }],
+        articleCount: 1,
+      });
+    const now = h.clock().getTime();
+    const old = digest(new Date(now - 181 * DAY).toISOString());
+    const recent = digest(new Date(now - DAY).toISOString());
+    h.db.prepare("DELETE FROM articles WHERE id = ?").run(plain.id);
+
+    purgeExpired(h.db, h.clock);
+
+    expect(() => getDigest(h.db, old)).toThrow(expect.objectContaining({ code: "not_found" }));
+    expect(getDigest(h.db, recent)).toMatchObject({ articles: [], sections: [{ lines: [{ text: "Line.", articleIds: [plain.id] }] }] });
   });
 });

@@ -157,6 +157,16 @@ describe("settings", () => {
     expect((await (await s.get("/api/v1/settings")).json()).staleFeedDays).toBe(90);
   });
 
+  it("reads and changes the times a digest is made, and refuses a time that is not HH:MM", async () => {
+    const s = testServer();
+    expect((await (await s.get("/api/v1/settings")).json()).digestSchedule).toEqual(["07:00", "19:00"]);
+    expect((await (await s.patch("/api/v1/settings", { digestSchedule: ["18:00", "06:30"] })).json()).digestSchedule).toEqual(["06:30", "18:00"]);
+    const response = await s.patch("/api/v1/settings", { digestSchedule: ["25:00"] });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: expect.stringContaining("digestSchedule") })]);
+    expect((await (await s.get("/api/v1/settings")).json()).digestSchedule).toEqual(["06:30", "18:00"]);
+  });
+
   it("answers 400 for an unknown time zone and keeps the stored settings", async () => {
     const s = testServer();
     await s.patch("/api/v1/settings", { timeZone: "Asia/Tokyo" });
@@ -205,7 +215,7 @@ describe("providers", () => {
   it("shows which provider runs each of the tasks, and no credentials", async () => {
     const s = testServer();
     const body = await (await s.get("/api/v1/providers")).json();
-    expect(Object.keys(body.tasks).sort()).toEqual(["cluster", "interpret", "judge", "proposeSelectors", "search", "summarize", "translate", "write"]);
+    expect(Object.keys(body.tasks).sort()).toEqual(["cluster", "digest", "interpret", "judge", "proposeSelectors", "search", "summarize", "translate", "write"]);
     expect(body.providers[0]).toEqual({ name: "interpret", adapter: "fake", model: "fake", webSearch: true, billable: false });
     expect(body).toMatchObject({ llmCallsToday: 0, summariesToday: 0, limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, summariesPerDay: 100 } });
     expect(JSON.stringify(body)).not.toMatch(/key|token|secret/i);

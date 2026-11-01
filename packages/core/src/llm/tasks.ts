@@ -1,4 +1,4 @@
-// The eight jobs given to a model. Each has an output schema and a function that builds its prompt.
+// The nine jobs given to a model. Each has an output schema and a function that builds its prompt.
 // Nothing else in the code base talks to a model.
 import { parseHTML } from "linkedom";
 import { z } from "zod";
@@ -474,9 +474,92 @@ const proposeSelectors: TaskDefinition<ProposeSelectorsInput, ProposeSelectorsOu
   },
 };
 
+// ---- digest ------------------------------------------------------------------------------------
+
+export const EXECUTIVE_SUMMARY_MAX_CHARS = 800;
+/** The schema takes lines a little longer and more of them than the prompt asks for: a slightly long answer is no reason to ask again. */
+const DIGEST_LINE_MAX_CHARS = 200;
+const DIGEST_LINES_MAX = 5;
+
+export interface DigestInput {
+  outputLanguage: string;
+  readerInfo: string;
+  now: string;
+  timeZone: string;
+  periodStart: string;
+  periodEnd: string;
+  /** The categories a section may be written for, in their order. Each has articles among the input. */
+  categories: Array<{ id: number; name: string }>;
+  articles: Array<{
+    id: number;
+    /** Null for a feed article of a feed without a category: it feeds the executive summary only. */
+    categoryId: number | null;
+    origin: "generated" | "feed";
+    title: string;
+    /** Set for generated articles only. */
+    importance: number | null;
+    /** The summary of a generated article; the summary, or the start of the delivered content, of a feed article. */
+    text: string;
+  }>;
+}
+
+const digestOutput = z.object({
+  executiveSummary: z.string().trim().min(1).max(EXECUTIVE_SUMMARY_MAX_CHARS),
+  sections: z.array(
+    z.object({
+      categoryId: z.number().int(),
+      lines: z
+        .array(z.object({ text: z.string().trim().min(1).max(DIGEST_LINE_MAX_CHARS), articleIds: z.array(z.number().int()) }))
+        .min(1)
+        .max(DIGEST_LINES_MAX),
+    }),
+  ),
+});
+export type DigestOutput = z.infer<typeof digestOutput>;
+
+const digest: TaskDefinition<DigestInput, DigestOutput> = {
+  output: digestOutput,
+  build: (input) => ({
+    system: SYSTEM,
+    prompt: [
+      "Task: write a digest of the articles a reader received in a period, so that the reader learns what matters most without reading them all.",
+      `Output language: ${input.outputLanguage}. Write everything in this language, whatever language the articles use.`,
+      `Current time: ${input.now} (reader's time zone: ${input.timeZone})`,
+      `Period: ${input.periodStart} to ${input.periodEnd}`,
+      reader(input.readerInfo),
+      "Categories, one JSON object per line:",
+      material(input.categories.map((category) => JSON.stringify(category)).join("\n")),
+      "Articles, one JSON object per line. origin is generated for an article written from several sources, with an importance from 1 to 5; feed for an item a subscribed feed delivered, without an importance:",
+      material(input.articles.map((article) => JSON.stringify(article)).join("\n")),
+      IMPORTANCE,
+      "Rules:",
+      "- State only what the articles say. Add no background, no opinion and nothing you know from elsewhere.",
+      "- Use a neutral, plain register (in Japanese, the です・ます style). No greetings and no praise.",
+      "- Choose what matters most. Prefer generated articles of importance 4 and 5. Judge the importance of feed articles yourself, by the reader's interests and by how many articles report the same thing.",
+      `- executiveSummary: plain prose over every article, without Markdown, headings or lists, at most ${EXECUTIVE_SUMMARY_MAX_CHARS} characters.`,
+      "- sections: one section for each category that has something worth telling, in the order of the categories, using only the categoryId values listed above, each at most once. A category with nothing worth telling has no section.",
+      "- Each section has about three lines, each one sentence of about 100 characters, on the most important articles of that category.",
+      "- articleIds: the ids of the articles a line is drawn from, taken from the list above. Never invent an id.",
+      "- Articles whose categoryId is null belong to no category: use them in the executiveSummary only.",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  }),
+  check: (input, output) => {
+    const allowed = new Set(input.categories.map((category) => category.id));
+    const seen = new Set<number>();
+    for (const section of output.sections) {
+      if (!allowed.has(section.categoryId)) return `a section for category ${section.categoryId}, which is not in the list`;
+      if (seen.has(section.categoryId)) return `two sections for category ${section.categoryId}`;
+      seen.add(section.categoryId);
+    }
+    return null;
+  },
+};
+
 // ---- registry ----------------------------------------------------------------------------------
 
-export const tasks = { interpret, search, judge, cluster, write, summarize, translate, proposeSelectors };
+export const tasks = { interpret, search, judge, cluster, write, summarize, translate, proposeSelectors, digest };
 
 export interface TaskIo {
   interpret: { input: InterpretInput; output: InterpretOutput };
@@ -487,6 +570,7 @@ export interface TaskIo {
   summarize: { input: SummarizeInput; output: SummarizeOutput };
   translate: { input: TranslateInput; output: TranslateOutput };
   proposeSelectors: { input: ProposeSelectorsInput; output: ProposeSelectorsOutput };
+  digest: { input: DigestInput; output: DigestOutput };
 }
 
-export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors"];
+export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"];

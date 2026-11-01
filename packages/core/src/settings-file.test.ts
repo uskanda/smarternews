@@ -44,6 +44,7 @@ describe("exportSettings", () => {
       advanceAfterMarkAll: true,
       removeDuplicates: true,
       staleFeedDays: 60,
+      digestSchedule: ["07:00", "19:00"],
     });
     expect(file.categories.map((c: { slug: string }) => c.slug)).toEqual(["security", "local-events"]);
     expect(file.categories.flatMap((c: { topics: unknown[] }) => c.topics)).toHaveLength(5);
@@ -448,6 +449,23 @@ describe("order and the move-on setting in the settings file", () => {
     const empty = createTestDb();
     importSettings(empty, written, clock);
     expect(getSettings(empty).staleFeedDays).toBe(90);
+  });
+
+  it("carries the times a digest is made to another server", () => {
+    const db = createTestDb();
+    updateSettings(db, { digestSchedule: ["06:30"] });
+    const written = exportSettings(db);
+    expect(parse(written).settings.digestSchedule).toEqual(["06:30"]);
+    const empty = createTestDb();
+    importSettings(empty, written, clock);
+    expect(getSettings(empty).digestSchedule).toEqual(["06:30"]);
+  });
+
+  it("leaves the times a digest is made alone when the file does not mention them", () => {
+    const db = createTestDb();
+    updateSettings(db, { digestSchedule: ["06:30"] });
+    importSettings(db, "version: 1\nsettings:\n  readerInfo: someone\n", clock);
+    expect(getSettings(db).digestSchedule).toEqual(["06:30"]);
   });
 
   it("leaves the days after which a feed counts as stale alone when the file does not mention them", () => {

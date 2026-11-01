@@ -11,6 +11,7 @@ import {
   LlmTranslator,
   startRun,
   SummaryWorker,
+  DigestWorker,
   TranslationService,
   type ArticleContent,
   type Category,
@@ -54,6 +55,9 @@ export function testServer(
     /** Answers the task that proposes selectors for a web feed. Without it, a call of the task fails the test. */
     proposeSelectors?: FakeHandler;
     selectorProposalsPerDay?: number;
+    /** Answers the digest task. Without it, a call of the task fails the test. */
+    digest?: FakeHandler;
+    digestsPerDay?: number;
     /** Makes every provider one that costs money, at these prices. */
     pricing?: ModelPricing;
     budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
@@ -68,12 +72,13 @@ export function testServer(
       ...(options.summarize ? { summarize: options.summarize } : {}),
       ...(options.translate ? { translate: options.translate } : {}),
       ...(options.proposeSelectors ? { proposeSelectors: options.proposeSelectors } : {}),
+      ...(options.digest ? { digest: options.digest } : {}),
     },
     {
       webSearch: options.webSearch,
       pricing: options.pricing,
       budget: options.budget,
-      ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined && options.selectorProposalsPerDay === undefined
+      ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined && options.selectorProposalsPerDay === undefined && options.digestsPerDay === undefined
         ? {}
         : {
             limits: {
@@ -81,6 +86,7 @@ export function testServer(
               llmCallsPerDay: options.llmCallsPerDay ?? 300,
               ...(options.summariesPerDay === undefined ? {} : { summariesPerDay: options.summariesPerDay }),
               ...(options.selectorProposalsPerDay === undefined ? {} : { selectorProposalsPerDay: options.selectorProposalsPerDay }),
+              ...(options.digestsPerDay === undefined ? {} : { digestsPerDay: options.digestsPerDay }),
             },
           }),
     },
@@ -112,6 +118,8 @@ export function testServer(
   // Likewise full content: `fullContent.tick()`, then `fullContent.idle()`. A request through the API waits for it.
   const fullContent = new FullContentWorker({ db, clock, fetcher });
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner: llm.runner, fullContent });
+  // Digests are made when a test asks for one: `digests.buildNow()` or `digests.tick()`, then `digests.idle()`.
+  const digests = new DigestWorker({ db, clock, runner: llm.runner, log: () => {} });
   // Images come from the same stand-in sites, through a fetcher of their own. Their directory is made only
   // when a test relays an image.
   const imageFetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
@@ -127,6 +135,7 @@ export function testServer(
     translation,
     summarizer,
     fullContent,
+    digests,
     images,
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
@@ -151,6 +160,7 @@ export function testServer(
     poller,
     summarizer,
     fullContent,
+    digests,
     imageKey: IMAGE_KEY,
     /** What the stand-in for the translation API was asked. Null on a server without a key. */
     google,

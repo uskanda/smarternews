@@ -57,6 +57,11 @@ export interface CallBudget {
 const SUMMARIES_PER_DAY = 100;
 /** Proposals of selectors a day, unless the configuration says otherwise. */
 const SELECTOR_PROPOSALS_PER_DAY = 50;
+/** Calls for digests a day, unless the configuration says otherwise. */
+const DIGESTS_PER_DAY = 4;
+
+/** The tasks with an allowance of their own: their calls are not counted towards `llmCallsPerDay`. */
+const OWN_ALLOWANCE = "task NOT IN ('summarize', 'digest')";
 
 export interface TaskLimits {
   llmCallsPerRun: number;
@@ -66,6 +71,8 @@ export interface TaskLimits {
   summariesPerDay: number;
   /** Calls that propose selectors for a web feed. They count towards `llmCallsPerDay` as well. */
   selectorProposalsPerDay: number;
+  /** Calls that make digests. The calls of runs are not counted here, and these not towards `llmCallsPerDay`. */
+  digestsPerDay: number;
 }
 
 /** The money the providers that cost money may use, and when its period starts again. */
@@ -83,7 +90,11 @@ export interface TaskRunnerOptions {
   clock: Clock;
   providers: Map<string, Provider>;
   assignment: Record<TaskName, string>;
-  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay"> & { summariesPerDay?: number; selectorProposalsPerDay?: number };
+  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay" | "digestsPerDay"> & {
+    summariesPerDay?: number;
+    selectorProposalsPerDay?: number;
+    digestsPerDay?: number;
+  };
   timeouts: { defaultMs: number; searchMs: number };
   timeZone: () => string;
   budget?: BudgetLimits;
@@ -97,7 +108,12 @@ export class TaskRunner {
   }
 
   get limits(): TaskLimits {
-    return { summariesPerDay: SUMMARIES_PER_DAY, selectorProposalsPerDay: SELECTOR_PROPOSALS_PER_DAY, ...this.#options.limits };
+    return {
+      summariesPerDay: SUMMARIES_PER_DAY,
+      selectorProposalsPerDay: SELECTOR_PROPOSALS_PER_DAY,
+      digestsPerDay: DIGESTS_PER_DAY,
+      ...this.#options.limits,
+    };
   }
 
   providerFor(task: TaskName): Provider {
@@ -171,10 +187,25 @@ export class TaskRunner {
 
   /**
    * Model calls made for runs and proposals of selectors since the start of the current day in the configured
-   * time zone. Summaries of feed articles have an allowance of their own, so that neither uses up the other's.
+   * time zone. Summaries of feed articles and digests have allowances of their own, so that none uses up another's.
    */
   callsToday(): number {
-    return this.#countToday("task <> 'summarize'");
+    return this.#countToday(OWN_ALLOWANCE);
+  }
+
+  /** Calls that made a digest since the start of the current day, a second attempt included. */
+  digestsToday(): number {
+    return this.#countToday("task = 'digest'");
+  }
+
+  /**
+   * Why a digest cannot be made now: the day used its allowance of digests, or the provider of digests costs
+   * money and the budget period used up its budget. Null when one can.
+   */
+  digestBlocked(): "limit" | "budget" | null {
+    if (this.digestsToday() >= this.limits.digestsPerDay) return "limit";
+    if (this.providerFor("digest").pricing && this.spentThisPeriod() >= this.budget.monthlyBudgetUsd) return "budget";
+    return null;
   }
 
   /** Calls that summarised a feed article since the start of the current day. */
@@ -238,6 +269,8 @@ export class TaskRunner {
   #spend(task: TaskName, budget: CallBudget, provider: Provider): void {
     if (task === "summarize") {
       if (!this.canSummarize()) throw new LlmLimitError("day");
+    } else if (task === "digest") {
+      if (this.digestsToday() >= this.limits.digestsPerDay) throw new LlmLimitError("day");
     } else {
       if (task === "proposeSelectors" && this.selectorProposalsToday() >= this.limits.selectorProposalsPerDay) throw new LlmLimitError("day");
       if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
