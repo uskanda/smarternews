@@ -25,6 +25,14 @@ function isTyping(target: EventTarget | null): boolean {
   return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
+/**
+ * Whether the key comes from inside a dialog that keeps the one-letter keys off, so that they never reach the list
+ * behind it. The left pane of a narrow screen is a dialog too, but without the mark: its keys move between entries.
+ */
+function isInQuietDialog(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-hotkeys="off"]') !== null;
+}
+
 function isPressedBySpace(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.tagName === "BUTTON" || target.tagName === "SUMMARY") return true;
@@ -51,7 +59,7 @@ function run(name: string): boolean {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  if (event.ctrlKey || event.metaKey || event.altKey || isTyping(event.target)) return;
+  if (event.ctrlKey || event.metaKey || event.altKey || isTyping(event.target) || isInQuietDialog(event.target)) return;
   const name = keyName(event);
   if (name === null) return;
   if ((name === "Space" || name === "Shift+Space") && isPressedBySpace(event.target)) return;
