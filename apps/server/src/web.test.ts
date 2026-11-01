@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FeedPoller, SummaryWorker, Fetcher, FullContentWorker, ImageCache, ImageProxy, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
+import { DigestWorker, FeedPoller, SummaryWorker, Fetcher, FullContentWorker, ImageCache, ImageProxy, LlmTranslator, RunQueue, TranslationService } from "@smarternews/core";
 import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
@@ -33,6 +33,7 @@ function server(build: "built" | "not-built") {
     poller: new FeedPoller({ db, clock, fetcher }),
     summarizer: new SummaryWorker({ db, clock, fetcher, runner, fullContent }),
     fullContent,
+    digests: new DigestWorker({ db, clock, runner }),
     images: { key: IMAGE_KEY, proxy: new ImageProxy({ fetcher, cache: new ImageCache({ dir: join(dir, "..", "image-cache"), maxBytes: 1000, maxAgeMs: 1000, clock }) }) },
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",

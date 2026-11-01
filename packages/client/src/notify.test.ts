@@ -1,6 +1,6 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
-import { baselineFrom, minImportanceFor, NOTIFY_SETTING_LABEL, planNotifications } from "./notify.ts";
+import { baselineFrom, minImportanceFor, NOTIFY_SETTING_LABEL, planDigestNotification, planNotifications } from "./notify.ts";
 
 let serial = 0;
 function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
@@ -146,5 +146,38 @@ describe("planNotifications", () => {
   it("names a category it does not know by nothing rather than failing", () => {
     const plan = planNotifications({ setting: "all", articles: [article({ categoryId: 99 })], checkedAt: CHECKED, categories });
     expect(plan.notifications[0]).toMatchObject({ body: "" });
+  });
+});
+
+describe("planDigestNotification", () => {
+  const digest = (id: number, executiveSummary = "朝のまとめです。") => ({ id, executiveSummary });
+
+  it("notifies a digest newer than the one notified last, under the title and with the start of its summary", () => {
+    const plan = planDigestNotification({ setting: "important", latest: digest(3, "あ".repeat(300)), notifiedId: 2 });
+    expect(plan.notification).toEqual({ digestId: 3, title: "ダイジェスト", body: `${"あ".repeat(99)}…` });
+    expect(plan.notifiedId).toBe(3);
+    expect(planDigestNotification({ setting: "all", latest: digest(3), notifiedId: 2 }).notification?.body).toBe("朝のまとめです。");
+  });
+
+  it("notifies nothing when notifications are off, and keeps the mark", () => {
+    expect(planDigestNotification({ setting: "off", latest: digest(3), notifiedId: 2 })).toEqual({ notification: null, notifiedId: 2 });
+  });
+
+  it("does not notify the same digest again", () => {
+    expect(planDigestNotification({ setting: "important", latest: digest(3), notifiedId: 3 })).toEqual({ notification: null, notifiedId: 3 });
+  });
+
+  it("only records where it stands on a device that never looked, so that older digests are not notified", () => {
+    expect(planDigestNotification({ setting: "important", latest: digest(3), notifiedId: null })).toEqual({ notification: null, notifiedId: 3 });
+    // Without any digest yet, the first one made later is notified.
+    expect(planDigestNotification({ setting: "important", latest: null, notifiedId: null })).toEqual({ notification: null, notifiedId: 0 });
+    expect(planDigestNotification({ setting: "important", latest: digest(1), notifiedId: 0 }).notification).toMatchObject({ digestId: 1 });
+  });
+
+  it("is never folded into the notification that sums up four articles or more", () => {
+    const articles = Array.from({ length: 3 }, () => article({ updatedAt: "2026-03-01T07:00:00.000Z" }));
+    const plan = planNotifications({ setting: "important", articles, checkedAt: "2026-03-01T06:30:00.000Z", categories: [] });
+    expect(plan.notifications.filter((entry) => entry.kind === "article")).toHaveLength(3);
+    expect(planDigestNotification({ setting: "important", latest: digest(5), notifiedId: 4 }).notification).not.toBeNull();
   });
 });

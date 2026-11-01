@@ -5,6 +5,7 @@ import { createApi, type Fetch } from "@smarternews/client";
 import { AppContext, type AppServices } from "./app/context.ts";
 import { applyStoredTheme } from "./lib/theme.ts";
 import { readToken, writeToken } from "./lib/token-store.ts";
+import { DigestPage } from "./digests/DigestPage.tsx";
 import { ReaderPage } from "./reader/ReaderPage.tsx";
 import { RunPage } from "./runs/RunPage.tsx";
 import { RunsPage } from "./runs/RunsPage.tsx";
@@ -44,6 +45,7 @@ const routes: RouteObject[] = [
       { path: "f/:feedId/:articleId?", element: <ReaderPage view="feed" /> },
       { path: "search/:articleId?", element: <ReaderPage view="search" /> },
       { path: "mentions/:articleId?", element: <ReaderPage view="mention" /> },
+      { path: "digests/:digestId?", element: <DigestPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
       { path: "settings/feeds", element: <FeedsPage /> },

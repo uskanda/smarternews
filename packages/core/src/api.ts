@@ -46,6 +46,8 @@ export const settingsSchema = z.object({
   removeDuplicates: z.boolean(),
   /** After how many days without a new item an enabled feed counts as stale. */
   staleFeedDays: z.number().int("must be a whole number of days").min(1, "must be between 1 and 365 days").max(365, "must be between 1 and 365 days"),
+  /** The times of day, in `timeZone`, at which a digest is made. Empty: digests are made by hand only. */
+  digestSchedule: z.array(timeOfDaySchema).max(24),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -1021,7 +1023,7 @@ export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors"]);
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
 /** What the providers that cost money used in the current budget period, in US dollars. */
@@ -1055,10 +1057,71 @@ export const providerStatusSchema = z.object({
   /** Calls made today for runs. Summaries of feed articles are counted apart. */
   llmCallsToday: z.number().int(),
   summariesToday: z.number().int(),
-  limits: z.object({ llmCallsPerRun: z.number().int(), llmCallsPerDay: z.number().int(), summariesPerDay: z.number().int() }),
+  /** Calls made today for digests, counted apart from the calls of runs. */
+  digestsToday: z.number().int(),
+  limits: z.object({
+    llmCallsPerRun: z.number().int(),
+    llmCallsPerDay: z.number().int(),
+    summariesPerDay: z.number().int(),
+    digestsPerDay: z.number().int(),
+  }),
   budget: budgetStatusSchema,
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
+
+// ---- digests -----------------------------------------------------------------------------------
+
+/** What made a digest: a time of the schedule, a time missed while the server was down, or the reader. */
+export const digestTriggerSchema = z.enum(["schedule", "catch-up", "manual"]);
+export type DigestTrigger = z.infer<typeof digestTriggerSchema>;
+
+/** One line of a category section, with the ids of the articles it is drawn from. */
+export const digestLineSchema = z.object({ text: z.string(), articleIds: z.array(z.number().int()) });
+export type DigestLine = z.infer<typeof digestLineSchema>;
+
+/** The lines on one category. The name is the category's when the digest was made. */
+export const digestSectionSchema = z.object({
+  categoryId: z.number().int(),
+  categoryName: z.string(),
+  lines: z.array(digestLineSchema),
+});
+export type DigestSection = z.infer<typeof digestSectionSchema>;
+
+export const digestSummarySchema = z.object({
+  id: z.number().int(),
+  createdAt: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  trigger: digestTriggerSchema,
+  /** How many articles the model was given. */
+  articleCount: z.number().int(),
+  executiveSummary: z.string(),
+});
+export type DigestSummary = z.infer<typeof digestSummarySchema>;
+
+export const digestSchema = digestSummarySchema.extend({
+  sections: z.array(digestSectionSchema),
+  /** The source articles that are still stored. An id of a line that is missing here belongs to a deleted article. */
+  articles: z.array(z.object({ id: z.number().int(), title: z.string(), origin: originSchema })),
+});
+export type Digest = z.infer<typeof digestSchema>;
+
+export const digestListQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(200).optional() });
+export type DigestListQuery = z.infer<typeof digestListQuerySchema>;
+
+export const digestListSchema = z.object({
+  items: z.array(digestSummarySchema),
+  /** True while a digest is being made. */
+  building: z.boolean(),
+});
+export type DigestList = z.infer<typeof digestListSchema>;
+
+/**
+ * What asking for a digest now did: one is being made; or none is, because the day reached its limit, the
+ * budget period used up its budget, or the period holds no article.
+ */
+export const digestRequestResultSchema = z.object({ status: z.enum(["queued", "limit", "budget", "empty"]) });
+export type DigestRequestResult = z.infer<typeof digestRequestResultSchema>;
 
 // ---- translation -------------------------------------------------------------------------------
 

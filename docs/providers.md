@@ -1,6 +1,6 @@
 # Model providers
 
-smarternews calls a language model for eight tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
+smarternews calls a language model for nine tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
 
 | Task | What the model does | When it runs |
 |---|---|---|
@@ -12,6 +12,7 @@ smarternews calls a language model for eight tasks. A provider is a model you co
 | `summarize` | Summarises one article of a subscribed feed | Once per article of a feed that has summaries switched on |
 | `translate` | Translates the title and the content of one article of a subscribed feed | When an article of a feed that translates is opened and the translation API cannot be used; once per 8,000 characters |
 | `proposeSelectors` | Proposes CSS selectors that take the articles out of a page without a feed | When you ask for candidates while adding a web feed, or choose "候補を出し直す" while editing one |
+| `digest` | Writes the digest of a period: an executive summary and a few lines per category | At the times of the digest schedule in the settings, 7:00 and 19:00 by default, and when you choose "今すぐ作る" |
 
 Providers and assignments live in `~/.config/smarternews/config.yaml`. The server reads the file at start-up and refuses to start when an assignment names a provider that is not configured. [examples/config.example.yaml](../examples/config.example.yaml) lists every key.
 
@@ -191,6 +192,21 @@ limits:
   selectorProposalsPerDay: 50
 ```
 
+## Digests
+
+`digest` reads the articles of a period once and writes an executive summary of up to 800 characters, and up to five lines for each category with something worth telling, each with the ids of the articles it is drawn from. It receives the output language, the reader information, the categories, and at most 200 articles: their title, their category, their importance for generated articles, and a short text. That text is the summary of a generated article; of a feed article it is its summary, or the first 300 characters of what the feed delivered. The full content of a feed article is never sent. The task uses no tools.
+
+Like `proposeSelectors`, `digest` uses the provider named `smart` when `tasks` does not assign it and there is one, and `default` otherwise. It weighs many articles at once and runs a few times a day.
+
+`limits.digestsPerDay` (4 by default) bounds the calls of one day, a second attempt after an invalid answer included. These calls do not count towards `limits.llmCallsPerDay`, so runs and digests never use up each other's allowance. 0 switches digests off. Under the `anthropic` adapter, digests also count towards the monthly budget, and none is made once it is used up.
+
+```yaml
+tasks:
+  digest: smart
+limits:
+  digestsPerDay: 4
+```
+
 ## Mixing providers
 
 Assignments are per task, so a cheap model can do the high-volume work. `judge` reads up to 30 short candidates per call and `cluster` reads headlines, while `write` produces the text you read. The default configuration therefore runs `judge` and `cluster` on `haiku` and the other tasks on `sonnet`.
@@ -199,7 +215,7 @@ Assignments are per task, so a cheap model can do the high-volume work. `judge` 
 
 The server validates every answer against the task's schema. An answer that does not match is requested once more with the same input. A second mismatch fails the task: nothing is stored, and the run history records the failure.
 
-A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, and `limits.selectorProposalsPerDay` those of proposals of selectors; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
+A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, and `limits.selectorProposalsPerDay` those of proposals of selectors, and `limits.digestsPerDay` those of digests; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
 
 `limits.runRetries` (2 by default, 0 to 3) is how often a scheduled run that ended as `failed` is tried again. Each retry is a run like any other, so it obeys `limits.llmCallsPerRun` and `limits.llmCallsPerDay`. While a provider stays down, a category therefore uses up to three runs' worth of calls for one scheduled time. A run that stopped at a limit is not retried.
 

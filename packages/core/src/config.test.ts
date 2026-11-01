@@ -18,6 +18,7 @@ describe("parseConfig", () => {
       summarize: "fast",
       translate: "fast",
       proposeSelectors: "smart",
+      digest: "smart",
     });
   });
 
@@ -37,6 +38,7 @@ tasks: { default: a, judge: b }
       summarize: "a",
       translate: "a",
       proposeSelectors: "a",
+      digest: "a",
     });
   });
 
@@ -76,6 +78,7 @@ providers:
       llmCallsPerDay: 350,
       summariesPerDay: 100,
       selectorProposalsPerDay: 50,
+      digestsPerDay: 4,
       judgeBatchSize: 30,
       pagesPerRun: 20,
       runRetries: 2,
@@ -231,6 +234,23 @@ describe("the task that proposes selectors and its limit", () => {
     expect(parseConfig(null).limits).toMatchObject({ selectorProposalsPerDay: 50, llmCallsPerDay: 350 });
     expect(parseConfig("limits:\n  selectorProposalsPerDay: 0\n").limits.selectorProposalsPerDay).toBe(0);
     expect(() => parseConfig("limits:\n  selectorProposalsPerDay: -1\n")).toThrow(/limits\.selectorProposalsPerDay/);
+  });
+});
+
+describe("the digest task and its limit", () => {
+  const providers = (names: string[]) => `providers:\n${names.map((name) => `  ${name}: { adapter: claude-cli, model: m }\n`).join("")}`;
+
+  it("goes to smart when nothing is assigned, to the default when there is no smart, and to the assigned one", () => {
+    expect(resolveAssignment(parseConfig(null)).digest).toBe("smart");
+    expect(resolveAssignment(parseConfig(`${providers(["fast", "smart"])}tasks:\n  default: fast\n`)).digest).toBe("smart");
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`)).digest).toBe("big");
+    expect(resolveAssignment(parseConfig(`${providers(["big", "smart", "local"])}tasks:\n  default: big\n  digest: local\n`)).digest).toBe("local");
+  });
+
+  it("allows 4 digests a day unless the file says otherwise, and 0", () => {
+    expect(parseConfig(null).limits.digestsPerDay).toBe(4);
+    expect(parseConfig("limits:\n  digestsPerDay: 0\n").limits.digestsPerDay).toBe(0);
+    expect(() => parseConfig("limits:\n  digestsPerDay: -1\n")).toThrow(/limits\.digestsPerDay/);
   });
 });
 

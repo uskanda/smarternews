@@ -3,6 +3,13 @@
 import {
   annotationListSchema,
   articleNoteSchema,
+  digestListSchema,
+  digestRequestResultSchema,
+  digestSchema,
+  type Digest,
+  type DigestList,
+  type DigestListQuery,
+  type DigestRequestResult,
   highlightSchema,
   type AnnotationList,
   type AnnotationListQuery,
@@ -334,6 +341,12 @@ export function createApi(options: ApiOptions) {
     run: (id: number): Promise<Run> => json(runSchema, `/runs/${id}`),
     runCandidates: (id: number, status: Candidate["status"] | "all" = "rejected"): Promise<Candidate[]> =>
       json(z.array(candidateSchema), `/runs/${id}/candidates${query({ status })}`),
+
+    /** The digests, the latest first, and whether one is being made. */
+    digests: (filter: DigestListQuery = {}): Promise<DigestList> => json(digestListSchema, `/digests${query(filter)}`),
+    digest: (id: number): Promise<Digest> => json(digestSchema, `/digests/${id}`),
+    /** Asks for a digest now. Answers at once: a digest that was started shows in the list when it is made. */
+    requestDigest: (): Promise<DigestRequestResult> => json(digestRequestResultSchema, "/digests", { method: "POST" }),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
     /** How much the translation API was used this month, and whether it has a key. */

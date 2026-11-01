@@ -482,3 +482,19 @@ terms:
     definition: "予算の期間に使った金額が月の予算のこの割合に達すると、画面が警告を出す値。"
     aliases: ["警告しきい値"]
     en: "warning ratio"
+  - term: "ダイジェスト"
+    definition: "決まった時刻に、期間内の生成記事と配信記事のうち重要なものをLLMが1つの文章にまとめたもの。エグゼクティブサマリーとカテゴリの区画からなる。"
+    aliases: ["全文まとめ", "定期まとめ", "まとめ記事"]
+    en: "digest"
+  - term: "エグゼクティブサマリー"
+    definition: "ダイジェストの先頭に置く、すべての購読フィードと生成記事をまとめた800文字以内の文章。"
+    aliases: ["全体の要約", "総括"]
+    en: "executive summary"
+  - term: "カテゴリの区画"
+    definition: "ダイジェストのうち、1つのカテゴリの重要な記事を3行程度にまとめた部分。各行は根拠の記事を持つ。"
+    aliases: ["カテゴリのまとめ"]
+    en: "category section"
+  - term: "根拠の記事"
+    definition: "ダイジェストのカテゴリの区画の1行が、内容の出典にした記事。"
+    aliases: ["参照記事"]
+    en: "source article"

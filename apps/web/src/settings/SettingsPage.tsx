@@ -157,6 +157,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
     timeZone: settings.timeZone,
     language: settings.search.language,
     region: settings.search.region,
+    digestSchedule: settings.digestSchedule.join(", "),
   });
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
@@ -181,8 +182,11 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         advanceAfterMarkAll: advance,
         removeDuplicates,
         staleFeedDays,
+        digestSchedule: form.digestSchedule.split(/[\s,、]+/).filter((time) => time.length > 0),
       });
       client.setQueryData(["settings"], saved);
+      // The server puts the times in order and drops the same time given twice.
+      setForm((shown) => ({ ...shown, digestSchedule: saved.digestSchedule.join(", ") }));
       // Which feeds are stale follows the days at once.
       void client.invalidateQueries({ queryKey: ["feeds"] });
       setError(null);
@@ -218,6 +222,15 @@ function GlobalSettings({ settings }: { settings: Settings }) {
           error={refusal(error, "search.region")}
           hint="JP や US のように、大文字2文字で書きます。"
         />
+        <div className="sm:col-span-2">
+          <Field
+            label="ダイジェストを作る時刻"
+            value={form.digestSchedule}
+            onChange={set("digestSchedule")}
+            error={refusal(error, "digestSchedule")}
+            hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「今すぐ作る」でだけ作ります。"
+          />
+        </div>
         <div className="sm:col-span-2">
           <Checkbox
             label="「すべて既読にする」のあと、未読のある次の項目へ移る"

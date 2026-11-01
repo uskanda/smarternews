@@ -19,7 +19,7 @@ const radio = (name: string) => screen.getByRole("radio", { name });
 const response = (data: Record<string, unknown>) => ({ notification: { request: { content: { data } } } });
 
 /** A device that is connected, has notifications on, and has looked at the server as it is now. */
-async function watching(server: TestServer, setting: "important" | "all" = "important", options: { offline?: () => boolean } = {}) {
+async function watching(server: TestServer, setting: "important" | "all" = "important", options: { offline?: () => boolean; failing?: (request: string) => boolean } = {}) {
   const device = await prepareDevice({ server, ...options });
   await saveNotifySetting(setting);
   await saveCheckedAt(BEGINNING); // nothing existed yet
@@ -313,7 +313,121 @@ describe("the periodic check", () => {
   });
 });
 
+describe("the digest notification", () => {
+  it("notifies a new digest once, titled ダイジェスト with the head of its executive summary", async () => {
+    const server = await makeServer();
+    await server.digest({ executiveSummary: "Before." });
+    await watching(server);
+    await server.advance(MINUTE);
+    const id = await server.digest({ executiveSummary: "x".repeat(200) });
+
+    expect(await runCheck()).toBe("notified");
+    await runCheck();
+
+    expect(notifications().shown).toHaveLength(1);
+    const [shown] = notifications().shown;
+    expect(shown!.identifier).toBe("digest");
+    expect(shown!.content.title).toBe("ダイジェスト");
+    expect(shown!.content.body.startsWith("xxxx")).toBe(true);
+    expect(shown!.content.body.length).toBeLessThan(200);
+    expect(shown!.content.data).toEqual({ digestId: id });
+  });
+
+  it("notifies only the latest of two new digests", async () => {
+    const server = await makeServer();
+    await watching(server);
+    await server.advance(MINUTE);
+    await server.digest({ executiveSummary: "Morning." });
+    await server.advance(MINUTE);
+    const latest = await server.digest({ executiveSummary: "Evening." });
+
+    await runCheck();
+
+    expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "ダイジェスト", body: "Evening.", data: { digestId: latest } }]);
+  });
+
+  it("does not count toward the articles that are folded into one", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    await watching(server, "all");
+    await server.advance(MINUTE);
+    for (const title of ["A", "B", "C"]) await server.article(category.id, { title });
+    await server.digest({ executiveSummary: "Overview." });
+
+    await runCheck();
+
+    expect(notifications().shown.map((entry) => entry.content.title).sort()).toEqual(["A", "B", "C", "ダイジェスト"]);
+  });
+
+  it("does not notify the digests made before notifications were turned on", async () => {
+    const server = await makeServer();
+    for (const summary of ["One.", "Two.", "Three."]) await server.digest({ executiveSummary: summary });
+    await renderApp({ server, url: "/settings" });
+    const user = userEvent.setup();
+    await waitFor(() => expect(radio("重要度5だけ")).toBeChecked());
+    await user.press(radio("出さない"));
+    await waitFor(() => expect(radio("出さない")).toBeChecked());
+    await server.advance(MINUTE);
+    await server.digest({ executiveSummary: "While off." });
+
+    await user.press(radio("重要度5だけ"));
+    await waitFor(() => expect(radio("重要度5だけ")).toBeChecked());
+    await runCheck();
+    expect(notifications().shown).toEqual([]);
+
+    await server.advance(MINUTE);
+    await server.digest({ executiveSummary: "After." });
+    await runCheck();
+
+    expect(notifications().shown.map((entry) => entry.content.body)).toEqual(["After."]);
+  });
+
+  it("is not notified on the first check of a device that never looked at digests", async () => {
+    const server = await makeServer();
+    for (const summary of ["One.", "Two.", "Three."]) await server.digest({ executiveSummary: summary });
+    await prepareDevice({ server });
+    await saveNotifySetting("important");
+    await saveCheckedAt(BEGINNING);
+
+    await runCheck();
+
+    expect(notifications().shown).toEqual([]);
+  });
+
+  it("keeps the mark of the articles when the digests cannot be read, and notifies the digest on the next check", async () => {
+    const server = await makeServer();
+    const category = await server.category();
+    let digestsDown = false;
+    await watching(server, "important", { failing: (request) => digestsDown && request.includes("/digests") });
+    await server.advance(MINUTE);
+    await server.article(category.id, { title: "Zero-day", importance: 5 });
+    await server.digest({ executiveSummary: "Overview." });
+
+    digestsDown = true;
+    await runCheck();
+    expect(notifications().shown.map((entry) => entry.content.title)).toEqual(["Zero-day"]);
+
+    digestsDown = false;
+    await runCheck();
+    expect(notifications().shown.map((entry) => entry.content.title)).toEqual(["Zero-day", "ダイジェスト"]);
+  });
+});
+
 describe("pressing a notification", () => {
+  it("opens the digest it is about", async () => {
+    const server = await makeServer();
+    const first = await server.digest({ executiveSummary: "Morning overview." });
+    await server.advance(MINUTE);
+    await server.digest({ executiveSummary: "Evening overview." });
+    await renderApp({ server, url: "/settings" });
+    await screen.findByRole("header", { name: "設定" });
+    await waitFor(() => expect(notifications().listeners.length).toBeGreaterThan(0));
+
+    await act(async () => notifications().listeners.forEach((listener) => listener(response({ digestId: first }))));
+
+    expect(await screen.findByText("Morning overview.")).toBeOnTheScreen();
+  });
+
   it("opens the article it is about", async () => {
     const server = await makeServer();
     const id = await server.article((await server.category()).id, { title: "Zero-day", importance: 5 });
