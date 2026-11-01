@@ -5,7 +5,7 @@ import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullConte
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { listPathOf } from "../lib/paths.ts";
-import { AnnotatedBody, ArticleNoteSection, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
+import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Mentions } from "./Mentions.tsx";
@@ -193,6 +193,7 @@ export function ArticleView({
   // On a narrow screen the article replaces the list, and the link that was activated is gone:
   // the focus moves to the headline so that keyboard and screen reader users land in the article.
   const heading = useRef<HTMLHeadingElement>(null);
+  const pane = useRef<HTMLElement>(null);
   const narrow = backTo !== null;
   const loadedId = article?.id;
   useEffect(() => {
@@ -224,9 +225,12 @@ export function ArticleView({
   // The full content stands in the place of what the feed delivered, unless the reader switched back to that.
   const fullShown = article.fullContent !== null && !fullContent.showDelivered;
   const translated = article.translation !== null && (fullShown || article.fullContent === null);
+  // The title as the site wrote it, which a filter matches: the line under a translated title, or the headline.
+  const originalTitleShown = article.translatedTitle !== null && article.translatedTitle !== article.title;
+  const filterSource = (original: boolean) => (delivered && original ? { [FILTER_SOURCE_ATTRIBUTE]: "" } : {});
 
   return (
-    <article aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
+    <article ref={pane} aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
       {/* One column, at most `measure-article` wide in characters of the body text, in the middle of the pane. */}
       <div className="mx-auto flex w-full max-w-measure-article flex-col gap-lg type-body-lg">
         {back}
@@ -248,12 +252,12 @@ export function ArticleView({
           {article.starred ? <span>スター</span> : null}
         </div>
         <div className="flex flex-col gap-xs">
-          <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none">
+          <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none" {...filterSource(!originalTitleShown)}>
             <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
           </h2>
-          {article.translatedTitle !== null && article.translatedTitle !== article.title ? (
+          {originalTitleShown ? (
             // The title as the site wrote it, marked with its language so that it is read out in that language.
-            <p lang={article.sourceLanguage ?? undefined} className="type-body-md text-on-surface-muted">
+            <p lang={article.sourceLanguage ?? undefined} className="type-body-md text-on-surface-muted" {...filterSource(true)}>
               <Highlighted text={article.title} terms={terms} groups={groups} />
             </p>
           ) : null}
@@ -331,6 +335,7 @@ export function ArticleView({
           count={translated ? article.translation!.segments.length : 1}
           enabled={article.fullContent === null || fullShown}
           focusId={focusAnnotation}
+          scope={pane}
           render={(marksFor) =>
             translated ? (
               // The translation is of the full content when there is one: what the feed delivered is then shown without one.
