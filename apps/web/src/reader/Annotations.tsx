@@ -249,6 +249,7 @@ function HighlightDialog({
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY} />
         <Dialog.Content
+          data-hotkeys="off"
           aria-describedby={undefined}
           onCloseAutoFocus={(event) => {
             const target = returnFocus();
@@ -293,7 +294,7 @@ function NewHighlightDialog({ quote, onSave, onClose }: { quote: string; onSave:
     <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content aria-describedby={undefined} className={PANEL}>
+        <Dialog.Content data-hotkeys="off" aria-describedby={undefined} className={PANEL}>
           <Dialog.Title className="type-headline-md">メモを書いてハイライトする</Dialog.Title>
           <Quote>{quote}</Quote>
           <NoteForm

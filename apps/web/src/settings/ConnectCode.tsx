@@ -48,7 +48,10 @@ export function ConnectCode() {
       <Dialog.Root open={code !== null} onOpenChange={(open) => (open ? undefined : setLink(null))}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-on-surface/40" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md rounded-lg border border-outline bg-surface p-xl">
+          <Dialog.Content
+            data-hotkeys="off"
+            className="fixed top-1/2 left-1/2 z-50 flex w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md rounded-lg border border-outline bg-surface p-xl"
+          >
             <Dialog.Title className="type-headline-md">アプリを接続する</Dialog.Title>
             <Dialog.Description className="type-body-md">
               アプリの接続の画面で「QRコードを読み取る」を押し、このコードを写してください。

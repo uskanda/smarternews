@@ -217,3 +217,23 @@ describe("the menu of a right click on the article", () => {
     await waitFor(() => expect(article.querySelector("mark.annotation-mark")).toHaveTextContent("特売"));
   });
 });
+
+describe("keys while the dialog for a hide filter is open", () => {
+  it("does not move through the list behind it", async () => {
+    const { server, feed, id } = shop();
+    const { user, path } = renderApp({ server, route: `/f/${feed.id}/${id}` });
+    const article = await opened();
+    await within(article).findByText(/春の特売/);
+    await within(screen.getByRole("region", { name: "記事の一覧" })).findByText("夏の特売");
+
+    selectText(article.querySelector(".article-body")!, "特売");
+    await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: MAKE }));
+    const dialog = await screen.findByRole("dialog", { name: "隠すフィルターを作る" });
+    within(dialog).getByRole("button", { name: "隠れる件数を確かめる" }).focus();
+    await user.keyboard("j");
+    await settle();
+
+    expect(path()).toBe(`/f/${feed.id}/${id}`);
+    expect(screen.getByRole("dialog", { name: "隠すフィルターを作る" })).toBeInTheDocument();
+  });
+});

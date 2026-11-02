@@ -1,4 +1,4 @@
-import { addHighlight, createFilter, insertFeed, saveArticleNote, saveArticleTranslation, saveAutoSummary, saveFullContent, saveTranslatedTitle } from "@smarternews/core";
+import { addHighlight, createFilter, getArticle, insertFeed, saveArticleNote, saveArticleTranslation, saveAutoSummary, saveFullContent, saveTranslatedTitle } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { createTermMatcher } from "@smarternews/client";
 import { ANNOTATION_SAMPLE_MARKDOWN, ANNOTATION_SAMPLE_TEXT, withoutSpaces } from "@smarternews/client/testing";
@@ -521,5 +521,38 @@ describe("an annotation on a feed article that filters hide", () => {
     await user.clear(await within(article).findByLabelText("記事へのメモ"));
     await user.click(within(article).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(within(list).queryByText("特売の話")).toBeNull());
+  });
+});
+
+describe("keys while a dialog of a highlight is open", () => {
+  it("does not star the article behind the dialog of a highlight", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    addHighlight(server.db, id, anchor(QUOTE), server.clock().toISOString());
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await user.click(await within(article).findByRole("button", { name: "ハイライト" }));
+    const dialog = await screen.findByRole("dialog", { name: "ハイライト" });
+    within(dialog).getByRole("button", { name: "閉じる" }).focus();
+    await user.keyboard("s");
+
+    expect(getArticle(server.db, id)?.starred).toBe(false);
+    expect(screen.getByRole("dialog", { name: "ハイライト" })).toBeInTheDocument();
+  });
+
+  it("does not star the article behind the dialog for writing a note and highlighting", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await within(article).findByText(/電池の工場/);
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "メモを書く" }));
+    const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
+    within(dialog).getByRole("button", { name: "やめる" }).focus();
+    await user.keyboard("s");
+
+    expect(getArticle(server.db, id)?.starred).toBe(false);
+    expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBeInTheDocument();
   });
 });
