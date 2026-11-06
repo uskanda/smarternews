@@ -21,12 +21,12 @@
 
 ## Decisions
 
-- 線は、選択中の `li`（`relative`）の中に `aria-hidden` の `span` を `absolute inset-y-0 right-0 w-[3px] bg-primary` で置いて描く。`border-r` で描くと行の内側の幅が変わり、選んだときに見出しの折り返しが変わることがあるためである。3つの一覧で同じ部品 `SelectedMark` を使う。
+- 線は、選択中の `li`（`relative`）の中に、`aria-hidden` の `span` を右端へ絶対配置で置いて描く。幅3pxと `primary` の地は、`app.css` の `.selected-mark` に書く。`border-r` で描くと行の内側の幅が変わる。すると、選んだときに見出しの折り返しまで変わることがある。3つの一覧で同じ部品 `SelectedMark` を使う。
 - `primary` と `selected` の差は、ライトで約8.0対1、ダークブルーで約7.2対1、ダークで約7.9対1あり、どれも3対1以上である。
-- フォーカスを移すかは、`move` の時点で `document.activeElement` が一覧のスクロール領域（`[data-list-scroll]`）の中にあるかで決め、`useRef` に覚える。選択が変わったあとの `useLayoutEffect` で、覚えていた場合だけ `[aria-current="true"]` のリンクに `focus({ preventScroll: true })` を呼ぶ。スクロールは今の `followScroll` に任せる。Spaceは本文の末尾で `move` を呼ぶので、同じ条件で動く。
-- 「未読。」は、見出しの `span` の先頭に `sr-only` の `span` で置く。重要度の「重要度N。」と同じ書き方にそろえる。見出しの文字は `[data-title]` の中に残るので、見出しを読むテストは影響を受けない。
+- フォーカスを移すかは、`move` の時点で決めて `useRef` に覚える。`document.activeElement` が一覧のスクロール領域（`[data-list-scroll]`）の中にあれば移す。選択が変わったあとの `useLayoutEffect` で、覚えていた場合だけ、選んだ行のリンクの `focus` を `preventScroll` 付きで呼ぶ。スクロールは `followScroll` に任せる。`Space` は本文の末尾で `move` を呼ぶので、同じ条件で動く。
+- `未読。` は、見出しの `span` の先頭に `sr-only` の `span` で置く。重要度の `重要度N。` と同じ書き方にそろえる。見出しの文字は `[data-title]` の中に残るので、見出しを読むテストは影響を受けない。
 
 ## Risks / Trade-offs
 
-- 右端の線は、狭い1ペインの画面では行の幅いっぱいの右端に出る。スクロールバーと重なることはないが、目立ちにくい。→ 地の色と併せて示すので、受け入れる。
+- 右端の線は、一覧のペインの右の罫線のすぐ内側に出るので、罫線と近く、目立ちにくいことがある。→ 地の色と太さ3pxで見分けられるので、受け入れる。
 - フォーカスを一覧の中にあるときだけ移すので、ページを開いた直後の `j` ではフォーカスは動かない。→ 承認された計画どおりで、本文を読む人の読み上げの位置を飛ばさないためである。

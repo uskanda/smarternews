@@ -57,6 +57,16 @@
     padding-left: calc(var(--spacing-xl) + var(--spacing-nav-indent));
   }
 
+  /* The selected row of a list: a line down its right edge, besides the ground, which alone is too faint. */
+  .selected-mark {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 3px;
+    background-color: var(--color-primary);
+  }
+
   @media (pointer: coarse) {
     .nav-fold {
       width: var(--spacing-touch);

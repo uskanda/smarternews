@@ -4,10 +4,11 @@ import { formatShort } from "@smarternews/client";
 import { useTermMatcher } from "../api/queries.ts";
 import { Badge } from "../ui/controls.tsx";
 import { Highlighted } from "./highlight.tsx";
+import { SelectedMark } from "./SelectedMark.tsx";
 
 /**
  * One line of the list. Importance four gets a highlighter stroke in the margin and five has its headline
- * marked; both are also said in words for people who cannot see the mark.
+ * marked; both are also said in words for people who cannot see the mark, and so is an unread row.
  */
 export function ArticleRow({
   article,
@@ -56,8 +57,10 @@ export function ArticleRow({
           className={`absolute left-xs w-xs rounded-sm bg-mark ${article.importance === 5 ? "inset-y-md" : "top-md h-lg"}`}
         />
       ) : null}
+      {selected ? <SelectedMark /> : null}
       <Link to={to} aria-current={selected ? "true" : undefined} className="flex flex-col gap-px py-md pr-lg pl-lg">
         <span className={article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
+          {article.isRead ? null : <span className="sr-only">未読。</span>}
           {marked ? <span className="sr-only">重要度{article.importance}。</span> : null}
           <span data-title className={article.importance === 5 ? "headline-mark" : ""}>
             <Highlighted text={headline} terms={terms} groups={matcher} />
