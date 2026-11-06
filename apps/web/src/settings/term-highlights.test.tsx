@@ -41,6 +41,7 @@ describe("the settings page", () => {
 
     await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
     await waitFor(() => expect(settingsFile).toHaveTextContent("語のまとまりを1件作成、語を2件追加"));
   });
