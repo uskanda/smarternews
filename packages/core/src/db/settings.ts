@@ -40,7 +40,7 @@ export function getSettings(db: Database, defaultTimeZone: string = systemTimeZo
 export function updateSettings(db: Database, patch: SettingsUpdate): Settings {
   if (patch.timeZone !== undefined && !isValidTimeZone(patch.timeZone)) {
     throw new DomainError("invalid", "unknown time zone", [
-      { path: "timeZone", message: `"${patch.timeZone}" is not an IANA time zone name` },
+      { path: "timeZone", message: `"${patch.timeZone}" is not an IANA time zone name`, code: "unknown_time_zone" },
     ]);
   }
   const next = { ...getSettings(db), ...patch };

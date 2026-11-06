@@ -1,7 +1,7 @@
 import type { Category, PageCandidates, PageSelectors } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { ApiError, conflictLabel, fieldError, UNCATEGORIZED_LABEL } from "@smarternews/client";
+import { ApiError, checkRequired, conflictLabel, fieldError, fieldMessage, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
@@ -10,6 +10,7 @@ import { Button, Field, messageFor } from "../ui/controls.tsx";
 
 const SELECT = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 export const NO_CATEGORY = "";
+const URL_LABEL = "フィードまたはサイトのURL";
 
 function useRefresh() {
   const client = useQueryClient();
@@ -96,10 +97,10 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
 
   function explain(error: unknown): string {
     if (error instanceof ApiError && error.kind === "conflict") return conflictLabel(error.message);
-    const reason = fieldError(error, "url");
-    if (reason) return `このURLを取得できませんでした。URLを確かめてください（${reason}）`;
+    const url = fieldMessage(error, "url", "URL");
+    if (url) return url;
     if (fieldError(error, "selectors")) return "このセレクターではページから記事を抜き出せませんでした。見本を確かめてください。";
-    return messageFor(error);
+    return fieldMessage(error, "categoryId", "カテゴリ") ?? messageFor(error);
   }
 
   function leavePage() {
@@ -161,6 +162,11 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
 
   function add(event: FormEvent) {
     event.preventDefault();
+    const empty = page === null && found === null ? checkRequired(url, URL_LABEL) : null;
+    if (empty !== null) {
+      setProblem(empty);
+      return;
+    }
     void run(async () => {
       if (page !== null) {
         const selectors = pageSelectors(candidates.state.status === "ready" ? candidates.state.result : null);
@@ -182,9 +188,9 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
   }
 
   return (
-    <form onSubmit={add} className="flex max-w-measure flex-col gap-md">
+    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
       <Field
-        label="フィードまたはサイトのURL"
+        label={URL_LABEL}
         type="url"
         inputMode="url"
         autoComplete="off"

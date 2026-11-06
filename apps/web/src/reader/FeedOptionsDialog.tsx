@@ -39,7 +39,7 @@ function FeedOptionsForm({ feed, onDone }: { feed: Feed; onDone: () => void }) {
   }
 
   return (
-    <form onSubmit={save} className="flex flex-col gap-md">
+    <form noValidate onSubmit={save} className="flex flex-col gap-md">
       <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />

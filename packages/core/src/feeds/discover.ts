@@ -16,7 +16,7 @@ interface LinkElement {
 }
 
 function refuse(message: string): DomainError {
-  return new DomainError("invalid", message, [{ path: "url", message }]);
+  return new DomainError("invalid", message, [{ path: "url", message, code: "unreachable" }]);
 }
 
 /**

@@ -92,7 +92,7 @@ describe("updateSettings", () => {
     const db = createTestDb();
     updateSettings(db, { timeZone: "Asia/Tokyo" });
     expect(() => updateSettings(db, { timeZone: "Mars/Olympus", readerInfo: "x" })).toThrow(
-      expect.objectContaining({ code: "invalid" }),
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "timeZone", code: "unknown_time_zone" })] }),
     );
     expect(getSettings(db)).toMatchObject({ timeZone: "Asia/Tokyo", readerInfo: "" });
   });
