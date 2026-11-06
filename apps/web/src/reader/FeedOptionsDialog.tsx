@@ -58,7 +58,7 @@ function FeedOptionsForm({ feed, onDone }: { feed: Feed; onDone: () => void }) {
 export function FeedOptionsDialog({ feed }: { feed: Feed }) {
   const [open, setOpen] = useState(false);
   return (
-    <FormDialog open={open} onOpenChange={setOpen} trigger={<Button>フィードの設定</Button>} title="フィードの設定">
+    <FormDialog open={open} onOpenChange={setOpen} trigger={<Button>購読フィードの設定</Button>} title="購読フィードの設定">
       <FeedOptionsForm feed={feed} onDone={() => setOpen(false)} />
     </FormDialog>
   );

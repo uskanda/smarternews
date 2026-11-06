@@ -1,7 +1,8 @@
 import { FEED_INTERVAL_MINUTES_MAX, FEED_INTERVAL_MINUTES_MIN, FEED_TITLE_MAX_CHARS, type Category, type Feed, type FeedStats, type Settings } from "@smarternews/core/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
+import { useFetchFeedNow } from "../lib/fetch-now.ts";
 import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -294,12 +295,11 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
 
 function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categories: Category[]; settings: Settings | undefined; timeZone: string }) {
   const { api } = useApp();
-  const client = useQueryClient();
   const refresh = useRefresh();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [fetching, setFetching] = useState(false);
+  const { fetching, fetchNow } = useFetchFeedNow(feed, "取得できませんでした。理由は一覧に表示しています。");
   // When the form closes, the focus goes back to the button that opened it.
   const editButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
@@ -310,43 +310,24 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
   const categoryName = categories.find((category) => category.id === feed.categoryId)?.name ?? UNCATEGORIZED_LABEL;
   const interval = feed.intervalMinutes === null ? `基本の取得周期（${settings?.feedIntervalMinutes ?? "…"}分）` : `${feed.intervalMinutes}分ごと`;
 
-  async function fetchNow() {
-    setFetching(true);
-    try {
-      const result = await api.fetchFeed(feed.id);
-      // The answer holds the feed as it is now, so the row changes without waiting for the next refresh.
-      client.setQueryData<Feed[]>(["feeds"], (list) => list?.map((entry) => (entry.id === feed.id ? result.feed : entry)));
-      refresh("counts", "articles", "feed-stats");
-      toast({
-        message:
-          result.status === "failed"
-            ? "取得できませんでした。理由は一覧に表示しています。"
-            : result.created > 0
-              ? `新しい記事を${result.created}件取得しました`
-              : "新しい記事はありませんでした",
-      });
-    } catch (error) {
-      toast({ message: messageFor(error) });
-    } finally {
-      setFetching(false);
-    }
-  }
-
   async function remove() {
     try {
       await api.deleteFeed(feed.id);
       refresh("feeds", "counts", "articles", "filters");
-      toast({ message: "購読フィードを削除しました" });
+      toast({ message: "購読フィードの登録を解除しました" });
     } catch {
-      toast({ message: "削除できませんでした。もう一度試してください。" });
+      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
     }
     setConfirming(false);
   }
 
   return (
-    <li className="flex flex-col gap-xs border-b border-outline py-md type-body-md">
+    // The list of a feed links here by this id, to put the row right that it reports on.
+    <li id={`feed-${feed.id}`} className="flex scroll-mt-md flex-col gap-xs border-b border-outline py-md type-body-md">
       <div className="flex flex-wrap items-baseline gap-x-lg gap-y-xs">
-        <span className="type-label-md">{feed.title}</span>
+        <span data-feed-heading tabIndex={-1} className="type-label-md">
+          {feed.title}
+        </span>
         <span className="text-on-surface-muted">{categoryName}</span>
         <span className="tabular-nums text-on-surface-muted">{interval}</span>
       </div>
@@ -364,19 +345,19 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
           <Button ref={editButton} aria-label={`${feed.title}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
-          <Button aria-label={`${feed.title}を削除`} onClick={() => setConfirming(true)}>
-            削除
+          <Button aria-label={`${feed.title}の登録を解除`} onClick={() => setConfirming(true)}>
+            登録を解除
           </Button>
         </div>
       )}
       <ConfirmDialog
         open={confirming}
-        title="購読フィードを削除しますか"
+        title="購読フィードの登録を解除しますか"
         onDismiss={() => setConfirming(false)}
         actions={
           <>
             <Button variant="danger" onClick={() => void remove()}>
-              削除する
+              登録を解除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
           </>
@@ -437,7 +418,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
         />
         <div>
           <Button type="submit" variant="primary">
-            取得周期を保存
+            保存する
           </Button>
         </div>
       </form>
@@ -561,6 +542,17 @@ export function FeedsPage() {
   const categories = useCategories().data ?? [];
   const settings = useSettings().data;
   const timeZone = useTimeZone();
+  // Opened from the list of a feed as /settings/feeds#feed-<id>: once the rows are there, that row is brought
+  // into view and its name takes the focus, so that the reader starts where the problem is.
+  const { hash } = useLocation();
+  const loaded = feeds.data !== undefined;
+  useEffect(() => {
+    if (!loaded || !/^#feed-\d{1,15}$/.test(hash)) return;
+    const row = document.getElementById(hash.slice(1));
+    if (!row) return;
+    row.scrollIntoView?.({ block: "start" });
+    row.querySelector<HTMLElement>("[data-feed-heading]")?.focus({ preventScroll: true });
+  }, [hash, loaded]);
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
@@ -569,7 +561,7 @@ export function FeedsPage() {
         </Link>
         <h1 className="type-headline-md">購読フィード</h1>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          登録したフィードを定期的に取得し、配信された記事をそのまま一覧に並べます。AIによる要約はしません。
+          登録したフィードを定期的に取得し、配信された記事をそのまま一覧に並べます。要約と翻訳は、選んだ購読フィードの記事だけに行います。
         </p>
       </header>
       <AddFeed categories={categories} />
