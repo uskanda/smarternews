@@ -467,6 +467,7 @@ describe("the settings file", () => {
     const settingsFile = await section("設定ファイル");
     await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
     await waitFor(() => expect(settingsFile).toHaveTextContent("カテゴリを2件作成"));
     expect(settingsFile).toHaveTextContent("トピックを1件作成");
@@ -481,9 +482,44 @@ describe("the settings file", () => {
     const settingsFile = await section("設定ファイル");
     await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
     expect(await within(settingsFile).findByRole("alert")).toHaveTextContent("categories.0.kind");
     expect(listCategories(server.db)).toEqual([]);
+  });
+
+  it("asks before loading, with the file's name and what loading overwrites", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const file = new File(["version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n"], "moved.yaml");
+
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "設定ファイルを読み込みますか" });
+    expect(dialog).toHaveTextContent("moved.yaml");
+    expect(dialog).toHaveTextContent("一致するカテゴリ、トピック、購読フィードを更新します");
+    expect(dialog).toHaveTextContent("読み手情報と全体設定を上書きします");
+    expect(dialog).toHaveTextContent("元に戻せません");
+    expect(dialog).toHaveTextContent("先に「書き出す」で控えを取れます");
+    expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus();
+    expect(listCategories(server.db)).toEqual([]);
+  });
+
+  it("loads nothing when the loading is called off", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const file = new File(["version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n"], "moved.yaml");
+
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(listCategories(server.db)).toEqual([]);
+    expect(settingsFile).not.toHaveTextContent("件作成");
   });
 
   it("explains that loading updates, creates and never deletes", async () => {
@@ -566,13 +602,36 @@ describe("qrPath", () => {
 });
 
 describe("the stored token", () => {
-  it("is removed on request, and the app asks for it again", async () => {
+  it("asks before it is removed, saying that it has to be entered again", async () => {
     const { user } = renderApp({ route: "/settings" });
 
     await user.click(await screen.findByRole("button", { name: "このブラウザーからトークンを消す" }));
 
+    const dialog = await screen.findByRole("alertdialog", { name: "トークンを消しますか" });
+    expect(dialog).toHaveTextContent("サーバーで表示したトークンをもう一度入力");
+    expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus();
+    expect(window.localStorage.getItem("smarternews.token")).not.toBeNull();
+  });
+
+  it("is removed once confirmed, and the app asks for it again", async () => {
+    const { user } = renderApp({ route: "/settings" });
+
+    await user.click(await screen.findByRole("button", { name: "このブラウザーからトークンを消す" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "消す" }));
+
     expect(await screen.findByLabelText("APIのトークン")).toBeInTheDocument();
     expect(window.localStorage.getItem("smarternews.token")).toBeNull();
+  });
+
+  it("stays when the removal is called off", async () => {
+    const { user } = renderApp({ route: "/settings" });
+
+    await user.click(await screen.findByRole("button", { name: "このブラウザーからトークンを消す" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(window.localStorage.getItem("smarternews.token")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "設定", level: 1 })).toBeInTheDocument();
   });
 });
 
