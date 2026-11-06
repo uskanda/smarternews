@@ -1,6 +1,6 @@
 import type { Category, Feed, Filter } from "@smarternews/core/api";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { formatFull } from "@smarternews/client";
 import { useCategories, useFeeds, useFilters, useTimeZone } from "../api/queries.ts";
@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { ACTION_LABEL, conditionsLabel, FilterForm, scopeLabel, useRefresh } from "./FilterForm.tsx";
+import { useInlineEditFocus } from "./inline-edit-focus.ts";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -57,7 +58,7 @@ function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: 
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [showing, setShowing] = useState(false);
-  const editButton = useRef<HTMLButtonElement>(null);
+  const focus = useInlineEditFocus(editing);
   const summary = `${ACTION_LABEL[filter.action]}（${scopeLabel(filter.scope, categories, feeds)}）`;
 
   async function toggle() {
@@ -95,19 +96,15 @@ function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: 
       </div>
       <p className="break-all">{conditionsLabel(filter)}</p>
       {editing ? (
-        <FilterForm
-          filter={filter}
-          onDone={() => {
-            setEditing(false);
-            editButton.current?.focus();
-          }}
-        />
+        <div ref={focus.region}>
+          <FilterForm filter={filter} onDone={() => setEditing(false)} />
+        </div>
       ) : (
         <div className="flex flex-wrap gap-sm pt-xs">
           <Button aria-expanded={showing} aria-label={`${summary}が隠している記事`} onClick={() => setShowing(!showing)} disabled={!filter.enabled}>
             隠している記事
           </Button>
-          <Button ref={editButton} aria-label={`${summary}を編集`} onClick={() => setEditing(true)}>
+          <Button ref={focus.opener} aria-label={`${summary}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
           <Button aria-label={`${summary}を${filter.enabled ? "無効にする" : "有効にする"}`} onClick={() => void toggle()}>

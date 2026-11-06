@@ -105,6 +105,22 @@ describe("the term highlights page", () => {
     expect(listTermGroups(server.db)[0]).toMatchObject({ color: "pink" });
   });
 
+  it("moves the focus to the name when the form opens, and back to the button when it closes", async () => {
+    const server = makeServer();
+    group(server, "A", "green", "規制");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    const item = await waitFor(() => groupItem("A"));
+
+    await user.click(within(item).getByRole("button", { name: "Aを編集" }));
+    expect(within(item).getByLabelText("まとまりの名前")).toHaveFocus();
+    await user.click(within(item).getByRole("button", { name: "やめる" }));
+    expect(within(item).getByRole("button", { name: "Aを編集" })).toHaveFocus();
+
+    await user.click(within(item).getByRole("button", { name: "Aを編集" }));
+    await user.click(within(item).getByRole("button", { name: "保存" }));
+    await waitFor(async () => expect(within(await groupItem("A")).getByRole("button", { name: "Aを編集" })).toHaveFocus());
+  });
+
   it("asks before deleting a group, saying how many terms go with it", async () => {
     const server = makeServer();
     group(server, "A", "green", "規制", "関税", "補助金");

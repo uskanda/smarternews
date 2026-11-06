@@ -293,6 +293,31 @@ describe("topics", () => {
     expect(screen.getByRole("checkbox", { name: "LLM検索" })).not.toHaveAccessibleDescription(/使われません/);
   });
 
+  it("moves the focus into the editor that opens, and back to the button when it closes", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
+    expect(screen.getByLabelText("トピックの文章")).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    expect(screen.getByRole("button", { name: "exploited flaws を編集" })).toHaveFocus();
+  });
+
+  it("returns the focus to the button after a topic is saved", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
+    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "exploited flaws を編集" })).toHaveFocus());
+  });
+
   it("deletes a topic after confirmation and keeps the articles", async () => {
     const server = makeServer();
     const category = server.category("Security");
