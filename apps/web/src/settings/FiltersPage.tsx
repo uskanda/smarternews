@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { ACTION_LABEL, conditionsLabel, FilterForm, scopeLabel, useRefresh } from "./FilterForm.tsx";
+import { UnsavedGuard } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -97,6 +98,7 @@ function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: 
       {editing ? (
         <FilterForm
           filter={filter}
+          label={`フィルター『${summary}』の編集`}
           onDone={() => {
             setEditing(false);
             editButton.current?.focus();
@@ -125,6 +127,14 @@ function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: 
 
 /** Filters that hide feed articles, or keep only some of them. */
 export function FiltersPage() {
+  return (
+    <UnsavedGuard>
+      <Filters />
+    </UnsavedGuard>
+  );
+}
+
+function Filters() {
   const filters = useFilters();
   const categories = useCategories().data ?? [];
   const feeds = useFeeds().data ?? [];

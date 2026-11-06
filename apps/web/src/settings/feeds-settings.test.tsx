@@ -1,6 +1,6 @@
 import { addHighlight, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -941,5 +941,76 @@ describe("editing a web feed", () => {
     expect(within(row).queryByLabelText("項目のセレクター")).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "見本を見る" })).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "候補を出し直す" })).not.toBeInTheDocument();
+  });
+});
+
+describe("changes to feeds not saved yet", () => {
+  const pane = () => screen.getByRole("navigation", { name: "項目" });
+  const toUnread = (user: ReturnType<typeof renderApp>["user"]) => user.click(within(pane()).getByRole("link", { name: /^未読/ }));
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+  const unloadStopped = () => !fireEvent(window, new Event("beforeunload", { cancelable: true }));
+
+  it("asks before leaving an edited feed, names it, and has the browser confirm a reload", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    expect(unloadStopped()).toBe(false);
+    await user.click(within(row).getByRole("checkbox", { name: "取得を一時停止する" }));
+    expect(unloadStopped()).toBe(true);
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("購読フィード『Blog』の編集");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(path()).toBe("/settings/feeds");
+    expect(within(row).getByRole("checkbox", { name: "取得を一時停止する" })).toBeChecked();
+  });
+
+  it("drops the changes without a question when the user backs out with やめる", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    await user.type(within(row).getByLabelText("名前"), " posts");
+    await user.click(within(row).getByRole("button", { name: "やめる" }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText("名前")).not.toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).title).toBe("Blog");
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks before leaving an edited base interval, and not once it is saved", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("取得周期");
+    const field = await within(form).findByLabelText("基本の取得周期（分）");
+
+    await user.clear(field);
+    await user.type(field, "60");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("基本の取得周期");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(within(form).getByRole("button", { name: "取得周期を保存" }));
+    await waitFor(() => expect(getSettings(server.db).feedIntervalMinutes).toBe(60));
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks before leaving a URL that was not added", async () => {
+    const { user } = renderApp({ route: "/settings/feeds" });
+
+    await user.type(within(await section("購読フィードの追加")).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await toUnread(user);
+
+    expect(await question()).toHaveTextContent("購読フィードの追加");
   });
 });

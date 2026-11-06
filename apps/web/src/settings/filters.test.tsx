@@ -282,4 +282,57 @@ describe("deleting what filters apply to", () => {
   });
 });
 
+describe("changes to filters not saved yet", () => {
+  const pane = () => screen.getByRole("navigation", { name: "項目" });
+  const toUnread = (user: ReturnType<typeof renderApp>["user"]) => user.click(within(pane()).getByRole("link", { name: /^未読/ }));
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+
+  it("asks before leaving an edited filter, and names it", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user, path } = renderApp({ server, route: "/settings/filters" });
+    const row = await rowOf("タイトルに「特売」を含む");
+
+    await user.click(within(row).getByRole("button", { name: "隠すフィルター（全体）を編集" }));
+    await user.type(within(row).getByLabelText("条件1の値"), "品");
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("フィルター『隠すフィルター（全体）』の編集");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(path()).toBe("/settings/filters");
+    expect(within(row).getByLabelText("条件1の値")).toHaveValue("特売品");
+  });
+
+  it("drops an edit without a question when the user backs out with やめる", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user, path } = renderApp({ server, route: "/settings/filters" });
+    const row = await rowOf("タイトルに「特売」を含む");
+
+    await user.click(within(row).getByRole("button", { name: "隠すフィルター（全体）を編集" }));
+    await user.type(within(row).getByLabelText("条件1の値"), "品");
+    await user.click(within(row).getByRole("button", { name: "やめる" }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+    expect(listFilters(server.db)[0]!.conditions).toEqual([title("特売")]);
+  });
+
+  it("asks before leaving a condition written for a new filter, and not for an untouched form", async () => {
+    const first = renderApp({ route: "/settings/filters" });
+    const form = await section("フィルターの追加");
+    await first.user.click(within(form).getByRole("checkbox", { name: "内容" }));
+    await toUnread(first.user);
+    await waitFor(() => expect(first.path()).toBe("/unread"));
+    first.unmount();
+
+    const second = renderApp({ route: "/settings/filters" });
+    await second.user.type(within(await section("フィルターの追加")).getByLabelText("条件1の値"), "特売");
+    await toUnread(second.user);
+    expect(await question()).toHaveTextContent("新しいフィルター");
+  });
+});
+
 

@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -65,6 +66,7 @@ function AddGroup() {
   const [name, setName] = useState("");
   const [color, setColor] = useState<TermColor>("green");
   const [error, setError] = useState<unknown>(null);
+  useUnsaved("語のまとまりの追加", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -100,6 +102,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   const [name, setName] = useState(group.name);
   const [color, setColor] = useState<TermColor>(group.color);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved(`まとまり『${group.name}』の編集`, name !== group.name || color !== group.color);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -132,6 +135,7 @@ function AddTerm({ group }: { group: TermGroup }) {
   const store = useStore();
   const [text, setText] = useState("");
   const [error, setError] = useState<unknown>(null);
+  useUnsaved(`まとまり『${group.name}』への語の追加`, text.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -285,6 +289,14 @@ function GroupRow({
 
 /** Term groups and their terms, coloured in the lists and the texts of articles. */
 export function TermHighlightsPage() {
+  return (
+    <UnsavedGuard>
+      <TermHighlights />
+    </UnsavedGuard>
+  );
+}
+
+function TermHighlights() {
   const { api } = useApp();
   const store = useStore();
   const toast = useToast();
