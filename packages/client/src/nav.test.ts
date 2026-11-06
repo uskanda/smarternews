@@ -105,6 +105,29 @@ describe("buildNav", () => {
     expect(outline(model)).toEqual(["未読 0", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "注釈 0", "Tools 0", "  AI生成 0", "  Blog 0"]);
   });
 
+  it("gives a feed entry the state of its fetches, and a healthy one none", () => {
+    const failed = { ...feed(10, "Blog", 1), lastError: "HTTP status 503: x" };
+    const paused = { ...feed(11, "Releases", 1), enabled: false };
+    const model = buildNav({ categories: [category(1, "Tools")], feeds: [failed, paused, feed(12, "Loose", null)], counts });
+    const [tools, loose] = model.groups;
+    expect(tools!.children.map((child) => child.state)).toEqual([undefined, "failed", "paused"]);
+    expect(loose!.children[0]).not.toHaveProperty("state");
+    expect(model.views.every((view) => !("state" in view))).toBe(true);
+  });
+
+  it("gives a group the strongest state of the feeds below it", () => {
+    const stale = { ...feed(10, "Blog", 1), stale: true };
+    const paused = { ...feed(11, "Releases", 1), enabled: false };
+    const failedLoose = { ...feed(12, "Loose", null), lastError: "timed out" };
+    const model = buildNav({ categories: [category(1, "Tools"), category(2, "Cars")], feeds: [paused, stale, failedLoose], counts });
+    expect(model.groups.map((group) => [group.entry.label, group.childState])).toEqual([
+      ["Tools", "stale"],
+      ["Cars", undefined],
+      ["未分類", "failed"],
+    ]);
+    expect(model.groups[1]).not.toHaveProperty("childState");
+  });
+
   it("gives each entry the list it opens", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(10, "Blog", 1)], counts });
     expect(model.views.map((view) => view.target)).toEqual([
