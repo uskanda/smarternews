@@ -53,7 +53,8 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
     const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
     if (!target) return;
     keyStep.current = step;
-    void navigate(annotationPath(target));
+    // As in the article list, only the first annotation opened adds to the history.
+    void navigate(annotationPath(target), { replace: selected !== null });
   };
   useHotkeys({ j: () => move(1), k: () => move(-1) });
   // A move with a key takes the list along, as in the article list.

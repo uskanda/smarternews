@@ -1,6 +1,6 @@
 import { updateSettings } from "@smarternews/core";
 import { API_TOKEN, testServer } from "@smarternews/server/testing";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App.tsx";
 import { setViewport } from "./setup.ts";
@@ -19,6 +19,16 @@ export interface RenderOptions {
   offline?: () => boolean;
   /** Pass fake-timer advancing to user-event when a test freezes time. */
   advanceTimers?: (ms: number) => void | Promise<void>;
+  /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
+  browserHistory?: boolean;
+}
+
+/** The browser's back. jsdom goes through its history after a task. */
+export async function back(): Promise<void> {
+  await act(async () => {
+    window.history.back();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 /**
@@ -38,6 +48,7 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
   let path = options.route ?? "/";
+  if (options.browserHistory) window.history.replaceState(null, "", path);
   const view = render(
     <App
       fetchImpl={(input, init) => {
@@ -45,7 +56,7 @@ export function renderApp(options: RenderOptions = {}) {
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
         return server.app.request(input, init);
       }}
-      initialEntries={[path]}
+      initialEntries={options.browserHistory ? undefined : [path]}
       now={() => server.clock()}
       onLocation={(next) => {
         path = next;
