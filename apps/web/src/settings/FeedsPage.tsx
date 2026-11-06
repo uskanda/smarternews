@@ -1,6 +1,6 @@
 import type { Category, Feed, FeedStats, Settings } from "@smarternews/core/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
 import { useFetchFeedNow } from "../lib/fetch-now.ts";
 import { ApiError, conflictLabel, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
@@ -10,6 +10,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { feedDeletionText } from "./feed-deletion.ts";
+import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
@@ -118,11 +119,6 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-  // The form takes the place of the buttons that opened it, so the focus is carried into it.
-  const form = useRef<HTMLFormElement>(null);
-  useEffect(() => {
-    form.current?.querySelector("input")?.focus();
-  }, []);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -155,7 +151,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const id = `feed-${feed.id}`;
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
-    <form ref={form} noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
+    <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
       <FeedStatsSection feed={feed} />
       <Field label="名前" value={title} onChange={(event) => setTitle(event.target.value)} error={fieldError(error, "title")} />
       <div className="flex flex-col gap-xs">
@@ -287,13 +283,8 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const { fetching, fetchNow } = useFetchFeedNow(feed, "取得できませんでした。理由は一覧に表示しています。");
-  // When the form closes, the focus goes back to the button that opened it.
-  const editButton = useRef<HTMLButtonElement>(null);
-  const wasEditing = useRef(false);
-  useEffect(() => {
-    if (wasEditing.current && !editing) editButton.current?.focus();
-    wasEditing.current = editing;
-  }, [editing]);
+  // The form takes the place of the buttons that opened it, so the focus is carried into it and back.
+  const focus = useInlineEditFocus(editing);
   const categoryName = categories.find((category) => category.id === feed.categoryId)?.name ?? UNCATEGORIZED_LABEL;
   const interval = feed.intervalMinutes === null ? `基本の取得周期（${settings?.feedIntervalMinutes ?? "…"}分）` : `${feed.intervalMinutes}分ごと`;
 
@@ -323,13 +314,15 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
         <FetchState feed={feed} timeZone={timeZone} />
       </div>
       {editing ? (
-        <EditFeed feed={feed} categories={categories} onDone={() => setEditing(false)} />
+        <div ref={focus.region}>
+          <EditFeed feed={feed} categories={categories} onDone={() => setEditing(false)} />
+        </div>
       ) : (
         <div className="flex flex-wrap gap-sm pt-xs">
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>
-          <Button ref={editButton} aria-label={`${feed.title}を編集`} onClick={() => setEditing(true)}>
+          <Button ref={focus.opener} aria-label={`${feed.title}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
           <Button aria-label={`${feed.title}の登録を解除`} onClick={() => setConfirming(true)}>

@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { KIND_LABEL, refusal } from "./SettingsPage.tsx";
 
@@ -271,7 +272,8 @@ function TopicEditor({
 
 /**
  * One topic. A link to `#topic-<id>` opens its editor with the focus in its text, both when the page opens with
- * that hash and when the hash changes to it later; the editor opened with the button leaves the focus alone.
+ * that hash and when the hash changes to it later. The editor opened with the button takes the focus to its first
+ * field too, and when the editor closes, the focus goes back to the button.
  */
 function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
   const { hash } = useLocation();
@@ -295,6 +297,7 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
     setEditing(false);
     setFocusText(false);
   };
+  const focus = useInlineEditFocus(editing);
   const sources = [
     topic.sources.feeds.length > 0 ? `フィード ${topic.sources.feeds.length}` : null,
     topic.sources.newsSearch ? "ニュース検索" : null,
@@ -305,7 +308,7 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
       <div className="flex items-start justify-between gap-md">
         <p className={`min-w-0 break-words ${topic.enabled ? "type-label-md" : "type-body-md text-on-surface-muted"}`}>{topic.text}</p>
         {editing ? null : (
-          <Button aria-label={`${topic.text} を編集`} onClick={() => setEditing(true)}>
+          <Button ref={focus.opener} aria-label={`${topic.text} を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
         )}
@@ -324,7 +327,11 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
       ) : (
         <p className="type-label-sm text-on-surface-muted">次の実行で解釈されます。検索語と判定基準は、そのとき作られます。</p>
       )}
-      {editing ? <TopicEditor topic={topic} canSearch={canSearch} focusText={focusText} onClose={close} /> : null}
+      {editing ? (
+        <div ref={focus.region}>
+          <TopicEditor topic={topic} canSearch={canSearch} focusText={focusText} onClose={close} />
+        </div>
+      ) : null}
     </li>
   );
 }

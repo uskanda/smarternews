@@ -184,6 +184,27 @@ describe("changing a filter", () => {
     expect(changed).toHaveTextContent("1件を隠しています");
   });
 
+  it("moves the focus to the chosen kind when the form opens, and back to the button when it closes", async () => {
+    const { server, feed } = withArticles();
+    createFilter(server.db, { action: "keep", scope: { type: "feed", feedId: feed.id }, conditions: [title("新")] }, server.clock);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+    const row = await rowOf("タイトルに「新」を含む");
+    const edit = "残すフィルター（購読フィード「Shop」）を編集";
+
+    await user.click(within(row).getByRole("button", { name: edit }));
+    const form = within(row).getByRole("form", { name: "フィルターの編集" });
+    expect(within(form).getByRole("radio", { name: "残すフィルター" })).toHaveFocus();
+
+    await user.click(within(form).getByRole("button", { name: "やめる" }));
+    expect(within(row).getByRole("button", { name: edit })).toHaveFocus();
+  });
+
+  it("leaves the focus where it is when the page opens", async () => {
+    renderApp({ route: "/settings/filters" });
+    const form = await section("フィルターの追加");
+    expect(form).not.toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("switches a filter off, says how many came back, and on again", async () => {
     const { server } = withArticles();
     createFilter(server.db, hide("特売"), server.clock);
