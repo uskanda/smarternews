@@ -1,6 +1,7 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { Link } from "react-router";
 import { eventTime, groupEvents, registrationLabel } from "@smarternews/client";
+import { SelectedMark } from "./SelectedMark.tsx";
 
 /** Upcoming events of one category, grouped by the day they start. */
 export function EventList({
@@ -40,10 +41,12 @@ export function EventList({
                 const registration = registrationLabel(event.registration);
                 const selected = item.id === selectedId;
                 return (
-                  <li key={item.id} data-read={item.isRead} className={`border-t border-outline ${selected ? "bg-selected" : ""}`}>
+                  <li key={item.id} data-read={item.isRead} className={`relative border-t border-outline ${selected ? "bg-selected" : ""}`}>
+                    {selected ? <SelectedMark /> : null}
                     <Link to={to(item.id)} aria-current={selected ? "true" : undefined} className="flex flex-col gap-px px-lg py-md">
-                      <span data-title className={item.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
-                        {item.title}
+                      <span className={item.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
+                        {item.isRead ? null : <span className="sr-only">未読。</span>}
+                        <span data-title>{item.title}</span>
                       </span>
                       <span className="flex flex-wrap gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
                         <span className="tabular-nums">{eventTime(event, timeZone)}</span>

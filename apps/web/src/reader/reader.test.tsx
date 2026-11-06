@@ -159,6 +159,26 @@ describe("a row of the list", () => {
     expect(screen.getByRole("link", { name: /Routine/ })).not.toHaveAccessibleName(/重要度/);
   });
 
+  it("says 未読 before the importance on an unread row, and nothing on a read one", async () => {
+    const server = makeServer();
+    const [read] = articles(server, server.category().id, [{ title: "Read one" }, { title: "Unread one", importance: 4 }]);
+    setArticleFlags(server.db, read!, { isRead: true }, server.clock().toISOString());
+    renderApp({ server, route: "/all" });
+
+    expect(await screen.findByRole("link", { name: /^未読。重要度4。Unread one/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Read one/ })).not.toHaveAccessibleName(/未読/);
+  });
+
+  it("draws the line at the right edge of the selected row only", async () => {
+    const server = makeServer();
+    const [, newer] = articles(server, server.category().id, [{ title: "Older story" }, { title: "Newer story" }]);
+    renderApp({ server, route: `/all/${newer}` });
+
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    expect(row(/Newer story/).querySelector("[data-selected-mark]")).toHaveAttribute("aria-hidden", "true");
+    expect(row(/Older story/).querySelector("[data-selected-mark]")).toBeNull();
+  });
+
   it("labels an updated article and an unconfirmed one", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Rumour", unconfirmed: true });
@@ -569,6 +589,23 @@ describe("events", () => {
     expect(article()).toHaveTextContent("3月11日");
     expect(article()).toHaveTextContent("City Hall");
   });
+
+  it("says 未読 on an unread event, marks the selected one, and takes the focus along with j", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/c/local-events" });
+
+    const morning = await screen.findByRole("link", { name: /^未読。Morning class/ });
+    await user.click(morning);
+    await screen.findByRole("heading", { level: 2, name: "Morning class" });
+    expect(morning.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    await user.keyboard("j");
+
+    const evening = screen.getByRole("link", { name: /Evening talk/ });
+    await waitFor(() => expect(evening).toHaveAttribute("aria-current", "true"));
+    expect(evening).toHaveFocus();
+    expect(evening.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    expect(morning.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+  });
 });
 
 describe("an article that other feeds delivered too", () => {
@@ -743,6 +780,40 @@ describe("the recently read articles", () => {
 });
 
 describe("keys on the list and the article", () => {
+  it("takes the focus to the row j selects when the focus was on the list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Third" }, { title: "Second" }, { title: "First" }]);
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    await screen.findByRole("heading", { level: 2, name: "First" });
+    await user.keyboard("j");
+
+    const second = within(list()).getByRole("link", { name: /Second/ });
+    await waitFor(() => expect(second).toHaveAttribute("aria-current", "true"));
+    expect(second).toHaveFocus();
+    await user.keyboard("k");
+    const first = within(list()).getByRole("link", { name: /First/ });
+    await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
+    expect(first).toHaveFocus();
+  });
+
+  it("leaves the focus where it is when j is pressed outside the list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Second" }, { title: "First" }]);
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    const heading = await screen.findByRole("heading", { level: 2, name: "First" });
+    await user.click(heading);
+    expect(heading).toHaveFocus();
+    await user.keyboard("j");
+
+    await screen.findByRole("heading", { level: 2, name: "Second" });
+    await waitFor(() => expect(within(list()).getByRole("link", { name: /Second/ })).toHaveAttribute("aria-current", "true"));
+    expect(list()).not.toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("marks the list as read with Shift+A, and offers the undo", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -869,6 +940,20 @@ describe("Space through the article", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Older story" })).toBeInTheDocument();
     expect(path()).toBe(`/all/${older}`);
     expect(pane.scrollTop).toBe(0);
+  });
+
+  it("takes the focus to the next row at the end of the body when the focus was on the list", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /Newer story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    layOut(400);
+    await user.keyboard(" ");
+
+    const older = within(list()).getByRole("link", { name: /Older story/ });
+    await waitFor(() => expect(older).toHaveAttribute("aria-current", "true"));
+    expect(older).toHaveFocus();
   });
 
   it("moves to the next article at once when the body fits", async () => {
