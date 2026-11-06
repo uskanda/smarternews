@@ -1,7 +1,7 @@
 import { addHighlight, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
@@ -343,6 +343,21 @@ describe("fetching a feed now", () => {
 
     expect(await screen.findByText("取得できませんでした。理由は一覧に表示しています。")).toBeInTheDocument();
     expect(await rowOf("Blog")).toHaveTextContent("取得に失敗");
+  });
+
+  it("opens at the row of a feed named in the address, with the focus on its name", async () => {
+    const server = makeServer();
+    feedOf(server, "Alpha");
+    const blog = feedOf(server, "Blog");
+    feedOf(server, "Charlie");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    onTestFinished(() => scrolled.mockRestore());
+    renderApp({ server, route: `/settings/feeds#feed-${blog.id}` });
+
+    const row = await rowOf("Blog");
+    expect(row).toHaveAttribute("id", `feed-${blog.id}`);
+    await waitFor(() => expect(document.activeElement).toBe(within(row).getByText("Blog")));
+    expect(scrolled.mock.contexts).toContain(row);
   });
 });
 

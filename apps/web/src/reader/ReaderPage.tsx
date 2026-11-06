@@ -54,6 +54,7 @@ import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
+import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -597,6 +598,8 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
+      {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
+      {view === "feed" && feed ? <FeedStatusBanner feed={feed} /> : null}
       <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
