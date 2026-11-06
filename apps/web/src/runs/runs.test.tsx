@@ -182,7 +182,7 @@ describe("one run", () => {
         now: server.clock().toISOString(),
       });
     }
-    return { server, category, id };
+    return { server, category, id, flaws, ransom };
   }
 
   it("lists the rejected candidates with headline, site, topic and reason, and links to the pages", async () => {
@@ -200,8 +200,23 @@ describe("one run", () => {
     expect(item).toHaveTextContent("advertising without new information");
   });
 
-  it("groups the rejected candidates by topic and leads to the topic's settings", async () => {
-    const { server, category, id } = withRejections();
+  it("leads from the topic of each rejected candidate to the editor of that topic", async () => {
+    const { server, category, id, flaws } = withRejections();
+    const { user, path } = renderApp({ server, route: `/runs/${id}` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    const item = (await within(rejected).findByRole("link", { name: "Rejected 0" })).closest("li")!;
+
+    const topic = within(item).getByRole("link", { name: "exploited flaws" });
+    expect(topic).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${flaws.id}`);
+
+    await user.click(topic);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
+  });
+
+  it("groups the rejected candidates by topic and leads to the topic's editor", async () => {
+    const { server, category, id, flaws, ransom } = withRejections();
     const { user } = renderApp({ server, route: `/runs/${id}` });
     const rejected = await screen.findByRole("region", { name: "除外した候補" });
     await within(rejected).findByRole("link", { name: "Rejected 0" });
@@ -211,7 +226,13 @@ describe("one run", () => {
     const groups = within(rejected).getAllByRole("group");
     expect(groups.map((group) => group.getAttribute("aria-label"))).toEqual(["exploited flaws（8件）", "ransomware（3件）"]);
     expect(within(groups[0]!).getAllByRole("listitem")).toHaveLength(8);
-    expect(within(groups[0]!).getByRole("link", { name: "このトピックを直す" })).toHaveAttribute("href", `/settings/categories/${category.id}`);
+    const fix = within(groups[0]!).getByRole("link", { name: "exploited flaws を直す" });
+    expect(fix).toHaveTextContent("このトピックを直す");
+    expect(fix).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${flaws.id}`);
+    expect(within(groups[1]!).getByRole("link", { name: "ransomware を直す" })).toHaveAttribute(
+      "href",
+      `/settings/categories/${category.id}#topic-${ransom.id}`,
+    );
   });
 
   it("says that a run does not exist", async () => {

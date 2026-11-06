@@ -2,8 +2,8 @@
 
 ## Context
 
-- 記事のAPIの `articleSchema.topics` は `{ id, text }` を返す。生成記事にだけ、`article_topics` から入る。トピックは記事のカテゴリに属する。
-- カテゴリの画面の `TopicItem` は、編集の開閉を各行の state だけで持っており、外から開く手段がない。
+- 記事のAPIは、当てはまったトピックを `{ id, text }` の配列で返す。生成記事にだけ、`article_topics` から入る。トピックは記事のカテゴリに属する。
+- カテゴリの画面の `TopicItem` は、編集の開閉を各行のstateだけで持っており、外から開く手段がない。
 - 設定の画面には、ハッシュで画面の中の場所を指す `useScrollToHash`（`/settings#providers`）がある。
 - 実行の詳細の「このトピックを直す」は、`/settings/categories/<id>` へ移るだけである。
 
@@ -16,14 +16,14 @@
 **Non-Goals:**
 
 - APIとデータベースの変更。
-- モバイルアプリ（トピックの編集はWebに任せている）。
+- Androidアプリ（トピックの編集はWebに任せている）。
 
 ## Decisions
 
-- **遷移先はハッシュで表す。** `topicEditPath(categoryId, topicId)` を `apps/web/src/lib/paths.ts` に置き、`/settings/categories/<categoryId>#topic-<topicId>` を返す。記事の画面と実行の詳細は、どちらもこの関数を使う。設定の画面の書き方にそろえ、編集を閉じたあとURLを書き換えなくても、戻る操作が不自然にならない。
-- **`TopicItem` がハッシュを見る。** `li` に `id="topic-<id>"` を付ける。`useLocation().hash` が自分の id と一致するとき、編集を開いた状態で始める。ページを開いたあとにハッシュが変わったときも、一致すれば開く。開いたら `li` を `scrollIntoView({ block: "start" })` で見える位置へ動かす。
+- **遷移先はハッシュで表す。** `apps/web/src/lib/paths.ts` に `topicEditPath(categoryId, topicId)` を置く。返す値は `/settings/categories/<categoryId>#topic-<topicId>` である。記事の画面と実行の詳細は、どちらもこの関数を使う。設定の画面の書き方にそろえ、編集を閉じたあとURLを書き換えなくても、戻る操作が不自然にならない。
+- **`TopicItem` がハッシュを見る。** `li` に `id="topic-<id>"` を付ける。`useLocation` で得たハッシュが自分のidと一致するとき、編集を開いた状態で始める。ページを開いたあとにハッシュが変わったときも、一致すれば開く。開いたら `li` を `scrollIntoView({ block: "start" })` で見える位置へ動かす。
 - **フォーカスはハッシュで開いたときだけ移す。** `TopicEditor` に `focusText` を渡し、トピックの文章の欄に `autoFocus` を付ける。「編集」のボタンで開いたときの動きは変えない。
-- **記事の画面では、補足の行のすぐ下に節を置く。** `section aria-label="トピック"` に見出し「トピック」と、各トピックへの `Link` のリストを並べる。リンクは `line-clamp-2 break-words` で2行に切り、全文は `title` でも示す。要素の中の文字は全文のまま残るので、読み上げは全文になる。トピックがないときと、`categoryId` が null のときは出さない。
+- **記事の画面では、補足の行のすぐ下に節を置く。** `section aria-label="トピック"` に見出し「トピック」と、各トピックへの `Link` のリストを並べる。リンクは `line-clamp-2 break-words` で2行に切り、全文は `title` でも示す。要素の中の文字は全文のまま残るので、読み上げは全文になる。トピックがないときと、`categoryId` がnullのときは出さない。
 - **実行の詳細のリンク。** まとめたときの「このトピックを直す」は、見える文字をそのまま残し、`aria-label` を「<トピック>を直す」にする。グループの数だけ同じ名前のリンクが並ぶのを避けるためである。まとめないときのトピック名は、カテゴリが分かるときだけ同じ遷移先へのリンクにし、分からなければ今と同じく文字にする。
 
 ## Risks / Trade-offs
