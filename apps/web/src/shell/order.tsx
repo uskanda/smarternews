@@ -313,6 +313,8 @@ export function EntryMenu({
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
+          // The menu takes its keys from the list behind it, which would move under the open menu.
+          data-hotkeys="off"
           className={MENU}
           aria-label={`${entry.label}の操作`}
           onCloseAutoFocus={(event) => {

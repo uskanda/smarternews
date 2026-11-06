@@ -92,6 +92,25 @@ describe("the menu of an entry", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  it("keeps the one-letter keys from the article behind it", async () => {
+    const { server, a } = seeded();
+    server.article(a.id, { title: "Older story" });
+    server.clock.advance(60_000);
+    const newer = server.article(a.id, { title: "Newer story" });
+    const { user, path } = await ready({ server, route: `/all/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+
+    fireEvent.contextMenu(link("X"));
+    const menu = await screen.findByRole("menu");
+    await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+    await user.keyboard("js");
+
+    expect(path()).toBe(`/all/${newer}`);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    // The open menu hides the rest of the page from the accessibility tree.
+    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+  });
+
   it("cannot move the first entry up or the last one down", async () => {
     const { server } = seeded();
     await ready({ server, route: "/all" });

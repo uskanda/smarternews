@@ -127,4 +127,19 @@ describe("moving on after marking all as read", () => {
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^X/ })).toHaveTextContent("X1"));
     expect(path()).toBe(`/f/${y.id}`);
   });
+
+  it("keeps the rows read in the list it moved on to when the marking is undone", async () => {
+    const { server, a, c } = seeded();
+    const { user, path } = renderApp({ server, route: `/c/${a.slug}` });
+    await markAll(user, "A");
+    await waitFor(() => expect(path()).toBe(`/c/${c.slug}`));
+    const list = () => screen.getByRole("region", { name: "記事の一覧" });
+    await user.click(await within(list()).findByRole("link", { name: /About C/ }));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^C/ })).toHaveTextContent("C1"));
+
+    await user.click(within(screen.getByRole("status")).getByRole("button", { name: "取り消す" }));
+
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^A\s*\d*$/ })).toHaveTextContent("A3"));
+    expect(within(list()).getByRole("link", { name: /About C/ })).toBeInTheDocument();
+  });
 });

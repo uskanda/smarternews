@@ -20,9 +20,27 @@ const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "AltGr
 /** What Space presses when it has the focus. A link is not among them: Space does not follow a link. */
 const PRESSED_BY_SPACE = new Set(["button", "menuitem", "checkbox", "switch", "tab"]);
 
+/** Kinds of input that take no text: one-letter keys keep working while one of them has the focus. */
+const NO_TEXT_INPUTS = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image"]);
+
+/**
+ * Whether the user types text where the key comes from. A checkbox, a select or a button takes no text, so a
+ * click on one does not take the one-letter keys away; a select still gets its arrow keys.
+ */
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+  if (target.isContentEditable || target.tagName === "TEXTAREA") return true;
+  return target instanceof HTMLInputElement && !NO_TEXT_INPUTS.has(target.type);
+}
+
+/**
+ * Keys taken inside the left pane of a narrow screen: the ones that move between entries and screens. The
+ * pane covers the article, so the keys that act on it are not taken there.
+ */
+const NAV_KEYS = new Set(["Shift+J", "Shift+K", "/", "?", "g"]);
+
+function isInNavPane(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-hotkeys="nav"]') !== null;
 }
 
 /**
@@ -35,7 +53,8 @@ function isInQuietDialog(target: EventTarget | null): boolean {
 
 function isPressedBySpace(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  if (target.tagName === "BUTTON" || target.tagName === "SUMMARY") return true;
+  if (target.tagName === "BUTTON" || target.tagName === "SUMMARY" || target.tagName === "SELECT") return true;
+  if (target instanceof HTMLInputElement) return true;
   return PRESSED_BY_SPACE.has(target.getAttribute("role") ?? "");
 }
 
@@ -63,6 +82,8 @@ function onKeyDown(event: KeyboardEvent): void {
   const name = keyName(event);
   if (name === null) return;
   if ((name === "Space" || name === "Shift+Space") && isPressedBySpace(event.target)) return;
+  // In the left pane, the second key of a pair is taken too: the pair moves to another screen.
+  if (isInNavPane(event.target) && !NAV_KEYS.has(name) && waitingUntil === null) return;
   const clock = [...callers].map((caller) => caller.now.current).find((now) => now !== undefined);
   const now = (clock ?? (() => new Date()))().getTime();
 
