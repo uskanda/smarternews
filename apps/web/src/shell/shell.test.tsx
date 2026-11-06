@@ -1,6 +1,6 @@
 import { insertFeed, resolvePricing, setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
 import { API_TOKEN } from "@smarternews/server/testing";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -149,6 +149,156 @@ describe("panes by width", () => {
 
     expect(await screen.findByRole("region", { name: "記事の一覧" })).toBeInTheDocument();
     expect(screen.queryByRole("article", { name: "記事" })).not.toBeInTheDocument();
+  });
+});
+
+describe("going back to the list on a narrow screen", () => {
+  const ROW = 60;
+  const VIEW = 120;
+  const pane = () => list().querySelector<HTMLElement>("[data-list-scroll]")!;
+  const rowLink = (title: string) => within(list()).getByRole("link", { name: new RegExp(`${title}(?!\\d)`) });
+  const moves = () => screen.getByRole("navigation", { name: "記事の移動" });
+
+  /** jsdom lays nothing out: the list shows 120px, and every row of it is 60px tall. */
+  function layOut(): void {
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const item = this.closest("[data-list-scroll] li");
+      const index = item?.parentElement ? [...item.parentElement.children].indexOf(item) : -1;
+      const scrolled = item?.closest<HTMLElement>("[data-list-scroll]")?.scrollTop ?? 0;
+      const top = index === -1 ? 0 : index * ROW - scrolled;
+      const height = index === -1 ? VIEW : ROW;
+      return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) };
+    });
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!;
+    Object.defineProperty(Element.prototype, "clientHeight", {
+      configurable: true,
+      get(this: Element) {
+        return this.hasAttribute("data-list-scroll") ? VIEW : 0;
+      },
+    });
+    onTestFinished(() => {
+      rect.mockRestore();
+      Object.defineProperty(Element.prototype, "clientHeight", height);
+    });
+  }
+
+  /** Eight articles, listed newest first as "Story 8" down to "Story 1". `ids[n]` is the id of "Story n". */
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const ids: Record<number, number> = {};
+    for (let index = 1; index <= 8; index += 1) {
+      ids[index] = server.article(category.id, { title: `Story ${index}` });
+      server.clock.advance(60_000);
+    }
+    return { server, ids };
+  }
+
+  /** Opens すべて on a narrow screen, scrolled down by three rows so that Story 5 and Story 4 show. */
+  async function openScrolled(server: TestServer) {
+    layOut();
+    const rendered = renderApp({ server, route: "/all", width: 390 });
+    await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+    pane().scrollTop = 3 * ROW;
+    fireEvent.scroll(pane());
+    return rendered;
+  }
+
+  it("shows the list where it was left, with the article read chosen and focused, after 一覧へ戻る", async () => {
+    const { server } = seeded();
+    const { user } = await openScrolled(server);
+
+    await user.click(rowLink("Story 4"));
+    await screen.findByRole("heading", { level: 2, name: "Story 4" });
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+
+    await screen.findByRole("region", { name: "記事の一覧" });
+    expect(pane().scrollTop).toBe(3 * ROW);
+    expect(rowLink("Story 4")).toHaveAttribute("aria-current", "true");
+    expect(rowLink("Story 4")).toHaveFocus();
+  });
+
+  it("does the same after the browser's back button", async () => {
+    const { server } = seeded();
+    const { user, back } = await openScrolled(server);
+
+    await user.click(rowLink("Story 5"));
+    await screen.findByRole("heading", { level: 2, name: "Story 5" });
+    await back();
+
+    await screen.findByRole("region", { name: "記事の一覧" });
+    expect(pane().scrollTop).toBe(3 * ROW);
+    expect(rowLink("Story 5")).toHaveAttribute("aria-current", "true");
+    expect(rowLink("Story 5")).toHaveFocus();
+  });
+
+  it("moves on with j from the article read", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = await openScrolled(server);
+
+    await user.click(rowLink("Story 4"));
+    await screen.findByRole("heading", { level: 2, name: "Story 4" });
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+    await screen.findByRole("region", { name: "記事の一覧" });
+    await user.keyboard("j");
+
+    await screen.findByRole("heading", { level: 2, name: "Story 3" });
+    expect(path()).toBe(`/all/${ids[3]}`);
+  });
+
+  it("offers the next and the previous article at the end of the body, by their headlines", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[8]}`, width: 390 });
+    await screen.findByRole("heading", { level: 2, name: "Story 8" });
+
+    // The first article of the list has nothing before it.
+    const next = await within(await screen.findByRole("navigation", { name: "記事の移動" })).findByRole("link", { name: /次の記事/ });
+    expect(next).toHaveTextContent("Story 7");
+    expect(within(moves()).queryByRole("link", { name: /前の記事/ })).not.toBeInTheDocument();
+    await user.click(next);
+
+    await screen.findByRole("heading", { level: 2, name: "Story 7" });
+    expect(path()).toBe(`/all/${ids[7]}`);
+    expect(await within(moves()).findByRole("link", { name: /前の記事/ })).toHaveTextContent("Story 8");
+    await user.click(within(moves()).getByRole("link", { name: /前の記事/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 8" });
+  });
+
+  it("leaves out the next article at the end of the list", async () => {
+    const { server, ids } = seeded();
+    renderApp({ server, route: `/all/${ids[1]}`, width: 390 });
+    await screen.findByRole("heading", { level: 2, name: "Story 1" });
+
+    const links = await screen.findByRole("navigation", { name: "記事の移動" });
+    expect(within(links).getByRole("link", { name: /前の記事/ })).toHaveTextContent("Story 2");
+    expect(within(moves()).queryByRole("link", { name: /次の記事/ })).not.toBeInTheDocument();
+  });
+
+  it("brings the last article read into view when the reader went on past the rows in view", async () => {
+    const { server } = seeded();
+    const { user } = await openScrolled(server);
+
+    await user.click(rowLink("Story 5"));
+    await screen.findByRole("heading", { level: 2, name: "Story 5" });
+    await user.click(await within(moves()).findByRole("link", { name: /次の記事/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 4" });
+    await user.click(await within(moves()).findByRole("link", { name: /次の記事/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 3" });
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+
+    await screen.findByRole("region", { name: "記事の一覧" });
+    // Story 3 is the sixth row: from 300px to 360px. The list goes down just far enough to show all of it.
+    expect(pane().scrollTop).toBe(6 * ROW - VIEW);
+    expect(rowLink("Story 3")).toHaveAttribute("aria-current", "true");
+    expect(rowLink("Story 3")).toHaveFocus();
+  });
+
+  it("offers no next or previous article on a wide screen, where the list is beside the article", async () => {
+    const { server, ids } = seeded();
+    renderApp({ server, route: `/all/${ids[5]}`, width: 1280 });
+    await screen.findByRole("heading", { level: 2, name: "Story 5" });
+
+    expect(screen.queryByRole("navigation", { name: "記事の移動" })).not.toBeInTheDocument();
   });
 });
 

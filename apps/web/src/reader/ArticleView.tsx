@@ -146,6 +146,54 @@ function FullContentBar({ article, control }: { article: Article; control: FullC
   );
 }
 
+/** An article beside the one open, in the order of the list. */
+export interface ArticleNeighbor {
+  title: string;
+  to: string;
+}
+
+/** The articles before and after the one open, offered at the end of the body on a narrow screen. */
+export interface ArticleNeighbors {
+  previous: ArticleNeighbor | null;
+  next: ArticleNeighbor | null;
+  /** Past the last article loaded while the list has more: loads the next page and opens its first article. */
+  more: (() => void) | null;
+}
+
+const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline px-lg py-sm text-left";
+
+/** The way to the article before and after this one, each with its headline on one line. */
+function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
+  const { previous, next, more } = neighbors;
+  if (!previous && !next && !more) return null;
+  const line = (title: string) => (
+    <span className="truncate type-body-md text-primary" title={title}>
+      {title}
+    </span>
+  );
+  return (
+    <nav aria-label="記事の移動" className="flex flex-col gap-sm">
+      {previous ? (
+        <Link to={previous.to} className={MOVE}>
+          <span className="type-label-sm text-on-surface-muted">前の記事</span>
+          {line(previous.title)}
+        </Link>
+      ) : null}
+      {next ? (
+        <Link to={next.to} className={MOVE}>
+          <span className="type-label-sm text-on-surface-muted">次の記事</span>
+          {line(next.title)}
+        </Link>
+      ) : more ? (
+        <button type="button" onClick={more} className={MOVE}>
+          <span className="type-label-sm text-on-surface-muted">次の記事</span>
+          <span className="type-body-md text-primary">続きを読み込んで開きます</span>
+        </button>
+      ) : null}
+    </nav>
+  );
+}
+
 /** What stands in the place of the summary while there is none yet. */
 const SUMMARY_NOTES = {
   waiting: "AIによる要約を作っています。",
@@ -161,6 +209,7 @@ export function ArticleView({
   timeZone,
   backTo,
   articlePath,
+  neighbors = null,
   onToggleStar,
   onToggleRead,
   fullContent,
@@ -174,6 +223,8 @@ export function ArticleView({
   /** Set on a narrow screen, where the list is on another pane. */
   backTo: string | null;
   articlePath: (id: number) => string;
+  /** Set on a narrow screen, where the list is out of sight: the articles before and after this one. */
+  neighbors?: ArticleNeighbors | null;
   onToggleStar: (article: Article) => void;
   onToggleRead: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
@@ -387,6 +438,7 @@ export function ArticleView({
           </Button>
           <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
         </div>
+        {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}
       </div>
     </article>
   );
