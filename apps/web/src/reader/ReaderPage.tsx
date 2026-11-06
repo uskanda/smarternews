@@ -388,6 +388,21 @@ export function ReaderPage({ view }: { view: View }) {
     return entry ? (parent ? `${parent}の${entry.label}` : entry.label) : null;
   }
 
+  /**
+   * Puts back to unread what marking all as read marked. The rows kept in the list that is open now stay: the
+   * list may be another one by now, read since the marking. A failure says so and offers to send it all again.
+   */
+  async function undoMarkAll(ids: number[]) {
+    try {
+      await api.markUnread(ids);
+    } catch {
+      toast({ message: "既読を取り消せませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: () => void undoMarkAll(ids) } });
+      return;
+    }
+    void client.invalidateQueries({ queryKey: ["articles"] });
+    void client.invalidateQueries({ queryKey: ["counts"] });
+  }
+
   async function markAllRead() {
     if (!listControls) return;
     // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
@@ -402,10 +417,7 @@ export function ReaderPage({ view }: { view: View }) {
       toast({
         message: opened ? `${result.updated}件を既読にしました。「${opened}」を開きました` : `${result.updated}件を既読にしました`,
         durationMs: 10_000,
-        action: {
-          label: "取り消す",
-          run: () => void api.markUnread(result.ids).then(refresh),
-        },
+        action: { label: "取り消す", run: () => void undoMarkAll(result.ids) },
       });
     } catch (error) {
       toast({ message: error instanceof Error ? "既読にできませんでした。もう一度試してください。" : "既読にできませんでした。" });
@@ -440,10 +452,11 @@ export function ReaderPage({ view }: { view: View }) {
     if (target === null) return;
     sortChange.mutate({ key: keyOf(target), sort: next });
   }
-  // A list in another order starts at its top.
+  // A list in another order, and another list, start at the top: every list is drawn by this one page, which
+  // would keep the place the last list was scrolled to. Going up reads nothing by scrolling.
   useLayoutEffect(() => {
     if (listScroll.current) listScroll.current.scrollTop = 0;
-  }, [sort]);
+  }, [sort, listKey]);
   const narrowing = searchSlug !== null ? `c:${searchSlug}` : searchFeedId !== undefined ? `f:${searchFeedId}` : "";
 
   const index = items.findIndex((item) => item.id === articleId);
@@ -486,7 +499,8 @@ export function ReaderPage({ view }: { view: View }) {
     pane.scrollTop = Math.max(0, pane.scrollTop + step * by);
   };
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = opened ?? items[index];
-  const canMarkAll = listControls && (view === "unread" || readToggle) && fetched.some((item) => !item.isRead);
+  // A page not loaded yet may hold unread articles, which marking all as read takes too.
+  const canMarkAll = listControls && (view === "unread" || readToggle) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
   useHotkeys(
     {
       // The list of annotations moves through its own rows.
