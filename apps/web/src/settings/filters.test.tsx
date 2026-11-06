@@ -178,10 +178,31 @@ describe("changing a filter", () => {
     expect(await within(form).findByRole("status")).toHaveTextContent("保存すると、1件が隠れます。");
     expect(listFilters(server.db)[0]!.conditions).toHaveLength(1);
 
-    await user.click(within(form).getByRole("button", { name: "保存" }));
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
 
     const changed = await rowOf("タイトルに「特売」を含む、かつタイトルに「春」を含む");
     expect(changed).toHaveTextContent("1件を隠しています");
+  });
+
+  it("moves the focus to the chosen kind when the form opens, and back to the button when it closes", async () => {
+    const { server, feed } = withArticles();
+    createFilter(server.db, { action: "keep", scope: { type: "feed", feedId: feed.id }, conditions: [title("新")] }, server.clock);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+    const row = await rowOf("タイトルに「新」を含む");
+    const edit = "残すフィルター（購読フィード「Shop」）を編集";
+
+    await user.click(within(row).getByRole("button", { name: edit }));
+    const form = within(row).getByRole("form", { name: "フィルターの編集" });
+    expect(within(form).getByRole("radio", { name: "残すフィルター" })).toHaveFocus();
+
+    await user.click(within(form).getByRole("button", { name: "やめる" }));
+    expect(within(row).getByRole("button", { name: edit })).toHaveFocus();
+  });
+
+  it("leaves the focus where it is when the page opens", async () => {
+    renderApp({ route: "/settings/filters" });
+    const form = await section("フィルターの追加");
+    expect(form).not.toContainElement(document.activeElement as HTMLElement);
   });
 
   it("switches a filter off, says how many came back, and on again", async () => {
@@ -200,16 +221,61 @@ describe("changing a filter", () => {
     await waitFor(() => expect(row).toHaveTextContent("3件を隠しています"));
   });
 
-  it("removes a filter and says how many articles came back", async () => {
+  it("asks before removing a filter, with what it is and how many articles come back", async () => {
     const { server } = withArticles();
     createFilter(server.db, hide("特売"), server.clock);
     const { user } = renderApp({ server, route: "/settings/filters" });
 
     await user.click(await screen.findByRole("button", { name: "隠すフィルター（全体）を削除" }));
 
+    const dialog = await screen.findByRole("alertdialog", { name: "フィルターを削除しますか" });
+    expect(dialog).toHaveTextContent("隠すフィルター（全体）");
+    expect(dialog).toHaveTextContent("タイトルに「特売」を含む");
+    expect(dialog).toHaveTextContent("隠している3件は一覧に戻ります");
+    expect(dialog).toHaveTextContent("削除せずに無効にもできます");
+    expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus();
+    expect(listFilters(server.db)).toHaveLength(1);
+  });
+
+  it("removes a filter once confirmed and says how many articles came back", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+
+    await user.click(await screen.findByRole("button", { name: "隠すフィルター（全体）を削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+
     expect(await screen.findByText("フィルターを削除しました。3件が一覧に戻りました。")).toBeInTheDocument();
     expect(listFilters(server.db)).toEqual([]);
     expect(await within(await section("フィルターの一覧")).findByText("フィルターはまだありません。")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "一覧" })).toHaveFocus());
+  });
+
+  it("keeps the filter when the removal is called off", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+
+    const remove = await screen.findByRole("button", { name: "隠すフィルター（全体）を削除" });
+    await user.click(remove);
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(listFilters(server.db)).toHaveLength(1);
+    expect(await rowOf("タイトルに「特売」を含む")).toBeInTheDocument();
+    await waitFor(() => expect(remove).toHaveFocus());
+  });
+
+  it("does not mention articles coming back when a disabled filter is removed", async () => {
+    const { server } = withArticles();
+    const filter = createFilter(server.db, hide("特売"), server.clock);
+    updateFilter(server.db, filter.id, { enabled: false });
+    const { user } = renderApp({ server, route: "/settings/filters" });
+
+    await user.click(await screen.findByRole("button", { name: "隠すフィルター（全体）を削除" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "フィルターを削除しますか" });
+    expect(dialog).not.toHaveTextContent("一覧に戻ります");
   });
 });
 
@@ -252,14 +318,14 @@ describe("deleting what filters apply to", () => {
   it("says in the feed's question that its two filters go with it", async () => {
     const { server } = scoped();
     const { user } = renderApp({ server, route: "/settings/feeds" });
-    await user.click(await screen.findByRole("button", { name: "Shopを削除" }));
+    await user.click(await screen.findByRole("button", { name: "Shopの登録を解除" }));
     expect(await screen.findByRole("alertdialog")).toHaveTextContent("この購読フィードを範囲とするフィルター2件も一緒に削除されます。");
   });
 
   it("says nothing of filters for a feed without any", async () => {
     const { server } = scoped();
     const { user } = renderApp({ server, route: "/settings/feeds" });
-    await user.click(await screen.findByRole("button", { name: "Plainを削除" }));
+    await user.click(await screen.findByRole("button", { name: "Plainの登録を解除" }));
     expect(await screen.findByRole("alertdialog")).not.toHaveTextContent("フィルター");
   });
 
@@ -276,7 +342,7 @@ describe("deleting what filters apply to", () => {
     const nav = await screen.findByRole("navigation", { name: "項目" });
     fireEvent.contextMenu(await within(nav).findByRole("link", { name: /^Shop\s*\d*$/ }));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
-    expect(await screen.findByRole("alertdialog", { name: "購読フィードを削除しますか" })).toHaveTextContent(
+    expect(await screen.findByRole("alertdialog", { name: "購読フィードの登録を解除しますか" })).toHaveTextContent(
       "この購読フィードを範囲とするフィルター2件も一緒に削除されます。",
     );
   });

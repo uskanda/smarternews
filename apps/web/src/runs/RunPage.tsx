@@ -16,12 +16,14 @@ import {
 } from "@smarternews/client";
 import { useCategories, useProviders, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { topicEditPath } from "../lib/paths.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const LINK = "tap text-primary underline underline-offset-4";
 
-function CandidateItem({ candidate, showTopics }: { candidate: Candidate; showTopics: boolean }) {
+/** One rejected candidate. Its topics, when shown, lead to their editors once the category is known. */
+function CandidateItem({ candidate, showTopics, categoryId = null }: { candidate: Candidate; showTopics: boolean; categoryId?: number | null }) {
   return (
     <li className="flex flex-col gap-px border-b border-outline py-sm">
       <span className="min-w-0">
@@ -32,7 +34,17 @@ function CandidateItem({ candidate, showTopics }: { candidate: Candidate; showTo
       <span className="type-body-md">{candidate.reason}</span>
       <span className="flex flex-wrap gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
         {candidate.siteName ? <span>{candidate.siteName}</span> : null}
-        {showTopics ? candidate.topics.map((topic) => <span key={topic.id}>{topic.text}</span>) : null}
+        {showTopics
+          ? candidate.topics.map((topic) =>
+              categoryId === null ? (
+                <span key={topic.id}>{topic.text}</span>
+              ) : (
+                <Link key={topic.id} to={topicEditPath(categoryId, topic.id)} className={`break-words ${LINK}`}>
+                  {topic.text}
+                </Link>
+              ),
+            )
+          : null}
       </span>
     </li>
   );
@@ -187,7 +199,8 @@ export function RunPage() {
                   <span className="pl-sm type-label-sm text-on-surface-muted tabular-nums">{group.candidates.length}件</span>
                 </h3>
                 {category && group.key !== "0" ? (
-                  <Link to={`/settings/categories/${category.id}`} className={`type-label-sm ${LINK}`}>
+                  // One such link per group: the name read out says which topic, the text stays short.
+                  <Link to={topicEditPath(category.id, Number(group.key))} aria-label={`${group.text} を直す`} className={`type-label-sm ${LINK}`}>
                     このトピックを直す
                   </Link>
                 ) : null}
@@ -202,7 +215,7 @@ export function RunPage() {
         ) : (
           <ul className="max-w-measure">
             {rejected.map((candidate) => (
-              <CandidateItem key={candidate.id} candidate={candidate} showTopics />
+              <CandidateItem key={candidate.id} candidate={candidate} showTopics categoryId={category?.id ?? null} />
             ))}
           </ul>
         )}

@@ -1,4 +1,10 @@
 /**
+ * Whether the focus is inside `pane`. A move with a key takes the focus to the row chosen only then: a reader
+ * paging through the body keeps the focus, and with it the place a screen reader reads, where it is.
+ */
+export const focusWithin = (pane: Element | null | undefined): boolean => !!pane && pane.contains(document.activeElement);
+
+/**
  * Where a list has to scroll so that the row chosen with a key is in view, or null when the whole row already is.
  * Moving forward puts the row at the top edge and moving back at the bottom edge, so one press past an edge turns
  * the page. Positions are measured from the start of the content.
