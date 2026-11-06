@@ -73,7 +73,7 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
     <section aria-label="注釈の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex items-center justify-between gap-sm border-b border-outline px-lg py-md">
         <h1 className="min-w-0 truncate type-headline-md">注釈</h1>
-        <Button onClick={() => void list.refetch()}>更新</Button>
+        <Button onClick={() => void list.refetch()}>読み直す</Button>
       </header>
       <div ref={pane} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}

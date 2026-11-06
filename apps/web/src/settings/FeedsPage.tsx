@@ -323,9 +323,9 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
     try {
       await api.deleteFeed(feed.id);
       refresh("feeds", "counts", "articles", "filters");
-      toast({ message: "購読フィードを削除しました" });
+      toast({ message: "購読フィードの登録を解除しました" });
     } catch {
-      toast({ message: "削除できませんでした。もう一度試してください。" });
+      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
     }
     setConfirming(false);
   }
@@ -351,19 +351,19 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
           <Button ref={editButton} aria-label={`${feed.title}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
-          <Button aria-label={`${feed.title}を削除`} onClick={() => setConfirming(true)}>
-            削除
+          <Button aria-label={`${feed.title}の登録を解除`} onClick={() => setConfirming(true)}>
+            登録を解除
           </Button>
         </div>
       )}
       <ConfirmDialog
         open={confirming}
-        title="購読フィードを削除しますか"
+        title="購読フィードの登録を解除しますか"
         onDismiss={() => setConfirming(false)}
         actions={
           <>
             <Button variant="danger" onClick={() => void remove()}>
-              削除する
+              登録を解除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
           </>
@@ -424,7 +424,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
         />
         <div>
           <Button type="submit" variant="primary">
-            取得周期を保存
+            保存する
           </Button>
         </div>
       </form>
@@ -556,7 +556,7 @@ export function FeedsPage() {
         </Link>
         <h1 className="type-headline-md">購読フィード</h1>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          登録したフィードを定期的に取得し、配信された記事をそのまま一覧に並べます。AIによる要約はしません。
+          登録したフィードを定期的に取得し、配信された記事をそのまま一覧に並べます。要約と翻訳は、選んだ購読フィードの記事だけに行います。
         </p>
       </header>
       <AddFeed categories={categories} />

@@ -31,6 +31,12 @@ describe("the way to the pages", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "フィルター" })).toBeInTheDocument();
     expect(path()).toBe("/settings/filters");
   });
+
+  it("says that summaries and translations go only to the feeds the user chose", async () => {
+    renderApp({ route: "/settings/feeds" });
+    expect(await screen.findByText(/要約と翻訳は、選んだ購読フィードの記事だけに行います。/)).toBeInTheDocument();
+    expect(screen.queryByText(/AIによる要約はしません/)).not.toBeInTheDocument();
+  });
 });
 
 describe("the list of subscribed feeds", () => {
@@ -88,7 +94,7 @@ describe("adding a feed", () => {
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.selectOptions(within(form).getByLabelText("カテゴリ"), "Tools");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     const row = await rowOf("Example Blog");
     expect(row).toHaveTextContent("Tools");
@@ -114,7 +120,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     await rowOf("Example Blog");
     expect(listFeeds(server.db).map((feed) => feed.url)).toEqual([FEED]);
@@ -131,7 +137,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     const choices = await within(form).findByRole("group", { name: /フィードが2つ見つかりました/ });
     expect(within(choices).getAllByRole("radio")).toHaveLength(2);
@@ -153,7 +159,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(await within(form).findByText("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。")).toBeInTheDocument();
     expect(listFeeds(server.db)).toEqual([]);
@@ -167,7 +173,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(await within(form).findByText(`このフィードはすでに購読しています（${FEED}）。`)).toBeInTheDocument();
   });
@@ -176,7 +182,7 @@ describe("adding a feed", () => {
     const { user } = renderApp({ route: "/settings/feeds" });
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://gone.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
     expect(await within(form).findByText(/このURLを取得できませんでした。.*404/)).toBeInTheDocument();
   });
 });
@@ -200,14 +206,14 @@ describe("the focus in the list of feeds", () => {
     feedOf(server, "Blog");
     const { user } = renderApp({ server, route: "/settings/feeds" });
 
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
     const dialog = await screen.findByRole("alertdialog");
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus());
 
     await user.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(listFeeds(server.db)).toHaveLength(1);
-    await waitFor(async () => expect(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" })).toHaveFocus());
+    await waitFor(async () => expect(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" })).toHaveFocus());
   });
 });
 
@@ -273,7 +279,7 @@ describe("deleting a feed", () => {
     for (let index = 0; index < 40; index += 1) seedFeedArticle(server.db, feed.id, { starred: index < 2 });
     const { user } = renderApp({ server, route: "/settings/feeds" });
 
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("配信記事40件が消えます");
@@ -281,9 +287,9 @@ describe("deleting a feed", () => {
     expect(dialog).not.toHaveTextContent("注釈");
     expect(listFeeds(server.db)).toHaveLength(1);
 
-    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+    await user.click(within(dialog).getByRole("button", { name: "登録を解除する" }));
 
-    expect(await screen.findByText("購読フィードを削除しました")).toBeInTheDocument();
+    expect(await screen.findByText("購読フィードの登録を解除しました")).toBeInTheDocument();
     expect(listFeeds(server.db)).toEqual([]);
   });
 
@@ -296,7 +302,7 @@ describe("deleting a feed", () => {
     saveArticleNote(server.db, ids[0]!, "メモ", now);
     const { user } = renderApp({ server, route: "/settings/feeds" });
 
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("「Blog」と、その配信記事40件が消えます。注釈のある3件も、注釈とともに消えます。元に戻せません。");
@@ -307,7 +313,7 @@ describe("deleting a feed", () => {
     const server = makeServer();
     feedOf(server, "Blog");
     const { user } = renderApp({ server, route: "/settings/feeds" });
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
     expect(listFeeds(server.db)).toHaveLength(1);
   });
@@ -349,7 +355,7 @@ describe("the base interval", () => {
     expect(field).toHaveValue(30);
     await user.clear(field);
     await user.type(field, "60");
-    await user.click(within(form).getByRole("button", { name: "取得周期を保存" }));
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
     expect(await screen.findByText("取得周期を保存しました")).toBeInTheDocument();
     expect(getSettings(server.db).feedIntervalMinutes).toBe(60);
   });
@@ -361,7 +367,7 @@ describe("the base interval", () => {
     const field = await within(form).findByLabelText("基本の取得周期（分）");
     await user.clear(field);
     await user.type(field, "3");
-    await user.click(within(form).getByRole("button", { name: "取得周期を保存" }));
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
     expect(await within(form).findByText("5分から1440分（24時間）の範囲で入力してください。")).toBeInTheDocument();
     expect(field).toHaveAccessibleDescription(/5分から1440分/);
     expect(getSettings(server.db).feedIntervalMinutes).toBe(30);
@@ -522,7 +528,7 @@ describe("summaries of a feed", () => {
     expect(choice).not.toBeChecked();
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(choice);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(within(await rowOf("Example Blog")).getByText("自動で要約")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, autoSummarize: true }]);
@@ -563,7 +569,7 @@ describe("translation of a feed", () => {
     expect(choice).toHaveAccessibleDescription(HINT);
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(choice);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(within(await rowOf("Example Blog")).getByText("翻訳")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, translate: true }]);
@@ -622,7 +628,7 @@ describe("full content of a feed", () => {
     expect(choice).toHaveAccessibleDescription(HINT);
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(choice);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(within(await rowOf("Example Blog")).getByText("全文を取得")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, fetchFullContent: true }]);
@@ -801,7 +807,7 @@ describe("subscribing to a page without a feed", () => {
     const view = renderApp({ server, route: "/settings/feeds" });
     const form = await section("購読フィードの追加");
     await view.user.type(within(form).getByLabelText("フィードまたはサイトのURL"), PAGE);
-    await view.user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
     await within(form).findByRole("button", { name: "このページを購読する" });
     return { ...view, form };
   }
@@ -879,7 +885,7 @@ describe("subscribing to a page without a feed", () => {
     const { user } = renderApp({ server, route: "/settings/feeds" });
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
     await rowOf("Example Blog");
     expect(within(form).queryByRole("button", { name: "このページを購読する" })).not.toBeInTheDocument();
   });
