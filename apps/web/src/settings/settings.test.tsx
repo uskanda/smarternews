@@ -203,6 +203,31 @@ describe("topics", () => {
     expect(item("ransomware")).toHaveTextContent("次の実行で解釈されます");
   });
 
+  it("opens the editor of the topic named in the hash, with the focus in its text, and leaves the others closed", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const target = topic(server, category.id, "ransomware");
+    renderApp({ server, route: `/settings/categories/${category.id}#topic-${target.id}` });
+
+    const text = await screen.findByLabelText("トピックの文章");
+    expect(text).toHaveValue("ransomware");
+    expect(text).toHaveFocus();
+    expect(text.closest("li")).toHaveAttribute("id", `topic-${target.id}`);
+    expect(screen.getAllByLabelText("トピックの文章")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "exploited flaws を編集" })).toBeInTheDocument();
+  });
+
+  it("opens no editor when the hash names a topic that is not there", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    renderApp({ server, route: `/settings/categories/${category.id}#topic-9999` });
+
+    expect(await screen.findByRole("button", { name: "exploited flaws を編集" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+  });
+
   it("adds a topic, says when it will be interpreted, offers to run now, and starts no run by itself", async () => {
     const server = makeServer();
     const category = server.category("Security");
