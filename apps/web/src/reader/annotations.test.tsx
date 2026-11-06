@@ -453,6 +453,30 @@ describe("the list of annotations", () => {
     await user.keyboard("j");
     await waitFor(() => expect(path()).toBe(`/annotations/${gone}?annotation=${lost.id}`));
   });
+
+  it("draws the line on the selected row only, and takes the focus along with j", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    saveArticleNote(server.db, a, "新しいメモ", at(10));
+    saveArticleNote(server.db, b, "古いメモ", at(20));
+    const { user } = renderApp({ server, route: "/annotations" });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("古いメモ");
+    const [first, second] = within(list).getAllByRole("link");
+
+    await user.click(first!);
+    await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
+    expect(first!.closest("li")!.querySelector("[data-selected-mark]")).toHaveAttribute("aria-hidden", "true");
+    expect(second!.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+    await user.keyboard("j");
+
+    await waitFor(() => expect(second).toHaveAttribute("aria-current", "true"));
+    expect(second).toHaveFocus();
+    expect(second!.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    expect(first!.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+  });
 });
 
 describe("an excerpt from a note in the search results", () => {

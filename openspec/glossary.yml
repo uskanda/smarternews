@@ -394,6 +394,10 @@ terms:
     definition: "押すたびに選んだ状態と選んでいない状態が入れ替わる、画面の入力部品。"
     aliases: []
     en: "checkbox"
+  - term: "ラジオボタン"
+    definition: "まとまりの中から1つだけを選ぶ、画面の入力部品。"
+    aliases: []
+    en: "radio button"
   - term: "リファラー"
     definition: "ブラウザーが要求に付けて送る、遷移元のページのURL。"
     aliases: []

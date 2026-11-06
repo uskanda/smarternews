@@ -20,7 +20,7 @@ import {
 } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
-import { followScroll } from "../lib/follow.ts";
+import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
@@ -451,18 +451,26 @@ export function ReaderPage({ view }: { view: View }) {
   // A move with a key takes the list along; a click leaves it where the reader put it.
   const root = useRef<HTMLDivElement>(null);
   const keyStep = useRef(0);
+  // The focus goes along with a move with a key when it was in the list, so it stays on the row chosen.
+  const keyFocus = useRef(false);
+  const scrollingList = () => root.current?.querySelector<HTMLElement>("[data-list-scroll]");
   const move = (step: number) => {
     const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
     if (!target) return;
     keyStep.current = step;
+    keyFocus.current = focusWithin(scrollingList());
     void navigate(articlePath(target.id));
   };
   useLayoutEffect(() => {
     const step = keyStep.current;
+    const focus = keyFocus.current;
     keyStep.current = 0;
-    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
-    const row = pane?.querySelector('[aria-current="true"]')?.closest("li");
-    if (step === 0 || !pane || !row) return;
+    keyFocus.current = false;
+    const pane = scrollingList();
+    const link = pane?.querySelector<HTMLElement>('[aria-current="true"]');
+    const row = link?.closest("li");
+    if (step === 0 || !pane || !link || !row) return;
+    if (focus) link.focus({ preventScroll: true });
     const view = pane.getBoundingClientRect();
     const box = row.getBoundingClientRect();
     const rowTop = box.top - view.top + pane.scrollTop;
