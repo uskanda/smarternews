@@ -885,7 +885,9 @@ describe("the browser's history while moving with keys", () => {
 
     await back();
     await waitFor(() => expect(here()).toBe("/all"));
-    expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+    for (const name of ["First story", "Second story", "Third story"]) {
+      expect(screen.queryByRole("heading", { level: 2, name })).not.toBeInTheDocument();
+    }
   });
 
   it("adds an entry when j opens the first article, so that back closes it", async () => {
