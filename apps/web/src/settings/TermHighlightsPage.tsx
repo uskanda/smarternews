@@ -120,7 +120,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
         <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
-          保存
+          保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
       </div>

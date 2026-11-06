@@ -388,6 +388,14 @@
     color: var(--color-annotation);
   }
 
+  /* The mark of a feed's state in the left pane, between the name and the unread count. */
+  .feed-state-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 1em;
+    height: 1em;
+  }
+
   /* An original shown alone in a translated body: its blocks are blocks of the body. */
   .segment-alone {
     display: contents;
