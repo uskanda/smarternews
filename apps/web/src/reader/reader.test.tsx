@@ -1,4 +1,4 @@
-import { getArticle, insertArticle, insertFeed, listListViews, markArticlesRead, setArticleFlags, updateListView } from "@smarternews/core";
+import { createTopic, getArticle, insertArticle, insertFeed, listListViews, markArticlesRead, setArticleFlags, updateListView } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -157,6 +157,26 @@ describe("a row of the list", () => {
 
     expect(await screen.findByRole("link", { name: /重要度5.*Urgent/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Routine/ })).not.toHaveAccessibleName(/重要度/);
+  });
+
+  it("says 未読 before the importance on an unread row, and nothing on a read one", async () => {
+    const server = makeServer();
+    const [read] = articles(server, server.category().id, [{ title: "Read one" }, { title: "Unread one", importance: 4 }]);
+    setArticleFlags(server.db, read!, { isRead: true }, server.clock().toISOString());
+    renderApp({ server, route: "/all" });
+
+    expect(await screen.findByRole("link", { name: /^未読。重要度4。Unread one/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Read one/ })).not.toHaveAccessibleName(/未読/);
+  });
+
+  it("draws the line at the right edge of the selected row only", async () => {
+    const server = makeServer();
+    const [, newer] = articles(server, server.category().id, [{ title: "Older story" }, { title: "Newer story" }]);
+    renderApp({ server, route: `/all/${newer}` });
+
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    expect(row(/Newer story/).querySelector("[data-selected-mark]")).toHaveAttribute("aria-hidden", "true");
+    expect(row(/Older story/).querySelector("[data-selected-mark]")).toBeNull();
   });
 
   it("labels an updated article and an unconfirmed one", async () => {
@@ -381,6 +401,63 @@ describe("reading an article", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Flaw disclosed" })).toBeInTheDocument();
   });
 
+  it("links each topic the article matched to the editor of that topic", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = createTopic(server.db, category.id, { text: "exploited flaws in widely used software, but not proof-of-concept code" }, server.clock);
+    const ransom = createTopic(server.db, category.id, { text: "ransomware" }, server.clock);
+    const id = insertArticle(server.db, {
+      categoryId: category.id,
+      kind: "news",
+      title: "Matched story",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      previousArticleId: null,
+      refs: [],
+      topicIds: [flaws.id, ransom.id],
+    });
+    const { user, path } = renderApp({ server, route: `/all/${id}` });
+
+    const topics = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "トピック" });
+    const links = within(topics).getAllByRole("link");
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      `/settings/categories/${category.id}#topic-${flaws.id}`,
+      `/settings/categories/${category.id}#topic-${ransom.id}`,
+    ]);
+    // The text is cut to two lines on the screen, but the whole of it is the name that is read out.
+    expect(links[0]).toHaveAccessibleName(flaws.text);
+    expect(links[0]).toHaveAttribute("title", flaws.text);
+    expect(links[0]).toHaveClass("line-clamp-2");
+
+    await user.click(links[1]!);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("ransomware");
+  });
+
+  it("shows no topics on a feed article or on a generated one that matched none", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const generated = server.article(category.id, { title: "No topics" });
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: category.id }, server.clock);
+    const delivered = seedFeedArticle(server.db, feed.id, { title: "Feed post" });
+
+    const first = renderApp({ server, route: `/all/${generated}` });
+    await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "No topics" });
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "トピック" })).not.toBeInTheDocument();
+    first.unmount();
+
+    renderApp({ server, route: `/f/${feed.id}/${delivered}` });
+    await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "Feed post" });
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "トピック" })).not.toBeInTheDocument();
+  });
+
   it("says so when an article was written from snippets only", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Thin", snippetOnly: true });
@@ -435,7 +512,7 @@ describe("read state", () => {
 
     await user.click(await screen.findByRole("link", { name: /First/ }));
     await waitFor(() => expect(row(/First/)).toHaveAttribute("data-read", "true"));
-    await user.click(screen.getByRole("button", { name: "更新" }));
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
 
     await waitFor(() => expect(rowTitles()).toEqual(["Second"]));
   });
@@ -577,6 +654,23 @@ describe("events", () => {
     expect(article()).toHaveTextContent("3月11日");
     expect(article()).toHaveTextContent("City Hall");
   });
+
+  it("says 未読 on an unread event, marks the selected one, and takes the focus along with j", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/c/local-events" });
+
+    const morning = await screen.findByRole("link", { name: /^未読。Morning class/ });
+    await user.click(morning);
+    await screen.findByRole("heading", { level: 2, name: "Morning class" });
+    expect(morning.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    await user.keyboard("j");
+
+    const evening = screen.getByRole("link", { name: /Evening talk/ });
+    await waitFor(() => expect(evening).toHaveAttribute("aria-current", "true"));
+    expect(evening).toHaveFocus();
+    expect(evening.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    expect(morning.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+  });
 });
 
 describe("an article that other feeds delivered too", () => {
@@ -664,7 +758,7 @@ describe("the recently read articles", () => {
     expect(screen.queryByRole("button", { name: "すべて既読にする" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "既読も表示" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "重要度4以上だけ" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "更新" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "読み直す" })).toBeInTheDocument();
   });
 
   it("says that nothing was read in the last seven days and opens the unread list", async () => {
@@ -719,7 +813,7 @@ describe("the recently read articles", () => {
       await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 2", "Tools 1", "Article A"]));
       expect(row(/Tools 2/)).toHaveAttribute("data-read", "false");
 
-      await user.click(screen.getByRole("button", { name: "更新" }));
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
       await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 1", "Article A"]));
     } finally {
       vi.useRealTimers();
@@ -751,6 +845,40 @@ describe("the recently read articles", () => {
 });
 
 describe("keys on the list and the article", () => {
+  it("takes the focus to the row j selects when the focus was on the list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Third" }, { title: "Second" }, { title: "First" }]);
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    await screen.findByRole("heading", { level: 2, name: "First" });
+    await user.keyboard("j");
+
+    const second = within(list()).getByRole("link", { name: /Second/ });
+    await waitFor(() => expect(second).toHaveAttribute("aria-current", "true"));
+    expect(second).toHaveFocus();
+    await user.keyboard("k");
+    const first = within(list()).getByRole("link", { name: /First/ });
+    await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
+    expect(first).toHaveFocus();
+  });
+
+  it("leaves the focus where it is when j is pressed outside the list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Second" }, { title: "First" }]);
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    const heading = await screen.findByRole("heading", { level: 2, name: "First" });
+    await user.click(heading);
+    expect(heading).toHaveFocus();
+    await user.keyboard("j");
+
+    await screen.findByRole("heading", { level: 2, name: "Second" });
+    await waitFor(() => expect(within(list()).getByRole("link", { name: /Second/ })).toHaveAttribute("aria-current", "true"));
+    expect(list()).not.toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("marks the list as read with Shift+A, and offers the undo", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -877,6 +1005,20 @@ describe("Space through the article", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Older story" })).toBeInTheDocument();
     expect(path()).toBe(`/all/${older}`);
     expect(pane.scrollTop).toBe(0);
+  });
+
+  it("takes the focus to the next row at the end of the body when the focus was on the list", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /Newer story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    layOut(400);
+    await user.keyboard(" ");
+
+    const older = within(list()).getByRole("link", { name: /Older story/ });
+    await waitFor(() => expect(older).toHaveAttribute("aria-current", "true"));
+    expect(older).toHaveFocus();
   });
 
   it("moves to the next article at once when the body fits", async () => {
@@ -1289,7 +1431,7 @@ describe("marking read what the list is scrolled past", () => {
       const { server, rows } = seeded();
       const user = await putBack(server, /Story 6/);
 
-      await user.click(screen.getByRole("button", { name: "更新" }));
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
       await waitFor(() => expect(row(/Story 6/)).toHaveAttribute("data-read", "false"));
       await scrollTo(0);
       await scrollTo(ROW);

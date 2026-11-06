@@ -4,7 +4,7 @@ import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
-import { listPathOf } from "../lib/paths.ts";
+import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -302,6 +302,26 @@ export function ArticleView({
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
           {article.starred ? <span>スター</span> : null}
         </div>
+        {!delivered && article.categoryId !== null && article.topics.length > 0 ? (
+          // The topics that chose this article, each a way to the editor of that topic: where a miss is fixed.
+          // A long topic is cut to two lines on the screen; the whole of it stays in the link, to be read out.
+          <section aria-label="トピック" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">トピック</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.topics.map((topic) => (
+                <li key={topic.id} className="min-w-0">
+                  <Link
+                    to={topicEditPath(article.categoryId!, topic.id)}
+                    title={topic.text}
+                    className="tap line-clamp-2 break-words text-primary underline underline-offset-4"
+                  >
+                    {topic.text}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none" {...filterSource(!originalTitleShown)}>
             <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />

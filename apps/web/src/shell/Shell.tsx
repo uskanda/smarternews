@@ -1,5 +1,16 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { budgetWarningLabel, buildNav, listKey, nextEventCategory, stepTarget, type ListTarget, type NavEntry, type NavModel } from "@smarternews/client";
+import {
+  budgetWarningLabel,
+  buildNav,
+  FEED_STATE_LABEL,
+  listKey,
+  nextEventCategory,
+  stepTarget,
+  type FeedState,
+  type ListTarget,
+  type NavEntry,
+  type NavModel,
+} from "@smarternews/client";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -96,12 +107,48 @@ function NavItem({ to, label, count, onNavigate }: { to: string; label: string; 
   );
 }
 
+const STATE_COLOR: Record<FeedState, string> = { failed: "text-error", stale: "text-warning", paused: "text-on-surface-muted" };
+/** What the mark on a folded category says: the state belongs to a feed below it, not to the category. */
+const HIDDEN_STATE_LABEL: Record<FeedState, string> = {
+  failed: "取得に失敗した購読フィードがあります",
+  stale: "更新が止まった購読フィードがあります",
+  paused: "一時停止中の購読フィードがあります",
+};
+
+/**
+ * The mark of a feed whose fetches went wrong, told by its shape as well as its colour: a triangle with "!" for a
+ * failed fetch, a clock for no new item for long, two bars for a pause. Its name is read out and shown on hover.
+ */
+function FeedStateIcon({ state, label = FEED_STATE_LABEL[state] }: { state: FeedState; label?: string }) {
+  return (
+    <span role="img" aria-label={label} title={label} className={`feed-state-icon ${STATE_COLOR[state]}`}>
+      <svg aria-hidden="true" viewBox="0 0 16 16" width="100%" height="100%" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        {state === "failed" ? (
+          <>
+            <path d="M8 1.75 14.5 13.5h-13z" />
+            <path d="M8 6v3.5M8 11.5v.25" />
+          </>
+        ) : state === "stale" ? (
+          <>
+            <circle cx="8" cy="8" r="6.25" />
+            <path d="M8 4.5V8l2.5 1.5" />
+          </>
+        ) : (
+          <path d="M5.75 3.5v9M10.25 3.5v9" strokeWidth="2" />
+        )}
+      </svg>
+    </span>
+  );
+}
+
 /** An entry that opens a list of articles. It is current on that list and on an article opened from it. */
 function ListItem({
   entry,
   to,
   count = entry.unread,
   holdsCurrent = false,
+  state = entry.state,
+  stateLabel,
   onNavigate,
 }: {
   entry: NavEntry;
@@ -109,6 +156,9 @@ function ListItem({
   count?: number;
   /** True for a folded category whose hidden entry is the one that is open: the row shows where the reader is. */
   holdsCurrent?: boolean;
+  /** The mark beside the name: the feed's own state, or that of the feeds hidden below a folded category. */
+  state?: FeedState;
+  stateLabel?: string;
   onNavigate?: () => void;
 }) {
   const current = isOnList(to, useLocation().pathname);
@@ -121,7 +171,14 @@ function ListItem({
       draggable={false}
       className={`${ITEM} ${current || holdsCurrent ? "bg-selected font-semibold" : ""}`}
     >
-      <span className="min-w-0 truncate">{entry.label}</span>
+      <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+      {state ? (
+        <>
+          {/* Read out apart from the name: the two would otherwise run together as one word. */}
+          <span className="sr-only">、</span>
+          <FeedStateIcon state={state} label={stateLabel} />
+        </>
+      ) : null}
       {count > 0 ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
     </Link>
   );
@@ -167,11 +224,11 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     try {
       await api.deleteFeed(feed.id);
       for (const key of ["feeds", "counts", "articles", "filters"]) void client.invalidateQueries({ queryKey: [key] });
-      toast({ message: "購読フィードを削除しました" });
+      toast({ message: "購読フィードの登録を解除しました" });
       // The list that was open is gone with the feed.
       if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
     } catch {
-      toast({ message: "削除できませんでした。もう一度試してください。" });
+      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
     }
     setRemoving(false);
     setLeaving(null);
@@ -234,7 +291,18 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
                   ) : foldable ? (
                     <span aria-hidden="true" className="nav-fold shrink-0" />
                   ) : null}
-                  {menu(group.entry, <ListItem entry={group.entry} to={pathOf(group.entry)} holdsCurrent={folded && childIsCurrent} onNavigate={onNavigate} />)}
+                  {menu(
+                    group.entry,
+                    <ListItem
+                      entry={group.entry}
+                      to={pathOf(group.entry)}
+                      holdsCurrent={folded && childIsCurrent}
+                      // Folded, the feeds below cannot show their marks: the row shows the strongest of them.
+                      state={folded ? group.childState : undefined}
+                      stateLabel={group.childState ? HIDDEN_STATE_LABEL[group.childState] : undefined}
+                      onNavigate={onNavigate}
+                    />,
+                  )}
                 </div>
                 {group.children.length > 0 ? (
                   <ul id={`nav-group-${key}`} hidden={folded} className={folded ? "" : "flex flex-col gap-px"}>
@@ -278,7 +346,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       ) : null}
       <ConfirmDialog
         open={leavingFeed !== undefined}
-        title="購読フィードを削除しますか"
+        title="購読フィードの登録を解除しますか"
         onDismiss={() => setLeaving(null)}
         returnFocus={() =>
           element.current?.querySelector<HTMLElement>(`[data-nav-key="feed-${leavingRow.current}"] a`) ?? element.current?.querySelector<HTMLElement>("a")
@@ -286,7 +354,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         actions={
           <>
             <Button variant="danger" disabled={removing} onClick={() => leavingFeed && void unsubscribe(leavingFeed)}>
-              削除する
+              登録を解除する
             </Button>
             <Button onClick={() => setLeaving(null)}>やめる</Button>
           </>

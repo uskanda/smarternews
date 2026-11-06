@@ -57,6 +57,16 @@
     padding-left: calc(var(--spacing-xl) + var(--spacing-nav-indent));
   }
 
+  /* The selected row of a list: a line down its right edge, besides the ground, which alone is too faint. */
+  .selected-mark {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 3px;
+    background-color: var(--color-primary);
+  }
+
   @media (pointer: coarse) {
     .nav-fold {
       width: var(--spacing-touch);
@@ -386,6 +396,14 @@
     margin-left: 0.15em;
     vertical-align: -0.05em;
     color: var(--color-annotation);
+  }
+
+  /* The mark of a feed's state in the left pane, between the name and the unread count. */
+  .feed-state-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 1em;
+    height: 1em;
   }
 
   /* An original shown alone in a translated body: its blocks are blocks of the body. */

@@ -20,7 +20,7 @@ import {
 } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
-import { followScroll } from "../lib/follow.ts";
+import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
@@ -54,6 +54,7 @@ import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
+import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -486,9 +487,13 @@ export function ReaderPage({ view }: { view: View }) {
   const index = current === null ? -1 : items.findIndex((item) => item.id === current);
   // A move with a key takes the list along; a click leaves it where the reader put it.
   const keyStep = useRef(0);
+  // The focus goes along with a move with a key when it was in the list, so it stays on the row chosen.
+  const keyFocus = useRef(false);
+  const scrollingList = () => root.current?.querySelector<HTMLElement>("[data-list-scroll]");
   const loadingMore = useRef(false);
   const go = (id: number, step: number) => {
     keyStep.current = step;
+    keyFocus.current = focusWithin(scrollingList());
     void navigate(articlePath(id));
   };
   /** Past the last article loaded, the next page is loaded first, and its first article opened. */
@@ -513,10 +518,14 @@ export function ReaderPage({ view }: { view: View }) {
   };
   useLayoutEffect(() => {
     const step = keyStep.current;
+    const focus = keyFocus.current;
     keyStep.current = 0;
-    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
-    const row = pane?.querySelector('[aria-current="true"]')?.closest("li");
-    if (step === 0 || !pane || !row) return;
+    keyFocus.current = false;
+    const pane = scrollingList();
+    const link = pane?.querySelector<HTMLElement>('[aria-current="true"]');
+    const row = link?.closest("li");
+    if (step === 0 || !pane || !link || !row) return;
+    if (focus) link.focus({ preventScroll: true });
     const view = pane.getBoundingClientRect();
     const box = row.getBoundingClientRect();
     const rowTop = box.top - view.top + pane.scrollTop;
@@ -618,7 +627,7 @@ export function ReaderPage({ view }: { view: View }) {
           </h1>
           <div className="flex shrink-0 gap-sm">
             {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
-            <Button onClick={refresh}>更新</Button>
+            <Button onClick={refresh}>読み直す</Button>
           </div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
@@ -629,7 +638,7 @@ export function ReaderPage({ view }: { view: View }) {
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
           {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
-          {/* Beside the switches rather than beside 更新: a third button there leaves the list's name no room.
+          {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
@@ -664,6 +673,8 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
+      {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
+      {view === "feed" && feed ? <FeedStatusBanner feed={feed} /> : null}
       <div
         ref={listScroll}
         data-list-scroll

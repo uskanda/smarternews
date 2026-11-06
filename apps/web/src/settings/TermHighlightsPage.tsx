@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { useInlineEditFocus } from "./inline-edit-focus.ts";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -119,7 +120,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
         <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
-          保存
+          保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
       </div>
@@ -176,7 +177,7 @@ function GroupRow({
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const editButton = useRef<HTMLButtonElement>(null);
+  const focus = useInlineEditFocus(editing);
   const up = useRef<HTMLButtonElement>(null);
   const down = useRef<HTMLButtonElement>(null);
 
@@ -235,13 +236,9 @@ function GroupRow({
         </ul>
       )}
       {editing ? (
-        <EditGroup
-          group={group}
-          onDone={() => {
-            setEditing(false);
-            editButton.current?.focus();
-          }}
-        />
+        <div ref={focus.region}>
+          <EditGroup group={group} onDone={() => setEditing(false)} />
+        </div>
       ) : (
         <>
           <AddTerm group={group} />
@@ -252,7 +249,7 @@ function GroupRow({
             <Button ref={down} aria-label={`${group.name}を下へ`} disabled={last} onClick={() => onMove(group, "down")}>
               下へ
             </Button>
-            <Button ref={editButton} aria-label={`${group.name}を編集`} onClick={() => setEditing(true)}>
+            <Button ref={focus.opener} aria-label={`${group.name}を編集`} onClick={() => setEditing(true)}>
               編集
             </Button>
             <Button aria-label={`${group.name}を削除`} onClick={() => setConfirming(true)}>
