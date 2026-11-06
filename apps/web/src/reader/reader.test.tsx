@@ -512,6 +512,145 @@ describe("stars", () => {
   });
 });
 
+describe("a star or a read state the server cannot store", () => {
+  /** The toast with the message: the article shows notes of its own as statuses. */
+  const toastSays = async (text: string) =>
+    (await screen.findByText(text, { selector: '[role="status"] > span' })).closest<HTMLElement>('[role="status"]')!;
+
+  /** Opens the article in the unread list, which reads it, and waits until the server has it read. */
+  async function openUnread(server: TestServer, id: number, offline: () => boolean) {
+    const rendered = renderApp({ server, route: "/unread", offline });
+    await rendered.user.click(await screen.findByRole("link", { name: /Story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+    return rendered;
+  }
+
+  it("shows a row kept in the unread list unread again when m fails to read it, and reads it when asked to try again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "false"));
+
+    offline = true;
+    await user.keyboard("m");
+
+    const status = await toastSays("既読にできませんでした");
+    expect(row(/Story/)).toHaveAttribute("data-read", "false");
+    expect(screen.getByRole("button", { name: "既読にする" })).toBeInTheDocument();
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+  });
+
+  it("shows the article read again when m fails to put it back to unread", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+
+    offline = true;
+    await user.keyboard("m");
+
+    await toastSays("未読に戻せませんでした");
+    expect(row(/Story/)).toHaveAttribute("data-read", "true");
+    expect(screen.getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
+    expect(getArticle(server.db, id).isRead).toBe(true);
+  });
+
+  it("takes the star off a row kept in the unread list again when s fails to add it, and adds it when asked to try again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+
+    offline = true;
+    await user.keyboard("s");
+
+    const status = await toastSays("スターを付けられませんでした");
+    expect(row(/Story/)).not.toHaveTextContent("スター");
+    expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveTextContent("スター"));
+  });
+
+  it("puts the star back when s fails to take it off, and takes it off when asked to try again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    setArticleFlags(server.db, id, { starred: true }, server.clock().toISOString());
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+    await waitFor(() => expect(row(/Story/)).toHaveTextContent("スター"));
+
+    offline = true;
+    await user.keyboard("s");
+
+    const status = await toastSays("スターを外せませんでした");
+    expect(row(/Story/)).toHaveTextContent("スター");
+    expect(screen.getByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(false));
+  });
+
+  it("says so, and leaves the row unread, when opening an article fails to read it", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let failing = true;
+    const original = server.app.request.bind(server.app);
+    server.app.request = ((input: string, init?: RequestInit) => {
+      if (failing && init?.method === "PATCH" && /\/articles\/\d+$/.test(String(input))) return Promise.reject(new TypeError("fetch failed"));
+      return original(input, init);
+    }) as typeof server.app.request;
+    onTestFinished(() => {
+      server.app.request = original;
+    });
+    const { user } = renderApp({ server, route: "/unread" });
+
+    await user.click(await screen.findByRole("link", { name: /Story/ }));
+
+    const status = await toastSays("既読にできませんでした");
+    expect(row(/Story/)).toHaveAttribute("data-read", "false");
+    expect(getArticle(server.db, id).isRead).toBe(false);
+    failing = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+  });
+
+  it("says so when undoing everything marked read fails, and undoes it when asked to try again", async () => {
+    const server = makeServer();
+    const ids = articles(server, server.category().id, [{ title: "One" }, { title: "Two" }]);
+    let offline = false;
+    const { user } = renderApp({ server, offline: () => offline });
+    await screen.findByRole("link", { name: /Two/ });
+    await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+    const done = await toastSays("2件を既読にしました");
+
+    offline = true;
+    await user.click(within(done).getByRole("button", { name: "取り消す" }));
+
+    const status = await toastSays("既読を取り消せませんでした");
+    expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true]);
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false]));
+    await waitFor(() => expect(rowTitles()).toEqual(["Two", "One"]));
+  });
+});
+
 describe("events", () => {
   function seeded() {
     const server = makeServer("2026-03-10T12:00:00.000Z");

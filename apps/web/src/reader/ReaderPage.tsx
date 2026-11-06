@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
+  type ArticleFlagChange,
   useArticle,
   useArticleFlags,
   useRecordOpened,
@@ -176,7 +177,10 @@ export function ReaderPage({ view }: { view: View }) {
   const toast = useToast();
   const timeZone = useTimeZone();
   const settings = useSettings();
-  const flags = useArticleFlags();
+  // A failed change of flags is answered with what this render holds: the kept rows, the toast, sending again.
+  const flagFailed = useRef<(change: ArticleFlagChange) => void>(() => {});
+  const flagRetry = useRef<(change: ArticleFlagChange) => void>(() => {});
+  const flags = useArticleFlags((change) => flagFailed.current(change));
 
   const categories = useCategories();
   const feeds = useFeeds();
@@ -311,25 +315,55 @@ export function ReaderPage({ view }: { view: View }) {
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
-  function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
+  function setRead(id: number, isRead: boolean) {
     // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
-    if (!isRead) scrollRead.exclude(target.id);
-    const summary = items.find((item) => item.id === target.id);
+    if (!isRead) scrollRead.exclude(id);
+    const summary = items.find((item) => item.id === id);
     if ((unreadOnly || recentlyRead) && summary) {
       setKept((current) => ({
         key: listKey,
-        items: [...current.items.filter((item) => item.id !== target.id), { ...summary, isRead }],
+        items: [...current.items.filter((item) => item.id !== id), { ...summary, isRead }],
       }));
     }
-    flags.mutate({ id: target.id, isRead });
+    flags.mutate({ id, isRead });
   }
-  function toggleStar(target: { id: number; starred: boolean }) {
+  function setStar(id: number, starred: boolean) {
     setKept((current) => ({
       key: current.key,
-      items: current.items.map((item) => (item.id === target.id ? { ...item, starred: !target.starred } : item)),
+      items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)),
     }));
-    flags.mutate({ id: target.id, starred: !target.starred });
+    flags.mutate({ id, starred });
   }
+  function toggleStar(target: { id: number; starred: boolean }) {
+    setStar(target.id, !target.starred);
+  }
+  /** Sends a change of flags again, as the screen of now has it: a retry after a failure. */
+  function sendFlags({ id, isRead, starred }: ArticleFlagChange) {
+    if (isRead !== undefined) setRead(id, isRead);
+    if (starred !== undefined) setStar(id, starred);
+  }
+  flagFailed.current = (change) => {
+    const { id, isRead, starred } = change;
+    // The rows kept in an unread or recently read list are not in the cache, so they are put back here.
+    setKept((current) => ({
+      key: current.key,
+      items: current.items.map((item) =>
+        item.id === id
+          ? { ...item, ...(isRead !== undefined ? { isRead: !isRead } : {}), ...(starred !== undefined ? { starred: !starred } : {}) }
+          : item,
+      ),
+    }));
+    const message =
+      isRead !== undefined
+        ? isRead
+          ? "既読にできませんでした"
+          : "未読に戻せませんでした"
+        : starred
+          ? "スターを付けられませんでした"
+          : "スターを外せませんでした";
+    toast({ message, durationMs: 10_000, action: { label: "もう一度試す", run: () => flagRetry.current(change) } });
+  };
+  flagRetry.current = sendFlags;
 
   // Full content: the fetch is kept here, for the `w` key and the article pane alike. Which content is shown is
   // held for one visit to an article; choosing it again shows the full content.
@@ -348,7 +382,7 @@ export function ReaderPage({ view }: { view: View }) {
     autoMarked.current = opened.id;
     recordOpened(opened);
     if (opened.fullContentStatus === "waiting") fullContent.fetch(opened.id);
-    if (!opened.isRead) setRead(opened, true);
+    if (!opened.isRead) setRead(opened.id, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when another article is opened, not on every change
   }, [opened?.id]);
   useEffect(() => {
@@ -405,12 +439,19 @@ export function ReaderPage({ view }: { view: View }) {
         durationMs: 10_000,
         action: {
           label: "取り消す",
-          run: () => void api.markUnread(result.ids).then(refresh),
+          run: () => undoMarkAll(result.ids),
         },
       });
     } catch (error) {
       toast({ message: error instanceof Error ? "既読にできませんでした。もう一度試してください。" : "既読にできませんでした。" });
     }
+  }
+
+  /** Puts back to unread what marking everything read read; a failure says so and offers to send it again. */
+  function undoMarkAll(ids: number[]) {
+    void api.markUnread(ids).then(refresh, () =>
+      toast({ message: "既読を取り消せませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: () => undoMarkAll(ids) } }),
+    );
   }
 
   function toggleParam(name: "read" | "min" | "unread", value: string, on: boolean) {
@@ -500,7 +541,7 @@ export function ReaderPage({ view }: { view: View }) {
       r: refresh,
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
-      m: selected ? () => setRead(selected, !selected.isRead) : undefined,
+      m: selected ? () => setRead(selected.id, !selected.isRead) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
@@ -674,7 +715,7 @@ export function ReaderPage({ view }: { view: View }) {
               backTo={layout === "narrow" ? listPath : null}
               articlePath={articlePath}
               onToggleStar={toggleStar}
-              onToggleRead={(article) => setRead(article, !article.isRead)}
+              onToggleRead={(article) => setRead(article.id, !article.isRead)}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),
