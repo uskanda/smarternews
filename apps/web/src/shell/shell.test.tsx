@@ -515,7 +515,7 @@ describe("refreshing", () => {
 
     server.article(category.id, { title: "Just arrived" });
     expect(screen.queryByRole("link", { name: /Just arrived/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "更新" }));
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
 
     expect(await screen.findByRole("link", { name: /Just arrived/ })).toBeInTheDocument();
   });

@@ -99,7 +99,7 @@ describe("the term highlights page", () => {
 
     await user.click(within(item).getByRole("button", { name: "Aを編集" }));
     await user.click(within(item).getByRole("radio", { name: "桃色" }));
-    await user.click(within(item).getByRole("button", { name: "保存" }));
+    await user.click(within(item).getByRole("button", { name: "保存する" }));
 
     await waitFor(async () => expect(await shown()).toEqual(["A 桃色 規制"]));
     expect(listTermGroups(server.db)[0]).toMatchObject({ color: "pink" });

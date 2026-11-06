@@ -370,7 +370,7 @@ describe("read state", () => {
 
     await user.click(await screen.findByRole("link", { name: /First/ }));
     await waitFor(() => expect(row(/First/)).toHaveAttribute("data-read", "true"));
-    await user.click(screen.getByRole("button", { name: "更新" }));
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
 
     await waitFor(() => expect(rowTitles()).toEqual(["Second"]));
   });
@@ -599,7 +599,7 @@ describe("the recently read articles", () => {
     expect(screen.queryByRole("button", { name: "すべて既読にする" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "既読も表示" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "重要度4以上だけ" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "更新" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "読み直す" })).toBeInTheDocument();
   });
 
   it("says that nothing was read in the last seven days and opens the unread list", async () => {
@@ -654,7 +654,7 @@ describe("the recently read articles", () => {
       await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 2", "Tools 1", "Article A"]));
       expect(row(/Tools 2/)).toHaveAttribute("data-read", "false");
 
-      await user.click(screen.getByRole("button", { name: "更新" }));
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
       await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 1", "Article A"]));
     } finally {
       vi.useRealTimers();
@@ -1224,7 +1224,7 @@ describe("marking read what the list is scrolled past", () => {
       const { server, rows } = seeded();
       const user = await putBack(server, /Story 6/);
 
-      await user.click(screen.getByRole("button", { name: "更新" }));
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
       await waitFor(() => expect(row(/Story 6/)).toHaveAttribute("data-read", "false"));
       await scrollTo(0);
       await scrollTo(ROW);

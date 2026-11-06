@@ -167,11 +167,11 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     try {
       await api.deleteFeed(feed.id);
       for (const key of ["feeds", "counts", "articles", "filters"]) void client.invalidateQueries({ queryKey: [key] });
-      toast({ message: "購読フィードを削除しました" });
+      toast({ message: "購読フィードの登録を解除しました" });
       // The list that was open is gone with the feed.
       if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
     } catch {
-      toast({ message: "削除できませんでした。もう一度試してください。" });
+      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
     }
     setRemoving(false);
     setLeaving(null);
@@ -278,7 +278,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       ) : null}
       <ConfirmDialog
         open={leavingFeed !== undefined}
-        title="購読フィードを削除しますか"
+        title="購読フィードの登録を解除しますか"
         onDismiss={() => setLeaving(null)}
         returnFocus={() =>
           element.current?.querySelector<HTMLElement>(`[data-nav-key="feed-${leavingRow.current}"] a`) ?? element.current?.querySelector<HTMLElement>("a")
@@ -286,7 +286,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         actions={
           <>
             <Button variant="danger" disabled={removing} onClick={() => leavingFeed && void unsubscribe(leavingFeed)}>
-              削除する
+              登録を解除する
             </Button>
             <Button onClick={() => setLeaving(null)}>やめる</Button>
           </>

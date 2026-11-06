@@ -140,7 +140,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
           <Button type="submit" variant="primary">
-            読み手情報を保存
+            保存する
           </Button>
         </div>
       </form>
@@ -268,7 +268,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
           <Button type="submit" variant="primary">
-            全体設定を保存
+            保存する
           </Button>
         </div>
       </form>

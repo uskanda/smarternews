@@ -234,7 +234,7 @@ function TopicEditor({ topic, canSearch, onClose }: { topic: Topic; canSearch: b
       {generalError(error)}
       <div className="flex flex-wrap gap-sm">
         <Button type="submit" variant="primary">
-          トピックを保存
+          保存する
         </Button>
         <Button onClick={onClose}>閉じる</Button>
         <Button onClick={() => setConfirming(true)}>トピックを削除</Button>

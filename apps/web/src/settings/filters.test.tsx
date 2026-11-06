@@ -178,7 +178,7 @@ describe("changing a filter", () => {
     expect(await within(form).findByRole("status")).toHaveTextContent("保存すると、1件が隠れます。");
     expect(listFilters(server.db)[0]!.conditions).toHaveLength(1);
 
-    await user.click(within(form).getByRole("button", { name: "保存" }));
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
 
     const changed = await rowOf("タイトルに「特売」を含む、かつタイトルに「春」を含む");
     expect(changed).toHaveTextContent("1件を隠しています");
@@ -252,14 +252,14 @@ describe("deleting what filters apply to", () => {
   it("says in the feed's question that its two filters go with it", async () => {
     const { server } = scoped();
     const { user } = renderApp({ server, route: "/settings/feeds" });
-    await user.click(await screen.findByRole("button", { name: "Shopを削除" }));
+    await user.click(await screen.findByRole("button", { name: "Shopの登録を解除" }));
     expect(await screen.findByRole("alertdialog")).toHaveTextContent("この購読フィードを範囲とするフィルター2件も一緒に削除されます。");
   });
 
   it("says nothing of filters for a feed without any", async () => {
     const { server } = scoped();
     const { user } = renderApp({ server, route: "/settings/feeds" });
-    await user.click(await screen.findByRole("button", { name: "Plainを削除" }));
+    await user.click(await screen.findByRole("button", { name: "Plainの登録を解除" }));
     expect(await screen.findByRole("alertdialog")).not.toHaveTextContent("フィルター");
   });
 
@@ -276,7 +276,7 @@ describe("deleting what filters apply to", () => {
     const nav = await screen.findByRole("navigation", { name: "項目" });
     fireEvent.contextMenu(await within(nav).findByRole("link", { name: /^Shop\s*\d*$/ }));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
-    expect(await screen.findByRole("alertdialog", { name: "購読フィードを削除しますか" })).toHaveTextContent(
+    expect(await screen.findByRole("alertdialog", { name: "購読フィードの登録を解除しますか" })).toHaveTextContent(
       "この購読フィードを範囲とするフィルター2件も一緒に削除されます。",
     );
   });

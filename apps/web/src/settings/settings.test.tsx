@@ -81,7 +81,7 @@ describe("editing a category", () => {
     const schedule = await screen.findByLabelText("実行時刻");
     await first.user.clear(schedule);
     await first.user.type(schedule, "05:00, 12:00, 18:00");
-    await first.user.click(screen.getByRole("button", { name: "保存する" }));
+    await first.user.click(within(await section("カテゴリの設定")).getByRole("button", { name: "保存する" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("保存しました");
     expect(getCategory(server.db, category.id).schedule).toEqual(["05:00", "12:00", "18:00"]);
@@ -107,7 +107,7 @@ describe("editing a category", () => {
     const field = await screen.findByLabelText("最低重要度");
     await user.clear(field);
     await user.type(field, "9");
-    await user.click(screen.getByRole("button", { name: "保存する" }));
+    await user.click(within(await section("カテゴリの設定")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toHaveAccessibleDescription(/5/));
     expect(field).toBeInvalid();
@@ -228,7 +228,7 @@ describe("topics", () => {
 
     await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
     await user.type(screen.getByLabelText("フィードのURL"), "https://example.org/feed.xml");
-    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getTopic(server.db, created.id).sources.feeds).toEqual(["https://example.org/feed.xml"]));
     expect(await screen.findByRole("status")).toHaveTextContent("保存しました");
@@ -244,7 +244,7 @@ describe("topics", () => {
     const text = screen.getByLabelText("トピックの文章");
     await user.clear(text);
     await user.type(text, "exploited flaws in routers");
-    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getTopic(server.db, created.id).interpreted).toBe(false));
     const item = (await within(await section("トピック")).findByText("exploited flaws in routers")).closest("li")!;
@@ -263,7 +263,7 @@ describe("topics", () => {
     await user.type(queries, "zero day{Enter}kev catalog");
     await user.type(screen.getByLabelText("検索の言語"), "en");
     await user.type(screen.getByLabelText("検索の地域"), "US");
-    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getTopic(server.db, created.id).queries).toEqual(["zero day", "kev catalog"]));
     expect(getTopic(server.db, created.id).search).toEqual({ language: "en", region: "US" });
@@ -316,7 +316,7 @@ describe("reader information and global settings", () => {
 
     const reader = await section("読み手情報");
     await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
-    await user.click(within(reader).getByRole("button", { name: "読み手情報を保存" }));
+    await user.click(within(reader).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
     expect(reader).toHaveTextContent("次の実行から");
@@ -332,7 +332,7 @@ describe("reader information and global settings", () => {
     await waitFor(() => expect(field).toHaveValue("UTC"));
     await user.clear(field);
     await user.type(field, "Mars/Olympus");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
     expect(field).toHaveAccessibleDescription(/IANA/);
@@ -348,7 +348,7 @@ describe("reader information and global settings", () => {
     await waitFor(() => expect(language).toHaveValue("ja"));
     await user.clear(language);
     await user.type(language, "en");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).outputLanguage).toBe("en"));
   });
@@ -364,7 +364,7 @@ describe("the times digests are made", () => {
     await waitFor(() => expect(field).toHaveValue(getSettings(server.db).digestSchedule.join(", ")));
     await user.clear(field);
     await user.type(field, "18:30, 06:30");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).digestSchedule).toEqual(["06:30", "18:30"]));
     await waitFor(() => expect(field).toHaveValue("06:30, 18:30"));
@@ -378,7 +378,7 @@ describe("the times digests are made", () => {
     const field = within(global).getByLabelText("ダイジェストを作る時刻");
     await waitFor(() => expect(field).not.toHaveValue(""));
     await user.clear(field);
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).digestSchedule).toEqual([]));
   });
@@ -393,7 +393,7 @@ describe("the times digests are made", () => {
     await waitFor(() => expect(field).not.toHaveValue(""));
     await user.clear(field);
     await user.type(field, "25:00");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
     expect(field).toHaveAccessibleDescription(/保存できません/);
@@ -410,7 +410,7 @@ describe("moving on after marking all as read", () => {
     const box = within(global).getByRole("checkbox", { name: "「すべて既読にする」のあと、未読のある次の項目へ移る" });
     expect(box).not.toBeChecked();
     await user.click(box);
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).advanceAfterMarkAll).toBe(true));
   });
@@ -432,7 +432,7 @@ describe("duplicate removal", () => {
     const { user } = renderApp({ server, route: "/settings" });
     const global = await section("全体設定");
     await user.click(within(global).getByRole("checkbox", { name: label }));
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
     await waitFor(() => expect(getSettings(server.db).removeDuplicates).toBe(false));
   });
 });
@@ -706,7 +706,7 @@ describe("the days after which a feed counts as stale", () => {
     const field = within(global).getByLabelText(label);
     await user.clear(field);
     await user.type(field, "90");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
     await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(90));
 
     await user.click(await screen.findByRole("link", { name: "購読フィードを設定する" }));
@@ -720,7 +720,7 @@ describe("the days after which a feed counts as stale", () => {
     const field = within(global).getByLabelText(label);
     await user.clear(field);
     await user.type(field, "0");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
     expect(await within(global).findByText("1から365までの日数を入れてください。")).toBeInTheDocument();
     expect(field).toHaveAccessibleDescription(/1から365までの日数/);
     expect(getSettings(server.db).staleFeedDays).toBe(60);

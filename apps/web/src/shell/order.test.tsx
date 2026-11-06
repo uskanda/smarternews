@@ -173,12 +173,13 @@ describe("unsubscribing from the menu", () => {
 
     fireEvent.contextMenu(link("Y"));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
-    const dialog = await screen.findByRole("alertdialog", { name: "購読フィードを削除しますか" });
+    const dialog = await screen.findByRole("alertdialog", { name: "購読フィードの登録を解除しますか" });
     expect(dialog).toHaveTextContent("「Y」と、その配信記事1件が消えます。うち1件にはスターが付いています。注釈のある1件も、注釈とともに消えます。元に戻せません。");
-    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+    await user.click(within(dialog).getByRole("button", { name: "登録を解除する" }));
 
     await waitFor(() => expect(groupLines().slice(0, 4)).toEqual(["A", "  AI生成", "  X", "  Z"]));
     expect(listFeeds(server.db).map((feed) => feed.title)).not.toContain("Y");
+    expect(await screen.findByText("購読フィードの登録を解除しました")).toBeInTheDocument();
     // The row is gone; the focus goes to the first entry instead of nowhere.
     await waitFor(() => expect(link("未読")).toHaveFocus());
   });
@@ -202,7 +203,7 @@ describe("unsubscribing from the menu", () => {
 
     fireEvent.contextMenu(link("Y"));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
-    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "登録を解除する" }));
 
     await waitFor(() => expect(path()).toBe("/unread"));
   });

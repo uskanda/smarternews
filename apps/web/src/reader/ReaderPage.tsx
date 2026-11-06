@@ -551,7 +551,7 @@ export function ReaderPage({ view }: { view: View }) {
           </h1>
           <div className="flex shrink-0 gap-sm">
             {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
-            <Button onClick={refresh}>更新</Button>
+            <Button onClick={refresh}>読み直す</Button>
           </div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
@@ -562,7 +562,7 @@ export function ReaderPage({ view }: { view: View }) {
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
           {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
-          {/* Beside the switches rather than beside 更新: a third button there leaves the list's name no room.
+          {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}

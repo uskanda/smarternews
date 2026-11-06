@@ -202,7 +202,7 @@ function NoteForm({ label, initial, onSave, onCancel, saving }: { label: string;
       <textarea id={id} rows={4} maxLength={5000} value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus className={TEXTAREA} />
       <div className="flex flex-wrap justify-end gap-sm">
         <Button type="submit" variant="primary" disabled={saving}>
-          保存
+          保存する
         </Button>
         <Button onClick={onCancel}>やめる</Button>
       </div>
