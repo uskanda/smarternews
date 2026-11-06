@@ -269,7 +269,7 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
           </Button>
         ) : (
           <Button type="submit" variant="primary" disabled={busy || url.trim().length === 0}>
-            {found ? "選んだフィードを追加" : "フィードを追加"}
+            {found ? "選んだフィードを追加" : "購読フィードを追加"}
           </Button>
         )}
       </div>

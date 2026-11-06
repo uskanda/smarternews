@@ -1,4 +1,4 @@
-import { insertFeed, resolvePricing, setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
+import { insertFeed, recordFetchFailure, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -515,7 +515,7 @@ describe("refreshing", () => {
 
     server.article(category.id, { title: "Just arrived" });
     expect(screen.queryByRole("link", { name: /Just arrived/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "更新" }));
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
 
     expect(await screen.findByRole("link", { name: /Just arrived/ })).toBeInTheDocument();
   });
@@ -597,5 +597,50 @@ describe("the warning of the monthly budget", () => {
     await vi.advanceTimersByTimeAsync(61_000);
 
     await waitFor(() => expect(warning()).not.toBeInTheDocument());
+  });
+});
+
+describe("the marks of a feed's state in the left pane", () => {
+  const feedOf = (server: TestServer, title: string, categoryId: number | null) =>
+    insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title, categoryId }, server.clock);
+  const link = (name: RegExp) => within(nav()).getByRole("link", { name });
+
+  it("marks a failed, a stale and a paused feed by a named shape, and a healthy one not", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const failed = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failed.id, { now: server.clock().toISOString(), error: "timed out" });
+    const stale = feedOf(server, "Quiet", tools.id);
+    server.db
+      .prepare("UPDATE feeds SET created_at = ?, last_new_item_at = ? WHERE id = ?")
+      .run("2025-01-01T00:00:00.000Z", "2025-06-01T00:00:00.000Z", stale.id);
+    updateFeed(server.db, feedOf(server, "Resting", tools.id).id, { enabled: false });
+    feedOf(server, "Healthy", tools.id);
+    renderApp({ server });
+
+    await within(nav()).findByRole("link", { name: /Healthy/ });
+    const mark = await within(link(/Failing/)).findByRole("img", { name: "取得に失敗" });
+    expect(mark).toHaveAttribute("title", "取得に失敗");
+    expect(within(link(/Quiet/)).getByRole("img", { name: "更新が止まっています" })).toBeInTheDocument();
+    expect(within(link(/Resting/)).getByRole("img", { name: "一時停止中" })).toBeInTheDocument();
+    expect(within(link(/Healthy/)).queryByRole("img")).not.toBeInTheDocument();
+    // The name of the entry still comes first, and the mark is read out with it.
+    expect(link(/Failing/)).toHaveAccessibleName(/^Failing、取得に失敗/);
+  });
+
+  it("puts the strongest mark of the feeds below on a category only while it is folded", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    updateFeed(server.db, feedOf(server, "Resting", tools.id).id, { enabled: false });
+    const failed = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failed.id, { now: server.clock().toISOString(), error: "timed out" });
+    const { user } = renderApp({ server });
+
+    await within(nav()).findByRole("link", { name: /Failing/ });
+    expect(within(link(/^Tools/)).queryByRole("img")).not.toBeInTheDocument();
+
+    await user.click(within(nav()).getByRole("button", { name: "Toolsの下の項目" }));
+
+    expect(within(link(/^Tools/)).getByRole("img", { name: "取得に失敗した購読フィードがあります" })).toBeInTheDocument();
   });
 });

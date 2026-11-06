@@ -41,6 +41,7 @@ describe("the settings page", () => {
 
     await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
     await waitFor(() => expect(settingsFile).toHaveTextContent("語のまとまりを1件作成、語を2件追加"));
   });
@@ -99,10 +100,26 @@ describe("the term highlights page", () => {
 
     await user.click(within(item).getByRole("button", { name: "Aを編集" }));
     await user.click(within(item).getByRole("radio", { name: "桃色" }));
-    await user.click(within(item).getByRole("button", { name: "保存" }));
+    await user.click(within(item).getByRole("button", { name: "保存する" }));
 
     await waitFor(async () => expect(await shown()).toEqual(["A 桃色 規制"]));
     expect(listTermGroups(server.db)[0]).toMatchObject({ color: "pink" });
+  });
+
+  it("moves the focus to the name when the form opens, and back to the button when it closes", async () => {
+    const server = makeServer();
+    group(server, "A", "green", "規制");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    const item = await waitFor(() => groupItem("A"));
+
+    await user.click(within(item).getByRole("button", { name: "Aを編集" }));
+    expect(within(item).getByLabelText("まとまりの名前")).toHaveFocus();
+    await user.click(within(item).getByRole("button", { name: "やめる" }));
+    expect(within(item).getByRole("button", { name: "Aを編集" })).toHaveFocus();
+
+    await user.click(within(item).getByRole("button", { name: "Aを編集" }));
+    await user.click(within(item).getByRole("button", { name: "保存する" }));
+    await waitFor(async () => expect(within(await groupItem("A")).getByRole("button", { name: "Aを編集" })).toHaveFocus());
   });
 
   it("asks before deleting a group, saying how many terms go with it", async () => {

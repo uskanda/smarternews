@@ -145,7 +145,7 @@ describe("highlighting a selection", () => {
     await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "メモを書く" }));
     const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
     await user.type(within(dialog).getByLabelText("メモ"), "規模を確かめる");
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(within(article).getByRole("button", { name: "ハイライト、メモあり" })).toHaveTextContent(QUOTE));
     expect(article.querySelectorAll(".annotation-note-icon")).toHaveLength(1);
@@ -250,7 +250,7 @@ describe("a highlight in the body", () => {
     expect(dialog).toHaveTextContent(QUOTE);
     await user.click(within(dialog).getByRole("button", { name: "メモを書く" }));
     await user.type(within(dialog).getByLabelText("メモ"), "数字を確かめる");
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     const noted = within(article).getByRole("button", { name: "ハイライト、メモあり" });
@@ -274,7 +274,7 @@ describe("a highlight in the body", () => {
     await user.clear(field);
     await user.type(field, "新しいメモ");
     const before = requests.filter((request) => request.startsWith("GET /api/v1/annotations")).length;
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存する" }));
 
     expect(await within(list).findByText("新しいメモ")).toBeInTheDocument();
     expect(requests.filter((request) => request.startsWith("GET /api/v1/annotations"))).toHaveLength(before);
@@ -361,7 +361,7 @@ describe("the note on a whole article", () => {
     await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
     const field = await within(article).findByLabelText("記事へのメモ");
     await user.type(field, "<script>alert(1)</script>{Enter}**二行目**");
-    await user.click(within(article).getByRole("button", { name: "保存" }));
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
 
     const note = await within(article).findByRole("region", { name: "記事へのメモ" });
     expect(note.querySelector("p")!.textContent).toBe("<script>alert(1)</script>\n**二行目**");
@@ -372,7 +372,7 @@ describe("the note on a whole article", () => {
     const again = within(article).getByLabelText("記事へのメモ");
     expect(again).toHaveValue("<script>alert(1)</script>\n**二行目**");
     await user.clear(again);
-    await user.click(within(article).getByRole("button", { name: "保存" }));
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
     await waitFor(() => expect(within(article).queryByRole("region", { name: "記事へのメモ" })).toBeNull());
     expect(stored(server)).toEqual([]);
   });
@@ -453,6 +453,30 @@ describe("the list of annotations", () => {
     await user.keyboard("j");
     await waitFor(() => expect(path()).toBe(`/annotations/${gone}?annotation=${lost.id}`));
   });
+
+  it("draws the line on the selected row only, and takes the focus along with j", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    saveArticleNote(server.db, a, "新しいメモ", at(10));
+    saveArticleNote(server.db, b, "古いメモ", at(20));
+    const { user } = renderApp({ server, route: "/annotations" });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("古いメモ");
+    const [first, second] = within(list).getAllByRole("link");
+
+    await user.click(first!);
+    await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
+    expect(first!.closest("li")!.querySelector("[data-selected-mark]")).toHaveAttribute("aria-hidden", "true");
+    expect(second!.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+    await user.keyboard("j");
+
+    await waitFor(() => expect(second).toHaveAttribute("aria-current", "true"));
+    expect(second).toHaveFocus();
+    expect(second!.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    expect(first!.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+  });
 });
 
 describe("an excerpt from a note in the search results", () => {
@@ -513,13 +537,13 @@ describe("an annotation on a feed article that filters hide", () => {
     await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
     await user.type(await within(article).findByLabelText("記事へのメモ"), "残す");
     const counted = requests.filter((request) => request === "GET /api/v1/counts").length;
-    await user.click(within(article).getByRole("button", { name: "保存" }));
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
     expect(await within(list).findByText("特売の話")).toBeInTheDocument();
     await waitFor(() => expect(requests.filter((request) => request === "GET /api/v1/counts").length).toBeGreaterThan(counted));
 
     await user.click(within(article).getByRole("button", { name: "メモを書き直す" }));
     await user.clear(await within(article).findByLabelText("記事へのメモ"));
-    await user.click(within(article).getByRole("button", { name: "保存" }));
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
     await waitFor(() => expect(within(list).queryByText("特売の話")).toBeNull());
   });
 });

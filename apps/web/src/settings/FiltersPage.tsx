@@ -6,8 +6,10 @@ import { formatFull } from "@smarternews/client";
 import { useCategories, useFeeds, useFilters, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
+import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { ACTION_LABEL, conditionsLabel, FilterForm, scopeLabel, useRefresh } from "./FilterForm.tsx";
+import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { UnsavedGuard } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -52,13 +54,26 @@ function HiddenArticles({ filter }: { filter: Filter }) {
   );
 }
 
-function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: Category[]; feeds: Feed[] }) {
+function FilterRow({
+  filter,
+  categories,
+  feeds,
+  afterRemoval,
+}: {
+  filter: Filter;
+  categories: Category[];
+  feeds: Feed[];
+  /** Where the focus goes once the row is gone. */
+  afterRemoval: () => HTMLElement | null;
+}) {
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [showing, setShowing] = useState(false);
-  const editButton = useRef<HTMLButtonElement>(null);
+  const [confirming, setConfirming] = useState(false);
+  const removed = useRef(false);
+  const focus = useInlineEditFocus(editing);
   const summary = `${ACTION_LABEL[filter.action]}（${scopeLabel(filter.scope, categories, feeds)}）`;
 
   async function toggle() {
@@ -78,9 +93,12 @@ function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: 
   async function remove() {
     try {
       const { restored } = await api.deleteFilter(filter.id);
+      removed.current = true;
+      setConfirming(false);
       refresh();
       toast({ message: `フィルターを削除しました。${restored > 0 ? `${restored}件が一覧に戻りました。` : ""}` });
     } catch {
+      setConfirming(false);
       toast({ message: "削除できませんでした。もう一度試してください。" });
     }
   }
@@ -96,31 +114,47 @@ function FilterRow({ filter, categories, feeds }: { filter: Filter; categories: 
       </div>
       <p className="break-all">{conditionsLabel(filter)}</p>
       {editing ? (
-        <FilterForm
-          filter={filter}
-          label={`フィルター『${summary}』の編集`}
-          onDone={() => {
-            setEditing(false);
-            editButton.current?.focus();
-          }}
-        />
+        <div ref={focus.region}>
+          <FilterForm filter={filter} label={`フィルター『${summary}』の編集`} onDone={() => setEditing(false)} />
+        </div>
       ) : (
         <div className="flex flex-wrap gap-sm pt-xs">
           <Button aria-expanded={showing} aria-label={`${summary}が隠している記事`} onClick={() => setShowing(!showing)} disabled={!filter.enabled}>
             隠している記事
           </Button>
-          <Button ref={editButton} aria-label={`${summary}を編集`} onClick={() => setEditing(true)}>
+          <Button ref={focus.opener} aria-label={`${summary}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
           <Button aria-label={`${summary}を${filter.enabled ? "無効にする" : "有効にする"}`} onClick={() => void toggle()}>
             {filter.enabled ? "無効にする" : "有効にする"}
           </Button>
-          <Button aria-label={`${summary}を削除`} onClick={() => void remove()}>
+          <Button aria-label={`${summary}を削除`} onClick={() => setConfirming(true)}>
             削除
           </Button>
         </div>
       )}
       {showing && filter.enabled && !editing ? <HiddenArticles filter={filter} /> : null}
+      <ConfirmDialog
+        open={confirming}
+        title="フィルターを削除しますか"
+        onDismiss={() => setConfirming(false)}
+        returnFocus={() => (removed.current ? afterRemoval() : null)}
+        actions={
+          <>
+            <Button variant="danger" onClick={() => void remove()}>
+              削除する
+            </Button>
+            <Button onClick={() => setConfirming(false)}>やめる</Button>
+          </>
+        }
+      >
+        <p>{summary}</p>
+        <p className="break-all">{conditionsLabel(filter)}</p>
+        <p>
+          {filter.enabled && filter.hiddenCount > 0 ? `隠している${filter.hiddenCount}件は一覧に戻ります。` : ""}
+          削除せずに無効にもできます。
+        </p>
+      </ConfirmDialog>
     </li>
   );
 }
@@ -138,6 +172,7 @@ function Filters() {
   const filters = useFilters();
   const categories = useCategories().data ?? [];
   const feeds = useFeeds().data ?? [];
+  const listHeading = useRef<HTMLHeadingElement>(null);
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
@@ -156,12 +191,16 @@ function Filters() {
         <FilterForm />
       </section>
       <section aria-label="フィルターの一覧" className={SECTION}>
-        <h2 className="type-headline-md">一覧</h2>
+        <h2 ref={listHeading} tabIndex={-1} className="type-headline-md">
+          一覧
+        </h2>
         {filters.isError ? <ErrorNotice error={filters.error} onRetry={() => void filters.refetch()} /> : null}
         {filters.isPending && !filters.isError ? <Loading /> : null}
         {filters.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">フィルターはまだありません。</p> : null}
         <ul className="max-w-measure-article">
-          {filters.data?.map((filter) => <FilterRow key={filter.id} filter={filter} categories={categories} feeds={feeds} />)}
+          {filters.data?.map((filter) => (
+            <FilterRow key={filter.id} filter={filter} categories={categories} feeds={feeds} afterRemoval={() => listHeading.current} />
+          ))}
         </ul>
         <p className="max-w-measure-article type-label-sm text-on-surface-muted">
           隠した記事は消えません。フィルターを無効にするか削除すると、隠す前の既読とスターのまま一覧に戻ります。

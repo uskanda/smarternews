@@ -403,7 +403,7 @@ export function FilterForm({
       ) : null}
       <div className="flex flex-wrap gap-sm">
         <Button type="submit" variant="primary" disabled={!complete || busy}>
-          {filter ? "保存" : "フィルターを追加"}
+          {filter ? "保存する" : "フィルターを追加"}
         </Button>
         <Button onClick={() => void check()} disabled={!complete || busy}>
           隠れる件数を確かめる

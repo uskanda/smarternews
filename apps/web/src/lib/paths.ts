@@ -17,6 +17,11 @@ export function listPathOf(target: ListTarget, slugOf: (categoryId: number) => s
   }
 }
 
+/** The page of a category with the editor of one of its topics open. */
+export function topicEditPath(categoryId: number, topicId: number): string {
+  return `/settings/categories/${categoryId}#topic-${topicId}`;
+}
+
 /** True on the list itself and on an article opened from it, but not on a list below it. */
 export function isOnList(listPath: string, pathname: string): boolean {
   if (pathname === listPath) return true;
