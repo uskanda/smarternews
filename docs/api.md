@@ -101,6 +101,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | `PATCH /api/v1/topics/:id` | Change `text`, `enabled`, `sources`, `search`, `queries` |
 | `DELETE /api/v1/topics/:id` | Delete it (status 204) |
 | `POST /api/v1/topics/:id/interpret` | Ask for a new interpretation before the next run |
+| `POST /api/v1/topics/:id/trials` | Try a text on the topic without saving it (status 202) |
+| `GET /api/v1/topic-trials/:id` | Read a trial: its status and, once it succeeded, its result |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -109,6 +111,16 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 ```
 
 A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override.
+
+### Topic trials
+
+A trial shows what a new text would change before you save it. `POST /api/v1/topics/:id/trials` takes `{"text": ..., "search": ...}`, the text and the search locale being edited; `search` left out or `null` uses the settings'. The trial asks the `interpret` task once with them, then the `judge` task once per batch of `limits.judgeBatchSize` stored candidates of the topic. It takes up to that many of the newest candidates the judge accepted and as many it rejected, more of one side when the other has fewer. Candidates rejected for an unknown publication time are left out, and a candidate the program rejected after the judge accepted it (below the minimum importance, over the article limit, an event date outside the window or unconfirmed) counts as accepted. The other topics a candidate matched are judged with their saved text, and each batch is judged at the time its newest candidate was collected.
+
+The answer comes at once: 202 with `{"status": "started", "id": ...}`. When a limit leaves too few calls for the trial, nothing starts and the answer is 200 with `id` `null` and a `status` that names the limit: `limit` for `limits.topicTrialsPerDay`, `day` for `limits.llmCallsPerDay`, `budget` for the monthly budget. While another trial runs, the answer is 409. Only one trial runs at a time.
+
+`GET /api/v1/topic-trials/:id` answers `id`, `topicId`, `status` (`running`, `succeeded`, `failed` or `stopped_by_limit`), `stoppedBy` (`run`, `day` or `budget` for a trial stopped by a limit), `error` for a failed one, and `result` for a succeeded one. The result holds the new `queries` and `criteria`, the category's `minImportance`, the number of candidates `tried`, and `changes`: the candidates whose verdict turned between accepted and rejected, newest first. Each has `candidateId`, `title`, `url`, `siteName`, `publishedAt`, `before` (`verdict`, `reason`, and `byProgram` when the stored reason is the program's), `after` (`verdict`, `reason`, `importance`), and `belowMinimum`, true when the trial accepts it below the category's minimum importance.
+
+A trial stores nothing: topics, candidates, seen URLs and articles stay as they were, and saving the text later interprets it again in the next run. Only its model calls are recorded, with the purpose `trial`. Results are kept in memory for 30 minutes and are gone after a restart; asking then answers 404.
 
 ## Articles
 

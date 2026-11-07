@@ -37,6 +37,7 @@ import {
 } from "@smarternews/core";
 import type { Hono } from "hono";
 import { createApp } from "./app.ts";
+import { TopicTrials } from "./topic-trials.ts";
 import { ensureKey, ensureToken } from "./tokens.ts";
 
 export interface Runtime {
@@ -164,6 +165,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
   const fullContent = new FullContentWorker({ db, clock, fetcher });
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner, fullContent });
   const digests = new DigestWorker({ db, clock, runner });
+  const trials = new TopicTrials({ db, clock, runner, judgeBatchSize: config.limits.judgeBatchSize });
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
@@ -180,6 +182,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     summarizer,
     fullContent,
     digests,
+    trials,
     images: { key: imageKey.key, proxy: imageProxy },
     tokens: { api: api.token, feed: feed.token },
     version,

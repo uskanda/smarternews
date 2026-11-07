@@ -24,12 +24,12 @@
 
 ## 3. サーバーとAPI
 
-- [ ] 3.1 `apps/server`に、試しをメモリーに置く`TopicTrials`と、2つの操作を足す
-- [ ] 3.2 `topic-trials-api.test.ts`で確かめる。202で受け付け、問い合わせで結果が返る。動いている間の2つ目は409になる
-- [ ] 3.3 `topic-trials-api.test.ts`で、上限0で断られることと、存在しないトピックと結果が404になることを確かめる
-- [ ] 3.4 `apps/server/src/testing.ts`に`topicTrialsPerDay`を足す
-- [ ] 3.5 `docs/api.md`のTopicsの節に2つの操作を書く
-- [ ] 3.6 `packages/client/src/api.ts`に`startTopicTrial`と`topicTrial`を足し、型検査が通ることを確かめる
+- [x] 3.1 `apps/server`に、試しをメモリーに置く`TopicTrials`と、2つの操作を足す
+- [x] 3.2 `topic-trials-api.test.ts`で確かめる。202で受け付け、問い合わせで結果が返る。動いている間の2つ目は409になる
+- [x] 3.3 `topic-trials-api.test.ts`で、上限0で断られることと、存在しないトピックと結果が404になることを確かめる
+- [x] 3.4 `apps/server/src/testing.ts`に`topicTrialsPerDay`を足す
+- [x] 3.5 `docs/api.md`のTopicsの節に2つの操作を書く
+- [x] 3.6 `packages/client/src/api.ts`に`startTopicTrial`と`topicTrial`を足し、型検査が通ることを確かめる
 
 ## 4. 画面
 

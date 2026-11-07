@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./app.ts";
+import { TopicTrials } from "./topic-trials.ts";
 
 export const API_TOKEN = "test-api-token-0123456789";
 export const FEED_TOKEN = "test-feed-token-0123456789";
@@ -58,6 +59,10 @@ export function testServer(
     /** Answers the digest task. Without it, a call of the task fails the test. */
     digest?: FakeHandler;
     digestsPerDay?: number;
+    /** Answer the interpret and judge tasks, which topic trials call. Without them, a call of the task fails the test. */
+    interpret?: FakeHandler;
+    judge?: FakeHandler;
+    topicTrialsPerDay?: number;
     /** Makes every provider one that costs money, at these prices. */
     pricing?: ModelPricing;
     budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
@@ -73,12 +78,18 @@ export function testServer(
       ...(options.translate ? { translate: options.translate } : {}),
       ...(options.proposeSelectors ? { proposeSelectors: options.proposeSelectors } : {}),
       ...(options.digest ? { digest: options.digest } : {}),
+      ...(options.interpret ? { interpret: options.interpret } : {}),
+      ...(options.judge ? { judge: options.judge } : {}),
     },
     {
       webSearch: options.webSearch,
       pricing: options.pricing,
       budget: options.budget,
-      ...(options.llmCallsPerDay === undefined && options.summariesPerDay === undefined && options.selectorProposalsPerDay === undefined && options.digestsPerDay === undefined
+      ...(options.llmCallsPerDay === undefined &&
+      options.summariesPerDay === undefined &&
+      options.selectorProposalsPerDay === undefined &&
+      options.digestsPerDay === undefined &&
+      options.topicTrialsPerDay === undefined
         ? {}
         : {
             limits: {
@@ -87,6 +98,7 @@ export function testServer(
               ...(options.summariesPerDay === undefined ? {} : { summariesPerDay: options.summariesPerDay }),
               ...(options.selectorProposalsPerDay === undefined ? {} : { selectorProposalsPerDay: options.selectorProposalsPerDay }),
               ...(options.digestsPerDay === undefined ? {} : { digestsPerDay: options.digestsPerDay }),
+              ...(options.topicTrialsPerDay === undefined ? {} : { topicTrialsPerDay: options.topicTrialsPerDay }),
             },
           }),
     },
@@ -120,6 +132,8 @@ export function testServer(
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner: llm.runner, fullContent });
   // Digests are made when a test asks for one: `digests.buildNow()` or `digests.tick()`, then `digests.idle()`.
   const digests = new DigestWorker({ db, clock, runner: llm.runner, log: () => {} });
+  // A trial runs on its own once started through the API: `trials.idle()` waits for it.
+  const trials = new TopicTrials({ db, clock, runner: llm.runner, judgeBatchSize: 30, log: () => {} });
   // Images come from the same stand-in sites, through a fetcher of their own. Their directory is made only
   // when a test relays an image.
   const imageFetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
@@ -136,6 +150,7 @@ export function testServer(
     summarizer,
     fullContent,
     digests,
+    trials,
     images,
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",
@@ -161,6 +176,7 @@ export function testServer(
     summarizer,
     fullContent,
     digests,
+    trials,
     imageKey: IMAGE_KEY,
     /** What the stand-in for the translation API was asked. Null on a server without a key. */
     google,
