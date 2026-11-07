@@ -11,6 +11,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
 import { ConnectCode } from "./ConnectCode.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const TASK_LABEL = {
@@ -31,6 +32,11 @@ function daysOf(text: string): number | null {
   if (!/^\d+$/.test(text.trim())) return null;
   const value = Number(text.trim());
   return value >= 1 && value <= 365 ? value : null;
+}
+
+/** The times written in a field, separated by commas, 、 or spaces. */
+function timesOf(text: string): string[] {
+  return text.split(/[\s,、]+/).filter((time) => time.length > 0);
 }
 
 /** The reason the server gave for refusing a value, introduced in the app's own words. */
@@ -62,6 +68,8 @@ function Categories() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"news" | "event">("news");
   const [error, setError] = useState<unknown>(null);
+  const leave = useUnsavedLeaving();
+  useUnsaved("新しいカテゴリの名前", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -69,6 +77,8 @@ function Categories() {
       const created = await api.createCategory({ name, kind });
       await client.invalidateQueries({ queryKey: ["categories"] });
       void client.invalidateQueries({ queryKey: ["counts"] });
+      // The name is saved now, in the category this opens.
+      leave();
       void navigate(`/settings/categories/${created.id}`);
     } catch (caught) {
       setError(caught);
@@ -114,6 +124,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [text, setText] = useState(settings.readerInfo);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -167,6 +178,18 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   const [staleError, setStaleError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
+  // Compared the way they are saved, so that nothing is left to ask about once they are.
+  useUnsaved(
+    "全体設定",
+    form.outputLanguage.trim() !== settings.outputLanguage ||
+      form.timeZone.trim() !== settings.timeZone ||
+      form.language.trim() !== settings.search.language ||
+      form.region.trim() !== settings.search.region ||
+      timesOf(form.digestSchedule).join(",") !== settings.digestSchedule.join(",") ||
+      advance !== settings.advanceAfterMarkAll ||
+      removeDuplicates !== settings.removeDuplicates ||
+      staleDays.trim() !== String(settings.staleFeedDays),
+  );
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -183,7 +206,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         advanceAfterMarkAll: advance,
         removeDuplicates,
         staleFeedDays,
-        digestSchedule: form.digestSchedule.split(/[\s,、]+/).filter((time) => time.length > 0),
+        digestSchedule: timesOf(form.digestSchedule),
       });
       client.setQueryData(["settings"], saved);
       // The server puts the times in order and drops the same time given twice.
@@ -560,6 +583,14 @@ function Providers() {
 
 /** Everything that is configured rather than read: categories, the reader, global settings, the settings file. */
 export function SettingsPage() {
+  return (
+    <UnsavedGuard>
+      <SettingsSections />
+    </UnsavedGuard>
+  );
+}
+
+function SettingsSections() {
   const { clearToken } = useApp();
   const settings = useSettings();
   const [clearing, setClearing] = useState(false);
