@@ -671,6 +671,14 @@ A run with the status `stopped_by_limit` names the limit in `stoppedBy`. Every o
 | `day` | The day reached `limits.llmCallsPerDay` |
 | `budget` | The budget period spent `limits.monthlyBudgetUsd` on providers that cost money. Those providers are not called again until the next period starts |
 
+Three fields say what the run's model calls used. Money is counted as the monthly budget counts it: the known costs of the calls to billable providers (see [Providers](#providers)).
+
+| Field | Meaning |
+|---|---|
+| `costUsd` | US dollars the run spent on billable providers. `null` for a run that called no billable provider |
+| `unknownCostCalls` | The run's calls to billable providers whose cost is unknown, such as a timeout. `costUsd` leaves them out |
+| `callsByTask` | For each task the run called, `calls` (every call, those to providers that cost nothing included) and `costUsd`. A task the run did not call is absent |
+
 A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
 
 | Field | Meaning |

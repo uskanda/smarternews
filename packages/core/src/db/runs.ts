@@ -1,10 +1,50 @@
-import type { RetrySkipped, Run, RunFailure, RunStatus, StopLimit } from "../api.ts";
+import type { RetrySkipped, Run, RunFailure, RunStatus, StopLimit, TaskName } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { notFound } from "../errors.ts";
 import type { Database } from "./database.ts";
 import { json, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
-function toRun(row: Row): Run {
+type RunCalls = Pick<Run, "costUsd" | "unknownCostCalls" | "callsByTask">;
+
+
+/**
+ * What the model calls of each run used, in one query for all of them. Money counts as the budget does: the known
+ * costs of the calls to providers that cost money.
+ */
+function callsOf(db: Database, ids: number[]): Map<number, RunCalls> {
+  const byRun = new Map<number, RunCalls & { billable: boolean }>();
+  if (ids.length === 0) return byRun;
+  const rows = db
+    .prepare(
+      `SELECT run_id, task, count(*) AS calls,
+              coalesce(sum(CASE WHEN billable = 1 THEN cost_usd END), 0) AS cost,
+              sum(billable = 1 AND cost_usd IS NULL) AS unknown,
+              max(billable) AS billable
+         FROM llm_calls WHERE run_id IN (${ids.map(() => "?").join(", ")}) GROUP BY run_id, task`,
+    )
+    .all(...ids);
+  for (const row of rows) {
+    const id = num(row.run_id);
+    const entry = byRun.get(id) ?? { costUsd: 0, unknownCostCalls: 0, callsByTask: {}, billable: false };
+    const cost = Number(row.cost);
+    entry.callsByTask[str(row.task) as TaskName] = { calls: num(row.calls), costUsd: cost };
+    entry.costUsd = (entry.costUsd ?? 0) + cost;
+    entry.unknownCostCalls += num(row.unknown);
+    entry.billable ||= num(row.billable) === 1;
+    byRun.set(id, entry);
+  }
+  return new Map(
+    [...byRun].map(([id, { billable, ...calls }]) => [id, { ...calls, costUsd: billable ? calls.costUsd : null }]),
+  );
+}
+
+/** Runs from their rows, each with what its model calls used. */
+function toRuns(db: Database, rows: Row[]): Run[] {
+  const calls = callsOf(db, rows.map((row) => num(row.id)));
+  return rows.map((row) => ({ ...toRun(row), ...(calls.get(num(row.id)) ?? { costUsd: null, unknownCostCalls: 0, callsByTask: {} }) }));
+}
+
+function toRun(row: Row): Omit<Run, keyof RunCalls> {
   return {
     id: num(row.id),
     categoryId: num(row.category_id),
@@ -41,7 +81,7 @@ export function createRun(
 
 export function findRun(db: Database, id: number): Run | null {
   const row = db.prepare("SELECT * FROM runs WHERE id = ?").get(id);
-  return row ? toRun(row) : null;
+  return row ? toRuns(db, [row])[0]! : null;
 }
 
 export function getRun(db: Database, id: number): Run {
@@ -56,7 +96,7 @@ export function listRuns(db: Database, filter: { categoryId?: number; limit?: nu
     filter.categoryId === undefined
       ? db.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT ?").all(limit)
       : db.prepare("SELECT * FROM runs WHERE category_id = ? ORDER BY id DESC LIMIT ?").all(filter.categoryId, limit);
-  return rows.map(toRun);
+  return toRuns(db, rows);
 }
 
 /** The run of this category that is waiting or in progress, if there is one. */
@@ -64,7 +104,7 @@ export function findActiveRun(db: Database, categoryId: number): Run | null {
   const row = db
     .prepare("SELECT * FROM runs WHERE category_id = ? AND status IN ('queued', 'running') ORDER BY id LIMIT 1")
     .get(categoryId);
-  return row ? toRun(row) : null;
+  return row ? toRuns(db, [row])[0]! : null;
 }
 
 export function hasRunForSlot(db: Database, categoryId: number, slot: string): boolean {
@@ -131,7 +171,7 @@ export function retryDelayMs(attempt: number): number {
  * Decides what follows a failed run. A scheduled run, or a retry of one, is retried at `at` while fewer than
  * `retries` retries were made; a manual run never is.
  */
-export function planRetry(db: Database, run: Run, retries: number, at: Date): void {
+export function planRetry(db: Database, run: Pick<Run, "id" | "trigger" | "attempt">, retries: number, at: Date): void {
   if (run.trigger === "manual") setRetry(db, run.id, { skipped: "manual" });
   else if (run.attempt >= retries) setRetry(db, run.id, { skipped: "limit" });
   else setRetry(db, run.id, { at: at.toISOString() });
@@ -139,7 +179,7 @@ export function planRetry(db: Database, run: Run, retries: number, at: Date): vo
 
 /** Failed runs whose retry is due at `now`, the one due first at the head. */
 export function listDueRetries(db: Database, now: string): Run[] {
-  return db.prepare("SELECT * FROM runs WHERE retry_at IS NOT NULL AND retry_at <= ? ORDER BY retry_at, id").all(now).map(toRun);
+  return toRuns(db, db.prepare("SELECT * FROM runs WHERE retry_at IS NOT NULL AND retry_at <= ? ORDER BY retry_at, id").all(now));
 }
 
 /** Whether the category has a run of a scheduled time that was recorded after the run `afterId`. */

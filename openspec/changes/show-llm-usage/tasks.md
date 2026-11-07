@@ -9,8 +9,8 @@
 
 ## 2. 実行ごとの集計
 
-- [ ] 2.1 `runSchema` に `costUsd`、`unknownCostCalls`、`callsByTask` を足し、`db/runs.ts` の実行を返すすべての関数が `llm_calls` の集計を付ける。仕様 `http-api` の「実行ごとの金額の提供」と「実行ごとのタスクごとの呼び出しの提供」の各場面を `runs-api.test.ts` で確かめる
-- [ ] 2.2 `docs/api.md` の実行の項に、足した欄を書く
+- [x] 2.1 `runSchema` に `costUsd`、`unknownCostCalls`、`callsByTask` を足し、`db/runs.ts` の実行を返すすべての関数が `llm_calls` の集計を付ける。仕様 `http-api` の「実行ごとの金額の提供」と「実行ごとのタスクごとの呼び出しの提供」の各場面を `runs-api.test.ts` で確かめる
+- [x] 2.2 `docs/api.md` の実行の項に、足した欄を書く
 
 ## 3. 利用量の集計とAPI
 

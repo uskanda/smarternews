@@ -976,6 +976,16 @@ export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
 export const stopLimitSchema = z.enum(["run", "day", "budget"]);
 export type StopLimit = z.infer<typeof stopLimitSchema>;
 
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
+export type TaskName = z.infer<typeof taskNameSchema>;
+
+/**
+ * Model calls and what they cost. `calls` counts every call, those to providers that cost nothing included; `costUsd`
+ * adds up the known costs of the calls to providers that cost money.
+ */
+export const taskCallsSchema = z.object({ calls: z.number().int(), costUsd: z.number() });
+export type TaskCalls = z.infer<typeof taskCallsSchema>;
+
 export const runSchema = z.object({
   id: z.number().int(),
   categoryId: z.number().int(),
@@ -1000,6 +1010,15 @@ export const runSchema = z.object({
   retrySkipped: retrySkippedSchema.nullable(),
   /** The allowance a run stopped by limit ran into. Null for every other run, and for runs stopped before it was kept. */
   stoppedBy: stopLimitSchema.nullable(),
+  /**
+   * US dollars the run's calls to providers that cost money used, as far as it is known. Null for a run that made no
+   * such call.
+   */
+  costUsd: z.number().nullable(),
+  /** The run's calls to providers that cost money whose cost is not known; `costUsd` leaves them out. */
+  unknownCostCalls: z.number().int(),
+  /** The run's model calls and their money, by task. Only the tasks the run called are present. */
+  callsByTask: z.partialRecord(taskNameSchema, taskCallsSchema),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -1022,9 +1041,6 @@ export const candidateSchema = z.object({
 export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
-
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
-export type TaskName = z.infer<typeof taskNameSchema>;
 
 /** What the providers that cost money used in the current budget period, in US dollars. */
 export const budgetStatusSchema = z.object({
