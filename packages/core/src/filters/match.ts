@@ -110,7 +110,7 @@ export function conditionProblems(conditions: Array<Pick<FilterCondition, "match
   conditions.forEach((condition, index) => {
     if (condition.match !== "regex") return;
     const problem = regexProblem(condition.value);
-    if (problem !== null) problems.push({ path: `${prefix}.${index}.value`, message: problem });
+    if (problem !== null) problems.push({ path: `${prefix}.${index}.value`, message: problem, code: "format" });
   });
   return problems;
 }

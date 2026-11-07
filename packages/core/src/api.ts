@@ -3,7 +3,11 @@
 import { parse as parseCssSelector } from "css-what";
 import { z } from "zod";
 
+import { FIELD_ERROR_CODES, FIELD_ERROR_UNITS } from "./errors.ts";
 import { MAX_MENTION_NAME_CHARS, mentionKey, mentionSchema } from "./mentions.ts";
+
+// The kinds of refusal of a field, which the apps word in their own language.
+export { FIELD_ERROR_CODES, FIELD_ERROR_UNITS, type FieldErrorCode, type FieldErrorUnit } from "./errors.ts";
 import { charCount } from "./search/text.ts";
 
 // Normalizing and matching search terms: the apps mark matches as the server finds them.
@@ -21,9 +25,36 @@ const slugSchema = z
   .max(64);
 const languageSchema = z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "must be a language tag such as en or ja");
 const regionSchema = z.string().regex(/^[A-Z]{2}$/, "must be a two-letter region such as US or JP");
-const importanceSchema = z.number().int().min(1).max(5);
+
+// The bounds of the values the screens edit. The schemas and the screens both take them from here, so that a
+// screen can say the range and check it before it sends.
+export const IMPORTANCE_MIN = 1;
+export const IMPORTANCE_MAX = 5;
+export const FEED_INTERVAL_MINUTES_MIN = 5;
+export const FEED_INTERVAL_MINUTES_MAX = 1440;
+export const STALE_FEED_DAYS_MAX = 365;
+export const READER_INFO_MAX_CHARS = 4000;
+/** The most times of day in a category's schedule, and in the schedule of digests. */
+export const SCHEDULE_MAX_TIMES = 24;
+export const CATEGORY_NAME_MAX_CHARS = 100;
+export const MAX_ARTICLES_PER_RUN = 50;
+export const WINDOW_HOURS_MAX = 720;
+export const WINDOW_DAYS_MAX = 90;
+export const TOPIC_TEXT_MAX_CHARS = 2000;
+export const TOPIC_FEEDS_MAX = 50;
+export const TOPIC_QUERY_MAX_CHARS = 200;
+export const TOPIC_QUERIES_MAX = 8;
+export const TERM_GROUP_NAME_MAX_CHARS = 100;
+export const HIGHLIGHT_TERM_MAX_CHARS = 100;
+export const FEED_TITLE_MAX_CHARS = 200;
+
+const importanceSchema = z.number().int().min(IMPORTANCE_MIN).max(IMPORTANCE_MAX);
 /** How often a subscribed feed is fetched, in minutes: five minutes to one day. */
-const intervalMinutesSchema = z.number().int().min(5, "must be between 5 and 1440 minutes").max(1440, "must be between 5 and 1440 minutes");
+const intervalMinutesSchema = z
+  .number()
+  .int()
+  .min(FEED_INTERVAL_MINUTES_MIN, "must be between 5 and 1440 minutes")
+  .max(FEED_INTERVAL_MINUTES_MAX, "must be between 5 and 1440 minutes");
 
 export const searchLocaleSchema = z.object({ language: languageSchema, region: regionSchema });
 export type SearchLocale = z.infer<typeof searchLocaleSchema>;
@@ -31,7 +62,7 @@ export type SearchLocale = z.infer<typeof searchLocaleSchema>;
 // ---- settings ----------------------------------------------------------------------------------
 
 export const settingsSchema = z.object({
-  readerInfo: z.string().max(4000),
+  readerInfo: z.string().max(READER_INFO_MAX_CHARS),
   outputLanguage: languageSchema,
   timeZone: z.string().min(1),
   search: searchLocaleSchema,
@@ -45,9 +76,13 @@ export const settingsSchema = z.object({
    */
   removeDuplicates: z.boolean(),
   /** After how many days without a new item an enabled feed counts as stale. */
-  staleFeedDays: z.number().int("must be a whole number of days").min(1, "must be between 1 and 365 days").max(365, "must be between 1 and 365 days"),
+  staleFeedDays: z
+    .number()
+    .int("must be a whole number of days")
+    .min(1, "must be between 1 and 365 days")
+    .max(STALE_FEED_DAYS_MAX, "must be between 1 and 365 days"),
   /** The times of day, in `timeZone`, at which a digest is made. Empty: digests are made by hand only. */
-  digestSchedule: z.array(timeOfDaySchema).max(24),
+  digestSchedule: z.array(timeOfDaySchema).max(SCHEDULE_MAX_TIMES),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -72,12 +107,12 @@ export const categorySchema = z.object({
 export type Category = z.infer<typeof categorySchema>;
 
 const categoryFields = {
-  name: z.string().trim().min(1).max(100),
-  schedule: z.array(timeOfDaySchema).max(24),
+  name: z.string().trim().min(1).max(CATEGORY_NAME_MAX_CHARS),
+  schedule: z.array(timeOfDaySchema).max(SCHEDULE_MAX_TIMES),
   minImportance: importanceSchema,
-  maxArticlesPerRun: z.number().int().min(1).max(50),
-  windowHours: z.number().int().min(1).max(720),
-  windowDays: z.number().int().min(1).max(90),
+  maxArticlesPerRun: z.number().int().min(1).max(MAX_ARTICLES_PER_RUN),
+  windowHours: z.number().int().min(1).max(WINDOW_HOURS_MAX),
+  windowDays: z.number().int().min(1).max(WINDOW_DAYS_MAX),
   enabled: z.boolean(),
 };
 
@@ -101,13 +136,13 @@ export type CategoryUpdate = z.infer<typeof categoryUpdateSchema>;
 // ---- topics ------------------------------------------------------------------------------------
 
 export const topicSourcesSchema = z.object({
-  feeds: z.array(z.url({ protocol: /^https?$/ })).max(50),
+  feeds: z.array(z.url({ protocol: /^https?$/ })).max(TOPIC_FEEDS_MAX),
   newsSearch: z.boolean(),
   llmSearch: z.boolean(),
 });
 export type TopicSources = z.infer<typeof topicSourcesSchema>;
 
-const queriesSchema = z.array(z.string().trim().min(1).max(200)).max(8);
+const queriesSchema = z.array(z.string().trim().min(1).max(TOPIC_QUERY_MAX_CHARS)).max(TOPIC_QUERIES_MAX);
 
 export const topicSchema = z.object({
   id: z.number().int(),
@@ -124,7 +159,7 @@ export const topicSchema = z.object({
 });
 export type Topic = z.infer<typeof topicSchema>;
 
-const topicText = z.string().trim().min(1).max(2000);
+const topicText = z.string().trim().min(1).max(TOPIC_TEXT_MAX_CHARS);
 
 export const topicCreateSchema = z.object({
   text: topicText,
@@ -303,7 +338,7 @@ export const highlightCreateSchema = z.object({
   quote: z
     .string()
     .max(MAX_ANNOTATION_CHARS, `is too long: at most ${MAX_ANNOTATION_CHARS} characters`)
-    .refine((quote) => quote.trim().length > 0, EMPTY),
+    .refine((quote) => quote.trim().length > 0, { message: EMPTY, params: { code: "required" } }),
   prefix: z.string().max(ANCHOR_CONTEXT_CHARS),
   suffix: z.string().max(ANCHOR_CONTEXT_CHARS),
   position: z.number().int().min(0),
@@ -523,9 +558,9 @@ export type ArticleSearchResult = z.infer<typeof articleSearchResultSchema>;
  */
 export const mentionArticlesQuerySchema = z.object({
   name: z.string().superRefine((name, context) => {
-    if (name.trim().length === 0) context.addIssue({ code: "custom", message: "is empty" });
+    if (name.trim().length === 0) context.addIssue({ code: "custom", message: "is empty", params: { code: "required" } });
     else if (charCount(mentionKey(name)) > MAX_MENTION_NAME_CHARS) {
-      context.addIssue({ code: "custom", message: `is too long: at most ${MAX_MENTION_NAME_CHARS} characters` });
+      context.addIssue({ code: "custom", message: `is too long: at most ${MAX_MENTION_NAME_CHARS} characters`, params: { code: "too_big" } });
     }
   }),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -638,7 +673,7 @@ export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 // ---- subscribed feeds --------------------------------------------------------------------------
 
 const feedUrlSchema = z.url({ protocol: /^https?$/ }).max(2000);
-const feedTitleSchema = z.string().trim().min(1).max(200);
+const feedTitleSchema = z.string().trim().min(1).max(FEED_TITLE_MAX_CHARS);
 
 /** The longest value one selector of a web feed holds. */
 export const MAX_SELECTOR_CHARS = 300;
@@ -658,7 +693,7 @@ const cssSelectorSchema = z
   .trim()
   .min(1)
   .max(MAX_SELECTOR_CHARS)
-  .refine((value) => isCssSelector(value), { message: "not a CSS selector" });
+  .refine((value) => isCssSelector(value), { message: "not a CSS selector", params: { code: "format" } });
 
 /**
  * How a web feed takes its articles out of its page: `item` finds the elements that repeat once an article;
@@ -756,10 +791,10 @@ export const feedCreateSchema = feedFields
   .extend({ format: feedFormatSchema.optional(), selectors: pageSelectorsSchema.optional() })
   .superRefine((input, context) => {
     if (input.format === "page" && input.selectors === undefined) {
-      context.addIssue({ code: "custom", path: ["selectors"], message: "a web feed needs selectors" });
+      context.addIssue({ code: "custom", path: ["selectors"], message: "a web feed needs selectors", params: { code: "required" } });
     }
     if (input.format !== "page" && input.selectors !== undefined) {
-      context.addIssue({ code: "custom", path: ["selectors"], message: "only a web feed has selectors" });
+      context.addIssue({ code: "custom", path: ["selectors"], message: "only a web feed has selectors", params: { code: "not_allowed" } });
     }
   });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
@@ -886,14 +921,14 @@ const filterFields = {
 
 export const filterCreateSchema = z
   .object({ ...filterFields, enabled: filterFields.enabled.optional() })
-  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type FilterCreate = z.infer<typeof filterCreateSchema>;
 
 /** A change to a filter. A keep filter over everything is refused once the change is applied. */
 export const filterUpdateSchema = z
   .object(filterFields)
   .partial()
-  .refine((filter) => !(filter.action === "keep" && filter.scope?.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope?.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type FilterUpdate = z.infer<typeof filterUpdateSchema>;
 
 /** A changed filter, and how many feed articles came back to the lists with the change. */
@@ -906,7 +941,7 @@ export type FilterDeleteResult = z.infer<typeof filterDeleteResultSchema>;
 /** A filter to try without saving it. With `id`, the stored filter of that id is left out of the count. */
 export const filterPreviewSchema = z
   .object({ ...filterFields, enabled: filterFields.enabled.optional(), id: z.number().int().optional() })
-  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type FilterPreview = z.infer<typeof filterPreviewSchema>;
 
 export const filterPreviewResultSchema = z.object({ hiddenCount: z.number().int() });
@@ -926,8 +961,8 @@ export const termColorSchema = z.enum(["green", "purple", "pink", "orange"]);
 export type TermColor = z.infer<typeof termColorSchema>;
 export const TERM_COLORS = termColorSchema.options;
 
-const termGroupNameSchema = z.string().trim().min(1, "a name is required").max(100);
-const highlightTermTextSchema = z.string().trim().min(1, "a term is required").max(100);
+const termGroupNameSchema = z.string().trim().min(1, "a name is required").max(TERM_GROUP_NAME_MAX_CHARS);
+const highlightTermTextSchema = z.string().trim().min(1, "a term is required").max(HIGHLIGHT_TERM_MAX_CHARS);
 
 /** A word marked in lists and article texts wherever it occurs, as stop words were matched. */
 export const highlightTermSchema = z.object({ id: z.number().int(), text: z.string() });
@@ -1251,7 +1286,7 @@ const settingsFileFilterSchema = z
     enabled: z.boolean().optional(),
     conditions: filterFields.conditions,
   })
-  .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
 
 /** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
@@ -1325,7 +1360,20 @@ export const apiErrorSchema = z.object({
   error: z.object({
     code: z.enum(["unauthorized", "invalid_input", "not_found", "conflict", "unavailable", "internal"]),
     message: z.string(),
-    fields: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
+    fields: z
+      .array(
+        z.object({
+          path: z.string(),
+          /** In English, for the CLI and the logs. The apps word the refusal from `code` and the bounds. */
+          message: z.string(),
+          code: z.enum(FIELD_ERROR_CODES).optional(),
+          /** The bound of `too_small` and `too_big`, and what it counts. */
+          minimum: z.number().optional(),
+          maximum: z.number().optional(),
+          unit: z.enum(FIELD_ERROR_UNITS).optional(),
+        }),
+      )
+      .optional(),
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;

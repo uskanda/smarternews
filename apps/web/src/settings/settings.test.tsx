@@ -179,6 +179,38 @@ describe("editing a category", () => {
     expect(getCategory(server.db, category.id).minImportance).toBe(3);
   });
 
+  it("says the range of the number of articles, and does not send a number above it", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const field = await screen.findByLabelText("件数上限");
+    expect(field).toHaveAccessibleDescription(/1から50まで/);
+    expect(screen.getByLabelText("対象期間（時間）")).toHaveAccessibleDescription(/1から720まで/);
+    await user.clear(field);
+    await user.type(field, "51");
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("件数上限は1から50までの数にしてください。")).toBeInTheDocument();
+    expect(field).toHaveAccessibleDescription(/件数上限は1から50までの数にしてください。/);
+    expect(field).toBeInvalid();
+    expect(getCategory(server.db, category.id).maxArticlesPerRun).toBe(5);
+  });
+
+  it("names the time in the wrong form by its place, before sending", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const field = await screen.findByLabelText("実行時刻");
+    await user.clear(field);
+    await user.type(field, "05:00, 5時");
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("実行時刻の2つ目の形が正しくありません。05:00 のように24時間表記で書いてください。")).toBeInTheDocument();
+    expect(getCategory(server.db, category.id).schedule).toEqual(["05:00"]);
+  });
+
   it("asks before leaving with unsaved changes, and stays when the user says so", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -451,7 +483,10 @@ describe("reader information and global settings", () => {
     await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
-    expect(field).toHaveAccessibleDescription(/IANA/);
+    // The description keeps the field's hint and adds the reason after it.
+    expect(field).toHaveAccessibleDescription(/タイムゾーンは、Asia\/Tokyo のような IANA のタイムゾーン名にしてください。/);
+    // The server's own words are English, and are not shown.
+    expect(global).not.toHaveTextContent(/is not an IANA time zone name/);
     expect(getSettings(server.db).timeZone).toBe("UTC");
   });
 
@@ -512,7 +547,7 @@ describe("the times digests are made", () => {
     await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
-    expect(field).toHaveAccessibleDescription(/保存できません/);
+    expect(field).toHaveAccessibleDescription(/ダイジェストを作る時刻の1つ目の形が正しくありません。/);
     expect(getSettings(server.db).digestSchedule).toEqual(before);
   });
 });
@@ -600,7 +635,9 @@ describe("the settings file", () => {
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
-    expect(await within(settingsFile).findByRole("alert")).toHaveTextContent("categories.0.kind");
+    const alert = await within(settingsFile).findByRole("alert");
+    expect(alert).toHaveTextContent("categories.0.kind: kindは、選べる値の中から選んでください。");
+    expect(alert).not.toHaveTextContent(/Invalid/);
     expect(listCategories(server.db)).toEqual([]);
   });
 
@@ -896,8 +933,8 @@ describe("the days after which a feed counts as stale", () => {
     await user.clear(field);
     await user.type(field, "0");
     await user.click(within(global).getByRole("button", { name: "保存する" }));
-    expect(await within(global).findByText("1から365までの日数を入れてください。")).toBeInTheDocument();
-    expect(field).toHaveAccessibleDescription(/1から365までの日数/);
+    expect(await within(global).findByText("更新が止まったとみなす日数は1から365までの数にしてください。")).toBeInTheDocument();
+    expect(field).toHaveAccessibleDescription(/1から365までの数にしてください/);
     expect(getSettings(server.db).staleFeedDays).toBe(60);
   });
 });

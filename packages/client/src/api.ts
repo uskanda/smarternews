@@ -108,12 +108,25 @@ import { z } from "zod";
 
 export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "unavailable" | "network" | "server";
 
+/**
+ * One refused field of a 400 answer. `message` is the server's English; a screen words the refusal from `code`
+ * and the bounds with `fieldMessage`. A code is a string here: a newer server may send one this app does not know.
+ */
+export interface FieldProblem {
+  path: string;
+  message: string;
+  code?: string;
+  minimum?: number;
+  maximum?: number;
+  unit?: string;
+}
+
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status: number | null;
-  readonly fields: Array<{ path: string; message: string }>;
+  readonly fields: FieldProblem[];
 
-  constructor(kind: ApiErrorKind, status: number | null, message: string, fields: Array<{ path: string; message: string }> = []) {
+  constructor(kind: ApiErrorKind, status: number | null, message: string, fields: FieldProblem[] = []) {
     super(message);
     this.name = "ApiError";
     this.kind = kind;

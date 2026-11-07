@@ -1,7 +1,7 @@
 // The parts of the feeds page that deal with web feeds: candidates for the selectors of a page, the preview of
 // what a set of selectors takes out, and the fields to write selectors by hand.
 import type { PageCandidates, PageSelectors, SelectorFallback, SelectorPreview } from "@smarternews/core/api";
-import { ApiError, fieldError, formatClock, formatDay } from "@smarternews/client";
+import { ApiError, feedErrorLabel, fieldError, fieldMessage, formatClock, formatDay } from "@smarternews/client";
 import { useId, useState } from "react";
 import { useApp } from "../app/context.ts";
 import { useTimeZone } from "../api/queries.ts";
@@ -36,9 +36,10 @@ export function selectorsOf(texts: SelectorTexts): PageSelectors | null {
 
 /** Why the server refused a selector, in the app's words. */
 export function selectorError(error: unknown, name: keyof SelectorTexts): string | null {
-  const message = fieldError(error, `selectors.${name}`);
-  if (message === null) return null;
-  return message === "not a CSS selector" ? "CSSセレクターとして読めません。" : message;
+  const path = `selectors.${name}`;
+  const problem = error instanceof ApiError ? error.fields.find((field) => field.path === path) : undefined;
+  if (problem?.code === "format") return "CSSセレクターとして読めません。";
+  return fieldMessage(error, path, FIELDS.find((field) => field.name === name)!.label);
 }
 
 /** What a set of selectors takes out: the count, and the first articles with their dates. */
@@ -157,8 +158,10 @@ export function CandidateStatus({ state }: { state: ReturnType<typeof useCandida
 /** Why candidates or a preview could not be had: mostly a page that could not be fetched. */
 function pageFailure(error: unknown, what: "候補" | "見本"): string {
   const reason = fieldError(error, "url");
-  if (reason) return `このページを取得できなかったため、${what}を出せませんでした（${reason}）。`;
-  return messageFor(error);
+  if (reason === null) return messageFor(error);
+  // The kinds of failure a fetch meets are known: one of them is said, and anything else is left out.
+  const known = feedErrorLabel(reason);
+  return known === reason ? `このページを取得できなかったため、${what}を出せませんでした。` : `このページを取得できなかったため、${what}を出せませんでした。${known}。`;
 }
 
 /**

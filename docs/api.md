@@ -26,8 +26,31 @@ RSS feeds use a separate, read-only token in the query string. The API rejects t
 An error response has this shape:
 
 ```json
-{ "error": { "code": "invalid_input", "message": "the input is invalid", "fields": [{ "path": "minImportance", "message": "Too big: expected number to be <=5" }] } }
+{ "error": { "code": "invalid_input", "message": "the input is invalid", "fields": [{ "path": "minImportance", "message": "Too big: expected number to be <=5", "code": "too_big", "maximum": 5, "unit": "number" }] } }
 ```
+
+Each entry of `fields` has `path` and `message`. The message is English and meant for logs and the CLI; a client words the problem from these optional fields instead:
+
+| Field | Meaning |
+|---|---|
+| `code` | The kind of problem, listed below. A client words an entry without a code, or with a code it does not know, as a value that cannot be saved |
+| `minimum`, `maximum` | The bound that `too_small` or `too_big` broke |
+| `unit` | What the bound counts: `chars` (characters of a text), `number` (the value itself) or `items` (entries of a list) |
+
+| `code` | Meaning |
+|---|---|
+| `required` | The value is missing, or of another type |
+| `too_small`, `too_big` | The value, its length or its number of entries is out of range |
+| `format` | The value is not in the expected form: a time that is not `HH:MM`, a URL, a regular expression or CSS selector that cannot be read, a number that is not whole |
+| `invalid_value` | The value is not one of the allowed values |
+| `custom` | Another rule of the schema |
+| `unknown_time_zone` | The time zone is not an IANA time zone name |
+| `no_such_item` | The value names a category, feed or term group that does not exist |
+| `not_allowed` | The value cannot be combined with the rest, such as a keep filter over everything or selectors for a feed |
+| `unreachable` | The URL could not be fetched or read as what it should be |
+| `no_items` | The selectors take no article out of the page |
+
+The element of a list is named by its index, such as `schedule.1` for the second time.
 
 | Status | `code` | Meaning |
 |---|---|---|

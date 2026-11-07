@@ -1,13 +1,29 @@
-import type { Category, ProviderStatus, Settings, TaskName, Usage } from "@smarternews/core/api";
+import {
+  CATEGORY_NAME_MAX_CHARS,
+  READER_INFO_MAX_CHARS,
+  SCHEDULE_MAX_TIMES,
+  STALE_FEED_DAYS_MAX,
+  type Category,
+  type ProviderStatus,
+  type Settings,
+  type TaskName,
+  type Usage,
+} from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   ApiError,
   budgetWarningLabel,
+  checkRequired,
+  checkText,
+  checkTimes,
+  checkWholeNumber,
+  fieldMessage,
   formatUsd,
   periodDayLabel,
   projectionLabel,
+  settingsFileProblem,
   TASK_LABEL,
   THEME_CHOICES,
   THEME_LABEL,
@@ -18,31 +34,18 @@ import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
+import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
 import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
-const STALE_RANGE = "1から365までの日数を入れてください。";
-
-/** A whole number of days from 1 to 365, or null. */
-function daysOf(text: string): number | null {
-  if (!/^\d+$/.test(text.trim())) return null;
-  const value = Number(text.trim());
-  return value >= 1 && value <= 365 ? value : null;
-}
 
 /** The times written in a field, separated by commas, 、 or spaces. */
 function timesOf(text: string): string[] {
   return text.split(/[\s,、]+/).filter((time) => time.length > 0);
-}
-
-/** The reason the server gave for refusing a value, introduced in the app's own words. */
-export function refusal(error: unknown, path: string): string | null {
-  const reason = fieldError(error, path);
-  return reason ? `この値は保存できません（${reason}）` : null;
 }
 
 function CategoryRow({ category }: { category: Category }) {
@@ -67,12 +70,16 @@ function Categories() {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"news" | "event">("news");
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const leave = useUnsavedLeaving();
   useUnsaved("新しいカテゴリの名前", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(name, { label: "カテゴリの名前", max: CATEGORY_NAME_MAX_CHARS });
+    setProblem(found);
+    if (found !== null) return;
     try {
       const created = await api.createCategory({ name, kind });
       await client.invalidateQueries({ queryKey: ["categories"] });
@@ -93,8 +100,16 @@ function Categories() {
         <p className="type-body-md text-on-surface-muted">カテゴリはまだありません。下の欄から追加してください。</p>
       ) : null}
       <ul className="max-w-measure">{categories.data?.map((category) => <CategoryRow key={category.id} category={category} />)}</ul>
-      <form onSubmit={add} className="flex max-w-measure flex-col gap-md">
-        <Field label="カテゴリの名前" value={name} onChange={(event) => setName(event.target.value)} error={refusal(error, "name")} />
+      <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+        <Field
+          label="カテゴリの名前"
+          value={name}
+          onChange={(event) => {
+            setName(event.target.value);
+            setProblem(null);
+          }}
+          error={problem ?? fieldMessage(error, "name", "カテゴリの名前")}
+        />
         <fieldset className="flex flex-wrap gap-lg type-body-md">
           <legend className="pb-xs type-label-md">種別</legend>
           {(["news", "event"] as const).map((value) => (
@@ -123,11 +138,15 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const client = useQueryClient();
   const toast = useToast();
   const [text, setText] = useState(settings.readerInfo);
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(text, { label: "読み手情報", max: READER_INFO_MAX_CHARS, required: false });
+    setProblem(found);
+    if (found !== null) return;
     try {
       client.setQueryData(["settings"], await api.updateSettings({ readerInfo: text }));
       setError(null);
@@ -140,13 +159,16 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   return (
     <section id="reader" aria-label="読み手情報" className={SECTION}>
       <h2 className="type-headline-md">読み手情報</h2>
-      <form onSubmit={save} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
         <Field
           label="読み手情報"
           multiline
           value={text}
-          onChange={(event) => setText(event.target.value)}
-          error={refusal(error, "readerInfo")}
+          onChange={(event) => {
+            setText(event.target.value);
+            setProblem(null);
+          }}
+          error={problem ?? fieldMessage(error, "readerInfo", "読み手情報")}
           hint="記事を読む人の仕事や関心を書きます。次の実行から、関連と重要度の判定に使われます。空にすると、記事に読み手への影響は付きません。"
         />
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
@@ -175,9 +197,12 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
   const duplicatesHint = useId();
   const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
-  const [staleError, setStaleError] = useState<string | null>(null);
+  const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
-  const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
+  const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
+    setForm({ ...form, [name]: event.target.value });
+    setProblems((shown) => ({ ...shown, [name]: undefined }));
+  };
   // Compared the way they are saved, so that nothing is left to ask about once they are.
   useUnsaved(
     "全体設定",
@@ -193,11 +218,18 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    const staleFeedDays = daysOf(staleDays);
-    if (staleFeedDays === null) {
-      setStaleError(STALE_RANGE);
-      return;
-    }
+    const stale = checkWholeNumber(staleDays, { label: "更新が止まったとみなす日数", min: 1, max: STALE_FEED_DAYS_MAX });
+    const digestTimes = checkTimes(form.digestSchedule, { label: "ダイジェストを作る時刻", max: SCHEDULE_MAX_TIMES, formatHint: TIME_FORMAT_HINT });
+    const found = problemsOf({
+      outputLanguage: checkRequired(form.outputLanguage, "出力言語"),
+      timeZone: checkRequired(form.timeZone, "タイムゾーン"),
+      language: checkRequired(form.language, "ニュース検索の言語"),
+      region: checkRequired(form.region, "ニュース検索の地域"),
+      digestSchedule: digestTimes.ok ? null : digestTimes.message,
+      staleDays: stale.ok ? null : stale.message,
+    });
+    setProblems(found ?? {});
+    if (found !== null || !stale.ok || !digestTimes.ok) return;
     try {
       const saved = await api.updateSettings({
         outputLanguage: form.outputLanguage.trim(),
@@ -205,8 +237,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         search: { language: form.language.trim(), region: form.region.trim() },
         advanceAfterMarkAll: advance,
         removeDuplicates,
-        staleFeedDays,
-        digestSchedule: timesOf(form.digestSchedule),
+        staleFeedDays: stale.value,
+        digestSchedule: digestTimes.value,
       });
       client.setQueryData(["settings"], saved);
       // The server puts the times in order and drops the same time given twice.
@@ -228,22 +260,27 @@ function GlobalSettings({ settings }: { settings: Settings }) {
           label="出力言語"
           value={form.outputLanguage}
           onChange={set("outputLanguage")}
-          error={refusal(error, "outputLanguage")}
+          error={problems.outputLanguage ?? fieldMessage(error, "outputLanguage", { label: "出力言語", formatHint: LANGUAGE_FORMAT_HINT })}
           hint="記事を書く言語。ja や en のように書きます。"
         />
         <Field
           label="タイムゾーン"
           value={form.timeZone}
           onChange={set("timeZone")}
-          error={refusal(error, "timeZone")}
+          error={problems.timeZone ?? fieldMessage(error, "timeZone", "タイムゾーン")}
           hint="実行時刻と日時の表示の基準。Asia/Tokyo のように書きます。"
         />
-        <Field label="ニュース検索の言語" value={form.language} onChange={set("language")} error={refusal(error, "search.language")} />
+        <Field
+          label="ニュース検索の言語"
+          value={form.language}
+          onChange={set("language")}
+          error={problems.language ?? fieldMessage(error, "search.language", { label: "ニュース検索の言語", formatHint: LANGUAGE_FORMAT_HINT })}
+        />
         <Field
           label="ニュース検索の地域"
           value={form.region}
           onChange={set("region")}
-          error={refusal(error, "search.region")}
+          error={problems.region ?? fieldMessage(error, "search.region", { label: "ニュース検索の地域", formatHint: REGION_FORMAT_HINT })}
           hint="JP や US のように、大文字2文字で書きます。"
         />
         <div className="sm:col-span-2">
@@ -251,7 +288,10 @@ function GlobalSettings({ settings }: { settings: Settings }) {
             label="ダイジェストを作る時刻"
             value={form.digestSchedule}
             onChange={set("digestSchedule")}
-            error={refusal(error, "digestSchedule")}
+            error={
+              problems.digestSchedule ??
+              fieldMessage(error, "digestSchedule", { label: "ダイジェストを作る時刻", formatHint: TIME_FORMAT_HINT })
+            }
             hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「今すぐ作る」でだけ作ります。"
           />
         </div>
@@ -279,14 +319,14 @@ function GlobalSettings({ settings }: { settings: Settings }) {
             type="number"
             inputMode="numeric"
             min={1}
-            max={365}
+            max={STALE_FEED_DAYS_MAX}
             value={staleDays}
             onChange={(event) => {
               setStaleDays(event.target.value);
-              setStaleError(null);
+              setProblems((shown) => ({ ...shown, staleDays: undefined }));
             }}
-            error={staleError ?? refusal(error, "staleFeedDays")}
-            hint="新しい記事がこの日数届いていない購読フィードに、購読フィードの一覧で印を付けます。取得は続けます。"
+            error={problems.staleDays ?? fieldMessage(error, "staleFeedDays", { label: "更新が止まったとみなす日数", min: 1, max: STALE_FEED_DAYS_MAX })}
+            hint={`新しい記事がこの日数届いていない購読フィードに、購読フィードの一覧で印を付けます。取得は続けます。1から${STALE_FEED_DAYS_MAX}まで。`}
           />
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
@@ -405,7 +445,7 @@ function SettingsFile() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form onSubmit={ask} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={ask} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込む設定ファイル
           <input
@@ -432,7 +472,7 @@ function SettingsFile() {
             <ul className="list-disc pl-lg">
               {error.fields.map((field) => (
                 <li key={field.path} className="break-words">
-                  {field.path}: {field.message}
+                  {settingsFileProblem(field)}
                 </li>
               ))}
             </ul>

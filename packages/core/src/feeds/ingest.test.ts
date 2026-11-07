@@ -322,6 +322,24 @@ describe("conditional requests", () => {
     expect(getFeed(s.db, feed.id)).toMatchObject({ lastSucceededAt: s.clock().toISOString(), lastError: null, articleCount: 1 });
   });
 
+  it("sends the condition for a JSON Feed too, and asks for JSON Feed in Accept", async () => {
+    const json = JSON.stringify({
+      version: "https://jsonfeed.org/version/1.1",
+      title: "Example JSON",
+      home_page_url: "https://example.org/",
+      items: [{ id: "a", url: "https://example.org/posts/a", title: "A", content_html: "<p>A.</p>", date_published: "2026-03-01T11:00:00Z" }],
+    });
+    const s = setup(() => new Response(json, { headers: { "content-type": "application/feed+json", etag: '"j1"' } }));
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(feed).toMatchObject({ title: "Example JSON", siteUrl: "https://example.org/", articleCount: 1 });
+    expect(s.requests[0]!.headers.accept).toContain("application/feed+json");
+    s.clock.advance(HOUR);
+    s.serve(() => new Response(null, { status: 304 }));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "not_modified", created: 0 });
+    expect(s.requests.at(-1)!.headers).toMatchObject({ "if-none-match": '"j1"' });
+  });
+
   it("sends no condition on the first request", async () => {
     const s = setup([{ title: "A" }]);
     await subscribe(s.deps, { url: FEED_URL });
