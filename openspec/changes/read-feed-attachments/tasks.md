@@ -24,4 +24,4 @@
 
 ## 4. 全体の確認
 
-- [ ] 4.1 `make verify` の各段（lint、型、テスト、ビルド、`DESIGN.md`、textlint、用語）を通す
+- [x] 4.1 `make verify` の各段（lint、型、テスト、ビルド、`DESIGN.md`、textlint、用語）を通す
