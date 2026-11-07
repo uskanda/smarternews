@@ -3,7 +3,7 @@
 ## 1. 移行の番号と理由の種類
 
 - [x] 1.1 出典の理由の移行を、024番から `026_ref_reasons.sql` に移す。同じ番号の移行がないことと、出典の理由の移行のテストを `packages/core/src/db/database.test.ts` で確かめる
-- [x] 1.2 移行の027で、`candidates` の表に `reason_code` の列を足し、過去の候補に理由の種類を入れる。両言語の5種類の文と、判定の理由と、保留中の候補の扱いを `database.test.ts` で確かめる
+- [x] 1.2 移行の028で、`candidates` の表に `reason_code` の列を足し、過去の候補に理由の種類を入れる。両言語の5種類の文と、判定の理由と、保留中の候補の扱いを `database.test.ts` で確かめる
 - [x] 1.3 `NewCandidate` に `reasonCode` を足し、`rejectCandidates` が種類と出力の言語を受け取るようにする。プログラムの4つの場面で種類が保存されることを `collect.test.ts`、`select.test.ts`、`events.test.ts` で確かめる。判定による除外では NULL になることも確かめる
 - [x] 1.4 `listTrialCandidates` を列で見分けるように変え、`programReasonCode` を消す。`candidates.test.ts` と `trial.test.ts` で確かめる
 - [x] 1.5 用語集に「理由の種類」と「トピックの成績」を足す。用語の検査で確かめる
