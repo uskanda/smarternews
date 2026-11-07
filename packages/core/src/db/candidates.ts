@@ -1,4 +1,5 @@
 import type { Candidate, SourceKind } from "../api.ts";
+import { programReasonCode, type ReasonCode } from "../pipeline/reasons.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
@@ -66,7 +67,11 @@ export interface PendingCandidate {
   snippet: string;
   siteName: string;
   publishedAt: string | null;
+  /** The importance for choosing stories: the judgement's, or 1 when it gave none. */
   importance: number;
+  /** Why the judgement found the candidate relevant, and the importance as it gave it; kept on the article's source. */
+  reason: string;
+  judgedImportance: number | null;
   topicIds: number[];
 }
 
@@ -90,6 +95,8 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
       siteName: str(row.site_name),
       publishedAt: strOrNull(row.published_at),
       importance: numOrNull(row.importance) ?? 1,
+      reason: str(row.reason),
+      judgedImportance: numOrNull(row.importance),
       topicIds: topicIdsOf(db, num(row.id)),
     }));
 }
@@ -137,6 +144,67 @@ export function listRunCandidates(db: Database, runId: number, status?: Candidat
       ? db.prepare("SELECT * FROM candidates WHERE run_id = ? ORDER BY id").all(runId)
       : db.prepare("SELECT * FROM candidates WHERE run_id = ? AND status = ? ORDER BY id").all(runId, status);
   return rows.map((row) => toCandidate(db, row));
+}
+
+/** A stored candidate of a topic, as a topic trial judges it again. */
+export interface TrialCandidate {
+  id: number;
+  url: string;
+  title: string;
+  snippet: string;
+  siteName: string;
+  publishedAt: string | null;
+  createdAt: string;
+  status: Candidate["status"];
+  reason: string;
+  importance: number | null;
+  topicIds: number[];
+  /** What the judge concluded. A candidate the program rejected after the judge accepted it counts as accepted. */
+  verdict: "accepted" | "rejected";
+  /** The program's reason when the program rejected it, which replaced the judge's reason. */
+  programReason: Exclude<ReasonCode, "no-date"> | null;
+}
+
+/**
+ * Candidates of a topic for a trial: the newest `perSide` the judge accepted and the newest `perSide` it rejected,
+ * a short side filled with more of the other. Candidates rejected for an unknown publication time never reached
+ * the judge and are left out. Newest first.
+ */
+export function listTrialCandidates(db: Database, topicId: number, perSide: number): TrialCandidate[] {
+  const all: TrialCandidate[] = [];
+  const rows = db
+    .prepare(
+      `SELECT c.* FROM candidates c JOIN candidate_topics ct ON ct.candidate_id = c.id
+        WHERE ct.topic_id = ? ORDER BY c.created_at DESC, c.id DESC`,
+    )
+    .all(topicId);
+  for (const row of rows) {
+    const status = str(row.status) as Candidate["status"];
+    const reason = str(row.reason);
+    const code = status === "rejected" ? programReasonCode(reason) : null;
+    if (code === "no-date") continue;
+    all.push({
+      id: num(row.id),
+      url: str(row.url),
+      title: str(row.title),
+      snippet: str(row.snippet),
+      siteName: str(row.site_name),
+      publishedAt: strOrNull(row.published_at),
+      createdAt: str(row.created_at),
+      status,
+      reason,
+      importance: numOrNull(row.importance),
+      topicIds: topicIdsOf(db, num(row.id)),
+      verdict: status !== "rejected" || code !== null ? "accepted" : "rejected",
+      programReason: code,
+    });
+  }
+  const accepted = all.filter((candidate) => candidate.verdict === "accepted");
+  const rejected = all.filter((candidate) => candidate.verdict === "rejected");
+  const takeAccepted = Math.min(accepted.length, Math.max(perSide, 2 * perSide - rejected.length));
+  const takeRejected = Math.min(rejected.length, 2 * perSide - takeAccepted);
+  const chosen = new Set([...accepted.slice(0, takeAccepted), ...rejected.slice(0, takeRejected)]);
+  return all.filter((candidate) => chosen.has(candidate));
 }
 
 /** Removes candidates created before the given time, and with them the page text they hold. */

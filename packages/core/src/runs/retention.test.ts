@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { getArticle, setArticleFlags } from "../db/articles.ts";
 import { getDigest, saveDigest } from "../db/digests.ts";
-import { getRun } from "../db/runs.ts";
+import { createCategory } from "../db/categories.ts";
+import { createRun, finishRun, getRun } from "../db/runs.ts";
 import { listSearchAttempts } from "../db/search-attempts.ts";
+import { createTestDb, fakeClock } from "../testing/db.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 import { dismissAttention, isAttentionDismissed } from "./attention.ts";
 import { purgeExpired } from "./retention.ts";
@@ -115,5 +117,58 @@ describe("purgeExpired", () => {
 
     expect(() => getDigest(h.db, old)).toThrow(expect.objectContaining({ code: "not_found" }));
     expect(getDigest(h.db, recent)).toMatchObject({ articles: [], sections: [{ lines: [{ text: "Line.", articleIds: [plain.id] }] }] });
+  });
+});
+
+describe("purgeExpired and the records of model calls", () => {
+  /** A run queued on 10 October with one model call, and a call on 9 October outside any run; the clock at noon on 9 November. */
+  function withCalls() {
+    const db = createTestDb();
+    const clock = fakeClock("2026-10-10T06:00:00.000Z");
+    const category = createCategory(db, { name: "C", slug: "c", kind: "news" }, clock);
+    const run = createRun(db, { categoryId: category.id, trigger: "manual", slot: null }, clock);
+    finishRun(db, run.id, {
+      status: "succeeded",
+      finishedAt: clock().toISOString(),
+      collected: 0,
+      rejected: 0,
+      articlesCreated: 0,
+      articlesUpdated: 0,
+      llmCalls: 1,
+      failures: [],
+    });
+    const insert = db.prepare(
+      "INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (?, 'write', 'smart', 1, 1, ?, 1, 1)",
+    );
+    insert.run(run.id, "2026-10-10T06:00:00.000Z");
+    insert.run(null, "2026-10-09T06:00:00.000Z");
+    clock.set("2026-11-09T12:00:00.000Z");
+    const calls = () => db.prepare("SELECT run_id, created_at FROM llm_calls ORDER BY created_at").all();
+    return { db, clock, run, calls };
+  }
+
+  it("keeps the calls of the budget period when it began more than thirty days ago", () => {
+    const { db, clock, calls } = withCalls();
+
+    purgeExpired(db, clock, { keepCallsSince: new Date("2026-10-10T00:00:00.000Z") });
+
+    expect(calls()).toEqual([{ run_id: null, created_at: "2026-10-10T06:00:00.000Z" }]);
+  });
+
+  it("removes the run after thirty days all the same, and its call stays as one outside any run", () => {
+    const { db, clock, run, calls } = withCalls();
+
+    purgeExpired(db, clock, { keepCallsSince: new Date("2026-10-10T00:00:00.000Z") });
+
+    expect(() => getRun(db, run.id)).toThrow(expect.objectContaining({ code: "not_found" }));
+    expect(calls()).toHaveLength(1);
+  });
+
+  it("removes the calls older than thirty days when no budget period is given", () => {
+    const { db, clock, calls } = withCalls();
+
+    purgeExpired(db, clock);
+
+    expect(calls()).toEqual([]);
   });
 });

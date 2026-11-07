@@ -103,6 +103,7 @@ import {
   updateTermGroup,
   subscribe,
   topicCreateSchema,
+  topicTrialRequestSchema,
   topicUpdateSchema,
   updateCategory,
   updateFeed,
@@ -130,6 +131,7 @@ import {
 } from "@smarternews/core";
 import { Hono, type Context } from "hono";
 import type { z } from "zod";
+import type { TopicTrials } from "./topic-trials.ts";
 import { serveWeb } from "./web.ts";
 
 export interface AppDeps {
@@ -148,6 +150,8 @@ export interface AppDeps {
   fullContent: FullContentWorker;
   /** Makes the digests; asked here to make one now. */
   digests: DigestWorker;
+  /** Tries the text of a topic before it is saved, one trial at a time, and keeps the results in memory. */
+  trials: TopicTrials;
   /** The relay of images: the key that signs their URLs, and what fetches and keeps them. */
   images: { key: Uint8Array; proxy: ImageProxy };
   tokens: { api: string; feed: string };
@@ -196,7 +200,7 @@ function idParam(c: Context, what: string, name = "id"): number {
 const RELAY_HEADERS = { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" };
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, digests, images } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, digests, trials, images } = deps;
   /** An article as it is answered: the images of a feed article's content load through the relay. */
   const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
   const app = new Hono();
@@ -309,6 +313,15 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   api.post("/topics/:id/interpret", (c) => c.json(requestInterpretation(db, idParam(c, "topic"))));
+  // Judges stored candidates again with a text that is not saved. Answers at once; the result is asked for below.
+  // Nothing is stored but the record of the model calls.
+  api.post("/topics/:id/trials", async (c) => {
+    const id = idParam(c, "topic");
+    const draft = parse(topicTrialRequestSchema, await jsonBody(c));
+    const started = trials.start(id, draft);
+    return c.json(started, started.status === "started" ? 202 : 200);
+  });
+  api.get("/topic-trials/:id", (c) => c.json(trials.get(c.req.param("id"))));
 
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
@@ -501,6 +514,7 @@ export function createApp(deps: AppDeps): Hono {
     };
     return c.json(status);
   });
+  api.get("/usage", (c) => c.json(runner.usageStatus()));
 
   app.route("/api/v1", api);
 

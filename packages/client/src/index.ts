@@ -3,6 +3,7 @@
 export * from "./annotations.ts";
 export * from "./attention.ts";
 export * from "./api.ts";
+export * from "./attachments.ts";
 export * from "./connect.ts";
 export * from "./events.ts";
 export * from "./feed-state.ts";

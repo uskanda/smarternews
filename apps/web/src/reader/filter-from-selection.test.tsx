@@ -12,6 +12,8 @@ const toolbar = () => screen.queryByRole("toolbar", { name: "選んだ文字列"
 const buttonsOf = (element: HTMLElement) => within(element).getAllByRole("button").map((button) => button.textContent);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 const MAKE = "隠すフィルターを作る…";
+/** Offered beside the filter wherever a category holds topics: see add-topic.test.tsx. */
+const TOPIC = "トピックを足す…";
 
 /** Selects the given occurrence of `text` among the characters under `root`, as a mouse would. */
 function selectText(root: Element, text: string, occurrence = 0) {
@@ -61,8 +63,8 @@ describe("making a hide filter from a selection", () => {
     await within(list).findByText("夏の特売");
 
     selectText(article.querySelector(".article-body")!, "特売");
-    const menu = await screen.findByRole("toolbar", { name: "選んだ文字列" });
-    expect(buttonsOf(menu)).toEqual(["ハイライト", "メモを書く", MAKE]);
+    await waitFor(() => expect(buttonsOf(toolbar()!)).toEqual(["ハイライト", "メモを書く", MAKE, TOPIC]));
+    const menu = toolbar()!;
     await user.click(within(menu).getByRole("button", { name: MAKE }));
 
     const dialog = await screen.findByRole("dialog", { name: "隠すフィルターを作る" });
@@ -136,10 +138,9 @@ describe("making a hide filter from a selection", () => {
     const article = await opened();
     await within(article).findByText("生成記事の本文です。");
     selectText(article.querySelector(".article-body")!, "本文");
-    expect(buttonsOf(await screen.findByRole("toolbar", { name: "選んだ文字列" }))).toEqual(["ハイライト", "メモを書く"]);
+    await waitFor(() => expect(buttonsOf(toolbar()!)).toEqual(["ハイライト", "メモを書く", TOPIC]));
     selectText(within(article).getByRole("heading", { level: 2 }), "電池");
-    await settle();
-    expect(toolbar()).toBeNull();
+    await waitFor(() => expect(buttonsOf(toolbar()!)).toEqual([TOPIC]));
   });
 
   it("is not offered for a translation, a summary, a long selection or one across paragraphs", async () => {
@@ -194,12 +195,12 @@ describe("the menu of a right click on the article", () => {
     expect(screen.queryByRole("menu")).toBeNull();
 
     selectText(article.querySelector(".article-body")!, "特売");
-    await screen.findByRole("toolbar", { name: "選んだ文字列" });
+    await waitFor(() => expect(buttonsOf(toolbar()!)).toContain(TOPIC));
     // Outside the article, a right click keeps the browser's menu even over a selection.
     expect(fireEvent.contextMenu(screen.getByRole("searchbox", { name: "記事を検索" }), { button: 2 })).toBe(true);
     expect(fireEvent.contextMenu(body, { button: 2, clientX: 40, clientY: 50 })).toBe(false);
     const menu = await screen.findByRole("menu", { name: "選んだ文字列の操作" });
-    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["ハイライト", "メモを書く", MAKE, "コピー"]);
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["ハイライト", "メモを書く", MAKE, TOPIC, "コピー"]);
     await user.click(within(menu).getByRole("menuitem", { name: MAKE }));
     expect(within(await screen.findByRole("dialog", { name: "隠すフィルターを作る" })).getByLabelText("条件1の値")).toHaveValue("特売");
   });

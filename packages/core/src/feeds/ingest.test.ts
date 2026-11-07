@@ -29,6 +29,8 @@ interface Item {
   published?: string | null;
   content?: string;
   author?: string;
+  /** XML put inside the item as it is, such as enclosures and Media RSS elements. */
+  extra?: string;
 }
 
 const esc = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -45,6 +47,7 @@ function rss(items: Item[], title = "Example Feed"): string {
         item.author ? `<author>${esc(item.author)}</author>` : "",
         `<description>${esc(item.content ?? `<p>Content of ${item.title}.</p>`)}</description>`,
         published === null ? "" : `<pubDate>${new Date(published).toUTCString()}</pubDate>`,
+        item.extra ?? "",
         "</item>",
       ].join("");
     })
@@ -322,6 +325,24 @@ describe("conditional requests", () => {
     expect(getFeed(s.db, feed.id)).toMatchObject({ lastSucceededAt: s.clock().toISOString(), lastError: null, articleCount: 1 });
   });
 
+  it("sends the condition for a JSON Feed too, and asks for JSON Feed in Accept", async () => {
+    const json = JSON.stringify({
+      version: "https://jsonfeed.org/version/1.1",
+      title: "Example JSON",
+      home_page_url: "https://example.org/",
+      items: [{ id: "a", url: "https://example.org/posts/a", title: "A", content_html: "<p>A.</p>", date_published: "2026-03-01T11:00:00Z" }],
+    });
+    const s = setup(() => new Response(json, { headers: { "content-type": "application/feed+json", etag: '"j1"' } }));
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(feed).toMatchObject({ title: "Example JSON", siteUrl: "https://example.org/", articleCount: 1 });
+    expect(s.requests[0]!.headers.accept).toContain("application/feed+json");
+    s.clock.advance(HOUR);
+    s.serve(() => new Response(null, { status: 304 }));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "not_modified", created: 0 });
+    expect(s.requests.at(-1)!.headers).toMatchObject({ "if-none-match": '"j1"' });
+  });
+
   it("sends no condition on the first request", async () => {
     const s = setup([{ title: "A" }]);
     await subscribe(s.deps, { url: FEED_URL });
@@ -347,6 +368,112 @@ describe("a fetch that fails", () => {
     const feed = await subscribe(s.deps, { url: FEED_URL });
     s.serve(() => html("<html>maintenance</html>"));
     expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed", error: expect.stringMatching(/not a feed/) });
+  });
+});
+
+describe("a fetch the site answers with a wait or with gone", () => {
+  const failing = (status: number, retryAfter?: string) => () =>
+    new Response("no", { status, headers: retryAfter === undefined ? {} : { "retry-after": retryAfter } });
+  /** The next fetch as the doubled interval alone sets it, after the given failures in a row (30 minutes each). */
+  const doubled = (s: ReturnType<typeof setup>, failures: number) => new Date(s.clock().getTime() + 30 * 60_000 * 2 ** failures).toISOString();
+
+  it("waits at least until the time Retry-After gives on 429, and records it as a failure", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    s.serve(failing(429, "7200"));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed", error: expect.stringMatching(/HTTP status 429/) });
+    expect(getFeed(s.db, feed.id)).toMatchObject({
+      nextFetchAt: new Date(s.clock().getTime() + 2 * HOUR).toISOString(),
+      failureCount: 1,
+      lastError: expect.stringMatching(/429/),
+      goneAt: null,
+    });
+  });
+
+  it("keeps the doubled interval when it is later than the time Retry-After gives", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve(failing(429, "60"));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).nextFetchAt).toBe(doubled(s, 1));
+  });
+
+  it("waits only the doubled interval on 429 without Retry-After", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve(failing(429));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).nextFetchAt).toBe(doubled(s, 1));
+  });
+
+  it("reads an HTTP date on 503, and waits one day at most", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve(failing(503, "Sun, 01 Mar 2026 18:00:00 GMT"));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).nextFetchAt).toBe("2026-03-01T18:00:00.000Z");
+
+    s.serve(failing(503, "Wed, 01 Apr 2026 00:00:00 GMT"));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).nextFetchAt).toBe(new Date(s.clock().getTime() + DAY).toISOString());
+  });
+
+  it("ignores Retry-After on any other failure", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve(failing(404, "7200"));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).nextFetchAt).toBe(doubled(s, 1));
+  });
+
+  it("forgets the time Retry-After gave once a later failure gives none", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve(failing(429, "36000"));
+    await fetchFeed(s.deps, feed.id);
+    s.serve(failing(500));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).nextFetchAt).toBe(doubled(s, 2));
+  });
+
+  it("records since when the feed answers 410, keeps that time while it goes on, and leaves the feed enabled", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    const first = s.clock().toISOString();
+    s.serve(failing(410));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed", error: expect.stringMatching(/HTTP status 410/) });
+    expect(getFeed(s.db, feed.id)).toMatchObject({ goneAt: first, failureCount: 1, lastError: expect.stringMatching(/410/), enabled: true });
+
+    s.clock.advance(2 * HOUR);
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ goneAt: first, failureCount: 2, enabled: true, nextFetchAt: doubled(s, 2) });
+  });
+
+  it("forgets the 410 after another failure, and both the 410 and Retry-After after a success", async () => {
+    const s = setup([{ title: "A" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve(failing(410));
+    await fetchFeed(s.deps, feed.id);
+    s.serve(failing(500));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).goneAt).toBeNull();
+
+    s.serve(failing(410));
+    await fetchFeed(s.deps, feed.id);
+    s.serve(failing(429, "36000"));
+    await fetchFeed(s.deps, feed.id);
+    s.serve([{ title: "A" }, { title: "B" }]);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 1 });
+    expect(getFeed(s.db, feed.id)).toMatchObject({ goneAt: null, failureCount: 0, lastError: null, nextFetchAt: doubled(s, 0) });
+  });
+
+  it("refuses a subscription the site answers with 410, in the words it always used", async () => {
+    const s = setup(failing(410));
+    await expect(subscribe(s.deps, { url: FEED_URL })).rejects.toThrow(/the feed could not be fetched: HTTP status 410/);
   });
 });
 
@@ -506,6 +633,103 @@ describe("translating titles when a feed is fetched", () => {
     await fetchFeed(s.deps, feed.id);
 
     expect(getArticle(s.db, id)).toMatchObject({ body: "New excerpt.", translation: { segments: [{ original: "Full text.", translated: "訳:Full text." }] } });
+  });
+
+  it("keeps the translations when only the attachments changed", async () => {
+    const s = translating();
+    const enclosure = (name: string) => `<enclosure url="https://cdn.example.org/${name}.mp3" type="audio/mpeg"/>`;
+    s.serve([{ title: "Title", key: "a", content: "<p>Same content.</p>", extra: enclosure("old") }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    await s.service.translateArticle(id);
+
+    s.serve([{ title: "Title", key: "a", content: "<p>Same content.</p>", extra: enclosure("new") }]);
+    await fetchFeed(s.deps, feed.id);
+
+    const article = getArticle(s.db, id);
+    expect(article.attachments.map((attachment) => attachment.url)).toEqual(["https://cdn.example.org/new.mp3"]);
+    expect(article).toMatchObject({ translatedTitle: "訳:Title", translation: { segments: [{ translated: "訳:Same content." }] } });
+  });
+
+  it("drops the translation of an empty body once the media description fills it", async () => {
+    const s = translating();
+    s.serve([{ title: "Video", key: "v", content: "" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    // An empty body has nothing to translate; a stored translation stands for one made before the fetch.
+    s.db.prepare("INSERT INTO article_translations (article_id, segments, method, created_at) VALUES (?, '[]', 'google', ?)").run(id, START);
+
+    s.serve([{ title: "Video", key: "v", content: "", extra: "<media:group><media:description>What the video shows.</media:description></media:group>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id).body).toBe("What the video shows.");
+    expect(s.db.prepare("SELECT count(*) AS n FROM article_translations").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("attachments and media descriptions", () => {
+  const PAGE_OF_ITEM = "https://example.org/posts/ep";
+  const media = `<enclosure url="https://cdn.example.org/ep.mp3" type="audio/mpeg" length="2048"/>
+    <media:thumbnail url="/thumbs/ep.jpg"/>
+    <media:description>Line one
+https://example.com/x</media:description>`;
+
+  it("stores the attachments of a new article, and makes its body of the media description when it has no content", async () => {
+    const s = setup([{ title: "Episode", key: "ep", link: PAGE_OF_ITEM, content: "", extra: media }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    const article = getArticle(s.db, s.list()[0]!.id);
+    expect(article.body).toBe("Line one\\\n[https://example.com/x](https://example.com/x)");
+    expect(article.attachments).toEqual([
+      { url: "https://cdn.example.org/ep.mp3", kind: "audio", mimeType: "audio/mpeg", size: 2048, title: null, thumbnailOf: null, imageUrl: null },
+      { url: "https://example.org/thumbs/ep.jpg", kind: "image", mimeType: null, size: null, title: null, thumbnailOf: PAGE_OF_ITEM, imageUrl: null },
+    ]);
+  });
+
+  it("keeps the content and leaves the description out when the item has content", async () => {
+    const s = setup([{ title: "Episode", key: "ep", link: PAGE_OF_ITEM, content: "<p>Show notes.</p>", extra: media }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(getArticle(s.db, s.list()[0]!.id).body).toBe("Show notes.");
+  });
+
+  it("rewrites an empty article stored before with the description, and judges it again", async () => {
+    const s = setup([{ title: "Episode", key: "ep", content: "" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(getArticle(s.db, s.list()[0]!.id).attachments).toEqual([]);
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["content"], match: "contains", value: "sponsored" }] }, s.clock);
+    expect(s.list()).toHaveLength(1);
+
+    s.serve([{ title: "Episode", key: "ep", content: "", extra: "<media:description>This episode is sponsored.</media:description>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(s.list()).toEqual([]);
+    expect(s.db.prepare("SELECT body FROM articles").get()).toEqual({ body: "This episode is sponsored." });
+  });
+
+  it("writes only the attachments when nothing else changed, and does not judge the article again", async () => {
+    const s = setup([{ title: "Episode", key: "ep", content: "<p>Notes.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const id = s.list()[0]!.id;
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["content"], match: "contains", value: "Notes" }] }, s.clock);
+    // What the filter found is cleared by hand: judging the article again would find it once more.
+    s.db.prepare("DELETE FROM filter_matches").run();
+
+    s.serve([{ title: "Episode", key: "ep", content: "<p>Notes.</p>", extra: '<enclosure url="https://cdn.example.org/ep.mp3" type="audio/mpeg"/>' }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id).attachments.map((attachment) => attachment.url)).toEqual(["https://cdn.example.org/ep.mp3"]);
+    expect(s.db.prepare("SELECT count(*) AS n FROM filter_matches").get()).toEqual({ n: 0 });
+
+    s.serve([{ title: "Episode", key: "ep", content: "<p>Notes.</p>" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(getArticle(s.db, id).attachments).toEqual([]);
+  });
+
+  it("gives no attachments for an article whose stored list cannot be read", async () => {
+    const s = setup([{ title: "Episode", key: "ep" }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    const id = s.list()[0]!.id;
+    s.db.prepare("UPDATE articles SET attachments = 'not json' WHERE id = ?").run(id);
+    expect(getArticle(s.db, id).attachments).toEqual([]);
   });
 });
 
@@ -845,11 +1069,12 @@ describe("a web feed", () => {
     const db = createTestDb();
     const clock = fakeClock(START);
     let body = initial;
+    let answer: (() => Response) | null = null;
     let robots: string | null = null;
     const fake = fakeFetch(
       {
         [ROBOTS]: () => (robots === null ? new Response("", { status: 404 }) : new Response(robots, { status: 200 })),
-        [PAGE]: () => html(body),
+        [PAGE]: () => (answer === null ? html(body) : answer()),
       },
       clock,
     );
@@ -864,6 +1089,11 @@ describe("a web feed", () => {
       llmCalls: () => Object.values(llm.requests).flat().length + Number(db.prepare("SELECT count(*) AS n FROM llm_calls").get()!.n),
       serve(next: string) {
         body = next;
+        answer = null;
+      },
+      /** Answers the page with this instead of the body. */
+      respond(next: () => Response) {
+        answer = next;
       },
       forbid(rules: string) {
         robots = rules;
@@ -946,6 +1176,24 @@ describe("a web feed", () => {
     expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 1 });
     expect(getFeed(s.db, feed.id)).toMatchObject({ lastError: null, failureCount: 0, lastSucceededAt: s.clock().toISOString() });
     expect(s.list().map((article) => article.title)).toEqual(["Post 9", "Post 1"]);
+  });
+
+  it("waits until the time Retry-After gives on 429, and records 410 apart, as a feed does", async () => {
+    const s = pageSetup(page([post(1)]));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    s.clock.advance(HOUR);
+    s.respond(() => new Response("slow down", { status: 429, headers: { "retry-after": "10800" } }));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed", error: `HTTP status 429: ${PAGE}` });
+    expect(getFeed(s.db, feed.id)).toMatchObject({ nextFetchAt: new Date(s.clock().getTime() + 3 * HOUR).toISOString(), goneAt: null });
+
+    s.respond(() => new Response("gone", { status: 410 }));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ goneAt: s.clock().toISOString(), failureCount: 2, enabled: true });
+
+    s.serve(page([post(2), post(1)]));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ goneAt: null, failureCount: 0 });
   });
 
   it("sends no conditional request", async () => {

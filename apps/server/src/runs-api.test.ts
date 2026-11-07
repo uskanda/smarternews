@@ -122,6 +122,52 @@ describe("runs", () => {
     );
   });
 
+  describe("what they say about the model calls", () => {
+    /** A run recorded without starting it, with the given calls: task, cost, and whether its provider costs money. */
+    function runWithCalls(s: ReturnType<typeof testServer>, calls: Array<[task: string, cost: number | null, billable: 0 | 1]>) {
+      const run = createRun(s.db, { categoryId: s.category().id, trigger: "manual", slot: null }, s.clock);
+      const insert = s.db.prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (?, ?, 'p', 1, 1, ?, ?, ?)");
+      for (const [task, cost, billable] of calls) insert.run(run.id, task, s.clock().toISOString(), cost, billable);
+      return run.id;
+    }
+
+    it("give the money of a run, the calls whose cost is unknown, and the calls and money by task", async () => {
+      const s = testServer();
+      const id = runWithCalls(s, [
+        ["judge", 0.04, 1],
+        ["judge", 0.06, 1],
+        ["judge", null, 1],
+        ["write", 0.3, 1],
+      ]);
+
+      const run = await (await s.get(`/api/v1/runs/${id}`)).json();
+
+      expect(run.costUsd).toBeCloseTo(0.4, 8);
+      expect(run.unknownCostCalls).toBe(1);
+      expect(Object.keys(run.callsByTask).sort()).toEqual(["judge", "write"]);
+      expect(run.callsByTask.judge.calls).toBe(3);
+      expect(run.callsByTask.judge.costUsd).toBeCloseTo(0.1, 8);
+      expect(run.callsByTask.write).toEqual({ calls: 1, costUsd: 0.3 });
+      expect((await (await s.get("/api/v1/runs")).json())[0]).toMatchObject({ id, unknownCostCalls: 1, callsByTask: { write: { calls: 1, costUsd: 0.3 } } });
+    });
+
+    it("give no money for a run that called only providers that cost nothing, and count its calls all the same", async () => {
+      const s = testServer();
+      const free = runWithCalls(s, [
+        ["judge", null, 0],
+        ["write", null, 0],
+      ]);
+      const none = runWithCalls(s, []);
+
+      expect(await (await s.get(`/api/v1/runs/${free}`)).json()).toMatchObject({
+        costUsd: null,
+        unknownCostCalls: 0,
+        callsByTask: { judge: { calls: 1, costUsd: null }, write: { calls: 1, costUsd: null } },
+      });
+      expect((await (await s.get("/api/v1/runs")).json())[0]).toMatchObject({ id: none, costUsd: null, unknownCostCalls: 0, callsByTask: {} });
+    });
+  });
+
   it("answers 404 for a run or category that does not exist", async () => {
     const s = testServer();
     expect((await s.get("/api/v1/runs/55")).status).toBe(404);

@@ -68,6 +68,11 @@ export interface InterpretInput {
   topicText: string;
   kind: Kind;
   search: SearchLocale;
+  /**
+   * The titles of articles made for the topic that the reader marked as misses, newest first. Empty, or left out,
+   * when there are none.
+   */
+  misses?: string[];
 }
 
 const interpretOutput = z.object({
@@ -79,20 +84,33 @@ export type InterpretOutput = z.infer<typeof interpretOutput>;
 
 const interpret: TaskDefinition<InterpretInput, InterpretOutput> = {
   output: interpretOutput,
-  build: (input) => ({
-    system: SYSTEM,
-    prompt: [
-      "Task: turn a topic that a reader wants to follow into search queries and a relevance test.",
-      `Category kind: ${input.kind} (${input.kind === "event" ? "upcoming events with a date and place" : "recent news"})`,
-      `Search language: ${input.search.language}. Search region: ${input.search.region}.`,
-      `Topic, as the reader wrote it:\n<topic>\n${input.topicText}\n</topic>`,
-      "Produce:",
-      "- queries: one to four short keyword queries for a news search engine, written in the search language. No search operators.",
-      "- criteria: two to four English sentences that say what counts as relevant to this topic and what to leave out.",
-      "- suggestedSources.newsSearch: true when news outlets cover this topic.",
-      "- suggestedSources.llmSearch: true when the topic needs a general web search, for example local events or pages that news outlets do not report.",
-    ].join("\n"),
-  }),
+  build: (input) => {
+    const misses = input.misses ?? [];
+    return {
+      system: SYSTEM,
+      prompt: [
+        "Task: turn a topic that a reader wants to follow into search queries and a relevance test.",
+        `Category kind: ${input.kind} (${input.kind === "event" ? "upcoming events with a date and place" : "recent news"})`,
+        `Search language: ${input.search.language}. Search region: ${input.search.region}.`,
+        `Topic, as the reader wrote it:\n<topic>\n${input.topicText}\n</topic>`,
+        ...(misses.length > 0
+          ? [
+              `Titles of articles made for this topic that the reader marked as not wanted, newest first:\n${material(misses.map((title) => `- ${title}`).join("\n"))}`,
+            ]
+          : []),
+        "Produce:",
+        "- queries: one to four short keyword queries for a news search engine, written in the search language. No search operators.",
+        "- criteria: two to four English sentences that say what counts as relevant to this topic and what to leave out.",
+        ...(misses.length > 0
+          ? [
+              "- In criteria, also say what to exclude so that articles like the ones the reader did not want are left out. Describe the kind of article, not the titles themselves.",
+            ]
+          : []),
+        "- suggestedSources.newsSearch: true when news outlets cover this topic.",
+        "- suggestedSources.llmSearch: true when the topic needs a general web search, for example local events or pages that news outlets do not report.",
+      ].join("\n"),
+    };
+  },
 };
 
 // ---- search ------------------------------------------------------------------------------------

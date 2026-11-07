@@ -3,7 +3,11 @@
 import { parse as parseCssSelector } from "css-what";
 import { z } from "zod";
 
+import { FIELD_ERROR_CODES, FIELD_ERROR_UNITS } from "./errors.ts";
 import { MAX_MENTION_NAME_CHARS, mentionKey, mentionSchema } from "./mentions.ts";
+
+// The kinds of refusal of a field, which the apps word in their own language.
+export { FIELD_ERROR_CODES, FIELD_ERROR_UNITS, type FieldErrorCode, type FieldErrorUnit } from "./errors.ts";
 import { charCount } from "./search/text.ts";
 
 // Normalizing and matching search terms: the apps mark matches as the server finds them.
@@ -21,9 +25,36 @@ const slugSchema = z
   .max(64);
 const languageSchema = z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "must be a language tag such as en or ja");
 const regionSchema = z.string().regex(/^[A-Z]{2}$/, "must be a two-letter region such as US or JP");
-const importanceSchema = z.number().int().min(1).max(5);
+
+// The bounds of the values the screens edit. The schemas and the screens both take them from here, so that a
+// screen can say the range and check it before it sends.
+export const IMPORTANCE_MIN = 1;
+export const IMPORTANCE_MAX = 5;
+export const FEED_INTERVAL_MINUTES_MIN = 5;
+export const FEED_INTERVAL_MINUTES_MAX = 1440;
+export const STALE_FEED_DAYS_MAX = 365;
+export const READER_INFO_MAX_CHARS = 4000;
+/** The most times of day in a category's schedule, and in the schedule of digests. */
+export const SCHEDULE_MAX_TIMES = 24;
+export const CATEGORY_NAME_MAX_CHARS = 100;
+export const MAX_ARTICLES_PER_RUN = 50;
+export const WINDOW_HOURS_MAX = 720;
+export const WINDOW_DAYS_MAX = 90;
+export const TOPIC_TEXT_MAX_CHARS = 2000;
+export const TOPIC_FEEDS_MAX = 50;
+export const TOPIC_QUERY_MAX_CHARS = 200;
+export const TOPIC_QUERIES_MAX = 8;
+export const TERM_GROUP_NAME_MAX_CHARS = 100;
+export const HIGHLIGHT_TERM_MAX_CHARS = 100;
+export const FEED_TITLE_MAX_CHARS = 200;
+
+const importanceSchema = z.number().int().min(IMPORTANCE_MIN).max(IMPORTANCE_MAX);
 /** How often a subscribed feed is fetched, in minutes: five minutes to one day. */
-const intervalMinutesSchema = z.number().int().min(5, "must be between 5 and 1440 minutes").max(1440, "must be between 5 and 1440 minutes");
+const intervalMinutesSchema = z
+  .number()
+  .int()
+  .min(FEED_INTERVAL_MINUTES_MIN, "must be between 5 and 1440 minutes")
+  .max(FEED_INTERVAL_MINUTES_MAX, "must be between 5 and 1440 minutes");
 
 export const searchLocaleSchema = z.object({ language: languageSchema, region: regionSchema });
 export type SearchLocale = z.infer<typeof searchLocaleSchema>;
@@ -31,7 +62,7 @@ export type SearchLocale = z.infer<typeof searchLocaleSchema>;
 // ---- settings ----------------------------------------------------------------------------------
 
 export const settingsSchema = z.object({
-  readerInfo: z.string().max(4000),
+  readerInfo: z.string().max(READER_INFO_MAX_CHARS),
   outputLanguage: languageSchema,
   timeZone: z.string().min(1),
   search: searchLocaleSchema,
@@ -45,9 +76,13 @@ export const settingsSchema = z.object({
    */
   removeDuplicates: z.boolean(),
   /** After how many days without a new item an enabled feed counts as stale. */
-  staleFeedDays: z.number().int("must be a whole number of days").min(1, "must be between 1 and 365 days").max(365, "must be between 1 and 365 days"),
+  staleFeedDays: z
+    .number()
+    .int("must be a whole number of days")
+    .min(1, "must be between 1 and 365 days")
+    .max(STALE_FEED_DAYS_MAX, "must be between 1 and 365 days"),
   /** The times of day, in `timeZone`, at which a digest is made. Empty: digests are made by hand only. */
-  digestSchedule: z.array(timeOfDaySchema).max(24),
+  digestSchedule: z.array(timeOfDaySchema).max(SCHEDULE_MAX_TIMES),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -72,12 +107,12 @@ export const categorySchema = z.object({
 export type Category = z.infer<typeof categorySchema>;
 
 const categoryFields = {
-  name: z.string().trim().min(1).max(100),
-  schedule: z.array(timeOfDaySchema).max(24),
+  name: z.string().trim().min(1).max(CATEGORY_NAME_MAX_CHARS),
+  schedule: z.array(timeOfDaySchema).max(SCHEDULE_MAX_TIMES),
   minImportance: importanceSchema,
-  maxArticlesPerRun: z.number().int().min(1).max(50),
-  windowHours: z.number().int().min(1).max(720),
-  windowDays: z.number().int().min(1).max(90),
+  maxArticlesPerRun: z.number().int().min(1).max(MAX_ARTICLES_PER_RUN),
+  windowHours: z.number().int().min(1).max(WINDOW_HOURS_MAX),
+  windowDays: z.number().int().min(1).max(WINDOW_DAYS_MAX),
   enabled: z.boolean(),
 };
 
@@ -101,13 +136,13 @@ export type CategoryUpdate = z.infer<typeof categoryUpdateSchema>;
 // ---- topics ------------------------------------------------------------------------------------
 
 export const topicSourcesSchema = z.object({
-  feeds: z.array(z.url({ protocol: /^https?$/ })).max(50),
+  feeds: z.array(z.url({ protocol: /^https?$/ })).max(TOPIC_FEEDS_MAX),
   newsSearch: z.boolean(),
   llmSearch: z.boolean(),
 });
 export type TopicSources = z.infer<typeof topicSourcesSchema>;
 
-const queriesSchema = z.array(z.string().trim().min(1).max(200)).max(8);
+const queriesSchema = z.array(z.string().trim().min(1).max(TOPIC_QUERY_MAX_CHARS)).max(TOPIC_QUERIES_MAX);
 
 export const topicSchema = z.object({
   id: z.number().int(),
@@ -121,10 +156,15 @@ export const topicSchema = z.object({
   sourcesSetByUser: z.boolean(),
   search: searchLocaleSchema.nullable(),
   createdAt: z.string(),
+  /**
+   * How many misses of the topic's articles were marked after its last interpretation, which the next
+   * interpretation reads. Every miss counts for a topic interpreted before the time of interpretation was kept.
+   */
+  missesSinceInterpretation: z.number().int(),
 });
 export type Topic = z.infer<typeof topicSchema>;
 
-const topicText = z.string().trim().min(1).max(2000);
+const topicText = z.string().trim().min(1).max(TOPIC_TEXT_MAX_CHARS);
 
 export const topicCreateSchema = z.object({
   text: topicText,
@@ -144,6 +184,64 @@ export const topicUpdateSchema = z.object({
 });
 export type TopicUpdate = z.infer<typeof topicUpdateSchema>;
 
+/** A text to try on a topic before it is saved, with the search locale being edited. Null or left out: the settings'. */
+export const topicTrialRequestSchema = z.object({
+  text: topicText,
+  search: searchLocaleSchema.nullable().optional(),
+});
+export type TopicTrialRequest = z.infer<typeof topicTrialRequestSchema>;
+
+/** The answer to a request for a trial: started, or refused because a limit leaves too few calls. */
+export const topicTrialStartSchema = z.object({
+  status: z.enum(["started", "limit", "day", "budget"]),
+  /** The trial to ask about. Null when it did not start. */
+  id: z.string().nullable(),
+});
+export type TopicTrialStart = z.infer<typeof topicTrialStartSchema>;
+
+const trialVerdictSchema = z.enum(["accepted", "rejected"]);
+
+/** A candidate whose verdict the trial turned around. */
+export const topicTrialChangeSchema = z.object({
+  candidateId: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  siteName: z.string(),
+  publishedAt: z.string().nullable(),
+  before: z.object({
+    verdict: trialVerdictSchema,
+    /** The reason stored with the candidate. */
+    reason: z.string(),
+    /** True when the program gave that reason after the judge accepted it: the judge's own reason is gone. */
+    byProgram: z.boolean(),
+  }),
+  after: z.object({ verdict: trialVerdictSchema, reason: z.string(), importance: z.number().int() }),
+  /** True when the trial accepts it with an importance below the category minimum, so no article would show it. */
+  belowMinimum: z.boolean(),
+});
+export type TopicTrialChange = z.infer<typeof topicTrialChangeSchema>;
+
+export const topicTrialResultSchema = z.object({
+  queries: z.array(z.string()),
+  criteria: z.string(),
+  minImportance: z.number().int(),
+  /** The candidates judged again. */
+  tried: z.number().int(),
+  changes: z.array(topicTrialChangeSchema),
+});
+export type TopicTrialResult = z.infer<typeof topicTrialResultSchema>;
+
+export const topicTrialSchema = z.object({
+  id: z.string(),
+  topicId: z.number().int(),
+  status: z.enum(["running", "succeeded", "failed", "stopped_by_limit"]),
+  /** The allowance a trial stopped by limit ran into. */
+  stoppedBy: z.enum(["run", "day", "budget"]).nullable(),
+  result: topicTrialResultSchema.nullable(),
+  error: z.string().nullable(),
+});
+export type TopicTrial = z.infer<typeof topicTrialSchema>;
+
 // ---- articles ----------------------------------------------------------------------------------
 
 export const articleRefSchema = z.object({
@@ -151,6 +249,10 @@ export const articleRefSchema = z.object({
   siteName: z.string(),
   title: z.string(),
   publishedAt: z.string().nullable(),
+  /** Why the judgement chose this source, as the model wrote it. Null for feed articles and for older sources. */
+  reason: z.string().nullable(),
+  /** The importance the judgement gave this source. Null where no judgement was kept. */
+  importance: z.number().int().nullable(),
 });
 export type ArticleRef = z.infer<typeof articleRefSchema>;
 
@@ -303,7 +405,7 @@ export const highlightCreateSchema = z.object({
   quote: z
     .string()
     .max(MAX_ANNOTATION_CHARS, `is too long: at most ${MAX_ANNOTATION_CHARS} characters`)
-    .refine((quote) => quote.trim().length > 0, EMPTY),
+    .refine((quote) => quote.trim().length > 0, { message: EMPTY, params: { code: "required" } }),
   prefix: z.string().max(ANCHOR_CONTEXT_CHARS),
   suffix: z.string().max(ANCHOR_CONTEXT_CHARS),
   position: z.number().int().min(0),
@@ -389,6 +491,25 @@ export const articleSummarySchema = z.object({
 });
 export type ArticleSummary = z.infer<typeof articleSummarySchema>;
 
+export const attachmentKindSchema = z.enum(["image", "audio", "video", "other"]);
+export type AttachmentKind = z.infer<typeof attachmentKindSchema>;
+
+/** A file the feed attached to a feed article: an RSS enclosure, a Media RSS content or thumbnail. */
+export const articleAttachmentSchema = z.object({
+  /** The original address. A screen links to it and never loads it. */
+  url: z.string(),
+  kind: attachmentKindSchema,
+  mimeType: z.string().nullable(),
+  /** In bytes, as the feed said. Null when it said nothing usable. */
+  size: z.number().int().nullable(),
+  title: z.string().nullable(),
+  /** For the thumbnail of what the article's page shows, such as a video: that page. Null otherwise. */
+  thumbnailOf: z.string().nullable(),
+  /** The address a screen loads an image from: the image relay. Null for what is not an image. */
+  imageUrl: z.string().nullable(),
+});
+export type ArticleAttachment = z.infer<typeof articleAttachmentSchema>;
+
 export const articleSchema = articleSummarySchema.extend({
   body: z.string(),
   bodyHtml: z.string(),
@@ -430,6 +551,13 @@ export const articleSchema = articleSummarySchema.extend({
    * stored. Empty for an article without them, such as one stored before names were kept.
    */
   mentions: z.array(mentionSchema),
+  /**
+   * The files the feed attached to a feed article, in the order it listed them. Kept apart from the body:
+   * highlights, translations, search and filters never see them. Empty for a generated article.
+   */
+  attachments: z.array(articleAttachmentSchema),
+  /** True when the reader marked the generated article as a miss. Always false for a feed article. */
+  missed: z.boolean(),
 });
 export type Article = z.infer<typeof articleSchema>;
 
@@ -523,9 +651,9 @@ export type ArticleSearchResult = z.infer<typeof articleSearchResultSchema>;
  */
 export const mentionArticlesQuerySchema = z.object({
   name: z.string().superRefine((name, context) => {
-    if (name.trim().length === 0) context.addIssue({ code: "custom", message: "is empty" });
+    if (name.trim().length === 0) context.addIssue({ code: "custom", message: "is empty", params: { code: "required" } });
     else if (charCount(mentionKey(name)) > MAX_MENTION_NAME_CHARS) {
-      context.addIssue({ code: "custom", message: `is too long: at most ${MAX_MENTION_NAME_CHARS} characters` });
+      context.addIssue({ code: "custom", message: `is too long: at most ${MAX_MENTION_NAME_CHARS} characters`, params: { code: "too_big" } });
     }
   }),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -533,7 +661,16 @@ export const mentionArticlesQuerySchema = z.object({
 });
 export type MentionArticlesQuery = z.infer<typeof mentionArticlesQuerySchema>;
 
-export const articleUpdateSchema = z.object({ isRead: z.boolean().optional(), starred: z.boolean().optional() });
+export const articleUpdateSchema = z.object({
+  isRead: z.boolean().optional(),
+  starred: z.boolean().optional(),
+  /**
+   * Marks a generated article as a miss, which also marks it read, or takes the mark away, which leaves whether it
+   * is read as it is. `isRead` in the same request wins, so that an undo puts back how it was. Refused for a feed
+   * article.
+   */
+  missed: z.boolean().optional(),
+});
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
 
 export const markReadSchema = z.object({
@@ -638,7 +775,7 @@ export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 // ---- subscribed feeds --------------------------------------------------------------------------
 
 const feedUrlSchema = z.url({ protocol: /^https?$/ }).max(2000);
-const feedTitleSchema = z.string().trim().min(1).max(200);
+const feedTitleSchema = z.string().trim().min(1).max(FEED_TITLE_MAX_CHARS);
 
 /** The longest value one selector of a web feed holds. */
 export const MAX_SELECTOR_CHARS = 300;
@@ -658,7 +795,7 @@ const cssSelectorSchema = z
   .trim()
   .min(1)
   .max(MAX_SELECTOR_CHARS)
-  .refine((value) => isCssSelector(value), { message: "not a CSS selector" });
+  .refine((value) => isCssSelector(value), { message: "not a CSS selector", params: { code: "format" } });
 
 /**
  * How a web feed takes its articles out of its page: `item` finds the elements that repeat once an article;
@@ -700,7 +837,12 @@ export const feedSchema = z.object({
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
   failureCount: z.number().int(),
-  /** When the feed is fetched next. Null while it is disabled. */
+  /**
+   * When the first of the 410 answers in a row came: the site says the feed is gone for good. Null after any
+   * other answer. The feed stays enabled.
+   */
+  goneAt: z.string().nullable(),
+  /** When the feed is fetched next, no earlier than a Retry-After of the last failure asked. Null while it is disabled. */
   nextFetchAt: z.string().nullable(),
   articleCount: z.number().int(),
   starredCount: z.number().int(),
@@ -756,10 +898,10 @@ export const feedCreateSchema = feedFields
   .extend({ format: feedFormatSchema.optional(), selectors: pageSelectorsSchema.optional() })
   .superRefine((input, context) => {
     if (input.format === "page" && input.selectors === undefined) {
-      context.addIssue({ code: "custom", path: ["selectors"], message: "a web feed needs selectors" });
+      context.addIssue({ code: "custom", path: ["selectors"], message: "a web feed needs selectors", params: { code: "required" } });
     }
     if (input.format !== "page" && input.selectors !== undefined) {
-      context.addIssue({ code: "custom", path: ["selectors"], message: "only a web feed has selectors" });
+      context.addIssue({ code: "custom", path: ["selectors"], message: "only a web feed has selectors", params: { code: "not_allowed" } });
     }
   });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
@@ -886,14 +1028,14 @@ const filterFields = {
 
 export const filterCreateSchema = z
   .object({ ...filterFields, enabled: filterFields.enabled.optional() })
-  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type FilterCreate = z.infer<typeof filterCreateSchema>;
 
 /** A change to a filter. A keep filter over everything is refused once the change is applied. */
 export const filterUpdateSchema = z
   .object(filterFields)
   .partial()
-  .refine((filter) => !(filter.action === "keep" && filter.scope?.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope?.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type FilterUpdate = z.infer<typeof filterUpdateSchema>;
 
 /** A changed filter, and how many feed articles came back to the lists with the change. */
@@ -906,7 +1048,7 @@ export type FilterDeleteResult = z.infer<typeof filterDeleteResultSchema>;
 /** A filter to try without saving it. With `id`, the stored filter of that id is left out of the count. */
 export const filterPreviewSchema = z
   .object({ ...filterFields, enabled: filterFields.enabled.optional(), id: z.number().int().optional() })
-  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope.type === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type FilterPreview = z.infer<typeof filterPreviewSchema>;
 
 export const filterPreviewResultSchema = z.object({ hiddenCount: z.number().int() });
@@ -926,8 +1068,8 @@ export const termColorSchema = z.enum(["green", "purple", "pink", "orange"]);
 export type TermColor = z.infer<typeof termColorSchema>;
 export const TERM_COLORS = termColorSchema.options;
 
-const termGroupNameSchema = z.string().trim().min(1, "a name is required").max(100);
-const highlightTermTextSchema = z.string().trim().min(1, "a term is required").max(100);
+const termGroupNameSchema = z.string().trim().min(1, "a name is required").max(TERM_GROUP_NAME_MAX_CHARS);
+const highlightTermTextSchema = z.string().trim().min(1, "a term is required").max(HIGHLIGHT_TERM_MAX_CHARS);
 
 /** A word marked in lists and article texts wherever it occurs, as stop words were matched. */
 export const highlightTermSchema = z.object({ id: z.number().int(), text: z.string() });
@@ -976,6 +1118,16 @@ export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
 export const stopLimitSchema = z.enum(["run", "day", "budget"]);
 export type StopLimit = z.infer<typeof stopLimitSchema>;
 
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
+export type TaskName = z.infer<typeof taskNameSchema>;
+
+/**
+ * Model calls and what they cost. `calls` counts every call, those to providers that cost nothing included; `costUsd`
+ * adds up the known costs of the calls to providers that cost money, and is null when none of the calls was one.
+ */
+export const taskCallsSchema = z.object({ calls: z.number().int(), costUsd: z.number().nullable() });
+export type TaskCalls = z.infer<typeof taskCallsSchema>;
+
 export const runSchema = z.object({
   id: z.number().int(),
   categoryId: z.number().int(),
@@ -1000,6 +1152,15 @@ export const runSchema = z.object({
   retrySkipped: retrySkippedSchema.nullable(),
   /** The allowance a run stopped by limit ran into. Null for every other run, and for runs stopped before it was kept. */
   stoppedBy: stopLimitSchema.nullable(),
+  /**
+   * US dollars the run's calls to providers that cost money used, as far as it is known. Null for a run that made no
+   * such call.
+   */
+  costUsd: z.number().nullable(),
+  /** The run's calls to providers that cost money whose cost is not known; `costUsd` leaves them out. */
+  unknownCostCalls: z.number().int(),
+  /** The run's model calls and their money, by task. Only the tasks the run called are present. */
+  callsByTask: z.partialRecord(taskNameSchema, taskCallsSchema),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -1067,9 +1228,6 @@ export type AttentionDismissal = z.infer<typeof attentionDismissalSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
-export type TaskName = z.infer<typeof taskNameSchema>;
-
 /** What the providers that cost money used in the current budget period, in US dollars. */
 export const budgetStatusSchema = z.object({
   /** The first and the last day of the period, as YYYY-MM-DD. Periods start at midnight UTC. */
@@ -1112,6 +1270,48 @@ export const providerStatusSchema = z.object({
   budget: budgetStatusSchema,
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
+
+/** Calls, money and calls of unknown cost. Money counts as the budget does; calls count every call. */
+const usageAmountsSchema = z.object({
+  calls: z.number().int(),
+  costUsd: z.number(),
+  unknownCostCalls: z.number().int(),
+});
+
+/** The model calls of the current budget period, from its first day to now, split several ways. */
+export const usageSchema = z.object({
+  /** The first and the last day of the period, as YYYY-MM-DD. Periods start at midnight UTC. */
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  /** The share of the period that has passed, from 0 to 1. */
+  elapsedRatio: z.number(),
+  /** False when no provider costs money: then every amount is 0 and the calls tell the usage. */
+  billable: z.boolean(),
+  monthlyBudgetUsd: z.number(),
+  /** The same total as the budget's. */
+  spentUsd: z.number(),
+  unknownCostCalls: z.number().int(),
+  /** Every category, in the order of the list, with the calls of its runs and the generated articles made in the period. */
+  byCategory: z.array(
+    usageAmountsSchema.extend({
+      categoryId: z.number().int(),
+      name: z.string(),
+      /** Generated articles of the category made in the period. */
+      articlesCreated: z.number().int(),
+      /** Those of them the reader has opened. */
+      articlesOpened: z.number().int(),
+      /** `costUsd` divided by `articlesOpened`. Null when no article was opened. */
+      costPerOpenedUsd: z.number().nullable(),
+    }),
+  ),
+  /** The calls that belong to no run: summaries, translations, proposals, digests, and calls whose run was deleted. */
+  outsideRuns: usageAmountsSchema,
+  /** Every UTC day from the first day of the period to today, days without calls included. */
+  byDay: z.array(z.object({ day: z.string(), calls: z.number().int(), costUsd: z.number() })),
+  /** The money at the end of the period if it goes on at its average pace so far. */
+  projection: z.object({ projectedUsd: z.number(), exceedsBudget: z.boolean() }),
+});
+export type Usage = z.infer<typeof usageSchema>;
 
 // ---- digests -----------------------------------------------------------------------------------
 
@@ -1237,7 +1437,7 @@ const settingsFileFilterSchema = z
     enabled: z.boolean().optional(),
     conditions: filterFields.conditions,
   })
-  .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"] });
+  .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
 
 /** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
@@ -1311,7 +1511,20 @@ export const apiErrorSchema = z.object({
   error: z.object({
     code: z.enum(["unauthorized", "invalid_input", "not_found", "conflict", "unavailable", "internal"]),
     message: z.string(),
-    fields: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
+    fields: z
+      .array(
+        z.object({
+          path: z.string(),
+          /** In English, for the CLI and the logs. The apps word the refusal from `code` and the bounds. */
+          message: z.string(),
+          code: z.enum(FIELD_ERROR_CODES).optional(),
+          /** The bound of `too_small` and `too_big`, and what it counts. */
+          minimum: z.number().optional(),
+          maximum: z.number().optional(),
+          unit: z.enum(FIELD_ERROR_UNITS).optional(),
+        }),
+      )
+      .optional(),
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;

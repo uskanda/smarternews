@@ -168,13 +168,16 @@ export function useArticle(id: number | null) {
 }
 
 /** Applies a change to one article wherever it is cached: in every list and in its own entry. */
-function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSummary>): void {
+/** Changes an article in every list and in its own entry. A miss is only on the article: the lists do not show it. */
+function patchArticle(client: QueryClient, id: number, { missed, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed">>): void {
   client.setQueriesData<InfiniteData<ArticleList>>({ queryKey: ["articles"] }, (data) =>
     data
       ? { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) })) }
       : data,
   );
-  client.setQueryData<Article>(["article", id], (article) => (article ? { ...article, ...patch } : article));
+  client.setQueryData<Article>(["article", id], (article) =>
+    article ? { ...article, ...patch, ...(missed !== undefined ? { missed } : {}) } : article,
+  );
 }
 
 /**
@@ -327,11 +330,12 @@ export function useRecordOpened() {
   );
 }
 
-/** A change of an article's read state or star, as sent to the server. */
+/** A change of an article's read state, star or miss, as sent to the server. */
 export interface ArticleFlagChange {
   id: number;
   isRead?: boolean;
   starred?: boolean;
+  missed?: boolean;
 }
 
 /**
@@ -351,11 +355,14 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
       patchArticle(client, change.id, {
         ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
         ...(change.starred !== undefined ? { starred: !change.starred } : {}),
+        ...(change.missed !== undefined ? { missed: !change.missed } : {}),
       });
       onFailed(change);
     },
     onSettled: (_data, _error, variables) => {
       void client.invalidateQueries({ queryKey: ["counts"] });
+      // A miss changes how many misses a topic has had since its interpretation.
+      if (variables.missed !== undefined) void client.invalidateQueries({ queryKey: ["topics"] });
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
@@ -373,6 +380,12 @@ export function useTopics(categoryId: number | null) {
 export function useProviders() {
   const { api } = useApp();
   return useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), refetchInterval: REFRESH_MS });
+}
+
+/** The model calls of the budget period, split by category and by day. Fetched as often as the providers. */
+export function useUsage() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
 }
 
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */

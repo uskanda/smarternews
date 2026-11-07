@@ -41,9 +41,11 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   otherFeeds: [],
   annotations: { note: null, highlights: [] },
   mentions: [],
+  attachments: [],
+  missed: false,
   refs: [
-    { url: "https://example.org/a", siteName: "Example News", title: "Fix shipped", publishedAt: "2026-03-01T09:00:00.000Z" },
-    { url: "https://example.net/b", siteName: "Example Daily", title: "Patch notes", publishedAt: null },
+    { url: "https://example.org/a", siteName: "Example News", title: "Fix shipped", publishedAt: "2026-03-01T09:00:00.000Z", reason: "A fix for an exploited bug", importance: 4 },
+    { url: "https://example.net/b", siteName: "Example Daily", title: "Patch notes", publishedAt: null, reason: null, importance: null },
   ],
   topics: [{ id: 3, text: "Exploited bugs" }],
   ...overrides,
@@ -153,5 +155,12 @@ describe("renderRss", () => {
 
   it("renders a channel without items", () => {
     expect(parse(renderRss(options([]))).items).toEqual([]);
+  });
+
+  it("puts no attachment of an article in the feed", () => {
+    const attachment = { kind: "audio" as const, mimeType: "audio/mpeg", size: 2048, title: "Episode", thumbnailOf: null, imageUrl: null };
+    const xml = renderRss(options([article({ attachments: [{ ...attachment, url: "https://cdn.example.org/attached-file.mp3" }] })]));
+    expect(xml).not.toContain("attached-file");
+    expect(xml).not.toContain("<enclosure");
   });
 });

@@ -456,6 +456,52 @@ describe("reading an article", () => {
     renderApp({ server, route: `/f/${feed.id}/${delivered}` });
     await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "Feed post" });
     expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "トピック" })).not.toBeInTheDocument();
+    // Nor, on a feed article, the sources with the reasons they were chosen: no judgement chose them.
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "出典" })).not.toBeInTheDocument();
+  });
+
+  it("says under each source why it was chosen, and nothing under a source without a reason", async () => {
+    const server = makeServer();
+    const ref = (path: string, extra: { reason?: string | null; importance?: number | null }) => ({
+      url: `https://example.org/${path}`,
+      siteName: "Example",
+      title: `Source ${path}`,
+      publishedAt: null,
+      ...extra,
+    });
+    const id = insertArticle(server.db, {
+      categoryId: server.category().id,
+      kind: "news",
+      title: "Chosen story",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 4,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      previousArticleId: null,
+      refs: [
+        ref("judged", { reason: "A new flaw in a widely used library", importance: 4 }),
+        ref("plain", {}),
+        ref("markup", { reason: "Uses <b>bold</b> words", importance: null }),
+        ref("rated", { importance: 2 }),
+      ],
+      topicIds: [],
+    });
+    renderApp({ server, route: `/all/${id}` });
+
+    const sources = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "出典" });
+    const items = within(sources).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("重要度 4・A new flaw in a widely used library");
+    expect(items[1]!.querySelector("p")).toBeNull();
+    expect(items[1]).not.toHaveTextContent("重要度");
+    // A model wrote the reason: it is shown as plain words, never as markup.
+    expect(items[2]).toHaveTextContent("Uses <b>bold</b> words");
+    expect(items[2]).not.toHaveTextContent("重要度");
+    expect(items[2]!.querySelector("b")).toBeNull();
+    expect(items[3]!.querySelector("p")).toHaveTextContent(/^重要度 2$/);
   });
 
   it("says so when an article was written from snippets only", async () => {
@@ -594,6 +640,77 @@ describe("stars", () => {
     await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
     await waitFor(() => expect(rowTitles()).toEqual(["Keep me"]));
+  });
+});
+
+describe("misses", () => {
+  const missed = (server: TestServer, id: number) => getArticle(server.db, id).missed;
+
+  it("marks a generated article as a miss with the button, says so, and shows the button pressed", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    const { user } = renderApp({ server, route: `/unread/${id}` });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+
+    await user.click(await screen.findByRole("button", { name: "外れの印を付ける" }));
+
+    await waitFor(() => expect(missed(server, id)).toBe(true));
+    expect(await screen.findByRole("button", { name: "外れの印を外す" })).toHaveAttribute("aria-pressed", "true");
+    const status = await screen.findByText("外れの印を付けました", { selector: '[role="status"] > span' });
+    expect(within(status.closest<HTMLElement>('[role="status"]')!).getByRole("button", { name: "取り消す" })).toBeInTheDocument();
+    expect(getArticle(server.db, id).isRead).toBe(true);
+  });
+
+  it("marks an unread article as a miss and read with x, and puts both back with the undo", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    const { user } = renderApp({ server, route: "/unread" });
+    await user.click(await screen.findByRole("link", { name: /Off topic/ }));
+    await screen.findByRole("heading", { level: 2, name: "Off topic" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+
+    await user.keyboard("x");
+
+    const status = (await screen.findByText("外れの印を付けて、既読にしました", { selector: '[role="status"] > span' })).closest<HTMLElement>(
+      '[role="status"]',
+    )!;
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: true, isRead: true }));
+    await waitFor(() => expect(row(/Off topic/)).toHaveAttribute("data-read", "true"));
+
+    await user.click(within(status).getByRole("button", { name: "取り消す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: false, isRead: false }));
+    await waitFor(() => expect(row(/Off topic/)).toHaveAttribute("data-read", "false"));
+    expect(screen.getByRole("button", { name: "外れの印を付ける" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("takes only the mark away when pressed again, and leaves the article read", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    setArticleFlags(server.db, id, { missed: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: `/all/${id}` });
+
+    await user.click(await screen.findByRole("button", { name: "外れの印を外す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: false, isRead: true }));
+    expect(await screen.findByRole("button", { name: "外れの印を付ける" })).toBeInTheDocument();
+  });
+
+  it("offers no miss on a feed article, and x does nothing there", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: null }, server.clock);
+    const post = seedFeedArticle(server.db, feed.id, { title: "A post" });
+    const { user, requests } = renderApp({ server, route: `/all/${post}` });
+    await screen.findByRole("heading", { level: 2, name: "A post" });
+    await waitFor(() => expect(getArticle(server.db, post).isRead).toBe(true));
+
+    await user.keyboard("x");
+
+    expect(screen.queryByRole("button", { name: "外れの印を付ける" })).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    expect(missed(server, post)).toBe(false);
   });
 });
 

@@ -22,7 +22,7 @@ describe("parsePage", () => {
       "UTC",
     );
     expect(parsed.items).toEqual([
-      { key: null, url: "https://example.org/posts/1", title: "新製品の発表", snippet: "", contentHtml: "", author: null, publishedAt: null },
+      { key: null, url: "https://example.org/posts/1", title: "新製品の発表", snippet: "", contentHtml: "", author: null, publishedAt: null, attachments: [], description: null },
     ]);
   });
 

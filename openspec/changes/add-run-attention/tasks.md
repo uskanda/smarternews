@@ -5,7 +5,7 @@
 - [x] 1.1 `news-search.test.ts`に、返った数と、Google Newsの解決を試した数と解決できなかった数のテストを足し、失敗を確かめる
 - [x] 1.2 `news-search.ts`に`searchNews`を足し、`collectNews`はその候補を返すようにする
 - [x] 1.3 `collect.test.ts`に、試行ごとの記録、判定済みのURLを除く前の数、エラーの試行、フィードを記録しないことのテストを足し、失敗を確かめる
-- [x] 1.4 `022_attention.sql`の移行で`search_attempts`と`attention_dismissals`を足し、`run.ts`の`attempt`で試行を記録する
+- [x] 1.4 `026_attention.sql`の移行で`search_attempts`と`attention_dismissals`を足し、`run.ts`の`attempt`で試行を記録する
 - [x] 1.5 `retention.test.ts`に、試行と確認の記録が30日で消えるテストを足し、`purgeExpired`で消す
 
 ## 2. 注意の一覧

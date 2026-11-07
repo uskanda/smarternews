@@ -125,6 +125,10 @@ terms:
     definition: "実行がニュース検索の検索先と検索語の組か、LLM検索のトピックで、1回検索したことの記録。"
     aliases: []
     en: "search attempt"
+  - term: "配信終了"
+    definition: "サイトが410を返し続けている購読フィードの状態で、取得の失敗より強い。"
+    aliases: []
+    en: "gone"
   # 一般語。terms-checkの一般語リストに無いので、この用語集で使う表記を決める。
   - term: "ニュース"
     definition: "最近公開または更新された出来事の報道や発表で、種別の1つでもある。"
@@ -154,6 +158,14 @@ terms:
     definition: "利用者が記事に付ける印で、付いた記事は保存期間を過ぎても残る。"
     aliases: ["お気に入り", "ブックマーク"]
     en: "star"
+  - term: "外れ"
+    definition: "利用者が生成記事に付ける、トピックに合わなかったことを示す否定の印。"
+    aliases: ["ハズレ", "不要の印"]
+    en: "miss"
+  - term: "外れの記録"
+    definition: "外れの印を付けた時点の記事の見出し、カテゴリ、トピック、時刻を写した記録で、記事が消えても残る。"
+    aliases: []
+    en: "miss record"
   - term: "スケジュール"
     definition: "カテゴリごとに決めた、実行を始める時刻の一覧。"
     aliases: []
@@ -194,6 +206,14 @@ terms:
     definition: "押すと1つの操作が実行される画面上の部品。"
     aliases: []
     en: "button"
+  - term: "アクセス"
+    definition: "サイトへ要求を送ること。サイトが返す429の文言で使う。"
+    aliases: []
+    en: "access"
+  - term: "フォーム"
+    definition: "画面の中で、入力欄と、その値を送るボタンをまとめた区画。"
+    aliases: []
+    en: "form"
   - term: "スクロール"
     definition: "画面に入りきらない内容を上下に送って見ること。"
     aliases: []
@@ -386,6 +406,22 @@ terms:
     definition: "記事の内容を一覧で示すための小さな画像。"
     aliases: []
     en: "thumbnail"
+  - term: "添付"
+    definition: "購読フィードが項目に添えたファイルで、RSSのenclosureとMedia RSSのcontentとthumbnailから読むもの。"
+    aliases: ["添付ファイル", "エンクロージャー"]
+    en: "attachment"
+  - term: "パーサー"
+    definition: "XMLやHTMLの文書を読み、プログラムが扱える形に分ける処理。"
+    aliases: ["パーザー", "パーザ"]
+    en: "parser"
+  - term: "プレーンテキスト"
+    definition: "HTMLやMarkdownの記法を含まない、文字だけの文章。"
+    aliases: ["平文"]
+    en: "plain text"
+  - term: "エスケープ"
+    definition: "記法として働く文字を、文字そのものとして読まれる形に書き換えること。"
+    aliases: []
+    en: "escape"
   - term: "ディスク"
     definition: "サーバーがファイルを置く記憶装置。"
     aliases: []

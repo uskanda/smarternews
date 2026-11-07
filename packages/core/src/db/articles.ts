@@ -1,5 +1,6 @@
 import type {
   Article,
+  ArticleAttachment,
   ArticleEvent,
   ArticleList,
   ArticleListQuery,
@@ -30,6 +31,7 @@ import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { annotationsOf } from "./annotations.ts";
 import { mentionsOf } from "./mentions.ts";
+import { isMissed, markMissed, unmarkMissed } from "./misses.ts";
 import { deleteArticleTranslation, findArticleTranslation } from "./translations.ts";
 
 /**
@@ -143,13 +145,15 @@ function toSummary(row: Row): ArticleSummary {
 
 function refsOf(db: Database, articleId: number): ArticleRef[] {
   return db
-    .prepare("SELECT url, site_name, title, published_at FROM article_refs WHERE article_id = ? ORDER BY position, id")
+    .prepare("SELECT url, site_name, title, published_at, reason, importance FROM article_refs WHERE article_id = ? ORDER BY position, id")
     .all(articleId)
     .map((row) => ({
       url: str(row.url),
       siteName: str(row.site_name),
       title: str(row.title),
       publishedAt: strOrNull(row.published_at),
+      reason: strOrNull(row.reason),
+      importance: numOrNull(row.importance),
     }));
 }
 
@@ -179,6 +183,40 @@ function fullContentStatusOf(db: Database, row: Row): FullContentStatus {
 function fullContentErrorOf(row: Row): FullContentError | null {
   if (str(row.full_content_status) !== "failed") return null;
   return { reason: str(row.full_content_error) as FullContentErrorReason, detail: strOrNull(row.full_content_error_detail) };
+}
+
+const ATTACHMENT_KINDS = new Set(["image", "audio", "video", "other"]);
+
+/**
+ * The stored attachments of a feed article. A list that cannot be read, and an entry without an address or a
+ * known kind, count as none. The image address is left for the relay to fill in (`relayArticleImages`).
+ */
+function attachmentsOf(row: Row): ArticleAttachment[] {
+  const stored = strOrNull(row.attachments);
+  if (stored === null || str(row.origin) !== "feed") return [];
+  let entries: unknown;
+  try {
+    entries = JSON.parse(stored);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(entries)) return [];
+  const textOrNull = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : null);
+  const primaryUrl = strOrNull(row.primary_url);
+  return entries.flatMap((entry: Record<string, unknown> | null): ArticleAttachment[] => {
+    if (!entry || typeof entry.url !== "string" || !ATTACHMENT_KINDS.has(String(entry.kind))) return [];
+    return [
+      {
+        url: entry.url,
+        kind: entry.kind as ArticleAttachment["kind"],
+        mimeType: textOrNull(entry.mimeType),
+        size: typeof entry.size === "number" && Number.isSafeInteger(entry.size) ? entry.size : null,
+        title: textOrNull(entry.title),
+        thumbnailOf: entry.thumbnail === true ? primaryUrl : null,
+        imageUrl: null,
+      },
+    ];
+  });
 }
 
 function toArticle(db: Database, row: Row): Article {
@@ -211,6 +249,8 @@ function toArticle(db: Database, row: Row): Article {
       .map((topic) => ({ id: num(topic.id), text: str(topic.text) })),
     annotations: annotationsOf(db, id),
     mentions: mentionsOf(db, id),
+    attachments: attachmentsOf(row),
+    missed: isMissed(db, id),
   };
 }
 
@@ -249,15 +289,17 @@ export interface ArticleContent {
   event: EventFields | null;
 }
 
-export type NewRef = ArticleRef;
+/** A source to store. The reason and importance of its judgement may be left out, and are then stored as null. */
+export type NewRef = Omit<ArticleRef, "reason" | "importance"> & { reason?: string | null; importance?: number | null };
 
+/** Adds sources after the ones an article has. A URL it already has is skipped, so its first reason stays. */
 function addRefs(db: Database, articleId: number, refs: NewRef[]): void {
   let position = num(db.prepare("SELECT coalesce(max(position), -1) + 1 AS next FROM article_refs WHERE article_id = ?").get(articleId)!.next);
   const statement = db.prepare(
-    "INSERT OR IGNORE INTO article_refs (article_id, url, site_name, title, published_at, position) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO article_refs (article_id, url, site_name, title, published_at, reason, importance, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (const ref of refs) {
-    const result = statement.run(articleId, ref.url, ref.siteName, ref.title, ref.publishedAt, position);
+    const result = statement.run(articleId, ref.url, ref.siteName, ref.title, ref.publishedAt, ref.reason || null, ref.importance ?? null, position);
     if (num(result.changes) > 0) position += 1;
   }
 }
@@ -814,18 +856,27 @@ function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[
 
 /**
  * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
- * one that was read already keeps its time, and one put back to unread loses it.
+ * one that was read already keeps its time, and one put back to unread loses it. Marking a generated article as a
+ * miss marks it read too, unless the same patch says whether it is read; taking the mark away leaves that alone.
  */
 export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, now: string): Article {
-  getArticle(db, id);
+  const article = getArticle(db, id);
+  if (patch.missed !== undefined && article.origin !== "generated") {
+    throw new DomainError("invalid", `article ${id} is not a generated article`, [
+      { path: "missed", message: "only a generated article can be marked as a miss", code: "not_allowed" },
+    ]);
+  }
   transaction(db, () => {
-    if (patch.isRead !== undefined) {
+    if (patch.missed === true) markMissed(db, id, now);
+    if (patch.missed === false) unmarkMissed(db, id);
+    const isRead = patch.isRead ?? (patch.missed === true ? true : undefined);
+    if (isRead !== undefined) {
       const changed = num(
         db
           .prepare("UPDATE articles SET is_read = ?, read_at = ? WHERE id = ? AND is_read <> ?")
-          .run(patch.isRead ? 1 : 0, patch.isRead ? now : null, id, patch.isRead ? 1 : 0).changes,
+          .run(isRead ? 1 : 0, isRead ? now : null, id, isRead ? 1 : 0).changes,
       );
-      if (patch.isRead && changed > 0) readDuplicatesOf(db, [id], now);
+      if (isRead && changed > 0) readDuplicatesOf(db, [id], now);
     }
     if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
   });

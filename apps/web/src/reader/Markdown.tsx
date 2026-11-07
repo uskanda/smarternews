@@ -15,7 +15,7 @@ const relayed = (url: string): string => relayedImageUrl("", url) ?? "";
  * An image of a feed article, loaded from the server's relay, which fetches it from the other site. The
  * request carries no referrer. When it cannot be loaded, its description takes its place.
  */
-function ArticleImage({ src, alt }: { src: string; alt: string }) {
+export function ArticleImage({ src, alt }: { src: string; alt: string }) {
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
   if (state === "failed")
     return alt ? (

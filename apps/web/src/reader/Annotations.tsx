@@ -9,6 +9,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button } from "../ui/controls.tsx";
 import { MENU, MENU_ITEM } from "../shell/order.tsx";
+import { AddTopicDialog, useTopicCategories } from "./AddTopicDialog.tsx";
 import { FilterFromSelectionDialog } from "./FilterFromSelection.tsx";
 import { ANNOTATION_MARK, SKIP_ATTRIBUTE, type AnnotationMarks } from "./highlight.tsx";
 
@@ -93,8 +94,13 @@ interface Selected {
   value: string;
   anchor: HighlightAnchor | null;
   filterable: boolean;
+  /** The text a new topic starts with, line breaks made spaces; null when a topic cannot be added from it. */
+  topicDraft: string | null;
   rect: { top: number; bottom: number; left: number };
 }
+
+/** The most characters of a selection a topic is added from: past that it is a quotation, not a subject. */
+const MAX_TOPIC_SELECTION_CHARS = 200;
 
 /** The elements a selection must start and end in, the same one, to be one paragraph. */
 const BLOCK = "p, li, h1, h2, h3, h4, h5, h6, td, th, pre, blockquote, dt, dd, figcaption";
@@ -143,14 +149,37 @@ function filterableIn(range: Range, scope: Element, root: Element, value: string
   return block === (elementOf(range.endContainer)?.closest(BLOCK) ?? first);
 }
 
+/** Whether a node is in a field, whose text is not the article's. */
+const inField = (node: Node): boolean => elementOf(node)?.closest("input, textarea, select, [contenteditable]") != null;
+
+/**
+ * The text a topic is added from, when the selection starts and ends in the article under `scope`, outside a
+ * field and a skipped element, and is 1 to 200 characters long without the spaces around it. Any part of an
+ * article will do, a translation or a summary as well: a topic names a subject, not where an article came from.
+ */
+function topicDraftIn(range: Range, scope: Element, value: string): string | null {
+  if (value.length === 0 || value.length > MAX_TOPIC_SELECTION_CHARS) return null;
+  // A selection in a field ends at the field, not in it; some browsers still tell its text as the selection's.
+  if (range.toString().trim().length === 0 || (document.activeElement && inField(document.activeElement))) return null;
+  const inside = (node: Node) => scope.contains(node) && !isSkipped(node) && !inField(node);
+  if (!inside(range.startContainer) || !inside(range.endContainer)) return null;
+  return value.replace(/\s*[\r\n]+\s*/g, " ");
+}
+
 /**
  * What the selection in the article offers, or null when nothing is selected or it offers nothing. It can be
- * highlighted with `highlights`, and made a filter of with `filters`.
+ * highlighted with `highlights`, made a filter of with `filters`, and added as a topic with `topics`.
  */
 function selectionIn(
   scope: Element,
   root: Element,
-  options: { highlights: boolean; filters: boolean; body: { text: string; starts: number[] }; ranges: LocatedHighlights<Highlight>["ranges"] },
+  options: {
+    highlights: boolean;
+    filters: boolean;
+    topics: boolean;
+    body: { text: string; starts: number[] };
+    ranges: LocatedHighlights<Highlight>["ranges"];
+  },
 ): Selected | null {
   const selection = document.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
@@ -158,10 +187,12 @@ function selectionIn(
   const value = range.toString().trim();
   const anchor = options.highlights ? anchorIn(range, root, options.body, options.ranges) : null;
   const filterable = options.filters && filterableIn(range, scope, root, value);
-  if (!anchor && !filterable) return null;
+  // The selection's own text, unlike the range's, breaks the line between paragraphs, as a copy would.
+  const topicDraft = options.topics ? topicDraftIn(range, scope, (selection.toString() || value).trim()) : null;
+  if (!anchor && !filterable && topicDraft === null) return null;
   // Where the selection is on the screen; a browser without the measure puts the menu at the top.
   const box = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : { top: 0, bottom: 0, left: 0 };
-  return { value, anchor, filterable, rect: { top: box.top, bottom: box.bottom, left: box.left } };
+  return { value, anchor, filterable, topicDraft, rect: { top: box.top, bottom: box.bottom, left: box.left } };
 }
 
 /** Copies the text selected, as the browser's own menu would. */
@@ -351,6 +382,7 @@ function MissingHighlights({ highlights, onOpen }: { highlights: readonly Highli
  * In a feed article a hide filter can also be made of a selection in an original part, whether `enabled` or not,
  * and in the original title: the element under `scope` that carries `FILTER_SOURCE_ATTRIBUTE`. A right click on
  * `scope` over a selection that offers something opens the same actions as a menu; otherwise the browser's own.
+ * In any article, a topic can be added from a selection anywhere under `scope`, while a category holds topics.
  */
 export function AnnotatedBody({
   article,
@@ -374,9 +406,11 @@ export function AnnotatedBody({
   const toast = useToast();
   const root = useRef<HTMLDivElement>(null);
   const filters = article.origin === "feed";
+  const topics = useTopicCategories().length > 0;
   const [selected, setSelected] = useState<Selected | null>(null);
   const [writingFor, setWritingFor] = useState<HighlightAnchor | null>(null);
   const [filteringFor, setFilteringFor] = useState<string | null>(null);
+  const [topicFor, setTopicFor] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<Selected | null>(null);
   const trigger = useRef<HTMLSpanElement>(null);
   const latest = useRef<Selected | null>(null);
@@ -390,19 +424,21 @@ export function AnnotatedBody({
   const missing = located?.missing ?? [];
 
   useEffect(() => {
-    if (!enabled && !filters) {
+    if (!enabled && !filters && !topics) {
       setSelected(null);
       return;
     }
     const look = () =>
       setSelected(
-        root.current ? selectionIn(scope?.current ?? root.current, root.current, { highlights: enabled, filters, body: current(), ranges }) : null,
+        root.current
+          ? selectionIn(scope?.current ?? root.current, root.current, { highlights: enabled, filters, topics, body: current(), ranges })
+          : null,
       );
     look();
     document.addEventListener("selectionchange", look);
     return () => document.removeEventListener("selectionchange", look);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `current` reads the texts kept in a ref
-  }, [enabled, filters, ranges, scope]);
+  }, [enabled, filters, topics, ranges, scope]);
 
   // A right click over a selection that offers something opens its menu at the pointer; the menu key and
   // Shift+F10 open it under the selection. The menu opens from a trigger of its own, as a right click on it would.
@@ -473,6 +509,7 @@ export function AnnotatedBody({
         ]
       : []),
     ...(selection.filterable ? [{ label: "隠すフィルターを作る…", run: () => setFilteringFor(selection.value) }] : []),
+    ...(selection.topicDraft !== null ? [{ label: "トピックを足す…", run: () => setTopicFor(selection.topicDraft) }] : []),
   ];
 
   // From the list of annotations: the highlight is brought into view and focused, once it is drawn.
@@ -524,7 +561,7 @@ export function AnnotatedBody({
           />
         ) : null}
       </div>
-      {selected && !writingFor && filteringFor === null ? (
+      {selected && !writingFor && filteringFor === null && topicFor === null ? (
         <div
           role="toolbar"
           aria-label="選んだ文字列"
@@ -574,6 +611,17 @@ export function AnnotatedBody({
           }}
         />
       ) : null}
+      <AddTopicDialog
+        draft={topicFor ?? ""}
+        categoryId={article.categoryId}
+        open={topicFor !== null}
+        onOpenChange={(open) => {
+          if (open) return;
+          setTopicFor(null);
+          document.getSelection()?.removeAllRanges();
+          setSelected(null);
+        }}
+      />
       {writingFor ? (
         <NewHighlightDialog
           quote={writingFor.quote}

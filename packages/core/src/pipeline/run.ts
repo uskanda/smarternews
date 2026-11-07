@@ -24,6 +24,7 @@ import {
 import { getCategory } from "../db/categories.ts";
 import { transaction, type Database } from "../db/database.ts";
 import { replaceMentions } from "../db/mentions.ts";
+import { recentMissTitles } from "../db/misses.ts";
 import { finishRun, getRun, startRun } from "../db/runs.ts";
 import { recordSearchAttempt, type SearchAttempt } from "../db/search-attempts.ts";
 import { getSettings } from "../db/settings.ts";
@@ -101,12 +102,19 @@ async function interpretTopics(ctx: Context): Promise<Topic[]> {
       continue;
     }
     try {
+      // The reader's recent misses go into the interpretation that happens anyway; a miss never asks for one.
+      const now = ctx.now.toISOString();
       const output = await ctx.runner.run(
         "interpret",
-        { topicText: topic.text, kind: ctx.category.kind, search: topic.search ?? ctx.settings.search },
+        {
+          topicText: topic.text,
+          kind: ctx.category.kind,
+          search: topic.search ?? ctx.settings.search,
+          misses: recentMissTitles(ctx.db, topic.id, now),
+        },
         ctx.budget,
       );
-      ready.push(applyInterpretation(ctx.db, topic.id, output));
+      ready.push(applyInterpretation(ctx.db, topic.id, output, now));
     } catch (error) {
       fail(ctx, "interpret", topic.text, error);
     }
@@ -474,6 +482,8 @@ async function writeStories(ctx: Context): Promise<void> {
         siteName: candidate.siteName,
         title: candidate.title,
         publishedAt: candidate.publishedAt,
+        reason: candidate.reason,
+        importance: candidate.judgedImportance,
       })),
       topicIds: [...new Set(story.candidates.flatMap((candidate) => candidate.topicIds))],
     };

@@ -37,6 +37,7 @@ import {
 } from "@smarternews/core";
 import type { Hono } from "hono";
 import { createApp } from "./app.ts";
+import { TopicTrials } from "./topic-trials.ts";
 import { ensureKey, ensureToken } from "./tokens.ts";
 
 export interface Runtime {
@@ -124,6 +125,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
       summariesPerDay: config.limits.summariesPerDay,
       selectorProposalsPerDay: config.limits.selectorProposalsPerDay,
       digestsPerDay: config.limits.digestsPerDay,
+      topicTrialsPerDay: config.limits.topicTrialsPerDay,
     },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,
@@ -147,7 +149,13 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     execute: (runId) => executeRun({ db, clock, runner, fetcher, config }, runId),
     retries: config.limits.runRetries,
   });
-  const scheduler = new Scheduler({ db, clock, queue, purgeImages: () => imageProxy.purgeExpired() });
+  const scheduler = new Scheduler({
+    db,
+    clock,
+    queue,
+    purgeImages: () => imageProxy.purgeExpired(),
+    budgetResetDay: config.limits.budgetResetDay,
+  });
   // The key comes from the environment and stays in this object: it is in no file, no table and no answer.
   const apiKey = translationApiKey(config, options.env);
   const translation = new TranslationService({
@@ -163,6 +171,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
   const fullContent = new FullContentWorker({ db, clock, fetcher });
   const summarizer = new SummaryWorker({ db, clock, fetcher, runner, fullContent });
   const digests = new DigestWorker({ db, clock, runner });
+  const trials = new TopicTrials({ db, clock, runner, judgeBatchSize: config.limits.judgeBatchSize });
 
   const api = ensureToken(paths.apiTokenFile);
   const feed = ensureToken(paths.feedTokenFile);
@@ -179,6 +188,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     summarizer,
     fullContent,
     digests,
+    trials,
     images: { key: imageKey.key, proxy: imageProxy },
     tokens: { api: api.token, feed: feed.token },
     version,

@@ -44,12 +44,18 @@ export function relayTranslation(translation: ArticleTranslation, key: Uint8Arra
   };
 }
 
-/** An article as the API gives it. A feed article's content, full content and translation load images through the relay. */
+/**
+ * An article as the API gives it. A feed article's content, full content, translation and image attachments
+ * load images through the relay.
+ */
 export function relayArticleImages(article: Article, key: Uint8Array): Article {
   if (article.origin !== "feed") return article;
   return {
     ...relayContent(article, key),
     fullContent: article.fullContent === null ? null : relayFullContent(article.fullContent, key),
     translation: article.translation === null ? null : relayTranslation(article.translation, key),
+    attachments: article.attachments.map((attachment) =>
+      attachment.kind === "image" && /^https?:\/\//i.test(attachment.url) ? { ...attachment, imageUrl: imageProxyPath(key, attachment.url) } : attachment,
+    ),
   };
 }

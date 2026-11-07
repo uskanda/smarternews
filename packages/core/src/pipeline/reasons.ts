@@ -21,3 +21,16 @@ const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
 export function reasonText(code: ReasonCode, outputLanguage: string): string {
   return REASONS[outputLanguage.toLowerCase().startsWith("ja") ? "ja" : "en"][code];
 }
+
+/**
+ * The program's reason a stored reason is, in whichever language it was written; null for a reason of the judge.
+ * A candidate keeps only its last reason, so this is how the judge's verdict on it is told apart later.
+ */
+export function programReasonCode(reason: string): ReasonCode | null {
+  for (const texts of Object.values(REASONS)) {
+    for (const [code, text] of Object.entries(texts)) {
+      if (text === reason) return code as ReasonCode;
+    }
+  }
+  return null;
+}

@@ -527,6 +527,51 @@ describe("the migration to duplicate removal", () => {
   });
 });
 
+describe("the migration to reasons on references", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("copies the reason and importance of the first accepted candidate, and leaves the rest empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "024")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (1, 1, 'news', 'first', 's', 'b', 4, ?, ?, ?)`,
+    ).run(now, now, now);
+    const ref = db.prepare("INSERT INTO article_refs (article_id, url, site_name, title, position) VALUES (1, ?, '', 't', ?)");
+    ref.run("https://example.org/judged", 0);
+    ref.run("https://example.org/twice", 1);
+    ref.run("https://example.org/unknown", 2);
+    ref.run("https://example.org/rejected", 3);
+    ref.run("https://example.org/blank", 4);
+    const candidate = db.prepare(
+      "INSERT INTO candidates (id, category_id, url, title, source_kind, status, reason, importance, article_id, created_at) VALUES (?, 1, ?, 't', 'feed', ?, ?, ?, ?, ?)",
+    );
+    candidate.run(1, "https://example.org/judged", "accepted", "A new flaw", 4, 1, now);
+    candidate.run(2, "https://example.org/twice", "accepted", "First look", 3, 1, now);
+    candidate.run(3, "https://example.org/twice", "accepted", "Second look", 5, 1, now);
+    candidate.run(4, "https://example.org/rejected", "rejected", "Off topic", 1, null, now);
+    candidate.run(5, "https://example.org/blank", "accepted", "", null, 1, now);
+
+    copyFileSync(join(SHIPPED, "024_ref_reasons.sql"), join(dir, "024_ref_reasons.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT url, reason, importance FROM article_refs ORDER BY position").all()).toEqual([
+      { url: "https://example.org/judged", reason: "A new flaw", importance: 4 },
+      { url: "https://example.org/twice", reason: "First look", importance: 3 },
+      { url: "https://example.org/unknown", reason: null, importance: null },
+      { url: "https://example.org/rejected", reason: null, importance: null },
+      { url: "https://example.org/blank", reason: null, importance: null },
+    ]);
+  });
+});
+
 describe("removing the article that duplicates were recorded against", () => {
   function withDuplicates() {
     const db = openDatabase(":memory:");
