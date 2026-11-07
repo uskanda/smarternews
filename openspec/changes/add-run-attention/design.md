@@ -24,7 +24,7 @@
 
 ### 検索の試行を表に残す
 
-移行`026_attention.sql`で表`search_attempts`を足す。主な列は次のとおりである。
+移行`028_attention.sql`で表`search_attempts`を足す。主な列は次のとおりである。
 
 | 列 | 中身 |
 |---|---|

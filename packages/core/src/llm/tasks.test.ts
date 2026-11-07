@@ -54,6 +54,36 @@ describe("the write task", () => {
   });
 });
 
+describe("what a rewrite adds, in the write task", () => {
+  const existing = { title: "Old", summary: "Old summary", body: "Old body" };
+  const article = { title: "t", summary: "s", body: "b", unconfirmed: false, impact: null, event: null, mentions: [] };
+  const schemaOf = (schema: z.ZodObject) => z.toJSONSchema(schema) as unknown as { properties: Record<string, unknown> };
+
+  it("asks for one or two sentences on what the new sources add, only when there is an existing article", () => {
+    const rewrite = tasks.write.build({ ...writeInput, existingArticle: existing }).prompt;
+    expect(rewrite).toMatch(/- updateNote: .*one or two sentences.*output language.*not in the existing article.*null when/i);
+    const fresh = tasks.write.build(writeInput).prompt;
+    expect(fresh).toContain("- updateNote: null.");
+    expect(fresh).not.toMatch(/updateNote: .*sentences/i);
+  });
+
+  it("hands the provider a string or null", () => {
+    expect(schemaOf(tasks.write.wire!).properties.updateNote).toEqual({ type: ["string", "null"] });
+  });
+
+  it("gives the trimmed note, or null when it is not a string of one to 300 characters, and still accepts the rest", () => {
+    const parse = (updateNote: unknown) => tasks.write.output.parse({ ...article, updateNote });
+    expect(parse(" 価格が発表されました。 ").updateNote).toBe("価格が発表されました。");
+    expect(parse("あ".repeat(300)).updateNote).toBe("あ".repeat(300));
+    expect(parse("あ".repeat(301)).updateNote).toBeNull();
+    expect(parse("  ").updateNote).toBeNull();
+    expect(parse(42).updateNote).toBeNull();
+    expect(parse(null).updateNote).toBeNull();
+    expect(tasks.write.output.parse(article).updateNote).toBeNull();
+    expect(parse(42).title).toBe("t");
+  });
+});
+
 describe("the interpret task", () => {
   const input = { topicText: "Rust releases", kind: "news" as const, search: { language: "en", region: "US" } };
 
@@ -235,7 +265,7 @@ describe("mentions in the write and summarize tasks", () => {
       expect(schema.required).toContain("mentions");
       expect(JSON.stringify(schema.properties.mentions)).not.toMatch(/max|min/i);
     }
-    expect(schemaOf(tasks.write.wire!).required).toEqual(["title", "summary", "body", "unconfirmed", "impact", "event", "mentions"]);
+    expect(schemaOf(tasks.write.wire!).required).toEqual(["title", "summary", "body", "unconfirmed", "impact", "event", "mentions", "updateNote"]);
     expect(schemaOf(tasks.summarize.wire!).required).toEqual(["summary", "mentions"]);
   });
 

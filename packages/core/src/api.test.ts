@@ -104,6 +104,7 @@ describe("the shape of a search", () => {
     translatedTitle: null,
     summary: "s",
     impact: null,
+    updateNote: null,
     importance: null,
     unconfirmed: false,
     firstPublishedAt: "2026-03-01T00:00:00.000Z",

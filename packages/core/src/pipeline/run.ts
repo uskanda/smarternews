@@ -426,6 +426,8 @@ async function writeStories(ctx: Context): Promise<void> {
     }
 
     const { sources, snippetOnly } = await loadSources(ctx, story);
+    // Only a model that read the existing article can say what the rewrite adds.
+    const existingArticle = story.mode === "update" && story.existing ? story.existing : null;
     let output;
     try {
       output = await ctx.runner.run(
@@ -437,7 +439,7 @@ async function writeStories(ctx: Context): Promise<void> {
           now: ctx.now.toISOString(),
           timeZone: ctx.settings.timeZone,
           sources,
-          existingArticle: story.mode === "update" && story.existing ? story.existing : null,
+          existingArticle,
         },
         ctx.budget,
       );
@@ -493,7 +495,8 @@ async function writeStories(ctx: Context): Promise<void> {
     const mentions = output.mentions;
     transaction(ctx.db, () => {
       if (story.mode === "update" && story.existing) {
-        reviseArticle(ctx.db, story.existing.id, content);
+        // An article found the same only after it was written, as an event under another headline, gets no note.
+        reviseArticle(ctx.db, story.existing.id, { ...content, updateNote: existingArticle ? output.updateNote : null });
         if (mentions !== null) replaceMentions(ctx.db, story.existing.id, mentions);
         acceptCandidates(ctx.db, candidateIds, story.existing.id, groupKey, ctx.run.id);
         return;
