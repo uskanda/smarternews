@@ -9,7 +9,8 @@ import { FetchError, type Fetcher } from "./http.ts";
 export type PageResult =
   | { ok: true; html: string; url: string }
   | { ok: false; reason: "robots" | "limit" }
-  | { ok: false; reason: "http"; status: number; detail: string }
+  /** `retryAfter` is the Retry-After header as it came, for the fetch of a web feed; full content ignores it. */
+  | { ok: false; reason: "http"; status: number; detail: string; retryAfter?: string }
   | { ok: false; reason: "blocked" | "timeout" | "error" | "not-html"; detail: string };
 
 type Robots = { isAllowed(url: string, userAgent?: string): boolean | undefined };
@@ -54,7 +55,8 @@ export class PageFetcher {
     try {
       const response = await this.#fetcher.get(url, { headers: { accept: "text/html,application/xhtml+xml" } });
       if (response.status < 200 || response.status >= 300) {
-        return { ok: false, reason: "http", status: response.status, detail: `HTTP status ${response.status}` };
+        const retryAfter = response.headers["retry-after"];
+        return { ok: false, reason: "http", status: response.status, detail: `HTTP status ${response.status}`, ...(retryAfter === undefined ? {} : { retryAfter }) };
       }
       if (response.contentType !== "" && !/html|xml/i.test(response.contentType)) {
         return { ok: false, reason: "not-html", detail: response.contentType };

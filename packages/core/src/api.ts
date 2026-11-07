@@ -700,7 +700,12 @@ export const feedSchema = z.object({
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
   failureCount: z.number().int(),
-  /** When the feed is fetched next. Null while it is disabled. */
+  /**
+   * When the first of the 410 answers in a row came: the site says the feed is gone for good. Null after any
+   * other answer. The feed stays enabled.
+   */
+  goneAt: z.string().nullable(),
+  /** When the feed is fetched next, no earlier than a Retry-After of the last failure asked. Null while it is disabled. */
   nextFetchAt: z.string().nullable(),
   articleCount: z.number().int(),
   starredCount: z.number().int(),

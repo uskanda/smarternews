@@ -275,7 +275,8 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.autoSummarize ? <Badge>自動で要約</Badge> : null}
       {feed.translate ? <Badge>翻訳</Badge> : null}
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
-      {feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
+      {/* A feed the site answers is gone is told apart from a failing one: unsubscribing is what fixes it. */}
+      {feed.goneAt ? <Badge tone="error">配信終了</Badge> : feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
       {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}
       <span className="tabular-nums">{feed.lastError && !feed.lastSucceededAt ? "まだ成功していません" : lastSuccess}</span>
       <span className="tabular-nums">直近30日に{feed.recentArticleCount}件</span>

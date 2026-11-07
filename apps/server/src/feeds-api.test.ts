@@ -117,7 +117,20 @@ describe("subscribed feeds", () => {
 
     const body = await (await s.post(`/api/v1/feeds/${feed.id}/fetch`)).json();
 
-    expect(body).toMatchObject({ status: "failed", created: 0, feed: { lastError: expect.stringMatching(/503/), failureCount: 1 } });
+    expect(body).toMatchObject({ status: "failed", created: 0, feed: { lastError: expect.stringMatching(/503/), failureCount: 1, goneAt: null } });
+  });
+
+  it("gives the time of the first 410 in a row as goneAt, and leaves the feed enabled", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    expect(feed.goneAt).toBeNull();
+    s.site.set(FEED, () => new Response("gone", { status: 410 }));
+
+    const body = await (await s.post(`/api/v1/feeds/${feed.id}/fetch`)).json();
+
+    expect(body).toMatchObject({ status: "failed", feed: { goneAt: s.clock().toISOString(), enabled: true, lastError: expect.stringMatching(/410/) } });
+    expect((await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).goneAt).toBe(s.clock().toISOString());
   });
 
   it("answers 404 for a feed that does not exist", async () => {

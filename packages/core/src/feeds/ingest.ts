@@ -23,6 +23,7 @@ import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
+import { parseRetryAfter } from "../fetch/retry-after.ts";
 import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
@@ -250,13 +251,38 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   return { created: fresh.length, titled: feed.translate ? titled : [] };
 }
 
+/** The site answered with an HTTP failure. The message is the reason recorded on the feed. */
+class FeedHttpError extends Error {
+  readonly status: number;
+  /** The Retry-After header as it came, or null. */
+  readonly retryAfter: string | null;
+
+  constructor(status: number, url: string, retryAfter: string | null | undefined) {
+    super(`HTTP status ${status}: ${url}`);
+    this.name = "FeedHttpError";
+    this.status = status;
+    this.retryAfter = retryAfter ?? null;
+  }
+}
+
+/** The answers whose Retry-After the next fetch waits for. */
+const RETRY_AFTER_STATUSES = new Set([429, 503]);
+const GONE = 410;
+
+/** What a failure tells besides its reason: whether the feed is gone, and how long the site asked to wait. */
+function failureOf(error: unknown, now: Date): { gone: boolean; retryAfterUntil: string | null } {
+  if (!(error instanceof FeedHttpError)) return { gone: false, retryAfterUntil: null };
+  const asked = RETRY_AFTER_STATUSES.has(error.status) ? parseRetryAfter(error.retryAfter, now) : null;
+  return { gone: error.status === GONE, retryAfterUntil: asked?.toISOString() ?? null };
+}
+
 async function download(deps: FeedDeps, url: string, conditions: { etag: string | null; lastModified: string | null }) {
   const headers: Record<string, string> = { accept: FEED_ACCEPT };
   if (conditions.etag) headers["if-none-match"] = conditions.etag;
   if (conditions.lastModified) headers["if-modified-since"] = conditions.lastModified;
   const response = await deps.fetcher.get(url, { headers });
   if (response.status === 304) return null;
-  if (response.status < 200 || response.status >= 300) throw new Error(`HTTP status ${response.status}: ${url}`);
+  if (response.status < 200 || response.status >= 300) throw new FeedHttpError(response.status, url, response.headers["retry-after"]);
   return { parsed: parseSubscription(response.text), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
 }
 
@@ -267,6 +293,7 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
  */
 async function downloadPage(deps: FeedDeps, url: string, selectors: PageSelectors) {
   const page = await pageFetcherOf(deps).fetchPage(url);
+  if (!page.ok && page.reason === "http") throw new FeedHttpError(page.status, url, page.retryAfter);
   if (!page.ok) throw new Error(pageFailureReason(page, url));
   return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined };
 }
@@ -305,7 +332,8 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
     return { status: "updated", created: stored.created };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (findFeed(db, feedId)) recordFetchFailure(db, feedId, { now: clock().toISOString(), error: message });
+    const now = clock();
+    if (findFeed(db, feedId)) recordFetchFailure(db, feedId, { now: now.toISOString(), error: message, ...failureOf(error, now) });
     return { status: "failed", created: 0, error: message };
   }
 }
