@@ -147,7 +147,13 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     execute: (runId) => executeRun({ db, clock, runner, fetcher, config }, runId),
     retries: config.limits.runRetries,
   });
-  const scheduler = new Scheduler({ db, clock, queue, purgeImages: () => imageProxy.purgeExpired() });
+  const scheduler = new Scheduler({
+    db,
+    clock,
+    queue,
+    purgeImages: () => imageProxy.purgeExpired(),
+    budgetResetDay: config.limits.budgetResetDay,
+  });
   // The key comes from the environment and stays in this object: it is in no file, no table and no answer.
   const apiKey = translationApiKey(config, options.env);
   const translation = new TranslationService({
