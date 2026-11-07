@@ -203,3 +203,50 @@ describe("a change of the terms", () => {
     await waitFor(() => expect(back.querySelector("mark.term-match")).toHaveTextContent("関税"));
   });
 });
+
+describe("changes to term groups not saved yet", () => {
+  const pane = () => screen.getByRole("navigation", { name: "項目" });
+  const toUnread = (user: ReturnType<typeof renderApp>["user"]) => user.click(within(pane()).getByRole("link", { name: /^未読/ }));
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+
+  it("asks before leaving the name of a group that was not added", async () => {
+    const { user } = renderApp({ route: "/settings/term-highlights" });
+
+    await user.type(within(await section("語のまとまりの追加")).getByLabelText("まとまりの名前"), "通商");
+    await toUnread(user);
+
+    expect(await question()).toHaveTextContent("語のまとまりの追加");
+  });
+
+  it("asks before leaving an edited group, and drops the edit without a question on やめる", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    const { user, path } = renderApp({ server, route: "/settings/term-highlights" });
+    const item = await waitFor(() => groupItem("A"));
+
+    await user.click(within(item).getByRole("button", { name: "Aを編集" }));
+    await user.click(within(item).getByRole("radio", { name: "桃色" }));
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("まとまり『A』の編集");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(within(item).getByRole("button", { name: "やめる" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+    expect(listTermGroups(server.db)[0]).toMatchObject({ color: "green" });
+  });
+
+  it("asks before leaving a term that was not added", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    const item = await waitFor(() => groupItem("通商"));
+
+    await user.type(within(item).getByLabelText("「通商」に足す語"), "関税");
+    await toUnread(user);
+
+    expect(await question()).toHaveTextContent("まとまり『通商』への語の追加");
+  });
+});

@@ -10,6 +10,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { ACTION_LABEL, conditionsLabel, FilterForm, scopeLabel, useRefresh } from "./FilterForm.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
+import { UnsavedGuard } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -114,7 +115,7 @@ function FilterRow({
       <p className="break-all">{conditionsLabel(filter)}</p>
       {editing ? (
         <div ref={focus.region}>
-          <FilterForm filter={filter} onDone={() => setEditing(false)} />
+          <FilterForm filter={filter} label={`フィルター『${summary}』の編集`} onDone={() => setEditing(false)} />
         </div>
       ) : (
         <div className="flex flex-wrap gap-sm pt-xs">
@@ -160,6 +161,14 @@ function FilterRow({
 
 /** Filters that hide feed articles, or keep only some of them. */
 export function FiltersPage() {
+  return (
+    <UnsavedGuard>
+      <Filters />
+    </UnsavedGuard>
+  );
+}
+
+function Filters() {
   const filters = useFilters();
   const categories = useCategories().data ?? [];
   const feeds = useFeeds().data ?? [];

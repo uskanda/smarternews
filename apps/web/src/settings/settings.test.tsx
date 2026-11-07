@@ -1,5 +1,5 @@
 import { applyInterpretation, createTopic, getCategory, getSettings, getTopic, insertFeed, listCategories, listTopics, updateCategory } from "@smarternews/core";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
@@ -123,6 +123,7 @@ describe("editing a category", () => {
     await user.click(within(screen.getByRole("navigation", { name: "項目" })).getByRole("link", { name: /^未読/ }));
 
     const dialog = await screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+    expect(dialog).toHaveTextContent("このまま移動すると、次の変更は保存されません：カテゴリの設定");
     await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
 
     expect(path()).toBe(`/settings/categories/${category.id}`);
@@ -833,5 +834,204 @@ describe("the days after which a feed counts as stale", () => {
     expect(await within(global).findByText("1から365までの日数を入れてください。")).toBeInTheDocument();
     expect(field).toHaveAccessibleDescription(/1から365までの日数/);
     expect(getSettings(server.db).staleFeedDays).toBe(60);
+  });
+});
+
+describe("changes not saved yet", () => {
+  const pane = () => screen.getByRole("navigation", { name: "項目" });
+  const toUnread = (user: ReturnType<typeof renderApp>["user"]) => user.click(within(pane()).getByRole("link", { name: /^未読/ }));
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+  /** Whether the page asked the browser to confirm before a reload or closing the tab. */
+  const unloadStopped = () => !fireEvent(window, new Event("beforeunload", { cancelable: true }));
+
+  function withTopic() {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "ransomware", true);
+    return { server, category };
+  }
+
+  it("asks before leaving an edited topic for the left pane, names it, and keeps the text when the user stays", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("トピック『ransomware』の編集");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(screen.getByLabelText("トピックの文章")).toHaveValue("ransomware gangs");
+  });
+
+  it("asks before Shift+J leaves an edited topic", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard("{Shift>}J{/Shift}");
+
+    expect(await question()).toHaveTextContent("トピック『ransomware』の編集");
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+  });
+
+  it("names every part with changes", async () => {
+    const { server, category } = withTopic();
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("名前"), " and more");
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("カテゴリの設定");
+    expect(dialog).toHaveTextContent("トピック『ransomware』の編集");
+  });
+
+  it("closes an unchanged topic at once, and asks before closing a changed one", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("このトピックに加えた変更は保存されません。");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(screen.getByLabelText("トピックの文章")).toHaveValue("ransomware gangs");
+
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    await user.click(within(await question()).getByRole("button", { name: "破棄して閉じる" }));
+    await waitFor(() => expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument());
+    expect(getTopic(server.db, listTopics(server.db, category.id)[0]!.id).text).toBe("ransomware");
+
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks for a new topic being written, and not for one of spaces only", async () => {
+    const { server, category } = withTopic();
+    const first = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await first.user.type(await screen.findByLabelText("新しいトピック"), "supply chain");
+    await toUnread(first.user);
+    expect(await question()).toHaveTextContent("新しいトピック");
+    first.unmount();
+
+    const second = renderApp({ server, route: `/settings/categories/${category.id}` });
+    await second.user.type(await screen.findByLabelText("新しいトピック"), "   ");
+    await toUnread(second.user);
+    await waitFor(() => expect(second.path()).toBe("/unread"));
+  });
+
+  it("does not ask after the category is deleted", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("名前"), " and more");
+    await user.click(screen.getByRole("button", { name: "カテゴリを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+
+    await waitFor(() => expect(path()).toBe("/settings"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("asks for a category name being written, and opens the category once it is added", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    await user.type(await screen.findByLabelText("カテゴリの名前"), "Security");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("新しいカテゴリの名前");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(screen.getByRole("button", { name: "カテゴリを追加" }));
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(path()).toBe(`/settings/categories/${listCategories(server.db)[0]!.id}`);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("asks for the reader information, and not once it is saved", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    const reader = await section("読み手情報");
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("読み手情報");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(within(reader).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks for the global settings, and discards them when the user leaves", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    const field = within(await section("全体設定")).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(field).toHaveValue("UTC"));
+    await user.clear(field);
+    await user.type(field, "Asia/Tokyo");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("全体設定");
+    await user.click(within(dialog).getByRole("button", { name: "破棄して移動" }));
+
+    await waitFor(() => expect(path()).toBe("/unread"));
+    expect(getSettings(server.db).timeZone).toBe("UTC");
+  });
+
+  it("does not ask once the global settings are saved", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const language = within(global).getByLabelText("出力言語");
+    await waitFor(() => expect(language).toHaveValue("ja"));
+    await user.clear(language);
+    await user.type(language, "en");
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getSettings(server.db).outputLanguage).toBe("en"));
+
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("does not ask for the settings of this device", async () => {
+    const { user, path } = renderApp({ route: "/settings" });
+
+    await user.click(within(await screen.findByRole("radiogroup", { name: "配色" })).getByRole("radio", { name: "ダーク" }));
+    await user.click(screen.getByRole("checkbox", { name: "スクロールした記事を既読にする" }));
+    await toUnread(user);
+
+    await waitFor(() => expect(path()).toBe("/unread"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("has the browser confirm a reload or closing the tab only while something is not saved", async () => {
+    const { user } = renderApp({ route: "/settings" });
+    const reader = await section("読み手情報");
+    expect(unloadStopped()).toBe(false);
+
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    expect(unloadStopped()).toBe(true);
+
+    await user.clear(within(reader).getByLabelText("読み手情報"));
+    expect(unloadStopped()).toBe(false);
   });
 });

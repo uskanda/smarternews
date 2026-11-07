@@ -15,6 +15,7 @@ import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
+import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const RANGE = "5分から1440分（24時間）の範囲で入力してください。";
@@ -119,6 +120,18 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved(
+    `購読フィード『${feed.title}』の編集`,
+    title !== feed.title ||
+      category !== (feed.categoryId === null ? NO_CATEGORY : String(feed.categoryId)) ||
+      ownInterval !== (feed.intervalMinutes !== null) ||
+      (ownInterval && minutes.trim() !== String(feed.intervalMinutes)) ||
+      paused !== !feed.enabled ||
+      autoSummarize !== feed.autoSummarize ||
+      translate !== feed.translate ||
+      fetchFullContent !== feed.fetchFullContent ||
+      JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
+  );
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -360,6 +373,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [minutes, setMinutes] = useState(String(settings.feedIntervalMinutes));
   const [problem, setProblem] = useState<string | null>(null);
+  useUnsaved("基本の取得周期", minutes.trim() !== String(settings.feedIntervalMinutes));
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -515,6 +529,14 @@ const needsLook = (feed: Feed) => feed.stale || feed.lastError !== null;
 
 /** Subscribed feeds: adding, the list with what the last fetch did, the base interval, and OPML. */
 export function FeedsPage() {
+  return (
+    <UnsavedGuard>
+      <Feeds />
+    </UnsavedGuard>
+  );
+}
+
+function Feeds() {
   const feeds = useFeeds();
   // Kept on this screen only: opened again, the list is in the order of the left pane.
   const [problemsFirst, setProblemsFirst] = useState(false);

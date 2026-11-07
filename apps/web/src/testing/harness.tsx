@@ -19,6 +19,16 @@ export interface RenderOptions {
   offline?: () => boolean;
   /** Pass fake-timer advancing to user-event when a test freezes time. */
   advanceTimers?: (ms: number) => void | Promise<void>;
+  /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
+  browserHistory?: boolean;
+}
+
+/** The browser's back. jsdom goes through its history after a task. */
+export async function back(): Promise<void> {
+  await act(async () => {
+    window.history.back();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 /**
@@ -41,6 +51,7 @@ export function renderApp(options: RenderOptions = {}) {
   let go: (delta: number) => void = () => {
     throw new Error("The app has not rendered its router yet.");
   };
+  if (options.browserHistory) window.history.replaceState(null, "", path);
   const view = render(
     <App
       fetchImpl={(input, init) => {
@@ -48,7 +59,7 @@ export function renderApp(options: RenderOptions = {}) {
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
         return server.app.request(input, init);
       }}
-      initialEntries={[path]}
+      initialEntries={options.browserHistory ? undefined : [path]}
       now={() => server.clock()}
       onLocation={(next) => {
         path = next;
