@@ -6,6 +6,8 @@ import {
   type Category,
   type ProviderStatus,
   type Settings,
+  type TaskName,
+  type Usage,
 } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
@@ -20,11 +22,13 @@ import {
   fieldMessage,
   formatUsd,
   periodDayLabel,
+  projectionLabel,
   settingsFileProblem,
+  TASK_LABEL,
   THEME_CHOICES,
   THEME_LABEL,
 } from "@smarternews/client";
-import { useCategories, useProviders, useSettings, useTopics } from "../api/queries.ts";
+import { useCategories, useProviders, useSettings, useTopics, useUsage } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
@@ -37,16 +41,6 @@ import { ConnectCode } from "./ConnectCode.tsx";
 import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
-const TASK_LABEL = {
-  interpret: "解釈",
-  search: "検索",
-  judge: "判定",
-  cluster: "集約",
-  write: "本文の生成",
-  summarize: "要約",
-  translate: "翻訳",
-  proposeSelectors: "セレクターの提案",
-} as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
 /** The times written in a field, separated by commas, 、 or spaces. */
@@ -596,7 +590,7 @@ function Providers() {
                 </tr>
               </thead>
               <tbody>
-                {(Object.keys(TASK_LABEL) as Array<keyof typeof TASK_LABEL>).map((task) => (
+                {(Object.keys(TASK_LABEL) as TaskName[]).map((task) => (
                   <tr key={task} className="border-t border-outline">
                     <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
                       {TASK_LABEL[task]}
@@ -617,6 +611,136 @@ function Providers() {
   );
 }
 
+/** Money in a cell of the usage tables, or that it costs nothing when no provider does. */
+function usageCost(usage: Usage, costUsd: number): string {
+  return usage.billable ? formatUsd(costUsd) : "かからない";
+}
+
+const CELL = "py-xs pr-lg text-right tabular-nums";
+const HEAD = "py-xs pr-lg text-right font-normal whitespace-nowrap";
+
+/** The money and calls of each category, with what its articles were worth to the reader, and the calls outside runs last. */
+function UsageByCategory({ usage }: { usage: Usage }) {
+  const { outsideRuns } = usage;
+  return (
+    <div className="max-w-measure overflow-x-auto">
+      <table aria-label="カテゴリごとの利用量" className="w-full text-left type-body-md">
+        <thead className="type-label-sm text-on-surface-muted">
+          <tr>
+            <th className="py-xs pr-lg font-normal">カテゴリ</th>
+            <th className={HEAD}>回数</th>
+            <th className={HEAD}>金額</th>
+            <th className={HEAD}>作った記事</th>
+            <th className={HEAD}>開いた記事</th>
+            <th className="py-xs text-right font-normal whitespace-nowrap">1件あたり</th>
+          </tr>
+        </thead>
+        <tbody>
+          {usage.byCategory.map((row) => (
+            <tr key={row.categoryId} className="border-t border-outline">
+              <th scope="row" className="py-xs pr-lg text-left font-normal">
+                {row.name}
+              </th>
+              <td className={CELL}>{row.calls}</td>
+              <td className={CELL}>{usageCost(usage, row.costUsd)}</td>
+              <td className={CELL}>{row.articlesCreated}</td>
+              <td className={CELL}>{row.articlesOpened}</td>
+              <td className="py-xs text-right tabular-nums">
+                {usage.billable ? (row.costPerOpenedUsd === null ? "—" : formatUsd(row.costPerOpenedUsd)) : "かからない"}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t border-outline">
+            <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
+              実行に属さない呼び出し
+            </th>
+            <td className={CELL}>{outsideRuns.calls}</td>
+            <td className={CELL}>{usageCost(usage, outsideRuns.costUsd)}</td>
+            <td className={CELL} />
+            <td className={CELL} />
+            <td className="py-xs" />
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The money and calls of each UTC day of the period, with a bar that lets the busy days stand out. */
+function UsageByDay({ usage }: { usage: Usage }) {
+  // Without a provider that costs money, the bars follow the calls.
+  const measure = (day: Usage["byDay"][number]) => (usage.billable ? day.costUsd : day.calls);
+  const most = Math.max(0, ...usage.byDay.map(measure));
+  return (
+    <div className="max-w-measure overflow-x-auto">
+      <table aria-label="日ごとの利用量" className="w-full text-left type-body-md">
+        <thead className="type-label-sm text-on-surface-muted">
+          <tr>
+            <th className="py-xs pr-lg font-normal whitespace-nowrap">日（UTC）</th>
+            <th colSpan={2} className="py-xs pr-lg font-normal">
+              金額
+            </th>
+            <th className="py-xs text-right font-normal whitespace-nowrap">回数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {usage.byDay.map((day) => (
+            <tr key={day.day} className="border-t border-outline">
+              <th scope="row" className="py-xs pr-lg text-left font-normal whitespace-nowrap tabular-nums">
+                {periodDayLabel(day.day)}
+              </th>
+              <td className="py-xs pr-sm text-right whitespace-nowrap tabular-nums">{usageCost(usage, day.costUsd)}</td>
+              <td className="w-full py-xs pr-lg align-middle">
+                <div
+                  aria-hidden="true"
+                  className="h-sm rounded-sm bg-outline-strong"
+                  style={{ width: `${most > 0 ? Math.round((measure(day) / most) * 100) : 0}%` }}
+                />
+              </td>
+              <td className="py-xs text-right tabular-nums">{day.calls}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The model calls of the budget period by category and by day, and where the money is heading. */
+function UsageSection() {
+  const usage = useUsage();
+  const data = usage.data;
+  return (
+    <section id="usage" aria-label="利用量" className={SECTION}>
+      <h2 className="type-headline-md">利用量</h2>
+      {usage.isError ? <ErrorNotice error={usage.error} onRetry={() => void usage.refetch()} /> : null}
+      {data ? (
+        <>
+          <p className="max-w-measure type-body-md">
+            予算の期間の{periodDayLabel(data.periodStart)}から今日まで（UTC）のLLMの呼び出しです。
+            {data.billable ? null : "金額のかかるプロバイダーはないので、回数で示します。"}
+          </p>
+          {data.billable ? (
+            <p className="max-w-measure type-body-md">
+              {projectionLabel(data)}
+              <span className="text-on-surface-muted">見込みの額で、請求の額とは一致しないことがあります。</span>
+            </p>
+          ) : null}
+          <h3 className="type-label-md">カテゴリごと</h3>
+          <UsageByCategory usage={data} />
+          <p className="max-w-measure type-label-sm text-on-surface-muted">
+            作った記事と開いた記事は、期間の中で作った生成記事の数です。1件あたりは、開いた記事1件あたりの金額です。実行に属さない呼び出しは、要約、翻訳、セレクターの提案、ダイジェストと、実行の記録が30日を過ぎて消えた呼び出しです。
+          </p>
+          <h3 className="type-label-md">日ごと</h3>
+          <UsageByDay usage={data} />
+        </>
+      ) : usage.isPending ? (
+        <Loading />
+      ) : null}
+    </section>
+  );
+}
+
 /** The sections of the page, in their order, as the links at the top name them. */
 const SECTIONS = [
   { id: "categories", name: "カテゴリ" },
@@ -627,6 +751,7 @@ const SECTIONS = [
   { id: "device", name: "この端末の設定" },
   { id: "settings-file", name: "設定ファイル" },
   { id: "providers", name: "プロバイダー" },
+  { id: "usage", name: "利用量" },
   { id: "tokens", name: "トークン" },
 ] as const;
 
@@ -660,9 +785,10 @@ function SettingsSections() {
   const { clearToken } = useApp();
   const settings = useSettings();
   const providers = useProviders();
-  // The reader and the global settings appear only once the settings are in, and the providers' section grows when
-  // they are, so the page scrolls to the section the address names after both.
-  useScrollToHash(!settings.isPending && !providers.isPending);
+  const usage = useUsage();
+  // The reader and the global settings appear only once the settings are in, and the sections of the providers and
+  // of the usage grow when theirs are, so the page scrolls to the section the address names after all of them.
+  useScrollToHash(!settings.isPending && !providers.isPending && !usage.isPending);
   const [clearing, setClearing] = useState(false);
   return (
     <div className="h-full overflow-y-auto bg-surface">
@@ -712,6 +838,7 @@ function SettingsSections() {
       <DeviceSettings />
       <SettingsFile />
       <Providers />
+      <UsageSection />
       <section id="tokens" aria-label="トークン" className={SECTION}>
         <h2 className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">

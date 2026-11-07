@@ -643,6 +643,77 @@ describe("stars", () => {
   });
 });
 
+describe("misses", () => {
+  const missed = (server: TestServer, id: number) => getArticle(server.db, id).missed;
+
+  it("marks a generated article as a miss with the button, says so, and shows the button pressed", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    const { user } = renderApp({ server, route: `/unread/${id}` });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+
+    await user.click(await screen.findByRole("button", { name: "外れの印を付ける" }));
+
+    await waitFor(() => expect(missed(server, id)).toBe(true));
+    expect(await screen.findByRole("button", { name: "外れの印を外す" })).toHaveAttribute("aria-pressed", "true");
+    const status = await screen.findByText("外れの印を付けました", { selector: '[role="status"] > span' });
+    expect(within(status.closest<HTMLElement>('[role="status"]')!).getByRole("button", { name: "取り消す" })).toBeInTheDocument();
+    expect(getArticle(server.db, id).isRead).toBe(true);
+  });
+
+  it("marks an unread article as a miss and read with x, and puts both back with the undo", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    const { user } = renderApp({ server, route: "/unread" });
+    await user.click(await screen.findByRole("link", { name: /Off topic/ }));
+    await screen.findByRole("heading", { level: 2, name: "Off topic" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+
+    await user.keyboard("x");
+
+    const status = (await screen.findByText("外れの印を付けて、既読にしました", { selector: '[role="status"] > span' })).closest<HTMLElement>(
+      '[role="status"]',
+    )!;
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: true, isRead: true }));
+    await waitFor(() => expect(row(/Off topic/)).toHaveAttribute("data-read", "true"));
+
+    await user.click(within(status).getByRole("button", { name: "取り消す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: false, isRead: false }));
+    await waitFor(() => expect(row(/Off topic/)).toHaveAttribute("data-read", "false"));
+    expect(screen.getByRole("button", { name: "外れの印を付ける" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("takes only the mark away when pressed again, and leaves the article read", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    setArticleFlags(server.db, id, { missed: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: `/all/${id}` });
+
+    await user.click(await screen.findByRole("button", { name: "外れの印を外す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: false, isRead: true }));
+    expect(await screen.findByRole("button", { name: "外れの印を付ける" })).toBeInTheDocument();
+  });
+
+  it("offers no miss on a feed article, and x does nothing there", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: null }, server.clock);
+    const post = seedFeedArticle(server.db, feed.id, { title: "A post" });
+    const { user, requests } = renderApp({ server, route: `/all/${post}` });
+    await screen.findByRole("heading", { level: 2, name: "A post" });
+    await waitFor(() => expect(getArticle(server.db, post).isRead).toBe(true));
+
+    await user.keyboard("x");
+
+    expect(screen.queryByRole("button", { name: "外れの印を付ける" })).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    expect(missed(server, post)).toBe(false);
+  });
+});
+
 describe("a star or a read state the server cannot store", () => {
   /** The toast with the message: the article shows notes of its own as statuses. */
   const toastSays = async (text: string) =>

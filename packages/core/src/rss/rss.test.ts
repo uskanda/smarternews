@@ -42,6 +42,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   annotations: { note: null, highlights: [] },
   mentions: [],
   attachments: [],
+  missed: false,
   refs: [
     { url: "https://example.org/a", siteName: "Example News", title: "Fix shipped", publishedAt: "2026-03-01T09:00:00.000Z", reason: "A fix for an exploited bug", importance: 4 },
     { url: "https://example.net/b", siteName: "Example Daily", title: "Patch notes", publishedAt: null, reason: null, importance: null },

@@ -261,6 +261,52 @@ describe("read state and stars", () => {
   });
 });
 
+describe("misses", () => {
+  it("marks a generated article as a miss and read, and counts it on its topic", async () => {
+    const s = testServer();
+    const category = s.category();
+    const topic = await (await s.post(`/api/v1/categories/${category.id}/topics`, { text: "Vulnerabilities" })).json();
+    const id = s.article(category.id, { topicIds: [topic.id] });
+
+    const response = await s.patch(`/api/v1/articles/${id}`, { missed: true });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id, missed: true, isRead: true });
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).missed).toBe(true);
+    const topics = await (await s.get(`/api/v1/categories/${category.id}/topics`)).json();
+    expect(topics).toEqual([expect.objectContaining({ id: topic.id, missesSinceInterpretation: 1 })]);
+  });
+
+  it("puts the read state back when an undo gives it with the mark taken away", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    await s.patch(`/api/v1/articles/${id}`, { missed: true });
+
+    const body = await (await s.patch(`/api/v1/articles/${id}`, { missed: false, isRead: false })).json();
+
+    expect(body).toMatchObject({ missed: false, isRead: false });
+  });
+
+  it("takes only the mark away when the read state is not given", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    await s.patch(`/api/v1/articles/${id}`, { missed: true });
+
+    expect(await (await s.patch(`/api/v1/articles/${id}`, { missed: false })).json()).toMatchObject({ missed: false, isRead: true });
+  });
+
+  it("refuses a feed article", async () => {
+    const s = testServer();
+    const post = seedFeedArticle(s.db, seedFeed(s.db));
+
+    const response = await s.patch(`/api/v1/articles/${post}`, { missed: true });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields[0]).toMatchObject({ path: "missed", code: "not_allowed" });
+    expect((await (await s.get(`/api/v1/articles/${post}`)).json()).isRead).toBe(false);
+  });
+});
+
 describe("importance filter", () => {
   it("returns only the articles at or above the given importance", async () => {
     const s = testServer();
