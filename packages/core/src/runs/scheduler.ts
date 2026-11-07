@@ -4,7 +4,7 @@ import { transaction, type Database } from "../db/database.ts";
 import { hasLaterScheduledRun, hasRunForSlot, listDueRetries, setRetry } from "../db/runs.ts";
 import { getSettings } from "../db/settings.ts";
 import { listTopics } from "../db/topics.ts";
-import { addDays, localParts, zonedToUtc } from "../time.ts";
+import { addDays, budgetPeriod, localParts, zonedToUtc } from "../time.ts";
 import type { RunQueue } from "./queue.ts";
 import { purgeExpired } from "./retention.ts";
 
@@ -41,13 +41,19 @@ export class Scheduler {
   #timer: NodeJS.Timeout | undefined;
   readonly #purgeImages: () => void;
   readonly #log: (message: string, error: unknown) => void;
+  readonly #budgetResetDay: number | undefined;
 
-  /** `purgeImages` deletes the relayed images past their period; it runs with the purge of the database. */
+  /**
+   * `purgeImages` deletes the relayed images past their period; it runs with the purge of the database.
+   * `budgetResetDay` keeps the records of model calls of the current budget period, which can be longer than their
+   * thirty days; without it they are kept for thirty days.
+   */
   constructor(options: {
     db: Database;
     clock: Clock;
     queue: RunQueue;
     purgeImages?: () => void;
+    budgetResetDay?: number;
     log?: (message: string, error: unknown) => void;
   }) {
     this.#db = options.db;
@@ -55,6 +61,7 @@ export class Scheduler {
     this.#queue = options.queue;
     this.#purgeImages = options.purgeImages ?? (() => {});
     this.#log = options.log ?? ((message, error) => console.error(message, error));
+    this.#budgetResetDay = options.budgetResetDay;
   }
 
   /** Sets where checking starts. With `catchUp`, times missed in the last six hours count as still due. */
@@ -89,7 +96,8 @@ export class Scheduler {
         // The images are tried again in an hour; the database is purged all the same.
         this.#log("scheduler: purging relayed images failed:", error);
       }
-      purgeExpired(this.#db, this.#clock);
+      const keepCallsSince = this.#budgetResetDay === undefined ? undefined : budgetPeriod(now, this.#budgetResetDay).start;
+      purgeExpired(this.#db, this.#clock, { keepCallsSince });
     }
   }
 

@@ -34,9 +34,9 @@ function topic(server: TestServer, categoryId: number, text: string, interpreted
 }
 
 describe("the links to the sections", () => {
-  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "トークン"];
+  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "利用量", "トークン"];
 
-  it("lists the nine sections at the top, each pointing at its section", async () => {
+  it("lists the ten sections at the top, each pointing at its section", async () => {
     renderApp({ route: "/settings" });
     await section("全体設定");
     await section("プロバイダー");
@@ -64,6 +64,15 @@ describe("the links to the sections", () => {
 
     const providers = await section("プロバイダー");
     await waitFor(() => expect(scroll.mock.contexts).toContain(providers));
+    scroll.mockRestore();
+  });
+
+  it("scrolls to the usage once it is in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderApp({ route: "/settings#usage" });
+
+    const usage = await section("利用量");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(usage));
     scroll.mockRestore();
   });
 

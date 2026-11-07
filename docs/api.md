@@ -707,6 +707,14 @@ A run with the status `stopped_by_limit` names the limit in `stoppedBy`. Every o
 | `day` | The day reached `limits.llmCallsPerDay` |
 | `budget` | The budget period spent `limits.monthlyBudgetUsd` on providers that cost money. Those providers are not called again until the next period starts |
 
+Three fields say what the run's model calls used. Money is counted as the monthly budget counts it: the known costs of the calls to billable providers (see [Providers](#providers)).
+
+| Field | Meaning |
+|---|---|
+| `costUsd` | US dollars the run spent on billable providers. `null` for a run that called no billable provider |
+| `unknownCostCalls` | The run's calls to billable providers whose cost is unknown, such as a timeout. `costUsd` leaves them out |
+| `callsByTask` | For each task the run called, `calls` (every call, those to providers that cost nothing included) and `costUsd` (`null` when none of the calls went to a billable provider). A task the run did not call is absent |
+
 A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
 
 | Field | Meaning |
@@ -770,6 +778,27 @@ A provider is `billable` when calling it costs money: today that means the `anth
 | `byTask`, `byProvider` | `spentUsd` split by task and by provider name. A task or provider without a cost in the period has 0 |
 
 These amounts are the server's own estimate from published prices, not the amount Anthropic bills.
+
+### Usage
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/usage"
+```
+
+`GET /api/v1/usage` splits the model calls of the current budget period, from its first day to now, several ways. Money is counted as `budget.spentUsd` counts it; `calls` counts every call, those to providers that cost nothing included. The model is not called to make it.
+
+| Field | Meaning |
+|---|---|
+| `periodStart`, `periodEnd` | The first and the last day of the budget period, as `YYYY-MM-DD` |
+| `elapsedRatio` | The share of the period that has passed, from 0 to 1 |
+| `billable` | `false` when no provider costs money. Every amount is then 0, and `calls` tells the usage |
+| `monthlyBudgetUsd`, `spentUsd`, `unknownCostCalls` | The same as in `budget` |
+| `byCategory` | Every category, in the order of the list, with `calls`, `costUsd` and `unknownCostCalls` of its runs, `articlesCreated` (its generated articles made in the period), `articlesOpened` (those of them the reader opened) and `costPerOpenedUsd` (`costUsd` divided by `articlesOpened`, or `null` when none was opened) |
+| `outsideRuns` | `calls`, `costUsd` and `unknownCostCalls` of the calls that belong to no run: summaries, translations, proposals of selectors and digests, and calls whose run was deleted |
+| `byDay` | Every UTC day from `periodStart` to today, with `day`, `calls` and `costUsd`. Days without calls have 0. The amounts add up to `spentUsd` |
+| `projection` | `projectedUsd`, the money at the end of the period if it goes on at its average pace so far (`spentUsd` divided by the time passed, times the length of the period), and `exceedsBudget`, `true` when that is more than `monthlyBudgetUsd` |
+
+The records of model calls are kept for 30 days, or from the first day of the current budget period when that is earlier, so that the period counts every call. Runs are still deleted after 30 days; their calls then count outside runs.
 
 ## RSS
 

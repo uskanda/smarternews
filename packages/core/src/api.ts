@@ -1051,6 +1051,16 @@ export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
 export const stopLimitSchema = z.enum(["run", "day", "budget"]);
 export type StopLimit = z.infer<typeof stopLimitSchema>;
 
+export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
+export type TaskName = z.infer<typeof taskNameSchema>;
+
+/**
+ * Model calls and what they cost. `calls` counts every call, those to providers that cost nothing included; `costUsd`
+ * adds up the known costs of the calls to providers that cost money, and is null when none of the calls was one.
+ */
+export const taskCallsSchema = z.object({ calls: z.number().int(), costUsd: z.number().nullable() });
+export type TaskCalls = z.infer<typeof taskCallsSchema>;
+
 export const runSchema = z.object({
   id: z.number().int(),
   categoryId: z.number().int(),
@@ -1075,6 +1085,15 @@ export const runSchema = z.object({
   retrySkipped: retrySkippedSchema.nullable(),
   /** The allowance a run stopped by limit ran into. Null for every other run, and for runs stopped before it was kept. */
   stoppedBy: stopLimitSchema.nullable(),
+  /**
+   * US dollars the run's calls to providers that cost money used, as far as it is known. Null for a run that made no
+   * such call.
+   */
+  costUsd: z.number().nullable(),
+  /** The run's calls to providers that cost money whose cost is not known; `costUsd` leaves them out. */
+  unknownCostCalls: z.number().int(),
+  /** The run's model calls and their money, by task. Only the tasks the run called are present. */
+  callsByTask: z.partialRecord(taskNameSchema, taskCallsSchema),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -1097,9 +1116,6 @@ export const candidateSchema = z.object({
 export type Candidate = z.infer<typeof candidateSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
-
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
-export type TaskName = z.infer<typeof taskNameSchema>;
 
 /** What the providers that cost money used in the current budget period, in US dollars. */
 export const budgetStatusSchema = z.object({
@@ -1143,6 +1159,48 @@ export const providerStatusSchema = z.object({
   budget: budgetStatusSchema,
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
+
+/** Calls, money and calls of unknown cost. Money counts as the budget does; calls count every call. */
+const usageAmountsSchema = z.object({
+  calls: z.number().int(),
+  costUsd: z.number(),
+  unknownCostCalls: z.number().int(),
+});
+
+/** The model calls of the current budget period, from its first day to now, split several ways. */
+export const usageSchema = z.object({
+  /** The first and the last day of the period, as YYYY-MM-DD. Periods start at midnight UTC. */
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  /** The share of the period that has passed, from 0 to 1. */
+  elapsedRatio: z.number(),
+  /** False when no provider costs money: then every amount is 0 and the calls tell the usage. */
+  billable: z.boolean(),
+  monthlyBudgetUsd: z.number(),
+  /** The same total as the budget's. */
+  spentUsd: z.number(),
+  unknownCostCalls: z.number().int(),
+  /** Every category, in the order of the list, with the calls of its runs and the generated articles made in the period. */
+  byCategory: z.array(
+    usageAmountsSchema.extend({
+      categoryId: z.number().int(),
+      name: z.string(),
+      /** Generated articles of the category made in the period. */
+      articlesCreated: z.number().int(),
+      /** Those of them the reader has opened. */
+      articlesOpened: z.number().int(),
+      /** `costUsd` divided by `articlesOpened`. Null when no article was opened. */
+      costPerOpenedUsd: z.number().nullable(),
+    }),
+  ),
+  /** The calls that belong to no run: summaries, translations, proposals, digests, and calls whose run was deleted. */
+  outsideRuns: usageAmountsSchema,
+  /** Every UTC day from the first day of the period to today, days without calls included. */
+  byDay: z.array(z.object({ day: z.string(), calls: z.number().int(), costUsd: z.number() })),
+  /** The money at the end of the period if it goes on at its average pace so far. */
+  projection: z.object({ projectedUsd: z.number(), exceedsBudget: z.boolean() }),
+});
+export type Usage = z.infer<typeof usageSchema>;
 
 // ---- digests -----------------------------------------------------------------------------------
 
