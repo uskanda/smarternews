@@ -119,6 +119,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | Operation | Purpose |
 |---|---|
 | `GET /api/v1/categories/:id/topics` | List the topics of a category |
+| `GET /api/v1/categories/:id/topic-stats` | What each topic of a category brought in the last 30 days |
 | `POST /api/v1/categories/:id/topics` | Add a topic (status 201) |
 | `GET /api/v1/topics/:id` | Read one |
 | `PATCH /api/v1/topics/:id` | Change `text`, `enabled`, `sources`, `search`, `queries` |
@@ -126,6 +127,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | `POST /api/v1/topics/:id/interpret` | Ask for a new interpretation before the next run |
 | `POST /api/v1/topics/:id/trials` | Try a text on the topic without saving it (status 202) |
 | `GET /api/v1/topic-trials/:id` | Read a trial: its status and, once it succeeded, its result |
+| `POST /api/v1/topics/:id/rewrite-proposals` | Ask the model for new wordings of the topic, without saving anything |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -144,6 +146,38 @@ The answer comes at once: 202 with `{"status": "started", "id": ...}`. When a li
 `GET /api/v1/topic-trials/:id` answers `id`, `topicId`, `status` (`running`, `succeeded`, `failed` or `stopped_by_limit`), `stoppedBy` (`run`, `day` or `budget` for a trial stopped by a limit), `error` for a failed one, and `result` for a succeeded one. The result holds the new `queries` and `criteria`, the category's `minImportance`, the number of candidates `tried`, and `changes`: the candidates whose verdict turned between accepted and rejected, newest first. Each has `candidateId`, `title`, `url`, `siteName`, `publishedAt`, `before` (`verdict`, `reason`, and `byProgram` when the stored reason is the program's), `after` (`verdict`, `reason`, `importance`), and `belowMinimum`, true when the trial accepts it below the category's minimum importance.
 
 A trial stores nothing: topics, candidates, seen URLs and articles stay as they were, and saving the text later interprets it again in the next run. Only its model calls are recorded, with the purpose `trial`. Results are kept in memory for 30 minutes and are gone after a restart; asking then answers 404.
+
+### Proposals of topic rewrites
+
+`POST /api/v1/topics/:id/rewrite-proposals` takes no body. It asks the `proposeTopicRewrite` task once with the saved text and `criteria` of the topic, the reader information, and the topic's articles opened and starred, its misses and the candidates the judge found not relevant (see [Model providers](providers.md#proposals-of-topic-rewrites) for how many of each). The answer waits for the model, up to `llm.timeoutMs`.
+
+The answer is 200 with `status` and `proposals`. `status` is `proposed` with one or two `proposals`, each with `text`, the new wording, and `explanation`, in the output language, of what changed and how the relevance test is likely to change. Without a call of the model, `proposals` is empty and `status` says why: `limit` for `limits.topicRewritesPerDay`, `day` for `limits.llmCallsPerDay`, `budget` for the monthly budget, `uninterpreted` for a topic that waits for its interpretation. When the task fails or runs out of time, the answer is 503. A topic that does not exist answers 404.
+
+Nothing is stored but the record of the call, which belongs to no run. To use a proposal, send its text with `PATCH /api/v1/topics/:id`; the topic is then interpreted again before the next run.
+
+### Topic stats
+
+`topic-stats` counts, for every topic of the category in the order of their ids, the candidates collected and the generated articles made in the last 30 days. No model is called. The answer has `since`, the start of the period, and `topics`, one entry per topic with these fields:
+
+| Field | Meaning |
+|---|---|
+| `topicId`, `text` | The topic |
+| `collected` | The candidates collected for it: `total`, and `bySource` with `feed`, `news-search` and `llm-search` |
+| `rejectedByJudge` | Candidates the `judge` task rejected |
+| `belowMinimum` | Candidates rejected because their story was below the category's `minImportance` |
+| `overLimit` | Candidates rejected because the run had written `maxArticlesPerRun` articles |
+| `rejectedByDate` | Candidates rejected for a date: news without a publication time, and events outside the window or without a date |
+| `created` | Generated articles of the topic made in the period. Feed articles are never counted |
+| `updated` | Generated articles of the topic rewritten by a follow-up, the last time in the period |
+| `opened`, `starred` | Of the articles in `created`: the ones opened, and the ones with a star now |
+| `missed` | Of the articles in `created`: the ones marked as a [miss](#misses) for this topic, whenever the mark was made |
+| `topRejectedSites` | Up to three sites with the most rejected candidates, as `siteName` and `count`, most first; candidates without a site name are left out |
+
+A candidate that matched two topics counts for both. A candidate keeps only its last reason, so one the judge accepted and the program then rejected counts under the program's reason. An unknown category answers 404.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/topic-stats"
+```
 
 ## Articles
 

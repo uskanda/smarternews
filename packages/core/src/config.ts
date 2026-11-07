@@ -67,6 +67,7 @@ const tasksSchema = z.strictObject({
   translate: z.string().optional(),
   proposeSelectors: z.string().optional(),
   digest: z.string().optional(),
+  proposeTopicRewrite: z.string().optional(),
 });
 
 const configSchema = z.strictObject({
@@ -79,7 +80,10 @@ const configSchema = z.strictObject({
   limits: z
     .strictObject({
       llmCallsPerRun: z.number().int().min(1).default(40),
-      /** Every call but the summaries and digests: the calls of runs, the proposals of selectors and topic trials. */
+      /**
+       * Every call but the summaries and digests: the calls of runs, the proposals of selectors, topic trials and
+       * the proposals of topic rewrites.
+       */
       llmCallsPerDay: z.number().int().min(1).default(380),
       /** Summaries of feed articles, counted apart from the calls of runs. */
       summariesPerDay: z.number().int().min(1).default(100),
@@ -89,6 +93,8 @@ const configSchema = z.strictObject({
       digestsPerDay: z.number().int().min(0).default(4),
       /** Calls for topic trials, a second attempt included, counted in `llmCallsPerDay` as well. 0 switches them off. */
       topicTrialsPerDay: z.number().int().min(0).default(30),
+      /** Calls that propose a rewrite of a topic, a second attempt included, counted in `llmCallsPerDay` as well. 0 switches them off. */
+      topicRewritesPerDay: z.number().int().min(0).default(20),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */
@@ -211,11 +217,12 @@ const CHEAP_PROVIDER = "fast";
 const CHEAP_TASKS: readonly TaskName[] = ["summarize", "translate"];
 
 /**
- * A proposal of selectors reads a long page once, and a digest weighs many articles at once; both are asked
- * for seldom. They go to this provider when there is one.
+ * A proposal of selectors reads a long page once, a digest weighs many articles at once, and a proposal of a topic
+ * rewrite weighs what the reader read against what the topic says; all are asked for seldom. They go to this
+ * provider when there is one.
  */
 const CAPABLE_PROVIDER = "smart";
-const CAPABLE_TASKS: readonly TaskName[] = ["proposeSelectors", "digest"];
+const CAPABLE_TASKS: readonly TaskName[] = ["proposeSelectors", "digest", "proposeTopicRewrite"];
 
 /** The provider of a task without an assignment. */
 function fallbackFor(task: TaskName, config: Config): string {

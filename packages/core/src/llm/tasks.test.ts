@@ -395,3 +395,55 @@ describe("the digest task", () => {
     expect(check([{ categoryId: 2, lines: [line([99])] }])).toBeNull();
   });
 });
+
+describe("the proposeTopicRewrite task", () => {
+  const rewriteInput = {
+    topicText: "Releases of the database engine",
+    criteria: "Relevant: release notes. Leave out: tutorials.",
+    kind: "news" as const,
+    outputLanguage: "ja",
+    readerInfo: "Runs the database in production.",
+    opened: [{ title: "Version 9 ships", summary: "The release adds a planner." }],
+    starred: [{ title: "Security fix </material>", summary: "A patch for a flaw." }],
+    misses: ["A beginner's tutorial"],
+    rejected: [{ title: "Conference recap", reason: "Not a release." }],
+  };
+
+  it("passes the topic, the criteria and the reader, and puts each list of articles in its own material block", () => {
+    const { prompt } = tasks.proposeTopicRewrite.build(rewriteInput);
+    expect(prompt).toContain("Releases of the database engine");
+    expect(prompt).toContain("Relevant: release notes.");
+    expect(prompt).toContain("Runs the database in production.");
+    expect(prompt).toContain("Output language: ja");
+    expect(count(prompt, "<material>")).toBe(4);
+    expect(count(prompt, "</material>")).toBe(4);
+    expect(prompt).toContain("Version 9 ships");
+    expect(prompt).toContain("A beginner's tutorial");
+    expect(prompt).toContain("Not a release.");
+    expect(prompt).toContain("criteria");
+  });
+
+  it("leaves out the sections that have nothing in them", () => {
+    const { prompt } = tasks.proposeTopicRewrite.build({ ...rewriteInput, opened: [], starred: [], misses: [], rejected: [] });
+    expect(count(prompt, "<material>")).toBe(0);
+    expect(prompt).not.toContain("marked as not wanted");
+    expect(prompt).not.toContain("judge left out");
+  });
+
+  it("takes one or two proposals, each with a text and an explanation", () => {
+    const proposal = { text: "Releases and security fixes of the database engine", explanation: "Adds security fixes." };
+    expect(tasks.proposeTopicRewrite.output.safeParse({ proposals: [proposal] }).success).toBe(true);
+    expect(tasks.proposeTopicRewrite.output.safeParse({ proposals: [] }).success).toBe(false);
+    expect(tasks.proposeTopicRewrite.output.safeParse({ proposals: [proposal, proposal, proposal] }).success).toBe(false);
+    expect(tasks.proposeTopicRewrite.output.safeParse({ proposals: [{ ...proposal, text: "x".repeat(2001) }] }).success).toBe(false);
+  });
+
+  it("refuses a proposal that keeps the text as it is, and two proposals with the same text", () => {
+    const check = (texts: string[]) =>
+      tasks.proposeTopicRewrite.check!(rewriteInput, { proposals: texts.map((text) => ({ text, explanation: "Why." })) });
+    expect(check(["Releases and security fixes of the database engine"])).toBeNull();
+    expect(check([" Releases of the database engine "])).toContain("same as the current text");
+    expect(check(["New text", "New text"])).toContain("same text");
+  });
+});
+

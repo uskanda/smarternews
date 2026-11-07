@@ -35,6 +35,7 @@ import {
   feedDiscoverSchema,
   feedUpdateSchema,
   feedStats,
+  topicStats,
   findCategoryBySlug,
   getArticle,
   getDigest,
@@ -73,6 +74,7 @@ import {
   pagePreviewRequestSchema,
   previewSelectors,
   proposeSelectors,
+  proposeTopicRewrite,
   markArticlesUnread,
   markReadBodySchema,
   markSeenArticlesRead,
@@ -303,6 +305,7 @@ export function createApp(deps: AppDeps): Hono {
     const category = getCategory(db, idParam(c, "category"));
     return c.json(listTopics(db, category.id));
   });
+  api.get("/categories/:id/topic-stats", (c) => c.json(topicStats(db, idParam(c, "category"), clock())));
   api.post("/categories/:id/topics", async (c) =>
     c.json(createTopic(db, idParam(c, "category"), parse(topicCreateSchema, await jsonBody(c)), clock), 201),
   );
@@ -322,6 +325,9 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(started, started.status === "started" ? 202 : 200);
   });
   api.get("/topic-trials/:id", (c) => c.json(trials.get(c.req.param("id"))));
+  // Proposals of a new wording, from the saved text and relevance test. One model call, so the answer waits for
+  // it, up to its time limit. Nothing is stored but the record of the call.
+  api.post("/topics/:id/rewrite-proposals", async (c) => c.json(await proposeTopicRewrite({ db, clock, runner }, idParam(c, "topic"))));
 
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));

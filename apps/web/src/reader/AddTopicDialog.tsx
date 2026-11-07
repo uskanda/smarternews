@@ -82,6 +82,7 @@ function AddTopicForm({ draft, categoryId, onDone }: { draft: string; categoryId
     try {
       const topic = await api.createTopic(target, { text });
       void client.invalidateQueries({ queryKey: ["topics", target] });
+      void client.invalidateQueries({ queryKey: ["topic-stats", target] });
       onDone();
       toast({
         message: "追加しました。次の実行で解釈されます。",

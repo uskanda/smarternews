@@ -19,6 +19,7 @@ describe("parseConfig", () => {
       translate: "fast",
       proposeSelectors: "smart",
       digest: "smart",
+      proposeTopicRewrite: "smart",
     });
   });
 
@@ -39,6 +40,7 @@ tasks: { default: a, judge: b }
       translate: "a",
       proposeSelectors: "a",
       digest: "a",
+      proposeTopicRewrite: "a",
     });
   });
 
@@ -80,6 +82,7 @@ providers:
       selectorProposalsPerDay: 50,
       digestsPerDay: 4,
       topicTrialsPerDay: 30,
+      topicRewritesPerDay: 20,
       judgeBatchSize: 30,
       pagesPerRun: 20,
       runRetries: 2,
@@ -261,6 +264,25 @@ describe("the digest task and its limit", () => {
     expect(parseConfig(null).limits.digestsPerDay).toBe(4);
     expect(parseConfig("limits:\n  digestsPerDay: 0\n").limits.digestsPerDay).toBe(0);
     expect(() => parseConfig("limits:\n  digestsPerDay: -1\n")).toThrow(/limits\.digestsPerDay/);
+  });
+});
+
+describe("the topic rewrite task and its limit", () => {
+  const providers = (names: string[]) => `providers:\n${names.map((name) => `  ${name}: { adapter: claude-cli, model: m }\n`).join("")}`;
+
+  it("goes to smart when nothing is assigned, to the default when there is no smart, and to the assigned one", () => {
+    expect(resolveAssignment(parseConfig(null)).proposeTopicRewrite).toBe("smart");
+    expect(resolveAssignment(parseConfig(`${providers(["fast", "smart"])}tasks:\n  default: fast\n`)).proposeTopicRewrite).toBe("smart");
+    expect(resolveAssignment(parseConfig(`${providers(["big", "fast"])}tasks:\n  default: big\n`)).proposeTopicRewrite).toBe("big");
+    const assigned = parseConfig(`${providers(["big", "smart", "local"])}tasks:\n  default: big\n  proposeTopicRewrite: local\n`);
+    expect(resolveAssignment(assigned).proposeTopicRewrite).toBe("local");
+  });
+
+  it("allows 20 proposals a day unless the file says otherwise, and 0", () => {
+    expect(parseConfig(null).limits.topicRewritesPerDay).toBe(20);
+    expect(parseConfig("limits:\n  topicRewritesPerDay: 0\n").limits.topicRewritesPerDay).toBe(0);
+    expect(() => parseConfig("limits:\n  topicRewritesPerDay: -1\n")).toThrow(/limits\.topicRewritesPerDay/);
+    expect(() => parseConfig("limits:\n  topicRewritesPerDay: 1.5\n")).toThrow(/limits\.topicRewritesPerDay/);
   });
 });
 

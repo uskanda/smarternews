@@ -32,7 +32,7 @@
 
 ## Impact
 
-- `packages/core`の保存：移行`028_attention.sql`（表`search_attempts`と`attention_dismissals`）と`db/search-attempts.ts`
+- `packages/core`の保存：移行`029_attention.sql`（表`search_attempts`と`attention_dismissals`）と`db/search-attempts.ts`
 - `packages/core`の処理：`sources/news-search.ts`、`pipeline/run.ts`、`runs/retention.ts`、`api.ts`の型
 - `packages/core`の新しい処理：`runs/attention.ts`
 - `apps/server`：`GET /api/v1/attention`と`POST /api/v1/attention/dismissals`

@@ -1,6 +1,6 @@
 # Model providers
 
-smarternews calls a language model for nine tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
+smarternews calls a language model for ten tasks. A provider is a model you configured under a name, and each task runs on the provider you assign to it.
 
 | Task | What the model does | When it runs |
 |---|---|---|
@@ -13,6 +13,7 @@ smarternews calls a language model for nine tasks. A provider is a model you con
 | `translate` | Translates the title and the content of one article of a subscribed feed | When an article of a feed that translates is opened and the translation API cannot be used; once per 8,000 characters |
 | `proposeSelectors` | Proposes CSS selectors that take the articles out of a page without a feed | When you ask for candidates while adding a web feed, or choose "候補を出し直す" while editing one |
 | `digest` | Writes the digest of a period: an executive summary and a few lines per category | At the times of the digest schedule in the settings, 7:00 and 19:00 by default, and when you choose "今すぐ作る" |
+| `proposeTopicRewrite` | Proposes one or two new wordings of a topic, with what changed | When you choose "書き直しの案を出す" in the editor of a topic |
 
 Providers and assignments live in `~/.config/smarternews/config.yaml`. The server reads the file at start-up and refuses to start when an assignment names a provider that is not configured. [examples/config.example.yaml](../examples/config.example.yaml) lists every key.
 
@@ -187,7 +188,7 @@ A web feed is a page without a feed whose articles are taken out with CSS select
 
 A task that is not listed under `tasks` uses `default`, with a second exception: `proposeSelectors` uses the provider named `smart` when there is one. It reads a long page and is asked for seldom. Without a provider of that name it uses `default`.
 
-`limits.selectorProposalsPerDay` (50 by default) bounds the proposals of one day. Each proposal also counts towards `limits.llmCallsPerDay`, whose default of 380 makes room for those 50 and for the 30 calls of topic trials. 0 switches proposals off. On a day that has reached either limit, and when the task fails, times out or proposes selectors that take no article out of the page, the server finds candidates by itself in the parts of the page with many links. The page says that the model was not used, and this is not an error.
+`limits.selectorProposalsPerDay` (50 by default) bounds the proposals of one day. Each proposal also counts towards `limits.llmCallsPerDay`, whose default of 380 makes room for those 50, for the 30 calls of topic trials and for the 20 proposals of topic rewrites. 0 switches proposals off. On a day that has reached either limit, and when the task fails, times out or proposes selectors that take no article out of the page, the server finds candidates by itself in the parts of the page with many links. The page says that the model was not used, and this is not an error.
 
 ```yaml
 limits:
@@ -220,6 +221,28 @@ limits:
   topicTrialsPerDay: 30
 ```
 
+## Proposals of topic rewrites
+
+`proposeTopicRewrite` proposes one or two new wordings of a topic, each with an explanation in the output language of what changed and how the relevance test is likely to change. It runs only when you choose "書き直しの案を出す" in the editor of an interpreted topic, once per request, and uses no tools. It reads the saved text and relevance test of the topic, the reader information, and what the reader did with the topic's articles:
+
+- the generated articles first opened in the last 30 days, the last opened first, up to 20, with their title and summary
+- the starred articles made in the last 30 days, newest first, up to 20, with their title and summary
+- the titles of the misses, as `interpret` reads them: marked in the last 90 days, newest first, up to 20
+- the candidates of the last 30 days that `judge` found not relevant, newest first, up to 30, with their title and reason. Candidates the program left out, for an unknown publication time, the article limit of a run or an importance below the category minimum, are not sent: a new wording does not change them.
+
+Nothing is stored but the record of the call. Choosing a proposal puts it into the editor; saving it has the topic interpreted again before the next run, as any edit of the text does. A proposal that keeps the current text, or two proposals with the same text, are asked for once more.
+
+Like `digest`, `proposeTopicRewrite` uses the provider named `smart` when `tasks` does not assign it and there is one, and `default` otherwise.
+
+`limits.topicRewritesPerDay` (20 by default) bounds the calls of one day, a second attempt after an invalid answer included. They count towards `limits.llmCallsPerDay` as well, and under the `anthropic` adapter towards the monthly budget. 0 switches proposals off. When either limit is reached, or the provider costs money and the budget is used up, the request is refused before any call.
+
+```yaml
+tasks:
+  proposeTopicRewrite: smart
+limits:
+  topicRewritesPerDay: 20
+```
+
 ## Mixing providers
 
 Assignments are per task, so a cheap model can do the high-volume work. `judge` reads up to 30 short candidates per call and `cluster` reads headlines, while `write` produces the text you read. The default configuration therefore runs `judge` and `cluster` on `haiku` and the other tasks on `sonnet`.
@@ -228,7 +251,7 @@ Assignments are per task, so a cheap model can do the high-volume work. `judge` 
 
 The server validates every answer against the task's schema. An answer that does not match is requested once more with the same input. A second mismatch fails the task: nothing is stored, and the run history records the failure.
 
-A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, `limits.selectorProposalsPerDay` those of proposals of selectors, `limits.topicTrialsPerDay` those of topic trials, and `limits.digestsPerDay` those of digests; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
+A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, `limits.selectorProposalsPerDay` those of proposals of selectors, `limits.topicTrialsPerDay` those of topic trials, `limits.topicRewritesPerDay` those of proposals of topic rewrites, and `limits.digestsPerDay` those of digests; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
 
 `limits.runRetries` (2 by default, 0 to 3) is how often a scheduled run that ended as `failed` is tried again. Each retry is a run like any other, so it obeys `limits.llmCallsPerRun` and `limits.llmCallsPerDay`. While a provider stays down, a category therefore uses up to three runs' worth of calls for one scheduled time. A run that stopped at a limit is not retried.
 

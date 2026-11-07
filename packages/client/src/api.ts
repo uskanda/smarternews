@@ -48,6 +48,8 @@ import {
   filterUpdateResultSchema,
   termGroupSchema,
   topicSchema,
+  topicRewriteResultSchema,
+  topicStatsSchema,
   topicTrialSchema,
   topicTrialStartSchema,
   translationStatusSchema,
@@ -105,7 +107,9 @@ import {
   type TermGroupUpdate,
   type Topic,
   type TopicCreate,
+  type TopicStats,
   type TopicUpdate,
+  type TopicRewriteResult,
   type TopicTrial,
   type TopicTrialRequest,
   type TopicTrialStart,
@@ -248,6 +252,8 @@ export function createApi(options: ApiOptions) {
     deleteCategory: async (id: number): Promise<void> => void (await request(`/categories/${id}`, { method: "DELETE" })),
 
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
+    /** What each topic of the category brought in the last 30 days. */
+    topicStats: (categoryId: number): Promise<TopicStats> => json(topicStatsSchema, `/categories/${categoryId}/topic-stats`),
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
@@ -258,6 +264,9 @@ export function createApi(options: ApiOptions) {
     startTopicTrial: (id: number, draft: TopicTrialRequest): Promise<TopicTrialStart> =>
       json(topicTrialStartSchema, `/topics/${id}/trials`, body("POST", draft)),
     topicTrial: (id: string): Promise<TopicTrial> => json(topicTrialSchema, `/topic-trials/${encodeURIComponent(id)}`),
+    /** Proposals of a new wording, from the saved text and relevance test. Waits for the model; stores nothing. */
+    proposeTopicRewrite: (id: number): Promise<TopicRewriteResult> =>
+      json(topicRewriteResultSchema, `/topics/${id}/rewrite-proposals`, { method: "POST" }),
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>
       json(articleListSchema, `/articles${query(filter as Record<string, string | number | undefined>)}`),

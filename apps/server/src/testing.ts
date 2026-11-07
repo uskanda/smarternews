@@ -63,6 +63,9 @@ export function testServer(
     interpret?: FakeHandler;
     judge?: FakeHandler;
     topicTrialsPerDay?: number;
+    /** Answers the task that proposes a rewrite of a topic. Without it, a call of the task fails the test. */
+    proposeTopicRewrite?: FakeHandler;
+    topicRewritesPerDay?: number;
     /** Makes every provider one that costs money, at these prices. */
     pricing?: ModelPricing;
     budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
@@ -80,6 +83,7 @@ export function testServer(
       ...(options.digest ? { digest: options.digest } : {}),
       ...(options.interpret ? { interpret: options.interpret } : {}),
       ...(options.judge ? { judge: options.judge } : {}),
+      ...(options.proposeTopicRewrite ? { proposeTopicRewrite: options.proposeTopicRewrite } : {}),
     },
     {
       webSearch: options.webSearch,
@@ -89,7 +93,8 @@ export function testServer(
       options.summariesPerDay === undefined &&
       options.selectorProposalsPerDay === undefined &&
       options.digestsPerDay === undefined &&
-      options.topicTrialsPerDay === undefined
+      options.topicTrialsPerDay === undefined &&
+      options.topicRewritesPerDay === undefined
         ? {}
         : {
             limits: {
@@ -99,6 +104,7 @@ export function testServer(
               ...(options.selectorProposalsPerDay === undefined ? {} : { selectorProposalsPerDay: options.selectorProposalsPerDay }),
               ...(options.digestsPerDay === undefined ? {} : { digestsPerDay: options.digestsPerDay }),
               ...(options.topicTrialsPerDay === undefined ? {} : { topicTrialsPerDay: options.topicTrialsPerDay }),
+              ...(options.topicRewritesPerDay === undefined ? {} : { topicRewritesPerDay: options.topicRewritesPerDay }),
             },
           }),
     },

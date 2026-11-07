@@ -166,6 +166,14 @@ terms:
     definition: "外れの印を付けた時点の記事の見出し、カテゴリ、トピック、時刻を写した記録で、記事が消えても残る。"
     aliases: []
     en: "miss record"
+  - term: "理由の種類"
+    definition: "プログラムが候補を除外したときの理由を表す決まった値で、判定による除外は持たない。"
+    aliases: ["理由コード"]
+    en: "reason code"
+  - term: "トピックの成績"
+    definition: "トピックごとに、直近30日に集めた候補と作った生成記事がどうなったかを数えたもの。"
+    aliases: ["トピックの統計"]
+    en: "topic stats"
   - term: "スケジュール"
     definition: "カテゴリごとに決めた、実行を始める時刻の一覧。"
     aliases: []
