@@ -189,6 +189,40 @@ describe("a row of the list", () => {
     expect(row(/Rumour/)).toHaveTextContent("更新");
     expect(row(/Rumour/)).toHaveTextContent("未確認");
   });
+
+  it("shows what the last update added in place of the summary, read or not", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const [, updated, read] = articles(server, category.id, [
+      { title: "Plain story", summary: "Plain summary." },
+      { title: "Updated story", summary: "Old summary." },
+      { title: "Read story", summary: "Read summary." },
+    ]);
+    const note = server.db.prepare("UPDATE articles SET revision = 1, update_note = ? WHERE id = ?");
+    note.run("価格が発表されました。", updated!);
+    note.run("日程が決まりました。", read!);
+    setArticleFlags(server.db, read!, { isRead: true }, server.clock().toISOString());
+    renderApp({ server, route: "/all" });
+
+    await screen.findByRole("link", { name: /Updated story/ });
+    expect(row(/Updated story/)).toHaveTextContent("更新：価格が発表されました。");
+    expect(row(/Updated story/)).not.toHaveTextContent("Old summary.");
+    expect(row(/Updated story/).querySelector("[data-update-note]")).toHaveClass("line-clamp-1");
+    expect(row(/Read story/)).toHaveTextContent("更新：日程が決まりました。");
+    expect(row(/Read story/)).not.toHaveTextContent("Read summary.");
+    expect(row(/Plain story/)).toHaveTextContent("Plain summary.");
+  });
+
+  it("shows the excerpt of a search hit rather than what the last update added", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Battery plant", summary: "新しい電池の工場ができた。" });
+    server.db.prepare("UPDATE articles SET revision = 1, update_note = '稼働の時期が決まりました。' WHERE id = ?").run(id);
+    renderApp({ server, route: `/search?q=${encodeURIComponent("電池")}` });
+
+    await screen.findByRole("link", { name: /Battery plant/ });
+    expect(row(/Battery plant/)).toHaveTextContent("電池の工場");
+    expect(row(/Battery plant/)).not.toHaveTextContent("稼働の時期が決まりました。");
+  });
 });
 
 describe("narrowing and paging", () => {
@@ -399,6 +433,82 @@ describe("reading an article", () => {
     await user.click(await within(await screen.findByRole("article", { name: "記事" })).findByRole("link", { name: "Flaw disclosed" }));
 
     expect(await screen.findByRole("heading", { level: 2, name: "Flaw disclosed" })).toBeInTheDocument();
+  });
+
+  it("lists the whole chain of earlier articles, newest first, with the day each was first published", async () => {
+    const server = makeServer("2026-03-01T09:30:00.000Z");
+    const category = server.category();
+    const write = (title: string, previousArticleId: number | null) => {
+      const id = insertArticle(server.db, {
+        categoryId: category.id,
+        kind: "news",
+        title,
+        summary: "s",
+        body: "b",
+        impact: null,
+        importance: 3,
+        unconfirmed: false,
+        snippetOnly: false,
+        event: null,
+        now: server.clock().toISOString(),
+        previousArticleId,
+        refs: [],
+        topicIds: [],
+      });
+      server.clock.advance(7 * 24 * 60 * MINUTE);
+      return id;
+    };
+    const first = write("Flaw disclosed", null);
+    const second = write("Patch released", first);
+    const third = write("Lawsuit filed", second);
+    const { user } = renderApp({ server, route: `/all/${third}` });
+
+    const chain = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "この話題の前の記事" });
+    const items = within(chain).getAllByRole("listitem");
+    expect(items.map((item) => within(item).getByRole("link").textContent)).toEqual(["Patch released", "Flaw disclosed"]);
+    expect(items[0]).toHaveTextContent("2026年3月8日");
+    expect(items[1]).toHaveTextContent("2026年3月1日");
+
+    await user.click(within(chain).getByRole("link", { name: "Flaw disclosed" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Flaw disclosed" })).toBeInTheDocument();
+  });
+
+  it("puts what the last update added after the headline and before the impact", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw", impact: "Update this week.", body: "Body text here." });
+    server.db.prepare("UPDATE articles SET revision = 1, update_note = '修正版が公開されました。' WHERE id = ?").run(id);
+    renderApp({ server, route: `/all/${id}` });
+
+    const note = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "今回の更新で加わったこと" });
+    expect(note).toHaveTextContent("今回の更新で加わったこと");
+    expect(note).toHaveTextContent("修正版が公開されました。");
+    const heading = within(article()).getByRole("heading", { level: 2, name: "Flaw" });
+    const impact = within(article()).getByRole("region", { name: "読み手への影響" });
+    expect(heading.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(impact) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows nothing of an update note on an article without one", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw" });
+    server.db.prepare("UPDATE articles SET revision = 1 WHERE id = ?").run(id);
+    renderApp({ server, route: `/all/${id}` });
+
+    await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "Flaw" });
+    expect(within(article()).queryByRole("region", { name: "今回の更新で加わったこと" })).not.toBeInTheDocument();
+  });
+
+  it("marks the sources added since the reader last read the article", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw", refs: ["https://example.org/a", "https://example.org/b"] });
+    server.db.prepare("UPDATE articles SET revision = 1, read_before_update_at = '2026-03-01T00:00:00.000Z' WHERE id = ?").run(id);
+    server.db.prepare("UPDATE article_refs SET added_at = CASE url WHEN 'https://example.org/b' THEN '2026-03-02T00:00:00.000Z' ELSE '2026-02-28T00:00:00.000Z' END").run();
+    renderApp({ server, route: `/all/${id}` });
+
+    const sources = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "出典" });
+    const items = within(sources).getAllByRole("listitem");
+    expect(items[0]).not.toHaveTextContent("新しい出典");
+    expect(items[1]).toHaveTextContent("新しい出典");
   });
 
   it("links each topic the article matched to the editor of that topic", async () => {
