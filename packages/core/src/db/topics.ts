@@ -30,15 +30,21 @@ function toTopic(row: Row): Topic {
     sourcesSetByUser: bool(row.sources_set_by_user),
     search: language !== null && region !== null ? { language, region } : null,
     createdAt: str(row.created_at),
+    missesSinceInterpretation: num(row.misses_since_interpretation),
   };
 }
 
+/** A topic's columns, with how many of its misses were marked after its last interpretation, or all of them. */
+const TOPIC_COLUMNS = `t.*,
+  (SELECT count(*) FROM miss_topics mt JOIN misses m ON m.id = mt.miss_id
+    WHERE mt.topic_id = t.id AND (t.interpreted_at IS NULL OR m.marked_at > t.interpreted_at)) AS misses_since_interpretation`;
+
 export function listTopics(db: Database, categoryId: number): Topic[] {
-  return db.prepare("SELECT * FROM topics WHERE category_id = ? ORDER BY id").all(categoryId).map(toTopic);
+  return db.prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.category_id = ? ORDER BY t.id`).all(categoryId).map(toTopic);
 }
 
 export function getTopic(db: Database, id: number): Topic {
-  const row = db.prepare("SELECT * FROM topics WHERE id = ?").get(id);
+  const row = db.prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.id = ?`).get(id);
   if (!row) throw notFound("topic", id);
   return toTopic(row);
 }
@@ -116,8 +122,12 @@ export function requestInterpretation(db: Database, id: number): Topic {
   return topic;
 }
 
-/** Stores what the interpret task produced. Source choices made by the user are never overwritten. */
-export function applyInterpretation(db: Database, id: number, interpretation: Interpretation): Topic {
+/**
+ * Stores what the interpret task produced. Source choices made by the user are never overwritten. `interpretedAt`
+ * is when the task ran, which the count of misses since the interpretation starts from; an interpretation brought
+ * from elsewhere, such as a settings file, leaves the time as it was.
+ */
+export function applyInterpretation(db: Database, id: number, interpretation: Interpretation, interpretedAt?: string): Topic {
   const topic = getTopic(db, id);
   topic.interpreted = true;
   topic.queries = interpretation.queries;
@@ -126,5 +136,6 @@ export function applyInterpretation(db: Database, id: number, interpretation: In
     topic.sources = { ...topic.sources, ...interpretation.suggestedSources };
   }
   save(db, topic);
-  return topic;
+  if (interpretedAt !== undefined) db.prepare("UPDATE topics SET interpreted_at = ? WHERE id = ?").run(interpretedAt, id);
+  return getTopic(db, id);
 }

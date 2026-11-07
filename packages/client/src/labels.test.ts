@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { budgetShare, budgetWarningLabel, conflictLabel, feedErrorLabel, formatUsd, nextPeriodStart, periodDayLabel, stopLimitLabel } from "./labels.ts";
+import {
+  budgetShare,
+  budgetWarningLabel,
+  conflictLabel,
+  feedErrorLabel,
+  formatUsd,
+  nextPeriodStart,
+  periodDayLabel,
+  projectionLabel,
+  stopLimitLabel,
+} from "./labels.ts";
 
 describe("conflictLabel", () => {
   it("says what a refused change ran into", () => {
@@ -21,6 +31,11 @@ describe("feedErrorLabel", () => {
     expect(feedErrorLabel("request failed: https://example.org/: getaddrinfo ENOTFOUND")).toBe("サイトに接続できませんでした");
   });
 
+  it("tells too many requests and a feed that is gone apart from other errors", () => {
+    expect(feedErrorLabel("HTTP status 429: https://example.org/feed.xml")).toBe("アクセスが多すぎると返されました（HTTP 429）");
+    expect(feedErrorLabel("HTTP status 410: https://example.org/feed.xml")).toBe("配信を終えたと返しています（HTTP 410）");
+  });
+
   it("says why the page of a web feed gave no articles", () => {
     expect(feedErrorLabel("no element matches the item selector")).toBe("ページに記事が見つかりませんでした。ページの作りが変わった可能性があります");
     expect(feedErrorLabel("robots.txt forbids")).toBe("サイトのrobots.txtが取得を禁じています");
@@ -29,6 +44,22 @@ describe("feedErrorLabel", () => {
 
   it("shows a reason it does not know as it is", () => {
     expect(feedErrorLabel("something new")).toBe("something new");
+  });
+});
+
+describe("projectionLabel", () => {
+  const usage = { periodEnd: "2026-11-09", monthlyBudgetUsd: 100 };
+
+  it("says what the period will have spent at its end, and how that was worked out", () => {
+    expect(projectionLabel({ ...usage, projection: { projectedUsd: 30, exceedsBudget: false } })).toBe(
+      "このままの速さで使うと、期末の11月9日までに$30.00になる見込みです。期間の初日から今までの1日あたりの平均で計算しました。",
+    );
+  });
+
+  it("says when the projection passes the monthly budget", () => {
+    expect(projectionLabel({ ...usage, projection: { projectedUsd: 120, exceedsBudget: true } })).toBe(
+      "このままの速さで使うと、期末の11月9日までに$120.00になる見込みで、月の予算の$100.00を超えます。期間の初日から今までの1日あたりの平均で計算しました。",
+    );
   });
 });
 

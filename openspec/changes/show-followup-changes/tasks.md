@@ -7,7 +7,7 @@
 
 ## 2. データベースとクローラー
 
-- [x] 2.1 `022_update_notes.sql`で列を足し、`database.test.ts`が通ることを確かめる
+- [x] 2.1 `027_update_notes.sql`で列を足し、`database.test.ts`が通ることを確かめる
 - [x] 2.2 `followup.test.ts`にupdateNoteの保存のテストを足し、失敗を確かめる。書き直しで保存し、次の書き直しでnullなら空に戻す。新しい記事を作る続報では保存しない。updateNoteだけが不正でも記事は保存する
 - [x] 2.3 `articles.ts`の`reviseArticle`、`insertArticle`、`addRefs`と`run.ts`を変え、2.2のテストが通ることを確かめる
 

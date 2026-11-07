@@ -478,3 +478,33 @@ describe("the relayed images kept on disk", () => {
     expect(() => scheduler.tick()).not.toThrow();
   });
 });
+
+describe("the purge of the records of model calls", () => {
+  function withCallOn(day: string, budgetResetDay?: number) {
+    const db = createTestDb();
+    const clock = fakeClock("2026-11-09T12:00:00.000Z");
+    const queue = new RunQueue({ db, clock, execute: async () => {} });
+    db.prepare("INSERT INTO llm_calls (task, provider, duration_ms, ok, created_at) VALUES ('summarize', 'fast', 1, 1, ?)").run(`${day}T06:00:00.000Z`);
+    const scheduler = new Scheduler({ db, clock, queue, budgetResetDay });
+    const calls = () => Number(db.prepare("SELECT count(*) AS n FROM llm_calls").get()!.n);
+    return { scheduler, calls };
+  }
+
+  it("keeps the calls of the current budget period, which began more than thirty days ago", () => {
+    const { scheduler, calls } = withCallOn("2026-10-10", 10);
+    scheduler.tick();
+    expect(calls()).toBe(1);
+  });
+
+  it("removes the calls from before the budget period", () => {
+    const { scheduler, calls } = withCallOn("2026-10-09", 10);
+    scheduler.tick();
+    expect(calls()).toBe(0);
+  });
+
+  it("removes the calls older than thirty days when it does not know the reset day", () => {
+    const { scheduler, calls } = withCallOn("2026-10-10");
+    scheduler.tick();
+    expect(calls()).toBe(0);
+  });
+});

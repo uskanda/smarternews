@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router";
 import { useCategories, useRuns, useTimeZone } from "../api/queries.ts";
-import { formatFull, retryLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
+import { formatFull, retryLabel, runCostLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
 import { ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const NUMBER = "py-sm pr-lg text-right tabular-nums";
@@ -57,6 +57,7 @@ export function RunsPage() {
                 <th className="py-xs pr-lg text-right font-normal">作成</th>
                 <th className="py-xs pr-lg text-right font-normal">更新</th>
                 <th className="py-xs pr-lg text-right font-normal">LLM</th>
+                <th className="py-xs pr-lg text-right font-normal">金額</th>
               </tr>
             </thead>
             <tbody>
@@ -80,6 +81,7 @@ export function RunsPage() {
                   <td className={NUMBER}>{run.articlesCreated}</td>
                   <td className={NUMBER}>{run.articlesUpdated}</td>
                   <td className={NUMBER}>{run.llmCalls}</td>
+                  <td className={NUMBER}>{runCostLabel(run.costUsd)}</td>
                 </tr>
               ))}
             </tbody>

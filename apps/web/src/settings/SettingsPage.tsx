@@ -1,49 +1,52 @@
-import type { Category, ProviderStatus, Settings } from "@smarternews/core/api";
+import {
+  CATEGORY_NAME_MAX_CHARS,
+  READER_INFO_MAX_CHARS,
+  SCHEDULE_MAX_TIMES,
+  STALE_FEED_DAYS_MAX,
+  type Category,
+  type ProviderStatus,
+  type Settings,
+  type TaskName,
+  type Usage,
+} from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
-import { ApiError, budgetWarningLabel, formatUsd, periodDayLabel, THEME_CHOICES, THEME_LABEL } from "@smarternews/client";
-import { useCategories, useProviders, useSettings, useTopics } from "../api/queries.ts";
+import {
+  ApiError,
+  budgetWarningLabel,
+  checkRequired,
+  checkText,
+  checkTimes,
+  checkWholeNumber,
+  fieldMessage,
+  formatUsd,
+  periodDayLabel,
+  projectionLabel,
+  settingsFileProblem,
+  TASK_LABEL,
+  THEME_CHOICES,
+  THEME_LABEL,
+} from "@smarternews/client";
+import { useCategories, useProviders, useSettings, useTopics, useUsage } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { chooseHideRead, useHideRead } from "../lib/hide-read.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
+import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
 import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
-const TASK_LABEL = {
-  interpret: "解釈",
-  search: "検索",
-  judge: "判定",
-  cluster: "集約",
-  write: "本文の生成",
-  summarize: "要約",
-  translate: "翻訳",
-  proposeSelectors: "セレクターの提案",
-} as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
-const STALE_RANGE = "1から365までの日数を入れてください。";
-
-/** A whole number of days from 1 to 365, or null. */
-function daysOf(text: string): number | null {
-  if (!/^\d+$/.test(text.trim())) return null;
-  const value = Number(text.trim());
-  return value >= 1 && value <= 365 ? value : null;
-}
 
 /** The times written in a field, separated by commas, 、 or spaces. */
 function timesOf(text: string): string[] {
   return text.split(/[\s,、]+/).filter((time) => time.length > 0);
-}
-
-/** The reason the server gave for refusing a value, introduced in the app's own words. */
-export function refusal(error: unknown, path: string): string | null {
-  const reason = fieldError(error, path);
-  return reason ? `この値は保存できません（${reason}）` : null;
 }
 
 function CategoryRow({ category }: { category: Category }) {
@@ -68,12 +71,16 @@ function Categories() {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"news" | "event">("news");
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const leave = useUnsavedLeaving();
   useUnsaved("新しいカテゴリの名前", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(name, { label: "カテゴリの名前", max: CATEGORY_NAME_MAX_CHARS });
+    setProblem(found);
+    if (found !== null) return;
     try {
       const created = await api.createCategory({ name, kind });
       await client.invalidateQueries({ queryKey: ["categories"] });
@@ -94,8 +101,16 @@ function Categories() {
         <p className="type-body-md text-on-surface-muted">カテゴリはまだありません。下の欄から追加してください。</p>
       ) : null}
       <ul className="max-w-measure">{categories.data?.map((category) => <CategoryRow key={category.id} category={category} />)}</ul>
-      <form onSubmit={add} className="flex max-w-measure flex-col gap-md">
-        <Field label="カテゴリの名前" value={name} onChange={(event) => setName(event.target.value)} error={refusal(error, "name")} />
+      <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+        <Field
+          label="カテゴリの名前"
+          value={name}
+          onChange={(event) => {
+            setName(event.target.value);
+            setProblem(null);
+          }}
+          error={problem ?? fieldMessage(error, "name", "カテゴリの名前")}
+        />
         <fieldset className="flex flex-wrap gap-lg type-body-md">
           <legend className="pb-xs type-label-md">種別</legend>
           {(["news", "event"] as const).map((value) => (
@@ -124,11 +139,15 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const client = useQueryClient();
   const toast = useToast();
   const [text, setText] = useState(settings.readerInfo);
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(text, { label: "読み手情報", max: READER_INFO_MAX_CHARS, required: false });
+    setProblem(found);
+    if (found !== null) return;
     try {
       client.setQueryData(["settings"], await api.updateSettings({ readerInfo: text }));
       setError(null);
@@ -141,13 +160,16 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   return (
     <section id="reader" aria-label="読み手情報" className={SECTION}>
       <h2 className="type-headline-md">読み手情報</h2>
-      <form onSubmit={save} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
         <Field
           label="読み手情報"
           multiline
           value={text}
-          onChange={(event) => setText(event.target.value)}
-          error={refusal(error, "readerInfo")}
+          onChange={(event) => {
+            setText(event.target.value);
+            setProblem(null);
+          }}
+          error={problem ?? fieldMessage(error, "readerInfo", "読み手情報")}
           hint="記事を読む人の仕事や関心を書きます。次の実行から、関連と重要度の判定に使われます。空にすると、記事に読み手への影響は付きません。"
         />
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
@@ -176,9 +198,12 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
   const duplicatesHint = useId();
   const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
-  const [staleError, setStaleError] = useState<string | null>(null);
+  const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
-  const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
+  const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
+    setForm({ ...form, [name]: event.target.value });
+    setProblems((shown) => ({ ...shown, [name]: undefined }));
+  };
   // Compared the way they are saved, so that nothing is left to ask about once they are.
   useUnsaved(
     "全体設定",
@@ -194,11 +219,18 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    const staleFeedDays = daysOf(staleDays);
-    if (staleFeedDays === null) {
-      setStaleError(STALE_RANGE);
-      return;
-    }
+    const stale = checkWholeNumber(staleDays, { label: "更新が止まったとみなす日数", min: 1, max: STALE_FEED_DAYS_MAX });
+    const digestTimes = checkTimes(form.digestSchedule, { label: "ダイジェストを作る時刻", max: SCHEDULE_MAX_TIMES, formatHint: TIME_FORMAT_HINT });
+    const found = problemsOf({
+      outputLanguage: checkRequired(form.outputLanguage, "出力言語"),
+      timeZone: checkRequired(form.timeZone, "タイムゾーン"),
+      language: checkRequired(form.language, "ニュース検索の言語"),
+      region: checkRequired(form.region, "ニュース検索の地域"),
+      digestSchedule: digestTimes.ok ? null : digestTimes.message,
+      staleDays: stale.ok ? null : stale.message,
+    });
+    setProblems(found ?? {});
+    if (found !== null || !stale.ok || !digestTimes.ok) return;
     try {
       const saved = await api.updateSettings({
         outputLanguage: form.outputLanguage.trim(),
@@ -206,8 +238,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         search: { language: form.language.trim(), region: form.region.trim() },
         advanceAfterMarkAll: advance,
         removeDuplicates,
-        staleFeedDays,
-        digestSchedule: timesOf(form.digestSchedule),
+        staleFeedDays: stale.value,
+        digestSchedule: digestTimes.value,
       });
       client.setQueryData(["settings"], saved);
       // The server puts the times in order and drops the same time given twice.
@@ -229,22 +261,27 @@ function GlobalSettings({ settings }: { settings: Settings }) {
           label="出力言語"
           value={form.outputLanguage}
           onChange={set("outputLanguage")}
-          error={refusal(error, "outputLanguage")}
+          error={problems.outputLanguage ?? fieldMessage(error, "outputLanguage", { label: "出力言語", formatHint: LANGUAGE_FORMAT_HINT })}
           hint="記事を書く言語。ja や en のように書きます。"
         />
         <Field
           label="タイムゾーン"
           value={form.timeZone}
           onChange={set("timeZone")}
-          error={refusal(error, "timeZone")}
+          error={problems.timeZone ?? fieldMessage(error, "timeZone", "タイムゾーン")}
           hint="実行時刻と日時の表示の基準。Asia/Tokyo のように書きます。"
         />
-        <Field label="ニュース検索の言語" value={form.language} onChange={set("language")} error={refusal(error, "search.language")} />
+        <Field
+          label="ニュース検索の言語"
+          value={form.language}
+          onChange={set("language")}
+          error={problems.language ?? fieldMessage(error, "search.language", { label: "ニュース検索の言語", formatHint: LANGUAGE_FORMAT_HINT })}
+        />
         <Field
           label="ニュース検索の地域"
           value={form.region}
           onChange={set("region")}
-          error={refusal(error, "search.region")}
+          error={problems.region ?? fieldMessage(error, "search.region", { label: "ニュース検索の地域", formatHint: REGION_FORMAT_HINT })}
           hint="JP や US のように、大文字2文字で書きます。"
         />
         <div className="sm:col-span-2">
@@ -252,7 +289,10 @@ function GlobalSettings({ settings }: { settings: Settings }) {
             label="ダイジェストを作る時刻"
             value={form.digestSchedule}
             onChange={set("digestSchedule")}
-            error={refusal(error, "digestSchedule")}
+            error={
+              problems.digestSchedule ??
+              fieldMessage(error, "digestSchedule", { label: "ダイジェストを作る時刻", formatHint: TIME_FORMAT_HINT })
+            }
             hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「今すぐ作る」でだけ作ります。"
           />
         </div>
@@ -280,14 +320,14 @@ function GlobalSettings({ settings }: { settings: Settings }) {
             type="number"
             inputMode="numeric"
             min={1}
-            max={365}
+            max={STALE_FEED_DAYS_MAX}
             value={staleDays}
             onChange={(event) => {
               setStaleDays(event.target.value);
-              setStaleError(null);
+              setProblems((shown) => ({ ...shown, staleDays: undefined }));
             }}
-            error={staleError ?? refusal(error, "staleFeedDays")}
-            hint="新しい記事がこの日数届いていない購読フィードに、購読フィードの一覧で印を付けます。取得は続けます。"
+            error={problems.staleDays ?? fieldMessage(error, "staleFeedDays", { label: "更新が止まったとみなす日数", min: 1, max: STALE_FEED_DAYS_MAX })}
+            hint={`新しい記事がこの日数届いていない購読フィードに、購読フィードの一覧で印を付けます。取得は続けます。1から${STALE_FEED_DAYS_MAX}まで。`}
           />
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
@@ -302,12 +342,14 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 }
 
 /**
- * What this browser keeps for itself: the colour scheme, and whether the list marks read what is scrolled past.
- * A change takes effect at once: neither is part of the settings on the server.
+ * What this browser keeps for itself: the colour scheme, whether the list marks read what is scrolled past, and
+ * whether the left pane hides the entries without unread articles. A change takes effect at once: none of them
+ * is part of the settings on the server.
  */
 function DeviceSettings() {
   const choice = useThemeChoice();
   const scrollRead = useScrollRead();
+  const hideRead = useHideRead();
   const id = useId();
   return (
     <section id="device" aria-labelledby={`${id}-title`} className={SECTION}>
@@ -347,6 +389,17 @@ function DeviceSettings() {
         />
         <p id={`${id}-scroll-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
           記事の一覧を送ったとき、一覧の上端を越えた記事を既読にします。最近読んだ記事、検索の結果、イベントの一覧は対象にしません。
+        </p>
+      </div>
+      <div className="flex flex-col gap-xs">
+        <Checkbox
+          label="未読のない項目を左のペインで隠す"
+          checked={hideRead}
+          aria-describedby={`${id}-hide-read-hint`}
+          onChange={(event) => chooseHideRead(event.target.checked)}
+        />
+        <p id={`${id}-hide-read-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
+          未読が0のカテゴリと購読フィードを、左のペインに出しません。開いている項目と、取得に問題のある購読フィードは出します。Shift+JとShift+Kも、隠した項目を通りません。
         </p>
       </div>
     </section>
@@ -406,7 +459,7 @@ function SettingsFile() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form onSubmit={ask} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={ask} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込む設定ファイル
           <input
@@ -433,7 +486,7 @@ function SettingsFile() {
             <ul className="list-disc pl-lg">
               {error.fields.map((field) => (
                 <li key={field.path} className="break-words">
-                  {field.path}: {field.message}
+                  {settingsFileProblem(field)}
                 </li>
               ))}
             </ul>
@@ -551,7 +604,7 @@ function Providers() {
                 </tr>
               </thead>
               <tbody>
-                {(Object.keys(TASK_LABEL) as Array<keyof typeof TASK_LABEL>).map((task) => (
+                {(Object.keys(TASK_LABEL) as TaskName[]).map((task) => (
                   <tr key={task} className="border-t border-outline">
                     <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
                       {TASK_LABEL[task]}
@@ -572,6 +625,136 @@ function Providers() {
   );
 }
 
+/** Money in a cell of the usage tables, or that it costs nothing when no provider does. */
+function usageCost(usage: Usage, costUsd: number): string {
+  return usage.billable ? formatUsd(costUsd) : "かからない";
+}
+
+const CELL = "py-xs pr-lg text-right tabular-nums";
+const HEAD = "py-xs pr-lg text-right font-normal whitespace-nowrap";
+
+/** The money and calls of each category, with what its articles were worth to the reader, and the calls outside runs last. */
+function UsageByCategory({ usage }: { usage: Usage }) {
+  const { outsideRuns } = usage;
+  return (
+    <div className="max-w-measure overflow-x-auto">
+      <table aria-label="カテゴリごとの利用量" className="w-full text-left type-body-md">
+        <thead className="type-label-sm text-on-surface-muted">
+          <tr>
+            <th className="py-xs pr-lg font-normal">カテゴリ</th>
+            <th className={HEAD}>回数</th>
+            <th className={HEAD}>金額</th>
+            <th className={HEAD}>作った記事</th>
+            <th className={HEAD}>開いた記事</th>
+            <th className="py-xs text-right font-normal whitespace-nowrap">1件あたり</th>
+          </tr>
+        </thead>
+        <tbody>
+          {usage.byCategory.map((row) => (
+            <tr key={row.categoryId} className="border-t border-outline">
+              <th scope="row" className="py-xs pr-lg text-left font-normal">
+                {row.name}
+              </th>
+              <td className={CELL}>{row.calls}</td>
+              <td className={CELL}>{usageCost(usage, row.costUsd)}</td>
+              <td className={CELL}>{row.articlesCreated}</td>
+              <td className={CELL}>{row.articlesOpened}</td>
+              <td className="py-xs text-right tabular-nums">
+                {usage.billable ? (row.costPerOpenedUsd === null ? "—" : formatUsd(row.costPerOpenedUsd)) : "かからない"}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t border-outline">
+            <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
+              実行に属さない呼び出し
+            </th>
+            <td className={CELL}>{outsideRuns.calls}</td>
+            <td className={CELL}>{usageCost(usage, outsideRuns.costUsd)}</td>
+            <td className={CELL} />
+            <td className={CELL} />
+            <td className="py-xs" />
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The money and calls of each UTC day of the period, with a bar that lets the busy days stand out. */
+function UsageByDay({ usage }: { usage: Usage }) {
+  // Without a provider that costs money, the bars follow the calls.
+  const measure = (day: Usage["byDay"][number]) => (usage.billable ? day.costUsd : day.calls);
+  const most = Math.max(0, ...usage.byDay.map(measure));
+  return (
+    <div className="max-w-measure overflow-x-auto">
+      <table aria-label="日ごとの利用量" className="w-full text-left type-body-md">
+        <thead className="type-label-sm text-on-surface-muted">
+          <tr>
+            <th className="py-xs pr-lg font-normal whitespace-nowrap">日（UTC）</th>
+            <th colSpan={2} className="py-xs pr-lg font-normal">
+              金額
+            </th>
+            <th className="py-xs text-right font-normal whitespace-nowrap">回数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {usage.byDay.map((day) => (
+            <tr key={day.day} className="border-t border-outline">
+              <th scope="row" className="py-xs pr-lg text-left font-normal whitespace-nowrap tabular-nums">
+                {periodDayLabel(day.day)}
+              </th>
+              <td className="py-xs pr-sm text-right whitespace-nowrap tabular-nums">{usageCost(usage, day.costUsd)}</td>
+              <td className="w-full py-xs pr-lg align-middle">
+                <div
+                  aria-hidden="true"
+                  className="h-sm rounded-sm bg-outline-strong"
+                  style={{ width: `${most > 0 ? Math.round((measure(day) / most) * 100) : 0}%` }}
+                />
+              </td>
+              <td className="py-xs text-right tabular-nums">{day.calls}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The model calls of the budget period by category and by day, and where the money is heading. */
+function UsageSection() {
+  const usage = useUsage();
+  const data = usage.data;
+  return (
+    <section id="usage" aria-label="利用量" className={SECTION}>
+      <h2 className="type-headline-md">利用量</h2>
+      {usage.isError ? <ErrorNotice error={usage.error} onRetry={() => void usage.refetch()} /> : null}
+      {data ? (
+        <>
+          <p className="max-w-measure type-body-md">
+            予算の期間の{periodDayLabel(data.periodStart)}から今日まで（UTC）のLLMの呼び出しです。
+            {data.billable ? null : "金額のかかるプロバイダーはないので、回数で示します。"}
+          </p>
+          {data.billable ? (
+            <p className="max-w-measure type-body-md">
+              {projectionLabel(data)}
+              <span className="text-on-surface-muted">見込みの額で、請求の額とは一致しないことがあります。</span>
+            </p>
+          ) : null}
+          <h3 className="type-label-md">カテゴリごと</h3>
+          <UsageByCategory usage={data} />
+          <p className="max-w-measure type-label-sm text-on-surface-muted">
+            作った記事と開いた記事は、期間の中で作った生成記事の数です。1件あたりは、開いた記事1件あたりの金額です。実行に属さない呼び出しは、要約、翻訳、セレクターの提案、ダイジェストと、実行の記録が30日を過ぎて消えた呼び出しです。
+          </p>
+          <h3 className="type-label-md">日ごと</h3>
+          <UsageByDay usage={data} />
+        </>
+      ) : usage.isPending ? (
+        <Loading />
+      ) : null}
+    </section>
+  );
+}
+
 /** The sections of the page, in their order, as the links at the top name them. */
 const SECTIONS = [
   { id: "categories", name: "カテゴリ" },
@@ -582,6 +765,7 @@ const SECTIONS = [
   { id: "device", name: "この端末の設定" },
   { id: "settings-file", name: "設定ファイル" },
   { id: "providers", name: "プロバイダー" },
+  { id: "usage", name: "利用量" },
   { id: "tokens", name: "トークン" },
 ] as const;
 
@@ -615,9 +799,10 @@ function SettingsSections() {
   const { clearToken } = useApp();
   const settings = useSettings();
   const providers = useProviders();
-  // The reader and the global settings appear only once the settings are in, and the providers' section grows when
-  // they are, so the page scrolls to the section the address names after both.
-  useScrollToHash(!settings.isPending && !providers.isPending);
+  const usage = useUsage();
+  // The reader and the global settings appear only once the settings are in, and the sections of the providers and
+  // of the usage grow when theirs are, so the page scrolls to the section the address names after all of them.
+  useScrollToHash(!settings.isPending && !providers.isPending && !usage.isPending);
   const [clearing, setClearing] = useState(false);
   return (
     <div className="h-full overflow-y-auto bg-surface">
@@ -667,6 +852,7 @@ function SettingsSections() {
       <DeviceSettings />
       <SettingsFile />
       <Providers />
+      <UsageSection />
       <section id="tokens" aria-label="トークン" className={SECTION}>
         <h2 className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">

@@ -25,7 +25,7 @@
 
 ### 列の追加
 
-`022_update_notes.sql`で列を足す。`articles`には`update_note TEXT`と`read_before_update_at TEXT`、`article_refs`には`added_at TEXT`である。今ある行は空のままにする。今ある出典は加わった時刻がないので新しくない。
+`027_update_notes.sql`で列を足す。`articles`には`update_note TEXT`と`read_before_update_at TEXT`、`article_refs`には`added_at TEXT`である。今ある行は空のままにする。今ある出典は加わった時刻がないので新しくない。
 
 ### 前回読んだ時刻
 

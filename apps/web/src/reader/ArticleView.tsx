@@ -1,4 +1,4 @@
-import type { Article, ArticleTranslation } from "@smarternews/core/api";
+import type { Article, ArticleRef, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDate, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
@@ -8,6 +8,7 @@ import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { Attachments } from "./Attachments.tsx";
 import { Mentions } from "./Mentions.tsx";
 
 /** The attribute that makes an element an original part of the body, in which a selection can be highlighted. */
@@ -160,6 +161,16 @@ export interface ArticleNeighbors {
   more: (() => void) | null;
 }
 
+/**
+ * Why the judgement chose a source of a generated article: its importance and its reason, on one quiet line.
+ * The reason is text a model wrote, so it is shown as plain words and never as markup.
+ */
+function SourceReason({ source }: { source: ArticleRef }) {
+  const parts = [source.importance === null ? null : `重要度 ${source.importance}`, source.reason].filter((part) => part);
+  if (parts.length === 0) return null;
+  return <p className="break-words type-label-sm text-on-surface-muted">{parts.join("・")}</p>;
+}
+
 const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline px-lg py-sm text-left";
 
 /** The way to the article before and after this one, each with its headline on one line. */
@@ -212,6 +223,7 @@ export function ArticleView({
   neighbors = null,
   onToggleStar,
   onToggleRead,
+  onToggleMiss,
   fullContent,
   terms,
   focusAnnotation = null,
@@ -227,6 +239,8 @@ export function ArticleView({
   neighbors?: ArticleNeighbors | null;
   onToggleStar: (article: Article) => void;
   onToggleRead: (article: Article) => void;
+  /** Marks a generated article as a miss, or takes the mark away. Not offered for a feed article. */
+  onToggleMiss: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
@@ -434,6 +448,7 @@ export function ArticleView({
           }
         />
         {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
+        <Attachments article={article} />
         <Mentions article={article} />
         {article.previousArticles.length > 0 ? (
           // The earlier articles of the story, newest first, each with the day it was first published.
@@ -469,6 +484,7 @@ export function ArticleView({
                     <Badge>新しい出典</Badge>
                   </span>
                 ) : null}
+                <SourceReason source={ref} />
               </li>
             ))}
           </ul>
@@ -479,6 +495,11 @@ export function ArticleView({
             {article.starred ? "スターを外す" : "スターを付ける"}
           </Button>
           <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
+          {delivered ? null : (
+            <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
+              {article.missed ? "外れの印を外す" : "外れの印を付ける"}
+            </Button>
+          )}
         </div>
         {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}
       </div>

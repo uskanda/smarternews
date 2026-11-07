@@ -240,10 +240,10 @@ function check(db: Database, filter: { scope: FilterScope; conditions: FilterCon
   const problems: FieldError[] = conditionProblems(filter.conditions);
   const { scope } = filter;
   if (scope.type === "category" && !db.prepare("SELECT 1 FROM categories WHERE id = ?").get(scope.categoryId)) {
-    problems.push({ path: "scope.categoryId", message: "no such category" });
+    problems.push({ path: "scope.categoryId", message: "no such category", code: "no_such_item" });
   }
   if (scope.type === "feed" && !db.prepare("SELECT 1 FROM feeds WHERE id = ?").get(scope.feedId)) {
-    problems.push({ path: "scope.feedId", message: "no such feed" });
+    problems.push({ path: "scope.feedId", message: "no such feed", code: "no_such_item" });
   }
   if (problems.length > 0) throw new DomainError("invalid", "the filter is invalid", problems);
 }
@@ -319,7 +319,7 @@ export function updateFilter(db: Database, id: number, patch: FilterUpdate): Fil
     enabled: patch.enabled ?? current.enabled,
   };
   if (next.action === "keep" && next.scope.type === "all") {
-    throw new DomainError("invalid", "the filter is invalid", [{ path: "scope", message: "a keep filter cannot apply to everything" }]);
+    throw new DomainError("invalid", "the filter is invalid", [{ path: "scope", message: "a keep filter cannot apply to everything", code: "not_allowed" }]);
   }
   check(db, next);
   if (findSameFilter(db, next, id)) throw refuseSame();

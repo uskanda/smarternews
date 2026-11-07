@@ -1,4 +1,4 @@
-import type { BudgetStatus, Run, StopLimit, TermColor } from "@smarternews/core/api";
+import type { BudgetStatus, Run, StopLimit, TaskName, TermColor, Usage } from "@smarternews/core/api";
 
 export const STATUS_LABEL: Record<Run["status"], string> = {
   queued: "待機中",
@@ -42,6 +42,11 @@ export function formatUsd(amount: number): string {
   return USD.format(amount);
 }
 
+/** The money of a run, or a dash for a run that called no provider that costs money. */
+export function runCostLabel(costUsd: number | null): string {
+  return costUsd === null ? "—" : formatUsd(costUsd);
+}
+
 /** A day of a budget period, YYYY-MM-DD, as 11月9日. Periods are counted in UTC, so the date is shown as it is. */
 export function periodDayLabel(day: string): string {
   const [, month, date] = day.split("-").map(Number);
@@ -81,6 +86,27 @@ export function budgetWarningLabel(budget: Pick<BudgetStatus, "spentUsd" | "mont
   return `月の予算の${share.percent}%を使いました（${amounts}）。期間は${periodDayLabel(budget.periodEnd)}までです。`;
 }
 
+/** What the budget period will have spent at its end at its average pace so far, against the monthly budget. */
+export function projectionLabel(usage: Pick<Usage, "periodEnd" | "monthlyBudgetUsd" | "projection">): string {
+  const { projectedUsd, exceedsBudget } = usage.projection;
+  const end = `期末の${periodDayLabel(usage.periodEnd)}までに${formatUsd(projectedUsd)}になる見込み`;
+  const over = exceedsBudget ? `で、月の予算の${formatUsd(usage.monthlyBudgetUsd)}を超えます。` : "です。";
+  return `このままの速さで使うと、${end}${over}期間の初日から今までの1日あたりの平均で計算しました。`;
+}
+
+/** The tasks of the model, by the names the screens use. */
+export const TASK_LABEL: Record<TaskName, string> = {
+  interpret: "解釈",
+  search: "検索",
+  judge: "判定",
+  cluster: "集約",
+  write: "本文の生成",
+  summarize: "要約",
+  translate: "翻訳",
+  proposeSelectors: "セレクターの提案",
+  digest: "ダイジェスト",
+};
+
 const STAGE_LABEL: Record<string, string> = {
   interpret: "解釈",
   feed: "フィード",
@@ -109,6 +135,8 @@ export function conflictLabel(message: string): string {
  */
 export function feedErrorLabel(error: string): string {
   const status = /HTTP status (\d{3})/.exec(error)?.[1];
+  if (status === "429") return "アクセスが多すぎると返されました（HTTP 429）";
+  if (status === "410") return "配信を終えたと返しています（HTTP 410）";
   if (status) return `サイトがエラーを返しました（HTTP ${status}）`;
   if (/timed out/.test(error)) return "時間内に応答がありませんでした";
   if (/not a feed/.test(error)) return "フィードとして読めない内容が返りました";

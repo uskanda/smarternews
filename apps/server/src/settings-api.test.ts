@@ -1,6 +1,7 @@
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
-import { resolvePricing } from "@smarternews/core";
+import { createRun, resolvePricing } from "@smarternews/core";
+import { usageSchema } from "@smarternews/core/api";
 import { API_TOKEN, FEED_TOKEN, testServer } from "./testing.ts";
 
 describe("categories", () => {
@@ -19,8 +20,23 @@ describe("categories", () => {
     expect(response.status).toBe(400);
     const body = await response.json();
     expect(body.error.code).toBe("invalid_input");
-    expect(body.error.fields).toEqual([{ path: "minImportance", message: expect.stringMatching(/5/) }]);
+    expect(body.error.fields).toEqual([{ path: "minImportance", message: expect.stringMatching(/5/), code: "too_big", maximum: 5, unit: "number" }]);
     expect((await (await s.get(`/api/v1/categories/${category.id}`)).json()).name).toBe("Security");
+  });
+
+  it("names the kind of refusal and its bound, for the apps to say it in their own words", async () => {
+    const s = testServer();
+    const category = s.category();
+    const response = await s.patch(`/api/v1/categories/${category.id}`, { maxArticlesPerRun: 51 });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "maxArticlesPerRun", code: "too_big", maximum: 50, unit: "number" })]);
+  });
+
+  it("calls a time zone it does not know by its own kind", async () => {
+    const s = testServer();
+    const response = await s.patch("/api/v1/settings", { timeZone: "Mars/Olympus" });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "timeZone", code: "unknown_time_zone" })]);
   });
 
   it("answers 409 for a slug that is taken", async () => {
@@ -242,5 +258,40 @@ describe("providers", () => {
     expect(body.budget.byTask).toMatchObject({ judge: 1.2, write: 3.4, interpret: 0 });
     expect(body.budget.byProvider).toMatchObject({ judge: 1.2, write: 3.4, summarize: 0 });
     expect(JSON.stringify(body)).not.toMatch(/key|token|secret/i);
+  });
+});
+
+describe("usage", () => {
+  it("splits the calls of the budget period by category, outside runs and by UTC day, with the projection", async () => {
+    const s = testServer("2026-10-25T12:00:00.000Z", {
+      pricing: resolvePricing("claude-sonnet-5-5")!,
+      budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 10 },
+    });
+    const category = s.category("Security");
+    const run = createRun(s.db, { categoryId: category.id, trigger: "manual", slot: null }, s.clock);
+    const seed = s.db.prepare(
+      "INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (?, ?, ?, 1, 1, ?, ?, 1)",
+    );
+    seed.run(run.id, "write", "write", "2026-10-12T00:00:00.000Z", 3.1);
+    seed.run(null, "summarize", "summarize", "2026-10-13T00:00:00.000Z", 0.0);
+
+    const response = await s.get("/api/v1/usage");
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(usageSchema.parse(body)).toEqual(body);
+    expect(body).toMatchObject({
+      periodStart: "2026-10-10",
+      periodEnd: "2026-11-09",
+      billable: true,
+      monthlyBudgetUsd: 100,
+      spentUsd: 3.1,
+      byCategory: [{ categoryId: category.id, name: "Security", calls: 1, costUsd: 3.1, articlesCreated: 0, costPerOpenedUsd: null }],
+      outsideRuns: { calls: 1, costUsd: 0, unknownCostCalls: 0 },
+      projection: { exceedsBudget: false },
+    });
+    expect(body.byDay).toHaveLength(16);
+    expect(body.byDay[2]).toEqual({ day: "2026-10-12", calls: 1, costUsd: 3.1 });
+    expect(body.projection.projectedUsd).toBeCloseTo((3.1 / 15.5) * 31, 8);
   });
 });

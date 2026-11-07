@@ -4,7 +4,7 @@
 
 smarternews is a self-hosted news crawler for one reader. You describe the topics you want to follow, in keywords or in sentences. The server collects pages about them on a schedule, groups pages about the same story, and writes one article per story with links to its sources. Read them through an HTTP API or as RSS feeds.
 
-It is also a feed reader. Subscribe to RSS and Atom feeds, and their articles appear beside the written ones, as the feeds deliver them.
+It is also a feed reader. Subscribe to RSS, Atom and JSON feeds, and their articles appear beside the written ones, as the feeds deliver them.
 
 A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for eight tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, summarising or translating the articles of the subscribed feeds you chose, and proposing selectors for a web page feed when you ask for candidates. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
 
@@ -67,7 +67,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - The run history shows what each run collected, what failed, and which candidates were rejected and why.
 - The search box at the top of the left pane finds articles by words, read ones included, and marks the matching words in the list and the article. The result narrows to a category, a feed or unread articles, and its URL keeps the words.
 
-Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `o` opens the main source, `w` fetches the full content of a feed article or switches between it and what the feed delivered, `Shift+F10` opens the menu of a category or feed, `/` moves to the search box, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen. `Space` scrolls the article down by a screen and moves to the next article at its end; `Shift+Space` scrolls up and moves to the previous article at its top. `Shift+A` marks the list as read, `r` reloads the list and the counts, and `u` shows or hides the read articles. `Shift+J` and `Shift+K` open the next and the previous entry of the left pane, skipping the entries of a folded category. `g` followed within a second by `a` opens 未読, by `s` スター, and by `r` 最近読んだ記事; `g` `e` opens the next event category each time.
+Keys: `j` and `k` move to the next and the previous article, `s` toggles the star, `m` toggles read, `x` marks a generated article as a miss, which also marks it read, or takes the mark away, `o` opens the main source, `w` fetches the full content of a feed article or switches between it and what the feed delivered, `Shift+F10` opens the menu of a category or feed, `/` moves to the search box, and `?` lists the keys. When `j` or `k` takes the selection out of view, the list scrolls by one screen. `Space` scrolls the article down by a screen and moves to the next article at its end; `Shift+Space` scrolls up and moves to the previous article at its top. `Shift+A` marks the list as read, `r` reloads the list and the counts, and `u` shows or hides the read articles. `Shift+J` and `Shift+K` open the next and the previous entry of the left pane, skipping the entries of a folded category. `g` followed within a second by `a` opens 未読, by `s` スター, and by `r` 最近読んだ記事; `g` `e` opens the next event category each time.
 
 The interface is in Japanese. Articles are written in the output language you configure. Current Chrome is the tested browser; Firefox and Safari from 2024 or later should work as well.
 
@@ -133,7 +133,7 @@ A topic is a keyword or a sentence. The model turns it into search queries and a
 
 A subscribed feed is read as it is. The server fetches it on an interval and stores each item as an article with the feed's own title and content. No model is involved in this, so subscribing costs no model calls unless you switch summaries or translation on for the feed (see below). This is separate from the `feeds` of a topic, which are material the model writes from.
 
-Add a feed in the web app under "設定" and "購読フィードを設定する". Enter the address of the feed, or of a site: the server then looks for the feeds that the page announces. A feed belongs to one `news` category or to none.
+Add a feed in the web app under "設定" and "購読フィードを設定する". Enter the address of the feed, or of a site: the server then looks for the feeds that the page announces. When the page announces none, the server tries `/feed`, `/rss.xml`, `/feed.xml`, `/atom.xml`, `/index.xml` and `/feed.json` at the top of the site, in that order. RSS 2.0, RSS 1.0, Atom and JSON Feed (1.0 and 1.1) can be read. A feed belongs to one `news` category or to none.
 
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
 - "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.
@@ -144,7 +144,7 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 - Any article of a feed can have its full content fetched from the article itself, whatever the setting: the "全文を取得" button in the web app, the `w` key, or the button on top in the Android app. Text shorter than what the feed delivered, such as a notice to subscribe, is not kept. With full content, a summary is written from it without a second request for the page, and translation translates it. The full content is never in the RSS output.
 - "翻訳する" in the form of a feed translates its articles into the output language. It is off by default. The list shows the translated title; the article shows each paragraph in translation with the original under it in smaller type. The original is kept, and filters are matched against it.
 - Translation sends the titles and contents of that feed's articles to Google's translation API, or to the model provider you configured, and sends nothing else. Titles are translated when articles arrive, by the API only. The content is translated when you first open an article, and the first 20,000 characters of it. Articles the feed already had are translated when you open them.
-- A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day.
+- A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day. A `Retry-After` on a 429 or 503 answer is waited for as well, up to one day. A feed that answers 410 is shown as gone, with a suggestion to unsubscribe; it is not disabled.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
 - Articles of feeds can be starred and marked read like any other. Without a star they are deleted after 90 days.
 - The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts and embedded frames are removed.
@@ -273,7 +273,7 @@ Planned retries are stored, so they survive a restart; a retry that came due whi
 
 ## Limits on model use
 
-A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (350 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
+A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (380 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
 
 Summaries of feed articles are counted apart. Once the day has made `summariesPerDay` of them (100 by default), no more are made until the next day, which starts with the newest articles that still wait. Summaries do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `summariesPerDay`. The `summarize` task runs on the provider named `fast` unless `tasks` in `config.yaml` assigns another; see [docs/providers.md](docs/providers.md).
 
@@ -286,6 +286,8 @@ Translation by the model counts towards `llmCallsPerDay`. On a day that has reac
 Digests are counted apart as well: `digestsPerDay` (4 by default, 0 makes none) bounds the calls of one day, a second attempt after an invalid answer included. They do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `digestsPerDay`. The `digest` task runs on the provider named `smart` unless `tasks` assigns another, and obeys the monthly budget like every task.
 
 Proposals of selectors for web feeds count towards `llmCallsPerDay` as well, and have a limit of their own: `selectorProposalsPerDay` (50 by default). The default of `llmCallsPerDay` was 300 before web feeds; it grew by these 50. On a day that has reached either limit, the candidates come from the server's own guess, and the page says so.
+
+A topic trial asks the `interpret` task once and the `judge` task once per batch of stored candidates, about three calls. Its calls count towards `llmCallsPerDay` and the monthly budget, and have a limit of their own: `topicTrialsPerDay` (30 by default, a second attempt after an invalid answer included; 0 switches trials off). The default of `llmCallsPerDay` grew from 350 to 380 by these 30. A trial whose calls do not fit in what the day leaves is refused before it calls a model.
 
 ## Development
 

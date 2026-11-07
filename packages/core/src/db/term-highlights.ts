@@ -81,7 +81,7 @@ export function orderTermGroups(db: Database, ids: number[]): void {
 export function moveTermGroup(db: Database, id: number, before: number | null): TermGroup[] {
   getTermGroup(db, id);
   if (before !== null && !db.prepare("SELECT 1 FROM term_groups WHERE id = ?").get(before)) {
-    throw new DomainError("invalid", `term group ${before} does not exist`, [{ path: "before", message: "no such term group" }]);
+    throw new DomainError("invalid", `term group ${before} does not exist`, [{ path: "before", message: "no such term group", code: "no_such_item" }]);
   }
   if (before !== id) {
     const others = listTermGroups(db)

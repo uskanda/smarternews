@@ -6,6 +6,7 @@ import { createTestDb, fakeClock, fakeFetch, fakeLlm } from "@smarternews/core/t
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
 import { API_TOKEN, FEED_TOKEN, IMAGE_KEY } from "./testing.ts";
+import { TopicTrials } from "./topic-trials.ts";
 
 function server(build: "built" | "not-built") {
   const dir = join(mkdtempSync(join(tmpdir(), "sn-web-")), "dist");
@@ -34,6 +35,7 @@ function server(build: "built" | "not-built") {
     summarizer: new SummaryWorker({ db, clock, fetcher, runner, fullContent }),
     fullContent,
     digests: new DigestWorker({ db, clock, runner }),
+    trials: new TopicTrials({ db, clock, runner, judgeBatchSize: 30 }),
     images: { key: IMAGE_KEY, proxy: new ImageProxy({ fetcher, cache: new ImageCache({ dir: join(dir, "..", "image-cache"), maxBytes: 1000, maxAgeMs: 1000, clock }) }) },
     tokens: { api: API_TOKEN, feed: FEED_TOKEN },
     version: "9.9.9",

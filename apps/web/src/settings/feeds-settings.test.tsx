@@ -71,6 +71,18 @@ describe("the list of subscribed feeds", () => {
     expect(row).toHaveTextContent("理由: サイトがエラーを返しました（HTTP 503）");
   });
 
+  it("says that a feed the site answers is gone has ended, instead of that it is failing", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    recordFetchFailure(server.db, blog.id, { now: "2026-03-01T11:00:00.000Z", error: "HTTP status 410: https://blog.example.org/feed.xml", gone: true });
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).toHaveTextContent("配信終了");
+    expect(row).not.toHaveTextContent("取得に失敗");
+    expect(row).toHaveTextContent("理由: 配信を終えたと返しています（HTTP 410）");
+  });
+
   it("says that a paused feed is paused", async () => {
     const server = makeServer();
     updateFeed(server.db, feedOf(server, "Blog").id, { enabled: false });
