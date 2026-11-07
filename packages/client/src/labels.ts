@@ -135,6 +135,8 @@ export function conflictLabel(message: string): string {
  */
 export function feedErrorLabel(error: string): string {
   const status = /HTTP status (\d{3})/.exec(error)?.[1];
+  if (status === "429") return "アクセスが多すぎると返されました（HTTP 429）";
+  if (status === "410") return "配信を終えたと返しています（HTTP 410）";
   if (status) return `サイトがエラーを返しました（HTTP ${status}）`;
   if (/timed out/.test(error)) return "時間内に応答がありませんでした";
   if (/not a feed/.test(error)) return "フィードとして読めない内容が返りました";

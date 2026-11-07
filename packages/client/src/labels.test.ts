@@ -31,6 +31,11 @@ describe("feedErrorLabel", () => {
     expect(feedErrorLabel("request failed: https://example.org/: getaddrinfo ENOTFOUND")).toBe("サイトに接続できませんでした");
   });
 
+  it("tells too many requests and a feed that is gone apart from other errors", () => {
+    expect(feedErrorLabel("HTTP status 429: https://example.org/feed.xml")).toBe("アクセスが多すぎると返されました（HTTP 429）");
+    expect(feedErrorLabel("HTTP status 410: https://example.org/feed.xml")).toBe("配信を終えたと返しています（HTTP 410）");
+  });
+
   it("says why the page of a web feed gave no articles", () => {
     expect(feedErrorLabel("no element matches the item selector")).toBe("ページに記事が見つかりませんでした。ページの作りが変わった可能性があります");
     expect(feedErrorLabel("robots.txt forbids")).toBe("サイトのrobots.txtが取得を禁じています");

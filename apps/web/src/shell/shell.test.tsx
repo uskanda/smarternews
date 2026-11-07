@@ -779,6 +779,23 @@ describe("the marks of a feed's state in the left pane", () => {
     expect(link(/Failing/)).toHaveAccessibleName(/^Failing、取得に失敗/);
   });
 
+  it("marks a feed the site answers is gone by the shape of a failure, with its own name, and puts it first on a folded category", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const failed = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failed.id, { now: server.clock().toISOString(), error: "timed out" });
+    const gone = feedOf(server, "Ended", tools.id);
+    recordFetchFailure(server.db, gone.id, { now: server.clock().toISOString(), error: "HTTP status 410: x", gone: true });
+    const { user } = renderApp({ server });
+
+    const mark = await within(await within(nav()).findByRole("link", { name: /Ended/ })).findByRole("img", { name: "配信終了" });
+    expect(mark).toHaveClass("text-error");
+    expect(link(/Ended/)).toHaveAccessibleName(/^Ended、配信終了/);
+
+    await user.click(within(nav()).getByRole("button", { name: "Toolsの下の項目" }));
+    expect(within(link(/^Tools/)).getByRole("img", { name: "配信を終えた購読フィードがあります" })).toBeInTheDocument();
+  });
+
   it("puts the strongest mark of the feeds below on a category only while it is folded", async () => {
     const server = makeServer();
     const tools = server.category("Tools");

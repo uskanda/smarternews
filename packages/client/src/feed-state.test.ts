@@ -19,6 +19,7 @@ const feed = (overrides: Partial<Feed> = {}): Feed => ({
   lastSucceededAt: null,
   lastError: null,
   failureCount: 0,
+  goneAt: null,
   nextFetchAt: null,
   articleCount: 0,
   starredCount: 0,
@@ -41,14 +42,19 @@ describe("feedState", () => {
     expect(feedState(feed({ enabled: false }))).toBe("paused");
   });
 
-  it("takes the strongest when states overlap: failed, then stale, then paused", () => {
+  it("names a feed whose site answers that it is gone", () => {
+    expect(feedState(feed({ lastError: "HTTP status 410: x", goneAt: "2026-03-01T00:00:00.000Z" }))).toBe("gone");
+  });
+
+  it("takes the strongest when states overlap: gone, then failed, then stale, then paused", () => {
+    expect(feedState(feed({ lastError: "HTTP status 410: x", goneAt: "2026-03-01T00:00:00.000Z", stale: true, enabled: false }))).toBe("gone");
     expect(feedState(feed({ lastError: "timed out", stale: true }))).toBe("failed");
     expect(feedState(feed({ lastError: "timed out", enabled: false }))).toBe("failed");
     expect(feedState(feed({ stale: true, enabled: false }))).toBe("stale");
   });
 
   it("has a label for each state, the words of the settings screen", () => {
-    expect(FEED_STATE_LABEL).toEqual({ failed: "取得に失敗", stale: "更新が止まっています", paused: "一時停止中" });
+    expect(FEED_STATE_LABEL).toEqual({ gone: "配信終了", failed: "取得に失敗", stale: "更新が止まっています", paused: "一時停止中" });
   });
 });
 
@@ -58,5 +64,6 @@ describe("strongestFeedState", () => {
     expect(strongestFeedState([null, undefined])).toBeNull();
     expect(strongestFeedState(["paused", null, "stale"])).toBe("stale");
     expect(strongestFeedState(["paused", "failed", "stale"])).toBe("failed");
+    expect(strongestFeedState(["failed", "gone", "stale"])).toBe("gone");
   });
 });
