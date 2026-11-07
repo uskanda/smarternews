@@ -67,8 +67,10 @@ function atomEntry(entry: Node): FeedItem {
   };
 }
 
-/** Reads RSS 2.0, RSS 1.0 (RDF) and Atom. */
+/** Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed. */
 export function parseFeed(xml: string): ParsedFeed {
+  const json = parseJsonFeed(xml);
+  if (json) return { title: json.title, items: json.items.map(({ title, url, snippet, publishedAt }) => ({ title, url, snippet, publishedAt })) };
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
   if (rss) return { title: plainText(textOf(rss.title), 200), items: ((rss.item as Node[] | undefined) ?? []).map(rssItem) };
@@ -159,8 +161,76 @@ function siteLink(link: unknown, parse: (link: unknown) => string): string | nul
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
-/** Reads RSS 2.0, RSS 1.0 (RDF) and Atom with everything a reader shows: identifier, author and content. */
+// ---- JSON Feed 1.0 and 1.1 (https://jsonfeed.org/version/1.1) -----------------------------------------
+
+const JSON_FEED_VERSION = "https://jsonfeed.org/version/";
+
+function stringOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function escapeHtml(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+/** Plain text as HTML: blank lines part paragraphs, and other line breaks stay as breaks. */
+function textAsHtml(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 0)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function jsonAuthor(item: Node): string | null {
+  const first: unknown = Array.isArray(item.authors) ? item.authors[0] : item.author;
+  if (!first || typeof first !== "object") return null;
+  return orNull(plainTitle(stringOf((first as Node).name), 200));
+}
+
+function jsonItem(item: Node): SubscriptionItem {
+  const summary = stringOf(item.summary).trim();
+  const text = stringOf(item.content_text);
+  const html = stringOf(item.content_html);
+  // summary and content_text are plain text, so escaping them keeps a "<" in them from reading as a tag.
+  const snippet = summary.length > 0 ? plainText(escapeHtml(summary)) : text.trim().length > 0 ? plainText(escapeHtml(text)) : plainText(html);
+  const id = typeof item.id === "number" ? String(item.id) : stringOf(item.id);
+  return {
+    title: plainTitle(stringOf(item.title)),
+    url: (stringOf(item.url) || stringOf(item.external_url)).trim(),
+    snippet,
+    publishedAt: parseDate(item.date_published) ?? parseDate(item.date_modified),
+    key: orNull(id),
+    author: jsonAuthor(item),
+    contentHtml: html.trim().length > 0 ? html.trim() : textAsHtml(text),
+  };
+}
+
+/** A JSON Feed read in full, or null when the text is not one. */
+export function parseJsonFeed(text: string): ParsedSubscription | null {
+  if (!text.trimStart().startsWith("{")) return null;
+  let root: unknown;
+  try {
+    root = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!root || typeof root !== "object" || !stringOf((root as Node).version).startsWith(JSON_FEED_VERSION)) return null;
+  const feed = root as Node;
+  const items = Array.isArray(feed.items) ? feed.items.filter((item): item is Node => !!item && typeof item === "object") : [];
+  return {
+    title: plainText(stringOf(feed.title), 200),
+    siteUrl: siteLink(feed.home_page_url, (link) => stringOf(link).trim()),
+    items: items.map(jsonItem),
+  };
+}
+
+/** Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author and content. */
 export function parseSubscription(xml: string): ParsedSubscription {
+  const json = parseJsonFeed(xml);
+  if (json) return json;
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
   if (rss) {
@@ -199,7 +269,7 @@ export function parseSubscription(xml: string): ParsedSubscription {
 }
 
 export async function fetchXml(fetcher: Fetcher, url: string): Promise<string> {
-  const response = await fetcher.get(url, { headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" } });
+  const response = await fetcher.get(url, { headers: { accept: "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*"} });
   if (response.status < 200 || response.status >= 300) throw new Error(`HTTP status ${response.status}: ${url}`);
   return response.text;
 }
