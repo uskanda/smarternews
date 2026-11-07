@@ -121,9 +121,11 @@ describe("highlighting a selection", () => {
     await within(article).findByText(/電池の工場/);
 
     selectText(article.querySelector(".article-body")!, QUOTE);
-    const toolbar = await screen.findByRole("toolbar", { name: "選んだ文字列" });
-    expect(within(toolbar).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く"]);
-    await user.click(within(toolbar).getByRole("button", { name: "ハイライト" }));
+    // A topic can be added too, as the article's category holds topics.
+    await waitFor(() =>
+      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを足す…"]),
+    );
+    await user.click(within(menu()!).getByRole("button", { name: "ハイライト" }));
 
     await waitFor(() => expect(marked(article)).toEqual([QUOTE]));
     expect(stored(server)).toEqual([{ kind: "highlight", quote: QUOTE, prefix: "最初の段落です。", suffix: "と発表した。最後の段落です。", position: 8, note: null }]);
