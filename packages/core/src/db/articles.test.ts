@@ -727,3 +727,83 @@ describe("open times", () => {
     expect(items.find((item) => item.id === bulk)!.openedAt).toBeNull();
   });
 });
+
+describe("what a follow-up added", () => {
+  const ref = (url: string) => ({ url, siteName: "Example", title: url, publishedAt: null });
+  const content = { title: "t", summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null };
+
+  function story(urls: string[] = ["https://example.org/a"]) {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW));
+    const id = insertArticle(db, { ...content, categoryId: category.id, kind: "news", now: NOW, previousArticleId: null, refs: urls.map(ref), topicIds: [] });
+    const revise = (urls: string[], now: string, updateNote: string | null = null) =>
+      reviseArticle(db, id, { ...content, now, refs: urls.map(ref), topicIds: [], updateNote });
+    const newRefs = () => getArticle(db, id).refs.filter((entry) => entry.isNew).map((entry) => entry.url);
+    return { db, category, id, revise, newRefs };
+  }
+
+  it("gives the note of the last rewrite in the article and its list item", () => {
+    const s = story();
+    expect(getArticle(s.db, s.id).updateNote).toBeNull();
+    s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+    expect(getArticle(s.db, s.id).updateNote).toBe("価格が発表されました。");
+    expect(listArticles(s.db, {}, NOW).items[0]!.updateNote).toBe("価格が発表されました。");
+    s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", null);
+    expect(getArticle(s.db, s.id).updateNote).toBeNull();
+  });
+
+  it("marks new the sources added after the reader read the article, and keeps them new once it is opened", () => {
+    const s = story();
+    setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+    s.revise(["https://example.org/a", "https://example.org/b"], "2026-03-01T13:00:00.000Z");
+    expect(s.newRefs()).toEqual(["https://example.org/b"]);
+
+    recordArticleOpened(s.db, s.id, "2026-03-01T13:10:00.000Z");
+    setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T13:10:00.000Z");
+    expect(s.newRefs()).toEqual(["https://example.org/b"]);
+
+    s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z");
+    expect(s.newRefs()).toEqual(["https://example.org/c"]);
+  });
+
+  it("marks new the sources of every rewrite since the reader last read the article", () => {
+    const s = story();
+    setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+    s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z");
+    s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z");
+    expect(s.newRefs()).toEqual(["https://example.org/b", "https://example.org/c"]);
+  });
+
+  it("marks no source new in an article never read, nor a source stored before the time was kept", () => {
+    const s = story();
+    s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z");
+    expect(s.newRefs()).toEqual([]);
+
+    setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T13:30:00.000Z");
+    s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z");
+    s.db.prepare("UPDATE article_refs SET added_at = NULL WHERE url = 'https://example.org/c'").run();
+    expect(s.newRefs()).toEqual([]);
+    expect(getArticle(s.db, s.id).refs.map((entry) => entry.isNew)).toEqual([false, false, false]);
+  });
+
+  it("gives the chain of earlier articles, newest first, at most 20, and stops where it comes back", () => {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW));
+    let previous: number | null = null;
+    const ids: number[] = [];
+    for (let index = 0; index < 25; index += 1) {
+      const at = new Date(Date.parse(NOW) + index * 86_400_000).toISOString();
+      previous = insertArticle(db, { ...content, title: `Story ${index}`, categoryId: category.id, kind: "news", now: at, previousArticleId: previous, refs: [], topicIds: [] });
+      ids.push(previous);
+    }
+    const chain = getArticle(db, ids[24]!).previousArticles;
+    expect(chain).toHaveLength(20);
+    expect(chain[0]).toEqual({ id: ids[23], title: "Story 23", firstPublishedAt: "2026-03-24T12:00:00.000Z" });
+    expect(chain.map((entry) => entry.id)).toEqual(ids.slice(4, 24).reverse());
+    expect(getArticle(db, ids[2]!).previousArticles.map((entry) => entry.id)).toEqual([ids[1], ids[0]]);
+    expect(getArticle(db, ids[0]!).previousArticles).toEqual([]);
+
+    db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(ids[1]!, ids[0]!);
+    expect(getArticle(db, ids[1]!).previousArticles.map((entry) => entry.id)).toEqual([ids[0]]);
+  });
+});

@@ -272,12 +272,28 @@ const writeBody = z.object({
     })
     .nullable(),
 });
-const writeOutput = writeBody.extend({ mentions: mentionsOutput });
+/** The longest note on what a rewrite adds. */
+export const UPDATE_NOTE_MAX_CHARS = 300;
+
+/**
+ * What a rewrite adds. Like the mentions, any shape passes the check of the output, so that a mistake here never
+ * makes the task ask again: a string of one to 300 characters is kept, trimmed, and anything else becomes null.
+ */
+const updateNoteOutput = z
+  .unknown()
+  .optional()
+  .transform((value) => {
+    if (typeof value !== "string") return null;
+    const note = value.trim();
+    return note.length > 0 && note.length <= UPDATE_NOTE_MAX_CHARS ? note : null;
+  });
+
+const writeOutput = writeBody.extend({ mentions: mentionsOutput, updateNote: updateNoteOutput });
 export type WriteOutput = z.infer<typeof writeOutput>;
 
 const write: TaskDefinition<WriteInput, WriteOutput> = {
   output: writeOutput,
-  wire: writeBody.extend({ mentions: mentionsWire }),
+  wire: writeBody.extend({ mentions: mentionsWire, updateNote: z.string().nullable() }),
   build: (input) => ({
     system: SYSTEM,
     prompt: [
@@ -311,6 +327,9 @@ const write: TaskDefinition<WriteInput, WriteOutput> = {
       input.kind === "event"
         ? "- event: the event's name; startsAt and endsAt as local date-times in the reader's time zone, written YYYY-MM-DD or YYYY-MM-DDTHH:MM, null when the sources do not say; venue; fee; registration (required, not_required or unknown). Never guess a date."
         : "- event: null.",
+      input.existingArticle
+        ? "- updateNote: one or two sentences in the output language on what the new sources add that was not in the existing article, or null when they add nothing."
+        : "- updateNote: null.",
       ...mentionRules("the article you wrote: its title, summary and body"),
     ]
       .filter((line) => line.length > 0)

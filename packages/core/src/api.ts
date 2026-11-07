@@ -151,6 +151,11 @@ export const articleRefSchema = z.object({
   siteName: z.string(),
   title: z.string(),
   publishedAt: z.string().nullable(),
+  /**
+   * True when a follow-up added the source after the reader last read the article before that follow-up. False in an
+   * article never read, for a source stored before the time sources were added was kept, and in a feed article.
+   */
+  isNew: z.boolean(),
 });
 export type ArticleRef = z.infer<typeof articleRefSchema>;
 
@@ -368,6 +373,11 @@ export const articleSummarySchema = z.object({
   translatedTitle: z.string().nullable(),
   summary: z.string(),
   impact: z.string().nullable(),
+  /**
+   * One or two sentences on what the last rewrite by a follow-up added. Null for an article never rewritten, when
+   * the model gave none, and for a feed article.
+   */
+  updateNote: z.string().nullable(),
   /** Null for a feed article. */
   importance: importanceSchema.nullable(),
   unconfirmed: z.boolean(),
@@ -415,7 +425,13 @@ export const articleSchema = articleSummarySchema.extend({
   /** Why the full content could not be had. Null unless the status is `failed`. */
   fullContentError: fullContentErrorSchema.nullable(),
   snippetOnly: z.boolean(),
+  /** The article this one follows up, the first of `previousArticles`. Kept for the screens that read only this. */
   previousArticleId: z.number().int().nullable(),
+  /**
+   * The chain of earlier articles on the story, newest first, at most 20: the article this one follows up, the one
+   * that article follows up, and so on. It ends where an article is gone or the chain comes back on itself.
+   */
+  previousArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
   /**
    * The other feeds that delivered a feed article, in the order their copies were stored: one entry per
    * copy recorded as a duplicate of this article. Empty for an article without duplicates.
