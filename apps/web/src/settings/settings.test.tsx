@@ -1,6 +1,8 @@
 import {
   applyInterpretation,
+  createRun,
   createTopic,
+  insertCandidate,
   getCategory,
   getSettings,
   getTopic,
@@ -487,6 +489,102 @@ describe("topics", () => {
 
     await waitFor(() => expect(listTopics(server.db, category.id)).toEqual([]));
     expect(server.db.prepare("SELECT count(*) AS n FROM articles").get()).toEqual({ n: 1 });
+  });
+});
+
+describe("the stats of the topics", () => {
+  /** Stores a candidate of the topic collected now: rejected by the judge unless it says otherwise. */
+  function candidate(server: TestServer, categoryId: number, topicId: number, options: { siteName?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | null } = {}) {
+    const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
+    insertCandidate(server.db, {
+      categoryId,
+      runId: run.id,
+      url: `https://example.org/${Math.random()}`,
+      fetchable: true,
+      title: "A page",
+      snippet: "",
+      siteName: options.siteName ?? "",
+      publishedAt: null,
+      sourceKind: "news-search",
+      status: options.status ?? "rejected",
+      reason: "why",
+      reasonCode: options.reasonCode ?? null,
+      importance: 2,
+      topicIds: [topicId],
+      now: server.clock().toISOString(),
+    });
+  }
+
+  it("follows the topics, with what each topic brought in the last 30 days", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    candidate(server, category.id, flaws.id, { siteName: "ads.example" });
+    candidate(server, category.id, flaws.id, { siteName: "ads.example", reasonCode: "below-minimum" });
+    candidate(server, category.id, flaws.id, { status: "pending" });
+    const missed = server.article(category.id, { topicIds: [flaws.id] });
+    server.article(category.id, { topicIds: [flaws.id] });
+    setArticleFlags(server.db, missed, { missed: true }, server.clock().toISOString());
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const regions = screen.getAllByRole("region").map((region) => region.getAttribute("aria-label"));
+    expect(regions.indexOf("トピックの成績")).toBe(regions.indexOf("トピック") + 1);
+    const row = await within(stats).findByRole("listitem");
+    expect(row).toHaveAttribute("id", `topic-stats-${flaws.id}`);
+    await waitFor(() => expect(row).toHaveTextContent("集めた候補3件（ニュース検索 3）"));
+    expect(row).toHaveTextContent("判定での除外1件");
+    expect(row).toHaveTextContent("基準未満1件");
+    expect(row).toHaveTextContent("作った記事2件");
+    expect(row).toHaveTextContent("外れ1/2件（50%）");
+    expect(row).toHaveTextContent("よく除外されるサイトads.example 2件");
+    expect(within(row).getByRole("link", { name: "exploited flaws" })).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${flaws.id}`);
+  });
+
+  it("puts the topics with problems first when asked, and back in their order when not", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const fine = topic(server, category.id, "fine topic", true);
+    topic(server, category.id, "empty topic", true);
+    const missing = topic(server, category.id, "missing topic", true);
+    candidate(server, category.id, fine.id, { status: "pending" });
+    candidate(server, category.id, missing.id, { status: "pending" });
+    setArticleFlags(server.db, server.article(category.id, { topicIds: [missing.id] }), { missed: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const order = () => within(stats).getAllByRole("listitem").map((item) => within(item).getByRole("link").textContent);
+    await waitFor(() => expect(order()).toEqual(["fine topic", "empty topic", "missing topic"]));
+
+    await user.click(within(stats).getByRole("checkbox", { name: "問題のあるトピックを先頭へ" }));
+    expect(order()).toEqual(["empty topic", "missing topic", "fine topic"]);
+
+    await user.click(within(stats).getByRole("checkbox", { name: "問題のあるトピックを先頭へ" }));
+    expect(order()).toEqual(["fine topic", "empty topic", "missing topic"]);
+  });
+
+  it("opens the editor of a topic from its row", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    await user.click(await within(stats).findByRole("link", { name: "exploited flaws" }));
+
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
+  });
+
+  it("counts a topic added on the page", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("新しいトピック"), "ransomware");
+    await user.click(screen.getByRole("button", { name: "トピックを追加" }));
+
+    const stats = await section("トピックの成績");
+    expect(await within(stats).findByRole("link", { name: "ransomware" })).toBeInTheDocument();
   });
 });
 
