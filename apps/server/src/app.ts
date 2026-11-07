@@ -32,6 +32,7 @@ import {
   feedDiscoverSchema,
   feedUpdateSchema,
   feedStats,
+  topicStats,
   findCategoryBySlug,
   getArticle,
   getDigest,
@@ -298,6 +299,7 @@ export function createApp(deps: AppDeps): Hono {
     const category = getCategory(db, idParam(c, "category"));
     return c.json(listTopics(db, category.id));
   });
+  api.get("/categories/:id/topic-stats", (c) => c.json(topicStats(db, idParam(c, "category"), clock())));
   api.post("/categories/:id/topics", async (c) =>
     c.json(createTopic(db, idParam(c, "category"), parse(topicCreateSchema, await jsonBody(c)), clock), 201),
   );

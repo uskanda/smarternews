@@ -1182,6 +1182,83 @@ export const candidateSchema = z.object({
 });
 export type Candidate = z.infer<typeof candidateSchema>;
 
+// ---- topic stats -------------------------------------------------------------------------------
+
+/** How many days the stats of a topic look back, counted from when its candidates and articles were made. */
+export const TOPIC_STATS_DAYS = 30;
+/** How many sites the stats of a topic name among those whose candidates were rejected most. */
+export const TOPIC_STATS_TOP_SITES = 3;
+
+/** What one topic of a category brought within the last `TOPIC_STATS_DAYS` days. Generated articles only. */
+export const topicStatsEntrySchema = z.object({
+  topicId: z.number().int(),
+  text: z.string(),
+  /** The candidates collected for the topic, and how many each kind of source found. */
+  collected: z.object({
+    total: z.number().int(),
+    bySource: z.record(sourceKindSchema, z.number().int()),
+  }),
+  /** Rejected by the judge: the rejections without a reason of the program's. */
+  rejectedByJudge: z.number().int(),
+  /** Rejected because the importance of their story was below the category's minimum. */
+  belowMinimum: z.number().int(),
+  /** Rejected because the run had written as many articles as the category allows. */
+  overLimit: z.number().int(),
+  /** Rejected for a date: no publication time, or an event outside the window or without a date. */
+  rejectedByDate: z.number().int(),
+  /** Generated articles of the topic made within the period. */
+  created: z.number().int(),
+  /** Generated articles of the topic rewritten at least once, the last time within the period. */
+  updated: z.number().int(),
+  /** Of the articles in `created`: the ones with an open time. */
+  opened: z.number().int(),
+  /** Of the articles in `created`: the ones with a star now. */
+  starred: z.number().int(),
+  /** Of the articles in `created`: the ones marked as a miss for this topic, whenever it was marked. */
+  missed: z.number().int(),
+  /** The sites with the most rejected candidates, most first, `TOPIC_STATS_TOP_SITES` at most. */
+  topRejectedSites: z.array(z.object({ siteName: z.string(), count: z.number().int() })),
+});
+export type TopicStatsEntry = z.infer<typeof topicStatsEntrySchema>;
+
+export const topicStatsSchema = z.object({
+  /** The start of the period: candidates and articles made at or after it are counted. */
+  since: z.string(),
+  /** Every topic of the category, enabled or not, in the order of their ids. */
+  topics: z.array(topicStatsEntrySchema),
+});
+export type TopicStats = z.infer<typeof topicStatsSchema>;
+
+/** The candidates of the topic that no article came from, rejected at any step. */
+export function topicRejected(entry: TopicStatsEntry): number {
+  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate;
+}
+
+/** The share of the topic's articles marked as misses; 0 without articles. */
+export function topicMissRate(entry: TopicStatsEntry): number {
+  return entry.created === 0 ? 0 : entry.missed / entry.created;
+}
+
+/** The share of the topic's candidates that no article came from; 0 without candidates. */
+export function topicRejectRate(entry: TopicStatsEntry): number {
+  return entry.collected.total === 0 ? 0 : topicRejected(entry) / entry.collected.total;
+}
+
+/**
+ * The topics with problems first: those that collected nothing, then by the share of misses among their articles,
+ * then by the share of their candidates no article came from, the highest first; the id breaks ties.
+ */
+export function rankTopicStats(entries: TopicStatsEntry[]): TopicStatsEntry[] {
+  const empty = (entry: TopicStatsEntry) => (entry.collected.total === 0 ? 0 : 1);
+  return [...entries].sort(
+    (a, b) =>
+      empty(a) - empty(b) ||
+      topicMissRate(b) - topicMissRate(a) ||
+      topicRejectRate(b) - topicRejectRate(a) ||
+      a.topicId - b.topicId,
+  );
+}
+
 // ---- providers ---------------------------------------------------------------------------------
 
 /** What the providers that cost money used in the current budget period, in US dollars. */

@@ -223,6 +223,18 @@ describe("the API client", () => {
     expect(seen.at(-1)!.url).toBe(`/api/v1/feeds/${feed.id}/stats`);
   });
 
+  it("reads the stats of the topics of a category", async () => {
+    const { api, server, seen } = setup();
+    const category = server.category();
+    const topic = await api.createTopic(category.id, { text: "Exploited bugs" });
+
+    const stats = await api.topicStats(category.id);
+
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/topic-stats`);
+    expect(stats.topics).toMatchObject([{ topicId: topic.id, text: "Exploited bugs", collected: { total: 0 }, created: 0, topRejectedSites: [] }]);
+    await expect(api.topicStats(999)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
   it("asks for candidates and a preview of a page, and subscribes to it and changes its selectors, on the paths of web feeds", async () => {
     const proposal = { candidates: [{ item: "li.post", title: null, link: null, date: "time" }] };
     const { api, server, seen } = setup(API_TOKEN, { proposeSelectors: () => proposal });
