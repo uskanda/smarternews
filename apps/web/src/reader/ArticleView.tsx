@@ -8,6 +8,7 @@ import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { Attachments } from "./Attachments.tsx";
 import { Mentions } from "./Mentions.tsx";
 
 /** The attribute that makes an element an original part of the body, in which a selection can be highlighted. */
@@ -425,6 +426,7 @@ export function ArticleView({
           }
         />
         {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
+        <Attachments article={article} />
         <Mentions article={article} />
         {previous ? (
           <p className="type-body-md">

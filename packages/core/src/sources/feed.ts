@@ -18,12 +18,15 @@ export interface ParsedFeed {
 
 type Node = Record<string, unknown>;
 
+/** Elements of attached files that an item may hold more than one of. */
+const ARRAY_MEDIA = new Set(["enclosure", "media:content", "media:thumbnail", "media:group"]);
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   textNodeName: "#text",
   parseTagValue: false,
-  isArray: (name) => name === "item" || name === "entry" || name === "link",
+  isArray: (name) => name === "item" || name === "entry" || name === "link" || ARRAY_MEDIA.has(name),
 });
 
 export function parseXml(xml: string): Node {
@@ -88,12 +91,42 @@ export function parseFeed(xml: string): ParsedFeed {
 
 // ---- subscribed feeds: the same documents, read in full -----------------------------------------------
 
+export type AttachmentKind = "image" | "audio" | "video" | "other";
+
+/** A file the feed attaches to an item: an RSS enclosure, a Media RSS content or thumbnail. */
+export interface FeedAttachment {
+  /** An absolute HTTP or HTTPS address. */
+  url: string;
+  kind: AttachmentKind;
+  mimeType: string | null;
+  /** In bytes, as the feed says. Null when it says nothing usable. */
+  size: number | null;
+  title: string | null;
+  /** True for a media:thumbnail: the picture of what the item's page shows, such as a video. */
+  thumbnail: boolean;
+}
+
+/** The Media RSS description of an item: HTML when its type says so, plain text otherwise. */
+export interface FeedDescription {
+  text: string;
+  html: boolean;
+}
+
+/** At most this many attachments are kept for one item. A bound against a feed that lists without end. */
+export const MAX_ATTACHMENTS = 20;
+/** An attachment whose address is longer than this is left out. */
+export const MAX_ATTACHMENT_URL_CHARS = 2000;
+
 export interface SubscriptionItem extends FeedItem {
   /** What the feed says identifies the item: an RSS guid, an Atom id, an rdf:about. Null when it has none. */
   key: string | null;
   author: string | null;
   /** The content as the feed delivers it. Untrusted HTML: convert it before storing or showing it. */
   contentHtml: string;
+  /** The files the feed attaches to the item, without repeats, in the order the feed lists them. */
+  attachments: FeedAttachment[];
+  /** The Media RSS description, given only when the item has no content. Untrusted, like the content. */
+  description: FeedDescription | null;
 }
 
 export interface ParsedSubscription {
@@ -134,12 +167,114 @@ function atomAuthor(entry: Node): string | null {
   return orNull(plainText(textOf((first as Node).name), 200));
 }
 
-function rssSubscriptionItem(item: Node): SubscriptionItem {
+// ---- enclosures and Media RSS ----
+
+function nodesOf(value: unknown): Node[] {
+  return (Array.isArray(value) ? value : [value]).filter((node): node is Node => !!node && typeof node === "object");
+}
+
+function attributeOf(node: Node, name: string): string {
+  const value = node[`@_${name}`];
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
+/** An absolute HTTP or HTTPS address, or null. `base` resolves a relative one; without it a relative one is refused. */
+function absoluteUrl(raw: string, base: string | null): string | null {
+  if (raw.length === 0) return null;
+  try {
+    const url = base === null ? new URL(raw) : new URL(raw, base);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+const MEDIA_KINDS = new Set<AttachmentKind>(["image", "audio", "video"]);
+
+/** The kind by the Media RSS medium first, then by the head of the media type. */
+function kindOf(medium: string, mimeType: string | null): AttachmentKind {
+  const named = medium.toLowerCase() as AttachmentKind;
+  if (MEDIA_KINDS.has(named)) return named;
+  if (medium.length > 0) return "other";
+  const head = (mimeType?.split("/")[0] ?? "") as AttachmentKind;
+  return MEDIA_KINDS.has(head) ? head : "other";
+}
+
+function sizeOf(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const size = Number(raw);
+  return size > 0 && Number.isSafeInteger(size) ? size : null;
+}
+
+function mediaTitle(node: Node): string | null {
+  const title = node["media:title"];
+  return orNull(plainText(textOf(Array.isArray(title) ? title[0] : title), 200));
+}
+
+/**
+ * The files an item attaches: its enclosures, then the media:content of the item and of its media:group, then
+ * their media:thumbnail. Relative addresses are resolved against `base`, the item's page. An address that is
+ * not HTTP or HTTPS, is too long, or was listed before is left out.
+ */
+function attachmentsOf(item: Node, base: string | null): FeedAttachment[] {
+  const attachments: FeedAttachment[] = [];
+  const seen = new Set<string>();
+  const add = (node: Node, attachment: Omit<FeedAttachment, "url">) => {
+    if (attachments.length >= MAX_ATTACHMENTS) return;
+    const url = absoluteUrl(attributeOf(node, "url"), base);
+    if (url === null || url.length > MAX_ATTACHMENT_URL_CHARS || seen.has(url)) return;
+    seen.add(url);
+    attachments.push({ url, ...attachment });
+  };
+  const itemTitle = mediaTitle(item);
+  const scopes = [
+    { node: item, title: itemTitle },
+    ...nodesOf(item["media:group"]).map((group) => ({ node: group, title: mediaTitle(group) ?? itemTitle })),
+  ];
+  for (const enclosure of nodesOf(item.enclosure)) {
+    const mimeType = orNull(attributeOf(enclosure, "type").toLowerCase());
+    add(enclosure, { kind: kindOf("", mimeType), mimeType, size: sizeOf(attributeOf(enclosure, "length")), title: null, thumbnail: false });
+  }
+  const contents = scopes.flatMap((scope) => nodesOf(scope.node["media:content"]).map((node) => ({ node, title: mediaTitle(node) ?? scope.title })));
+  for (const { node, title } of contents) {
+    const mimeType = orNull(attributeOf(node, "type").toLowerCase());
+    add(node, { kind: kindOf(attributeOf(node, "medium"), mimeType), mimeType, size: sizeOf(attributeOf(node, "fileSize")), title, thumbnail: false });
+  }
+  for (const { node, title } of [...scopes, ...contents]) {
+    for (const thumbnail of nodesOf(node["media:thumbnail"])) add(thumbnail, { kind: "image", mimeType: null, size: null, title, thumbnail: true });
+  }
+  return attachments;
+}
+
+/** The first media:description of the item, of its media:group, or of its first media:content. */
+function descriptionOf(item: Node): FeedDescription | null {
+  const groups = nodesOf(item["media:group"]);
+  const firstContents = [item, ...groups].map((scope) => nodesOf(scope["media:content"])[0]).filter((node): node is Node => node !== undefined);
+  for (const scope of [item, ...groups, ...firstContents]) {
+    const raw = scope["media:description"];
+    const node = Array.isArray(raw) ? raw[0] : raw;
+    const text = textOf(node).trim();
+    if (text.length === 0) continue;
+    return { text, html: !!node && typeof node === "object" && attributeOf(node as Node, "type").toLowerCase() === "html" };
+  }
+  return null;
+}
+
+/** The attachments of an item, and its description when it has no content. */
+function mediaOf(item: Node, url: string, contentHtml: string, feedUrl: string | null) {
+  const base = absoluteUrl(url, feedUrl) ?? feedUrl;
+  return { attachments: attachmentsOf(item, base), description: contentHtml.length > 0 ? null : descriptionOf(item) };
+}
+
+function rssSubscriptionItem(item: Node, feedUrl: string | null): SubscriptionItem {
+  const read = rssItem(item);
+  const contentHtml = (textOf(item["content:encoded"]) || textOf(item.description)).trim();
   return {
-    ...rssItem(item),
+    ...read,
     key: orNull(textOf(item.guid)) ?? orNull(String(item["@_rdf:about"] ?? "")),
     author: rssAuthor(item),
-    contentHtml: (textOf(item["content:encoded"]) || textOf(item.description)).trim(),
+    contentHtml,
+    ...mediaOf(item, read.url, contentHtml, feedUrl),
   };
 }
 
@@ -205,6 +340,9 @@ function jsonItem(item: Node): SubscriptionItem {
     key: orNull(id),
     author: jsonAuthor(item),
     contentHtml: html.trim().length > 0 ? html.trim() : textAsHtml(text),
+    // The attachments of JSON Feed are not read (add-json-feed); it has no Media RSS description.
+    attachments: [],
+    description: null,
   };
 }
 
@@ -227,8 +365,12 @@ export function parseJsonFeed(text: string): ParsedSubscription | null {
   };
 }
 
-/** Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author and content. */
-export function parseSubscription(xml: string): ParsedSubscription {
+/**
+ * Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author, content
+ * and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the relative
+ * pages of items.
+ */
+export function parseSubscription(xml: string, feedUrl: string | null = null): ParsedSubscription {
   const json = parseJsonFeed(xml);
   if (json) return json;
   const root = parseXml(xml);
@@ -237,7 +379,7 @@ export function parseSubscription(xml: string): ParsedSubscription {
     return {
       title: plainText(textOf(rss.title), 200),
       siteUrl: siteLink(rss.link, rssLink),
-      items: ((rss.item as Node[] | undefined) ?? []).map(rssSubscriptionItem),
+      items: ((rss.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl)),
     };
   }
   const rdf = root["rdf:RDF"] as Node | undefined;
@@ -246,7 +388,7 @@ export function parseSubscription(xml: string): ParsedSubscription {
     return {
       title: plainText(textOf(channel?.title), 200),
       siteUrl: siteLink(channel?.link, rssLink),
-      items: ((rdf.item as Node[] | undefined) ?? []).map(rssSubscriptionItem),
+      items: ((rdf.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl)),
     };
   }
   const atom = root.feed as Node | undefined;
@@ -257,12 +399,17 @@ export function parseSubscription(xml: string): ParsedSubscription {
     return {
       title: plainText(textOf(atom.title), 200),
       siteUrl: siteLink(atom.link, atomLink),
-      items: entries.map((entry, index) => ({
-        ...atomEntry(entry),
-        key: orNull(textOf(entry.id)),
-        author: atomAuthor(entry),
-        contentHtml: atomContent(entry, rawEntries[index]),
-      })),
+      items: entries.map((entry, index) => {
+        const read = atomEntry(entry);
+        const contentHtml = atomContent(entry, rawEntries[index]);
+        return {
+          ...read,
+          key: orNull(textOf(entry.id)),
+          author: atomAuthor(entry),
+          contentHtml,
+          ...mediaOf(entry, read.url, contentHtml, feedUrl),
+        };
+      }),
     };
   }
   throw new Error("the document is not a feed");

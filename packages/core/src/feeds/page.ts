@@ -133,7 +133,7 @@ export function extractPage(html: string, pageUrl: string, selectors: PageSelect
     const url = addressOf(link, pageUrl);
     const title = selectors.title === undefined ? textOf(link) : textOf(select(element, selectors.title, "title", false));
     if (url === null || title.length === 0) continue;
-    items.push({ key: null, url, title, snippet: "", contentHtml: "", author: null, publishedAt: dateOf(element, selectors, timeZone) });
+    items.push({ key: null, url, title, snippet: "", contentHtml: "", author: null, publishedAt: dateOf(element, selectors, timeZone), attachments: [], description: null });
   }
   return { title: textOf(document.querySelector("title")), matched: elements.length, items };
 }
