@@ -51,6 +51,8 @@ export class TaskFailedError extends Error {
 export interface CallBudget {
   runId: number | null;
   calls: number;
+  /** What the calls are for when the task does not say it: "trial" for a topic trial. */
+  purpose?: "trial";
 }
 
 /** Summaries of feed articles a day, unless the configuration says otherwise. */
@@ -59,13 +61,15 @@ const SUMMARIES_PER_DAY = 100;
 const SELECTOR_PROPOSALS_PER_DAY = 50;
 /** Calls for digests a day, unless the configuration says otherwise. */
 const DIGESTS_PER_DAY = 4;
+/** Calls for topic trials a day, unless the configuration says otherwise. */
+const TOPIC_TRIALS_PER_DAY = 30;
 
 /** The tasks with an allowance of their own: their calls are not counted towards `llmCallsPerDay`. */
 const OWN_ALLOWANCE = "task NOT IN ('summarize', 'digest')";
 
 export interface TaskLimits {
   llmCallsPerRun: number;
-  /** Calls for runs and proposals of selectors. Summaries of feed articles are not counted here. */
+  /** Calls for runs, proposals of selectors and topic trials. Summaries of feed articles are not counted here. */
   llmCallsPerDay: number;
   /** Calls that summarise feed articles. The calls of runs are not counted here. */
   summariesPerDay: number;
@@ -73,6 +77,8 @@ export interface TaskLimits {
   selectorProposalsPerDay: number;
   /** Calls that make digests. The calls of runs are not counted here, and these not towards `llmCallsPerDay`. */
   digestsPerDay: number;
+  /** Calls of topic trials, a second attempt included. They count towards `llmCallsPerDay` as well. */
+  topicTrialsPerDay: number;
 }
 
 /** The money the providers that cost money may use, and when its period starts again. */
@@ -90,10 +96,11 @@ export interface TaskRunnerOptions {
   clock: Clock;
   providers: Map<string, Provider>;
   assignment: Record<TaskName, string>;
-  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay" | "digestsPerDay"> & {
+  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay" | "digestsPerDay" | "topicTrialsPerDay"> & {
     summariesPerDay?: number;
     selectorProposalsPerDay?: number;
     digestsPerDay?: number;
+    topicTrialsPerDay?: number;
   };
   timeouts: { defaultMs: number; searchMs: number };
   timeZone: () => string;
@@ -112,6 +119,7 @@ export class TaskRunner {
       summariesPerDay: SUMMARIES_PER_DAY,
       selectorProposalsPerDay: SELECTOR_PROPOSALS_PER_DAY,
       digestsPerDay: DIGESTS_PER_DAY,
+      topicTrialsPerDay: TOPIC_TRIALS_PER_DAY,
       ...this.#options.limits,
     };
   }
@@ -229,6 +237,25 @@ export class TaskRunner {
     return this.selectorProposalsToday() < limits.selectorProposalsPerDay && this.callsToday() < limits.llmCallsPerDay;
   }
 
+  /** Calls made for topic trials since the start of the current day, a second attempt included. */
+  topicTrialsToday(): number {
+    return this.#countToday("purpose = 'trial'");
+  }
+
+  /**
+   * Why a topic trial that needs `calls` model calls cannot start now: the trials of the day have fewer calls left,
+   * the calls of the day have fewer left, or a provider of the trial costs money and the budget is used up.
+   * Null when it can start. A second attempt after an invalid answer can still stop it on the way.
+   */
+  trialBlocked(calls: number): "limit" | "day" | "budget" | null {
+    const limits = this.limits;
+    if (limits.topicTrialsPerDay - this.topicTrialsToday() < calls) return "limit";
+    if (limits.llmCallsPerDay - this.callsToday() < calls) return "day";
+    const billable = this.providerFor("interpret").pricing !== null || this.providerFor("judge").pricing !== null;
+    if (billable && this.spentThisPeriod() >= this.budget.monthlyBudgetUsd) return "budget";
+    return null;
+  }
+
   #countToday(condition: string): number {
     const { db, clock, timeZone } = this.#options;
     const since = startOfLocalDay(clock(), timeZone()).toISOString();
@@ -273,6 +300,7 @@ export class TaskRunner {
       if (this.digestsToday() >= this.limits.digestsPerDay) throw new LlmLimitError("day");
     } else {
       if (task === "proposeSelectors" && this.selectorProposalsToday() >= this.limits.selectorProposalsPerDay) throw new LlmLimitError("day");
+      if (budget.purpose === "trial" && this.topicTrialsToday() >= this.limits.topicTrialsPerDay) throw new LlmLimitError("day");
       if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
       if (this.callsToday() >= this.#options.limits.llmCallsPerDay) throw new LlmLimitError("day");
     }
@@ -306,8 +334,9 @@ export class TaskRunner {
     this.#options.db
       .prepare(
         `INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, error, created_at,
-                                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, billable)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, billable,
+                                purpose)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         budget.runId,
@@ -324,6 +353,7 @@ export class TaskRunner {
         usage?.webSearches ?? null,
         cost,
         provider.pricing ? 1 : 0,
+        budget.purpose ?? null,
       );
   }
 }

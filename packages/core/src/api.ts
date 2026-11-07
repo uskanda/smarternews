@@ -144,6 +144,64 @@ export const topicUpdateSchema = z.object({
 });
 export type TopicUpdate = z.infer<typeof topicUpdateSchema>;
 
+/** A text to try on a topic before it is saved, with the search locale being edited. Null or left out: the settings'. */
+export const topicTrialRequestSchema = z.object({
+  text: topicText,
+  search: searchLocaleSchema.nullable().optional(),
+});
+export type TopicTrialRequest = z.infer<typeof topicTrialRequestSchema>;
+
+/** The answer to a request for a trial: started, or refused because a limit leaves too few calls. */
+export const topicTrialStartSchema = z.object({
+  status: z.enum(["started", "limit", "day", "budget"]),
+  /** The trial to ask about. Null when it did not start. */
+  id: z.string().nullable(),
+});
+export type TopicTrialStart = z.infer<typeof topicTrialStartSchema>;
+
+const trialVerdictSchema = z.enum(["accepted", "rejected"]);
+
+/** A candidate whose verdict the trial turned around. */
+export const topicTrialChangeSchema = z.object({
+  candidateId: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  siteName: z.string(),
+  publishedAt: z.string().nullable(),
+  before: z.object({
+    verdict: trialVerdictSchema,
+    /** The reason stored with the candidate. */
+    reason: z.string(),
+    /** True when the program gave that reason after the judge accepted it: the judge's own reason is gone. */
+    byProgram: z.boolean(),
+  }),
+  after: z.object({ verdict: trialVerdictSchema, reason: z.string(), importance: z.number().int() }),
+  /** True when the trial accepts it with an importance below the category minimum, so no article would show it. */
+  belowMinimum: z.boolean(),
+});
+export type TopicTrialChange = z.infer<typeof topicTrialChangeSchema>;
+
+export const topicTrialResultSchema = z.object({
+  queries: z.array(z.string()),
+  criteria: z.string(),
+  minImportance: z.number().int(),
+  /** The candidates judged again. */
+  tried: z.number().int(),
+  changes: z.array(topicTrialChangeSchema),
+});
+export type TopicTrialResult = z.infer<typeof topicTrialResultSchema>;
+
+export const topicTrialSchema = z.object({
+  id: z.string(),
+  topicId: z.number().int(),
+  status: z.enum(["running", "succeeded", "failed", "stopped_by_limit"]),
+  /** The allowance a trial stopped by limit ran into. */
+  stoppedBy: z.enum(["run", "day", "budget"]).nullable(),
+  result: topicTrialResultSchema.nullable(),
+  error: z.string().nullable(),
+});
+export type TopicTrial = z.infer<typeof topicTrialSchema>;
+
 // ---- articles ----------------------------------------------------------------------------------
 
 export const articleRefSchema = z.object({

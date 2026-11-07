@@ -79,14 +79,16 @@ const configSchema = z.strictObject({
   limits: z
     .strictObject({
       llmCallsPerRun: z.number().int().min(1).default(40),
-      /** Every call but the summaries: the calls of runs and the proposals of selectors. */
-      llmCallsPerDay: z.number().int().min(1).default(350),
+      /** Every call but the summaries and digests: the calls of runs, the proposals of selectors and topic trials. */
+      llmCallsPerDay: z.number().int().min(1).default(380),
       /** Summaries of feed articles, counted apart from the calls of runs. */
       summariesPerDay: z.number().int().min(1).default(100),
       /** Proposals of selectors for web feeds, counted in `llmCallsPerDay` as well. 0 leaves them to the program. */
       selectorProposalsPerDay: z.number().int().min(0).default(50),
       /** Calls for digests, counted apart from the calls of runs. 0 makes no digest. */
       digestsPerDay: z.number().int().min(0).default(4),
+      /** Calls for topic trials, a second attempt included, counted in `llmCallsPerDay` as well. 0 switches them off. */
+      topicTrialsPerDay: z.number().int().min(0).default(30),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */

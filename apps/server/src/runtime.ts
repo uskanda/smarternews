@@ -124,6 +124,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
       summariesPerDay: config.limits.summariesPerDay,
       selectorProposalsPerDay: config.limits.selectorProposalsPerDay,
       digestsPerDay: config.limits.digestsPerDay,
+      topicTrialsPerDay: config.limits.topicTrialsPerDay,
     },
     timeouts: { defaultMs: config.llm.timeoutMs, searchMs: config.llm.searchTimeoutMs },
     timeZone: () => getSettings(db).timeZone,

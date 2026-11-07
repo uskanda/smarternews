@@ -55,10 +55,11 @@ translation:
 
 limits:
   llmCallsPerRun: 40      # a run stops, and is recorded as stopped_by_limit, when it reaches this
-  llmCallsPerDay: 350     # calls of runs and proposals of selectors, counted from midnight in the configured time zone
+  llmCallsPerDay: 380     # calls of runs, proposals of selectors and topic trials, counted from midnight in the configured time zone
   summariesPerDay: 100    # summaries of feed articles, counted apart from the calls of runs
   selectorProposalsPerDay: 50   # proposals of selectors for web feeds; they count towards llmCallsPerDay too
   digestsPerDay: 4        # calls for digests, counted apart from the calls of runs; 0 makes no digest
+  topicTrialsPerDay: 30   # calls of topic trials; they count towards llmCallsPerDay too; 0 switches trials off
   judgeBatchSize: 30      # candidates judged per model call
   pagesPerRun: 20         # article pages fetched per run
   runRetries: 2           # retries of a scheduled run that failed, 0 to 3; 0 switches them off

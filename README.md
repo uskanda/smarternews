@@ -273,7 +273,7 @@ Planned retries are stored, so they survive a restart; a retry that came due whi
 
 ## Limits on model use
 
-A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (350 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
+A run stops when it has made `llmCallsPerRun` model calls (40 by default). Once the day has reached `llmCallsPerDay` (380 by default), no run calls a model. Articles finished before a stop are kept, and the next run continues with the rest. `GET /api/v1/providers` shows the calls made today.
 
 Summaries of feed articles are counted apart. Once the day has made `summariesPerDay` of them (100 by default), no more are made until the next day, which starts with the newest articles that still wait. Summaries do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `summariesPerDay`. The `summarize` task runs on the provider named `fast` unless `tasks` in `config.yaml` assigns another; see [docs/providers.md](docs/providers.md).
 
@@ -286,6 +286,8 @@ Translation by the model counts towards `llmCallsPerDay`. On a day that has reac
 Digests are counted apart as well: `digestsPerDay` (4 by default, 0 makes none) bounds the calls of one day, a second attempt after an invalid answer included. They do not count towards `llmCallsPerDay`, and the calls of runs do not count towards `digestsPerDay`. The `digest` task runs on the provider named `smart` unless `tasks` assigns another, and obeys the monthly budget like every task.
 
 Proposals of selectors for web feeds count towards `llmCallsPerDay` as well, and have a limit of their own: `selectorProposalsPerDay` (50 by default). The default of `llmCallsPerDay` was 300 before web feeds; it grew by these 50. On a day that has reached either limit, the candidates come from the server's own guess, and the page says so.
+
+A topic trial asks the `interpret` task once and the `judge` task once per batch of stored candidates, about three calls. Its calls count towards `llmCallsPerDay` and the monthly budget, and have a limit of their own: `topicTrialsPerDay` (30 by default, a second attempt after an invalid answer included; 0 switches trials off). The default of `llmCallsPerDay` grew from 350 to 380 by these 30. A trial whose calls do not fit in what the day leaves is refused before it calls a model.
 
 ## Development
 
