@@ -7,6 +7,7 @@ import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, messageFor } from "../ui/controls.tsx";
+import { useUnsaved } from "./unsaved.tsx";
 
 // The inputs of a filter, shared by the settings of filters and the dialog that makes one from a selection.
 
@@ -102,6 +103,11 @@ function draftOf(filter?: FilterStart): Draft {
     : { action: "hide", scope: "all", conditions: [newCondition()] };
 }
 
+/** What a draft says, without the keys its conditions are rendered by, for telling whether it changed. */
+function contentOf(draft: Pick<Draft, "action" | "scope"> & { conditions: FilterCondition[] }): string {
+  return JSON.stringify([draft.action, draft.scope, draft.conditions.map(({ fields, match, value }) => [fields, match, value])]);
+}
+
 function ConditionInput({
   index,
   condition,
@@ -187,17 +193,20 @@ function ConditionInput({
  * The inputs of a filter: kind, scope and conditions, with a count before saving. Used to add and to edit.
  * `initial` is what a new filter starts from. `preferred` are scopes put first, after 全体, as この記事.
  * `onCreated` takes over once a new filter is added; without it the inputs are emptied and a notice says so.
+ * `label` names the form when the settings page asks before leaving changes that are not saved.
  */
 export function FilterForm({
   filter,
   initial,
   preferred = [],
+  label,
   onDone,
   onCreated,
 }: {
   filter?: Filter;
   initial?: FilterStart;
   preferred?: FilterScope[];
+  label?: string;
   onDone?: () => void;
   onCreated?: (saved: Filter) => void;
 }) {
@@ -212,6 +221,13 @@ export function FilterForm({
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const scopeId = useId();
+  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again.
+  useUnsaved(
+    label ?? (filter ? "フィルターの編集" : "新しいフィルター"),
+    filter
+      ? contentOf(draft) !== contentOf({ ...filter, scope: scopeKey(filter.scope) })
+      : draft.conditions.some((condition) => condition.value.trim() !== ""),
+  );
 
   const scope = scopeOf(draft.scope);
   const complete = scope !== null && draft.conditions.every((condition) => condition.fields.length > 0 && condition.value.trim().length > 0);

@@ -8,8 +8,8 @@ import {
   type Settings,
 } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { useId, useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router";
 import {
   ApiError,
   budgetWarningLabel,
@@ -31,8 +31,10 @@ import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
+import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const TASK_LABEL = {
@@ -46,6 +48,11 @@ const TASK_LABEL = {
   proposeSelectors: "セレクターの提案",
 } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
+
+/** The times written in a field, separated by commas, 、 or spaces. */
+function timesOf(text: string): string[] {
+  return text.split(/[\s,、]+/).filter((time) => time.length > 0);
+}
 
 function CategoryRow({ category }: { category: Category }) {
   const topics = useTopics(category.id).data;
@@ -71,6 +78,8 @@ function Categories() {
   const [kind, setKind] = useState<"news" | "event">("news");
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const leave = useUnsavedLeaving();
+  useUnsaved("新しいカテゴリの名前", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -81,6 +90,8 @@ function Categories() {
       const created = await api.createCategory({ name, kind });
       await client.invalidateQueries({ queryKey: ["categories"] });
       void client.invalidateQueries({ queryKey: ["counts"] });
+      // The name is saved now, in the category this opens.
+      leave();
       void navigate(`/settings/categories/${created.id}`);
     } catch (caught) {
       setError(caught);
@@ -88,7 +99,7 @@ function Categories() {
   }
 
   return (
-    <section aria-label="カテゴリ" className={SECTION}>
+    <section id="categories" aria-label="カテゴリ" className={SECTION}>
       <h2 className="type-headline-md">カテゴリ</h2>
       {categories.isError ? <ErrorNotice error={categories.error} onRetry={() => void categories.refetch()} /> : null}
       {categories.data?.length === 0 ? (
@@ -119,7 +130,7 @@ function Categories() {
         </p>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
-          <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
+          <Button type="submit" disabled={name.trim().length === 0}>
             カテゴリを追加
           </Button>
         </div>
@@ -135,6 +146,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const [text, setText] = useState(settings.readerInfo);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -151,7 +163,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   }
 
   return (
-    <section aria-label="読み手情報" className={SECTION}>
+    <section id="reader" aria-label="読み手情報" className={SECTION}>
       <h2 className="type-headline-md">読み手情報</h2>
       <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
         <Field
@@ -167,7 +179,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
         />
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
-          <Button type="submit" variant="primary">
+          <Button type="submit">
             保存する
           </Button>
         </div>
@@ -197,6 +209,18 @@ function GlobalSettings({ settings }: { settings: Settings }) {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
   };
+  // Compared the way they are saved, so that nothing is left to ask about once they are.
+  useUnsaved(
+    "全体設定",
+    form.outputLanguage.trim() !== settings.outputLanguage ||
+      form.timeZone.trim() !== settings.timeZone ||
+      form.language.trim() !== settings.search.language ||
+      form.region.trim() !== settings.search.region ||
+      timesOf(form.digestSchedule).join(",") !== settings.digestSchedule.join(",") ||
+      advance !== settings.advanceAfterMarkAll ||
+      removeDuplicates !== settings.removeDuplicates ||
+      staleDays.trim() !== String(settings.staleFeedDays),
+  );
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -235,7 +259,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   }
 
   return (
-    <section aria-label="全体設定" className={SECTION}>
+    <section id="global" aria-label="全体設定" className={SECTION}>
       <h2 className="type-headline-md">全体設定</h2>
       <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
         <Field
@@ -313,7 +337,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
-          <Button type="submit" variant="primary">
+          <Button type="submit">
             保存する
           </Button>
         </div>
@@ -331,7 +355,7 @@ function DeviceSettings() {
   const scrollRead = useScrollRead();
   const id = useId();
   return (
-    <section aria-labelledby={`${id}-title`} className={SECTION}>
+    <section id="device" aria-labelledby={`${id}-title`} className={SECTION}>
       <h2 id={`${id}-title`} className="type-headline-md">
         この端末の設定
       </h2>
@@ -419,7 +443,7 @@ function SettingsFile() {
   }
 
   return (
-    <section aria-label="設定ファイル" className={SECTION}>
+    <section id="settings-file" aria-label="設定ファイル" className={SECTION}>
       <h2 className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         カテゴリ、トピック、購読フィード、フィルター、語の色付け、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
@@ -519,19 +543,9 @@ function Budget({ status }: { status: ProviderStatus }) {
   );
 }
 
-/** Opens the section a link points at, such as /settings#providers from the warning at the top of the screen. */
-function useScrollToHash(ready: boolean) {
-  const { hash } = useLocation();
-  useEffect(() => {
-    if (!ready || hash.length < 2) return;
-    document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: "start" });
-  }, [hash, ready]);
-}
-
 function Providers() {
   const providers = useProviders();
   const status = providers.data;
-  useScrollToHash(status !== undefined);
   return (
     <section id="providers" aria-label="プロバイダー" className={SECTION}>
       <h2 className="type-headline-md">プロバイダー</h2>
@@ -603,18 +617,61 @@ function Providers() {
   );
 }
 
+/** The sections of the page, in their order, as the links at the top name them. */
+const SECTIONS = [
+  { id: "categories", name: "カテゴリ" },
+  { id: "feeds", name: "購読フィード" },
+  { id: "term-highlights", name: "語の色付け" },
+  { id: "reader", name: "読み手情報" },
+  { id: "global", name: "全体設定" },
+  { id: "device", name: "この端末の設定" },
+  { id: "settings-file", name: "設定ファイル" },
+  { id: "providers", name: "プロバイダー" },
+  { id: "tokens", name: "トークン" },
+] as const;
+
+/** Links to every section, wrapping onto more lines when the width runs out, and scrolling away with the page. */
+function SectionLinks() {
+  return (
+    <nav aria-label="設定の区画">
+      <ul className="flex flex-wrap gap-x-lg gap-y-xs type-body-md">
+        {SECTIONS.map((section) => (
+          <li key={section.id}>
+            <Link to={`/settings#${section.id}`} className="tap text-primary underline underline-offset-4">
+              {section.name}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
 /** Everything that is configured rather than read: categories, the reader, global settings, the settings file. */
 export function SettingsPage() {
+  return (
+    <UnsavedGuard>
+      <SettingsSections />
+    </UnsavedGuard>
+  );
+}
+
+function SettingsSections() {
   const { clearToken } = useApp();
   const settings = useSettings();
+  const providers = useProviders();
+  // The reader and the global settings appear only once the settings are in, and the providers' section grows when
+  // they are, so the page scrolls to the section the address names after both.
+  useScrollToHash(!settings.isPending && !providers.isPending);
   const [clearing, setClearing] = useState(false);
   return (
     <div className="h-full overflow-y-auto bg-surface">
-      <header className="border-b border-outline px-lg py-md md:px-2xl">
+      <header className="flex flex-col gap-md border-b border-outline px-lg py-md md:px-2xl">
         <h1 className="type-headline-md">設定</h1>
+        <SectionLinks />
       </header>
       <Categories />
-      <section aria-label="購読フィード" className={SECTION}>
+      <section id="feeds" aria-label="購読フィード" className={SECTION}>
         <h2 className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
@@ -632,7 +689,7 @@ export function SettingsPage() {
           </li>
         </ul>
       </section>
-      <section aria-label="語の色付け" className={SECTION}>
+      <section id="term-highlights" aria-label="語の色付け" className={SECTION}>
         <h2 className="type-headline-md">語の色付け</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           登録した語を、生成記事と配信記事の両方の一覧と本文で色付けします。語はまとまりに分け、まとまりごとに色を選びます。色付けは記事を隠しません。
@@ -655,7 +712,7 @@ export function SettingsPage() {
       <DeviceSettings />
       <SettingsFile />
       <Providers />
-      <section aria-label="トークン" className={SECTION}>
+      <section id="tokens" aria-label="トークン" className={SECTION}>
         <h2 className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           このブラウザーに保存したAPIのトークンを消します。次に開くとき、もう一度入力が必要になります。

@@ -237,3 +237,19 @@ describe("keys while the dialog for a hide filter is open", () => {
     expect(screen.getByRole("dialog", { name: "隠すフィルターを作る" })).toBeInTheDocument();
   });
 });
+
+describe("what is written in the dialog for a hide filter", () => {
+  it("is not held against a reload, as changes on the settings pages are", async () => {
+    const { server, feed, id } = shop();
+    const { user } = renderApp({ server, route: `/f/${feed.id}/${id}` });
+    const article = await opened();
+    await within(article).findByText(/春の特売/);
+
+    selectText(article.querySelector(".article-body")!, "特売");
+    await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: MAKE }));
+    const dialog = await screen.findByRole("dialog", { name: "隠すフィルターを作る" });
+    await user.type(within(dialog).getByLabelText("条件1の値"), "の値段");
+
+    expect(fireEvent(window, new Event("beforeunload", { cancelable: true }))).toBe(true);
+  });
+});

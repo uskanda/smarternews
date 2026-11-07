@@ -57,7 +57,8 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
     if (!target) return;
     keyStep.current = step;
     keyFocus.current = focusWithin(pane.current);
-    void navigate(annotationPath(target));
+    // As in the article list, only the first annotation opened adds to the history.
+    void navigate(annotationPath(target), { replace: selected !== null });
   };
   useHotkeys({ j: () => move(1), k: () => move(-1) });
   // A move with a key takes the list along, as in the article list, and the focus too when it was in the list.

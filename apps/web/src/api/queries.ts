@@ -290,7 +290,6 @@ export function useSummaryRequest(article: Article | undefined): "none" | "waiti
   return late ? "late" : "waiting";
 }
 
-/** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */
 /**
  * Shows articles read or unread in every list and in their detail, before or without a request: the rows the
  * list was scrolled past, and those rows again when the request failed.
@@ -327,18 +326,32 @@ export function useRecordOpened() {
   );
 }
 
-export function useArticleFlags() {
+/** A change of an article's read state or star, as sent to the server. */
+export interface ArticleFlagChange {
+  id: number;
+  isRead?: boolean;
+  starred?: boolean;
+}
+
+/**
+ * Sets the read state or the star of an article. The screen changes at once, in every list and in the article.
+ * When the server cannot store it, the change is undone everywhere it was made, also for an article whose own
+ * entry is not cached, and `onFailed` gets what was sent, to say so and to send it again.
+ */
+export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
   const { api } = useApp();
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: number; isRead?: boolean; starred?: boolean }) => api.updateArticle(id, patch),
+    mutationFn: ({ id, ...patch }: ArticleFlagChange) => api.updateArticle(id, patch),
     onMutate: ({ id, ...patch }) => {
-      const before = client.getQueryData<Article>(["article", id]);
       patchArticle(client, id, patch);
-      return { before };
     },
-    onError: (_error, { id }, context) => {
-      if (context?.before) patchArticle(client, id, { isRead: context.before.isRead, starred: context.before.starred });
+    onError: (_error, change) => {
+      patchArticle(client, change.id, {
+        ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
+        ...(change.starred !== undefined ? { starred: !change.starred } : {}),
+      });
+      onFailed(change);
     },
     onSettled: (_data, _error, variables) => {
       void client.invalidateQueries({ queryKey: ["counts"] });

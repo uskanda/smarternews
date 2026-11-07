@@ -10,11 +10,12 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { feedDeletionText } from "./feed-deletion.ts";
-import { useInlineEditFocus } from "./inline-edit-focus.ts";
+import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
+import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const RANGE = "5分から1440分（24時間）の範囲で入力してください。";
@@ -122,6 +123,18 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [titleProblem, setTitleProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved(
+    `購読フィード『${feed.title}』の編集`,
+    title !== feed.title ||
+      category !== (feed.categoryId === null ? NO_CATEGORY : String(feed.categoryId)) ||
+      ownInterval !== (feed.intervalMinutes !== null) ||
+      (ownInterval && minutes.trim() !== String(feed.intervalMinutes)) ||
+      paused !== !feed.enabled ||
+      autoSummarize !== feed.autoSummarize ||
+      translate !== feed.translate ||
+      fetchFullContent !== feed.fetchFullContent ||
+      JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
+  );
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -289,11 +302,35 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
   );
 }
 
-function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categories: Category[]; settings: Settings | undefined; timeZone: string }) {
+/** The id of a feed's row, which an address such as /settings/feeds#feed-12 names. */
+const rowId = (feedId: number) => `feed-${feedId}`;
+
+/**
+ * The row an address names: /settings/feeds#feed-12 shows the row, and /settings/feeds#feed-12-edit, from the
+ * settings dialog above a feed's list, also opens its form.
+ */
+function parseFeedHash(hash: string): { feedId: number; edit: boolean } | null {
+  const match = /^#feed-(\d{1,15})(-edit)?$/.exec(hash);
+  return match ? { feedId: Number(match[1]), edit: match[2] !== undefined } : null;
+}
+
+function FeedRow({
+  feed,
+  categories,
+  settings,
+  timeZone,
+  initiallyEditing = false,
+}: {
+  feed: Feed;
+  categories: Category[];
+  settings: Settings | undefined;
+  timeZone: string;
+  initiallyEditing?: boolean;
+}) {
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(initiallyEditing);
   const [confirming, setConfirming] = useState(false);
   const { fetching, fetchNow } = useFetchFeedNow(feed, "取得できませんでした。理由は一覧に表示しています。");
   // The form takes the place of the buttons that opened it, so the focus is carried into it and back.
@@ -314,7 +351,8 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
 
   return (
     // The list of a feed links here by this id, to put the row right that it reports on.
-    <li id={`feed-${feed.id}`} className="flex scroll-mt-md flex-col gap-xs border-b border-outline py-md type-body-md">
+    <li id={rowId(feed.id)} className="flex scroll-mt-md flex-col gap-xs border-b border-outline py-md type-body-md">
+
       <div className="flex flex-wrap items-baseline gap-x-lg gap-y-xs">
         <span data-feed-heading tabIndex={-1} className="type-label-md">
           {feed.title}
@@ -331,7 +369,10 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
           <EditFeed feed={feed} categories={categories} onDone={() => setEditing(false)} />
         </div>
       ) : (
-        <div className="flex flex-wrap gap-sm pt-xs">
+        <div className="flex flex-wrap items-center gap-sm pt-xs">
+          <Link to={`/f/${feed.id}`} aria-label={`${feed.title}の記事の一覧`} className="tap text-primary underline underline-offset-4">
+            記事の一覧
+          </Link>
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>
@@ -373,6 +414,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [minutes, setMinutes] = useState(String(settings.feedIntervalMinutes));
   const [problem, setProblem] = useState<string | null>(null);
+  useUnsaved("基本の取得周期", minutes.trim() !== String(settings.feedIntervalMinutes));
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -528,6 +570,14 @@ const needsLook = (feed: Feed) => feed.stale || feed.lastError !== null;
 
 /** Subscribed feeds: adding, the list with what the last fetch did, the base interval, and OPML. */
 export function FeedsPage() {
+  return (
+    <UnsavedGuard>
+      <Feeds />
+    </UnsavedGuard>
+  );
+}
+
+function Feeds() {
   const feeds = useFeeds();
   // Kept on this screen only: opened again, the list is in the order of the left pane.
   const [problemsFirst, setProblemsFirst] = useState(false);
@@ -536,16 +586,22 @@ export function FeedsPage() {
   const settings = useSettings().data;
   const timeZone = useTimeZone();
   // Opened from the list of a feed as /settings/feeds#feed-<id>: once the rows are there, that row is brought
-  // into view and its name takes the focus, so that the reader starts where the problem is.
+  // into view and its name takes the focus, so that the reader starts where the problem is. The settings dialog
+  // above a feed's list links to /settings/feeds#feed-<id>-edit instead, and that row starts with its form open
+  // and the focus in its first field.
   const { hash } = useLocation();
+  const target = parseFeedHash(hash);
+  const targetId = target?.feedId;
+  const targetEdit = target?.edit === true;
   const loaded = feeds.data !== undefined;
   useEffect(() => {
-    if (!loaded || !/^#feed-\d{1,15}$/.test(hash)) return;
-    const row = document.getElementById(hash.slice(1));
+    if (!loaded || targetId === undefined) return;
+    const row = document.getElementById(rowId(targetId));
     if (!row) return;
     row.scrollIntoView?.({ block: "start" });
-    row.querySelector<HTMLElement>("[data-feed-heading]")?.focus({ preventScroll: true });
-  }, [hash, loaded]);
+    const focused = targetEdit ? firstField(row.querySelector<HTMLElement>("form") ?? row) : row.querySelector<HTMLElement>("[data-feed-heading]");
+    focused?.focus({ preventScroll: true });
+  }, [targetId, targetEdit, loaded]);
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
@@ -566,7 +622,18 @@ export function FeedsPage() {
         {feeds.data && feeds.data.length > 0 ? (
           <Checkbox label="問題のある購読フィードを先頭に並べる" checked={problemsFirst} onChange={(event) => setProblemsFirst(event.target.checked)} />
         ) : null}
-        <ul>{listed?.map((feed) => <FeedRow key={feed.id} feed={feed} categories={categories} settings={settings} timeZone={timeZone} />)}</ul>
+        <ul>
+          {listed?.map((feed) => (
+            <FeedRow
+              key={feed.id}
+              feed={feed}
+              categories={categories}
+              settings={settings}
+              timeZone={timeZone}
+              initiallyEditing={target?.edit === true && target.feedId === feed.id}
+            />
+          ))}
+        </ul>
       </section>
       {settings ? <BaseInterval settings={settings} /> : null}
       <TranslationUsage />

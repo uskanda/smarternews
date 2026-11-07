@@ -17,7 +17,7 @@ import {
 } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { Link, useBlocker, useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, checkText, checkTimes, checkWholeNumber, describeProblem, fieldMessage, linesOf } from "@smarternews/client";
 import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -28,6 +28,7 @@ import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { KIND_LABEL } from "./SettingsPage.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -73,7 +74,7 @@ function generalError(error: unknown) {
 
 // ---- category form -----------------------------------------------------------------------------
 
-function CategoryForm({ category, onDirty }: { category: Category; onDirty: (dirty: boolean) => void }) {
+function CategoryForm({ category }: { category: Category }) {
   const { api } = useApp();
   const client = useQueryClient();
   const toast = useToast();
@@ -89,8 +90,7 @@ function CategoryForm({ category, onDirty }: { category: Category; onDirty: (dir
   const [form, setForm] = useState(initial);
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
-  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
-  useEffect(() => onDirty(dirty), [dirty, onDirty]);
+  useUnsaved("カテゴリの設定", JSON.stringify(form) !== JSON.stringify(initial));
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
@@ -235,10 +235,15 @@ function TopicEditor({
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  useUnsaved(`トピック『${topic.text}』の編集`, dirty);
   const text = (name: "text" | "feeds" | "queries" | "language" | "region") => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
   };
+  // 閉じる reads like "save and close" to some, so changes are only dropped once the user says so.
+  const close = () => (dirty ? setClosing(true) : onClose());
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -347,9 +352,24 @@ function TopicEditor({
         <Button type="submit" variant="primary">
           保存する
         </Button>
-        <Button onClick={onClose}>閉じる</Button>
+        <Button onClick={close}>閉じる</Button>
         <Button onClick={() => setConfirming(true)}>トピックを削除</Button>
       </div>
+      <ConfirmDialog
+        open={closing}
+        title="保存していない変更があります"
+        onDismiss={() => setClosing(false)}
+        actions={
+          <>
+            <Button onClick={onClose}>破棄して閉じる</Button>
+            <Button variant="primary" onClick={() => setClosing(false)}>
+              編集を続ける
+            </Button>
+          </>
+        }
+      >
+        <p>このトピックに加えた変更は保存されません。</p>
+      </ConfirmDialog>
       <ConfirmDialog
         open={confirming}
         title="トピックを削除しますか"
@@ -445,6 +465,7 @@ function Topics({ category }: { category: Category }) {
   const [text, setText] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved("新しいトピック", text.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -530,8 +551,9 @@ function RunNow({ category }: { category: Category }) {
   );
 }
 
-function DeleteCategory({ category, onLeave }: { category: Category; onLeave: () => void }) {
+function DeleteCategory({ category }: { category: Category }) {
   const { api } = useApp();
+  const leave = useUnsavedLeaving();
   const client = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
@@ -551,7 +573,8 @@ function DeleteCategory({ category, onLeave }: { category: Category; onLeave: ()
   async function remove() {
     try {
       await api.deleteCategory(category.id);
-      onLeave();
+      // What was being edited is gone with the category, so there is nothing left to ask about.
+      leave();
       await refreshLists();
       toast({ message: "カテゴリを削除しました" });
       void navigate("/settings");
@@ -609,9 +632,6 @@ export function CategoryPage() {
   const params = useParams();
   const categories = useCategories();
   const category = categories.data?.find((entry) => String(entry.id) === params.categoryId);
-  const [dirty, setDirty] = useState(false);
-  const leaving = useRef(false);
-  const blocker = useBlocker(() => dirty && !leaving.current);
 
   if (categories.isError) return <ErrorNotice error={categories.error} onRetry={() => void categories.refetch()} />;
   if (!categories.data) return <Loading />;
@@ -627,39 +647,21 @@ export function CategoryPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-surface">
-      <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
-        <Link to="/settings" className="tap type-label-sm text-primary underline underline-offset-4">
-          設定へ戻る
-        </Link>
-        <h1 className="type-headline-md">{category.name}</h1>
-      </header>
-      <section aria-label="カテゴリの設定" className={SECTION}>
-        <CategoryForm key={`${category.id}:${JSON.stringify(category)}`} category={category} onDirty={setDirty} />
-      </section>
-      <Topics category={category} />
-      <RunNow category={category} />
-      <DeleteCategory
-        category={category}
-        onLeave={() => {
-          leaving.current = true;
-        }}
-      />
-      <ConfirmDialog
-        open={blocker.state === "blocked"}
-        title="保存していない変更があります"
-        onDismiss={() => blocker.reset?.()}
-        actions={
-          <>
-            <Button onClick={() => blocker.proceed?.()}>破棄して移動</Button>
-            <Button variant="primary" onClick={() => blocker.reset?.()}>
-              編集を続ける
-            </Button>
-          </>
-        }
-      >
-        <p>このまま移動すると、カテゴリの設定に加えた変更は保存されません。</p>
-      </ConfirmDialog>
-    </div>
+    <UnsavedGuard>
+      <div className="h-full overflow-y-auto bg-surface">
+        <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
+          <Link to="/settings" className="tap type-label-sm text-primary underline underline-offset-4">
+            設定へ戻る
+          </Link>
+          <h1 className="type-headline-md">{category.name}</h1>
+        </header>
+        <section aria-label="カテゴリの設定" className={SECTION}>
+          <CategoryForm key={`${category.id}:${JSON.stringify(category)}`} category={category} />
+        </section>
+        <Topics category={category} />
+        <RunNow category={category} />
+        <DeleteCategory category={category} />
+      </div>
+    </UnsavedGuard>
   );
 }
