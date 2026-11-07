@@ -12,6 +12,7 @@ import {
   WINDOW_HOURS_MAX,
   type Category,
   type CategoryUpdate,
+  type SearchLocale,
   type Topic,
   type TopicUpdate,
 } from "@smarternews/core/api";
@@ -24,6 +25,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { TopicTrialResults, useTopicTrial } from "./TopicTrial.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
@@ -244,6 +246,21 @@ function TopicEditor({
   };
   // 閉じる reads like "save and close" to some, so changes are only dropped once the user says so.
   const close = () => (dirty ? setClosing(true) : onClose());
+  const searchOf = (): SearchLocale | null =>
+    form.language.trim() || form.region.trim() ? { language: form.language.trim(), region: form.region.trim() } : null;
+  const trial = useTopicTrial(topic.id);
+  // Tries the text and search locale being edited. Nothing is saved, so the changes stay unsaved.
+  const tryText = () => {
+    const found = problemsOf({
+      text: checkText(form.text, { label: TOPIC_TEXT.label, max: TOPIC_TEXT_MAX_CHARS }),
+      language: form.region.trim() && !form.language.trim() ? describeProblem({ code: "required" }, TOPIC_LANGUAGE) : null,
+      region: form.language.trim() && !form.region.trim() ? describeProblem({ code: "required" }, TOPIC_REGION) : null,
+    });
+    setProblems(found ?? {});
+    if (found !== null) return;
+    setError(null);
+    void trial.start({ text: form.text, search: searchOf() }, setError);
+  };
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -265,9 +282,7 @@ function TopicEditor({
       patch.sources = { feeds: linesOf(form.feeds), newsSearch: form.newsSearch, llmSearch: form.llmSearch };
     }
     if (form.queries !== initial.queries) patch.queries = linesOf(form.queries);
-    if (form.language !== initial.language || form.region !== initial.region) {
-      patch.search = form.language.trim() || form.region.trim() ? { language: form.language.trim(), region: form.region.trim() } : null;
-    }
+    if (form.language !== initial.language || form.region !== initial.region) patch.search = searchOf();
     try {
       await api.updateTopic(topic.id, patch);
       await client.invalidateQueries({ queryKey: ["topics", topic.categoryId] });
@@ -352,9 +367,16 @@ function TopicEditor({
         <Button type="submit" variant="primary">
           保存する
         </Button>
+        <Button onClick={tryText} disabled={trial.running}>
+          試す
+        </Button>
         <Button onClick={close}>閉じる</Button>
         <Button onClick={() => setConfirming(true)}>トピックを削除</Button>
       </div>
+      <p className="type-label-sm text-on-surface-muted">
+        「試す」は、編集中の文章で保存してある候補を判定し直し、結論の入れ替わる候補を示します。何も保存せず、LLMを約3回呼びます。
+      </p>
+      <TopicTrialResults trial={trial} />
       <ConfirmDialog
         open={closing}
         title="保存していない変更があります"

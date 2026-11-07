@@ -39,6 +39,7 @@ export * from "./llm/providers.ts";
 export * from "./llm/pricing.ts";
 export * from "./llm/runner.ts";
 export * from "./pipeline/run.ts";
+export * from "./pipeline/trial.ts";
 export * from "./rss/rss.ts";
 export * from "./translation/adapter.ts";
 export * from "./translation/google.ts";

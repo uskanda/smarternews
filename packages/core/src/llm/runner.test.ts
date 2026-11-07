@@ -55,7 +55,14 @@ function provider(name: string, adapter: LlmAdapter, pricing: ModelPricing | nul
 function setup(options: {
   providers: Provider[];
   assignment?: Partial<Record<TaskName, string>>;
-  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number; digestsPerDay?: number };
+  limits?: {
+    llmCallsPerRun: number;
+    llmCallsPerDay: number;
+    summariesPerDay?: number;
+    selectorProposalsPerDay?: number;
+    digestsPerDay?: number;
+    topicTrialsPerDay?: number;
+  };
   timeoutMs?: number;
   timeZone?: string;
   budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
@@ -394,6 +401,52 @@ describe("the allowance of selector proposals", () => {
     expect(runner.canProposeSelectors()).toBe(false);
     await expect(runner.run("proposeSelectors", proposeInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe("the allowance of topic trials", () => {
+  const trial = () => ({ runId: null, calls: 0, purpose: "trial" as const });
+  const run = () => ({ runId: null, calls: 0 });
+
+  it("records a trial's calls as such, and counts them towards both the trials and the calls of the day", async () => {
+    const { adapter } = scripted([validInterpretation, validInterpretation]);
+    const { runner, db } = setup({ providers: [provider("a", adapter)] });
+    expect(runner.limits).toMatchObject({ topicTrialsPerDay: 30 });
+
+    await runner.run("interpret", interpretInput, trial());
+    await runner.run("interpret", interpretInput, run());
+    expect(db.prepare("SELECT purpose FROM llm_calls ORDER BY id").all()).toEqual([{ purpose: "trial" }, { purpose: null }]);
+    expect(runner.topicTrialsToday()).toBe(1);
+    expect(runner.callsToday()).toBe(2);
+  });
+
+  it("stops a trial at its allowance of the day, and leaves runs calling the model", async () => {
+    const { adapter, requests } = scripted([validInterpretation, validInterpretation, validInterpretation]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicTrialsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, trial());
+    await expect(runner.run("interpret", interpretInput, trial())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+    await expect(runner.run("interpret", interpretInput, run())).resolves.toEqual(validInterpretation);
+  });
+
+  it("says before a trial whether its calls fit in what the day and the budget leave", async () => {
+    const { adapter } = scripted([validInterpretation, validInterpretation]);
+    const limited = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicTrialsPerDay: 4 } });
+    expect(limited.runner.trialBlocked(3)).toBeNull();
+    await limited.runner.run("interpret", interpretInput, trial());
+    await limited.runner.run("interpret", interpretInput, trial());
+    expect(limited.runner.trialBlocked(3)).toBe("limit");
+    expect(limited.runner.trialBlocked(2)).toBeNull();
+
+    const off = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicTrialsPerDay: 0 } });
+    expect(off.runner.trialBlocked(3)).toBe("limit");
+
+    const day = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 2 } });
+    expect(day.runner.trialBlocked(3)).toBe("day");
+
+    const billed = setup({ providers: [provider("a", adapter, SONNET)], budget: { monthlyBudgetUsd: 0, warnRatio: 0.8, resetDay: 1 } });
+    expect(billed.runner.trialBlocked(3)).toBe("budget");
   });
 });
 

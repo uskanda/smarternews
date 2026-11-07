@@ -75,10 +75,11 @@ providers:
     expect(config.listen).toBe("0.0.0.0:9000");
     expect(config.limits).toEqual({
       llmCallsPerRun: 40,
-      llmCallsPerDay: 350,
+      llmCallsPerDay: 380,
       summariesPerDay: 100,
       selectorProposalsPerDay: 50,
       digestsPerDay: 4,
+      topicTrialsPerDay: 30,
       judgeBatchSize: 30,
       pagesPerRun: 20,
       runRetries: 2,
@@ -230,10 +231,19 @@ describe("the task that proposes selectors and its limit", () => {
     expect(resolveAssignment(config).proposeSelectors).toBe("local");
   });
 
-  it("allows 50 proposals and 350 calls a day unless the file says otherwise, and 0 proposals", () => {
-    expect(parseConfig(null).limits).toMatchObject({ selectorProposalsPerDay: 50, llmCallsPerDay: 350 });
+  it("allows 50 proposals and 380 calls a day unless the file says otherwise, and 0 proposals", () => {
+    expect(parseConfig(null).limits).toMatchObject({ selectorProposalsPerDay: 50, llmCallsPerDay: 380 });
     expect(parseConfig("limits:\n  selectorProposalsPerDay: 0\n").limits.selectorProposalsPerDay).toBe(0);
     expect(() => parseConfig("limits:\n  selectorProposalsPerDay: -1\n")).toThrow(/limits\.selectorProposalsPerDay/);
+  });
+});
+
+describe("the limit of topic trials", () => {
+  it("allows 30 calls of trials a day unless the file says otherwise, and 0 switches trials off", () => {
+    expect(parseConfig(null).limits.topicTrialsPerDay).toBe(30);
+    expect(parseConfig("limits:\n  topicTrialsPerDay: 0\n").limits.topicTrialsPerDay).toBe(0);
+    expect(() => parseConfig("limits:\n  topicTrialsPerDay: -1\n")).toThrow(/limits\.topicTrialsPerDay/);
+    expect(() => parseConfig("limits:\n  topicTrialsPerDay: 1.5\n")).toThrow(/limits\.topicTrialsPerDay/);
   });
 });
 

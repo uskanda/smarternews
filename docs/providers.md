@@ -187,7 +187,7 @@ A web feed is a page without a feed whose articles are taken out with CSS select
 
 A task that is not listed under `tasks` uses `default`, with a second exception: `proposeSelectors` uses the provider named `smart` when there is one. It reads a long page and is asked for seldom. Without a provider of that name it uses `default`.
 
-`limits.selectorProposalsPerDay` (50 by default) bounds the proposals of one day. Each proposal also counts towards `limits.llmCallsPerDay`, whose default of 350 makes room for those 50. 0 switches proposals off. On a day that has reached either limit, and when the task fails, times out or proposes selectors that take no article out of the page, the server finds candidates by itself in the parts of the page with many links. The page says that the model was not used, and this is not an error.
+`limits.selectorProposalsPerDay` (50 by default) bounds the proposals of one day. Each proposal also counts towards `limits.llmCallsPerDay`, whose default of 380 makes room for those 50 and for the 30 calls of topic trials. 0 switches proposals off. On a day that has reached either limit, and when the task fails, times out or proposes selectors that take no article out of the page, the server finds candidates by itself in the parts of the page with many links. The page says that the model was not used, and this is not an error.
 
 ```yaml
 limits:
@@ -209,6 +209,17 @@ limits:
   digestsPerDay: 4
 ```
 
+## Topic trials
+
+A topic trial tries the text of a topic before it is saved. It runs only when you ask for it in the editor of a topic, and it uses no task of its own: it asks `interpret` once with the text being edited, then `judge` once per batch of `limits.judgeBatchSize` stored candidates of the topic, up to two batches. Both tasks run on the providers `tasks` assigns to them. The calls are recorded with the purpose `trial` and belong to no run.
+
+`limits.topicTrialsPerDay` (30 by default) bounds the calls of trials in one day, a second attempt after an invalid answer included. They count towards `limits.llmCallsPerDay` as well, and under the `anthropic` adapter towards the monthly budget. 0 switches trials off. A trial whose calls do not fit in what either limit leaves for the day, or whose providers cost money once the budget is used up, is refused before any call.
+
+```yaml
+limits:
+  topicTrialsPerDay: 30
+```
+
 ## Mixing providers
 
 Assignments are per task, so a cheap model can do the high-volume work. `judge` reads up to 30 short candidates per call and `cluster` reads headlines, while `write` produces the text you read. The default configuration therefore runs `judge` and `cluster` on `haiku` and the other tasks on `sonnet`.
@@ -217,7 +228,7 @@ Assignments are per task, so a cheap model can do the high-volume work. `judge` 
 
 The server validates every answer against the task's schema. An answer that does not match is requested once more with the same input. A second mismatch fails the task: nothing is stored, and the run history records the failure.
 
-A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, and `limits.selectorProposalsPerDay` those of proposals of selectors, and `limits.digestsPerDay` those of digests; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
+A call that exceeds `llm.timeoutMs` (`llm.searchTimeoutMs` for `search`) is stopped and counts as a failure. `limits.llmCallsPerRun` and `limits.llmCallsPerDay` bound the number of calls of runs, `limits.summariesPerDay` those of summaries, `limits.selectorProposalsPerDay` those of proposals of selectors, `limits.topicTrialsPerDay` those of topic trials, and `limits.digestsPerDay` those of digests; see the README. `limits.monthlyBudgetUsd` bounds the money the `anthropic` adapter spends, as described above.
 
 `limits.runRetries` (2 by default, 0 to 3) is how often a scheduled run that ended as `failed` is tried again. Each retry is a run like any other, so it obeys `limits.llmCallsPerRun` and `limits.llmCallsPerDay`. While a provider stays down, a category therefore uses up to three runs' worth of calls for one scheduled time. A run that stopped at a limit is not retried.
 

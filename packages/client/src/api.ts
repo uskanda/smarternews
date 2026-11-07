@@ -46,6 +46,8 @@ import {
   filterUpdateResultSchema,
   termGroupSchema,
   topicSchema,
+  topicTrialSchema,
+  topicTrialStartSchema,
   translationStatusSchema,
   usageSchema,
   type Article,
@@ -102,6 +104,9 @@ import {
   type Topic,
   type TopicCreate,
   type TopicUpdate,
+  type TopicTrial,
+  type TopicTrialRequest,
+  type TopicTrialStart,
   type TranslationStatus,
 } from "@smarternews/core/api";
 import { z } from "zod";
@@ -247,6 +252,10 @@ export function createApi(options: ApiOptions) {
     /** Has the topic interpreted again before the next run of its category. */
     interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
+    /** Starts a trial of a text that is not saved. Answers at once; the result is asked for with `topicTrial`. */
+    startTopicTrial: (id: number, draft: TopicTrialRequest): Promise<TopicTrialStart> =>
+      json(topicTrialStartSchema, `/topics/${id}/trials`, body("POST", draft)),
+    topicTrial: (id: string): Promise<TopicTrial> => json(topicTrialSchema, `/topic-trials/${encodeURIComponent(id)}`),
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>
       json(articleListSchema, `/articles${query(filter as Record<string, string | number | undefined>)}`),
