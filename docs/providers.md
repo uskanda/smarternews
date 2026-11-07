@@ -117,6 +117,8 @@ A budget period runs from midnight UTC on `budgetResetDay` to the moment before 
 
 Each call is checked against what was spent before it, so one call can take the total a little past the budget. A call that ends without an answer, such as one that timed out, has no usage to price. It counts as a call of unknown cost and stays out of the total. The page of the settings shows the period, the total against the budget, the money by task and by provider, and the number of calls of unknown cost. From `budgetWarnRatio` on, every page of the web app shows a warning at the top.
 
+The usage section of the settings page splits the calls of the period by category, with the generated articles made and opened and the money per opened article, and by UTC day, and projects the money at the end of the period at its average pace so far; the run history shows the money of each run. With no provider that costs money, it shows the number of calls instead.
+
 The totals are the server's estimate from published prices. They are not read from Anthropic's billing, whose period may also start at another hour, so keep `budgetWarnRatio` low enough to leave a margin.
 
 ## The `openai-compatible` adapter

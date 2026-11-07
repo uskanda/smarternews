@@ -14,9 +14,9 @@
 
 ## 3. 利用量の集計とAPI
 
-- [ ] 3.1 `usageSchema` と `db/usage.ts` の `usageReport`、`TaskRunner.usageStatus()` を書く。カテゴリごとの行、実行に属さない行、UTCの日ごとの行（和が `spentUsd` と一致すること）、見込みと予算を超えるかどうかを `usage.test.ts` で確かめる
-- [ ] 3.2 `GET /api/v1/usage` を足す。仕様 `http-api` の「利用量の内訳の提供」の場面と、返る形を `settings-api.test.ts` で確かめる
-- [ ] 3.3 `docs/api.md` に `/usage` を、`docs/providers.md` に利用量の区画のことを書く
+- [x] 3.1 `usageSchema` と `db/usage.ts` の `usageReport`、`TaskRunner.usageStatus()` を書く。カテゴリごとの行、実行に属さない行、UTCの日ごとの行（和が `spentUsd` と一致すること）、見込みと予算を超えるかどうかを `usage.test.ts` で確かめる
+- [x] 3.2 `GET /api/v1/usage` を足す。仕様 `http-api` の「利用量の内訳の提供」の場面と、返る形を `settings-api.test.ts` で確かめる
+- [x] 3.3 `docs/api.md` に `/usage` を、`docs/providers.md` に利用量の区画のことを書く
 
 ## 4. 画面
 

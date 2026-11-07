@@ -1085,6 +1085,48 @@ export const providerStatusSchema = z.object({
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
 
+/** Calls, money and calls of unknown cost. Money counts as the budget does; calls count every call. */
+const usageAmountsSchema = z.object({
+  calls: z.number().int(),
+  costUsd: z.number(),
+  unknownCostCalls: z.number().int(),
+});
+
+/** The model calls of the current budget period, from its first day to now, split several ways. */
+export const usageSchema = z.object({
+  /** The first and the last day of the period, as YYYY-MM-DD. Periods start at midnight UTC. */
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  /** The share of the period that has passed, from 0 to 1. */
+  elapsedRatio: z.number(),
+  /** False when no provider costs money: then every amount is 0 and the calls tell the usage. */
+  billable: z.boolean(),
+  monthlyBudgetUsd: z.number(),
+  /** The same total as the budget's. */
+  spentUsd: z.number(),
+  unknownCostCalls: z.number().int(),
+  /** Every category, in the order of the list, with the calls of its runs and the generated articles made in the period. */
+  byCategory: z.array(
+    usageAmountsSchema.extend({
+      categoryId: z.number().int(),
+      name: z.string(),
+      /** Generated articles of the category made in the period. */
+      articlesCreated: z.number().int(),
+      /** Those of them the reader has opened. */
+      articlesOpened: z.number().int(),
+      /** `costUsd` divided by `articlesOpened`. Null when no article was opened. */
+      costPerOpenedUsd: z.number().nullable(),
+    }),
+  ),
+  /** The calls that belong to no run: summaries, translations, proposals, digests, and calls whose run was deleted. */
+  outsideRuns: usageAmountsSchema,
+  /** Every UTC day from the first day of the period to today, days without calls included. */
+  byDay: z.array(z.object({ day: z.string(), calls: z.number().int(), costUsd: z.number() })),
+  /** The money at the end of the period if it goes on at its average pace so far. */
+  projection: z.object({ projectedUsd: z.number(), exceedsBudget: z.boolean() }),
+});
+export type Usage = z.infer<typeof usageSchema>;
+
 // ---- digests -----------------------------------------------------------------------------------
 
 /** What made a digest: a time of the schedule, a time missed while the server was down, or the reader. */
