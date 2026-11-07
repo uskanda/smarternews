@@ -29,7 +29,7 @@ Webページの購読フィードの取得は `PageFetcher` を通り、HTTPの�
 
 ### 2つの列を足す
 
-スキーマの変更 `022_feed_http_failures.sql` で、`feeds` に `retry_after_until` と `gone_at` を足す。
+スキーマの変更 `024_feed_http_failures.sql` で、`feeds` に `retry_after_until` と `gone_at` を足す。
 `retry_after_until` は、Retry-Afterの示す、次の取得を始めてよい最も早い時刻である。失敗のたびに上書きする（Retry-Afterがなければ空にする）。成功すると空にする。
 `gone_at` は、410なら `coalesce(gone_at, 今)`、410以外の失敗と成功なら空にする。「続けて受けた410のうち最初の時刻」を、列1つで持てる。
 失敗の種類を表す列（Q1のC）にしなかったのは、画面で区別するのが410だけだからである。

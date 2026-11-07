@@ -47,6 +47,7 @@ import {
   termGroupSchema,
   topicSchema,
   translationStatusSchema,
+  usageSchema,
   type Article,
   type ArticleList,
   type ArticleListQuery,
@@ -82,6 +83,7 @@ import {
   type PageSelectors,
   type SelectorPreview,
   type ProviderStatus,
+  type Usage,
   type Run,
   type Settings,
   type SettingsUpdate,
@@ -106,12 +108,25 @@ import { z } from "zod";
 
 export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "unavailable" | "network" | "server";
 
+/**
+ * One refused field of a 400 answer. `message` is the server's English; a screen words the refusal from `code`
+ * and the bounds with `fieldMessage`. A code is a string here: a newer server may send one this app does not know.
+ */
+export interface FieldProblem {
+  path: string;
+  message: string;
+  code?: string;
+  minimum?: number;
+  maximum?: number;
+  unit?: string;
+}
+
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status: number | null;
-  readonly fields: Array<{ path: string; message: string }>;
+  readonly fields: FieldProblem[];
 
-  constructor(kind: ApiErrorKind, status: number | null, message: string, fields: Array<{ path: string; message: string }> = []) {
+  constructor(kind: ApiErrorKind, status: number | null, message: string, fields: FieldProblem[] = []) {
     super(message);
     this.name = "ApiError";
     this.kind = kind;
@@ -229,6 +244,8 @@ export function createApi(options: ApiOptions) {
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
+    /** Has the topic interpreted again before the next run of its category. */
+    interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>
@@ -349,6 +366,7 @@ export function createApi(options: ApiOptions) {
     requestDigest: (): Promise<DigestRequestResult> => json(digestRequestResultSchema, "/digests", { method: "POST" }),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
+    usage: (): Promise<Usage> => json(usageSchema, "/usage"),
     /** How much the translation API was used this month, and whether it has a key. */
     translation: (): Promise<TranslationStatus> => json(translationStatusSchema, "/translation"),
   };

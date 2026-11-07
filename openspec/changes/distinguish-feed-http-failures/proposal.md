@@ -30,7 +30,7 @@
 ## Impact
 
 - `packages/core`: 次のファイルを変える。
-  - スキーマの変更（`022_feed_http_failures.sql`）。
+  - スキーマの変更（`024_feed_http_failures.sql`）。
   - 取得の失敗の扱い（`feeds/ingest.ts`）と、記録と次の取得の時刻（`db/feeds.ts`）。
   - `PageResult` のRetry-After（`fetch/pages.ts`）と、Retry-Afterを読む関数（`fetch/retry-after.ts`）。
   - APIの型（`api.ts`）。

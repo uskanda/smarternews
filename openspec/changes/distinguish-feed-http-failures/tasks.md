@@ -9,7 +9,7 @@
 
 ## 2. 記録と次の取得の時刻
 
-- [x] 2.1 `022_feed_http_failures.sql` のスキーマの変更で、`feeds` に `retry_after_until` と `gone_at` を足す
+- [x] 2.1 `024_feed_http_failures.sql` のスキーマの変更で、`feeds` に `retry_after_until` と `gone_at` を足す
 - [x] 2.2 `recordFetchFailure` と `recordFetchSuccess` で2つの列を記録し、`nextFetchFrom` を2つの時刻の遅いほうにする。`toFeed` と `feedSchema` に `goneAt` を足す
 - [x] 2.3 `ingest.ts` の `download` と `downloadPage` で `FeedHttpError` を投げ、`fetchFeed` で410とRetry-Afterを記録する。仕様 `feed-subscriptions` の3つの要件を、RSSとWebページの購読フィードの両方について `ingest.test.ts` で確かめる。要件は「Retry-Afterの尊重」「配信の終了の記録」「配信の終了による無効化の禁止」である
 - [x] 2.4 `poller.test.ts` で、仕様 `feed-subscriptions` の「待っている間の即時の取得」を確かめる。Retry-Afterの時刻までは自動の取得をせず、即時の取得ならすぐに取得する

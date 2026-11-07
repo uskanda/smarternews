@@ -1,4 +1,15 @@
-import { applyInterpretation, createTopic, getCategory, getSettings, getTopic, insertFeed, listCategories, listTopics, updateCategory } from "@smarternews/core";
+import {
+  applyInterpretation,
+  createTopic,
+  getCategory,
+  getSettings,
+  getTopic,
+  insertFeed,
+  listCategories,
+  listTopics,
+  setArticleFlags,
+  updateCategory,
+} from "@smarternews/core";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
@@ -23,9 +34,9 @@ function topic(server: TestServer, categoryId: number, text: string, interpreted
 }
 
 describe("the links to the sections", () => {
-  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "トークン"];
+  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "利用量", "トークン"];
 
-  it("lists the nine sections at the top, each pointing at its section", async () => {
+  it("lists the ten sections at the top, each pointing at its section", async () => {
     renderApp({ route: "/settings" });
     await section("全体設定");
     await section("プロバイダー");
@@ -53,6 +64,15 @@ describe("the links to the sections", () => {
 
     const providers = await section("プロバイダー");
     await waitFor(() => expect(scroll.mock.contexts).toContain(providers));
+    scroll.mockRestore();
+  });
+
+  it("scrolls to the usage once it is in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderApp({ route: "/settings#usage" });
+
+    const usage = await section("利用量");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(usage));
     scroll.mockRestore();
   });
 
@@ -170,6 +190,38 @@ describe("editing a category", () => {
     expect(getCategory(server.db, category.id).minImportance).toBe(3);
   });
 
+  it("says the range of the number of articles, and does not send a number above it", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const field = await screen.findByLabelText("件数上限");
+    expect(field).toHaveAccessibleDescription(/1から50まで/);
+    expect(screen.getByLabelText("対象期間（時間）")).toHaveAccessibleDescription(/1から720まで/);
+    await user.clear(field);
+    await user.type(field, "51");
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("件数上限は1から50までの数にしてください。")).toBeInTheDocument();
+    expect(field).toHaveAccessibleDescription(/件数上限は1から50までの数にしてください。/);
+    expect(field).toBeInvalid();
+    expect(getCategory(server.db, category.id).maxArticlesPerRun).toBe(5);
+  });
+
+  it("names the time in the wrong form by its place, before sending", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const field = await screen.findByLabelText("実行時刻");
+    await user.clear(field);
+    await user.type(field, "05:00, 5時");
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("実行時刻の2つ目の形が正しくありません。05:00 のように24時間表記で書いてください。")).toBeInTheDocument();
+    expect(getCategory(server.db, category.id).schedule).toEqual(["05:00"]);
+  });
+
   it("asks before leaving with unsaved changes, and stays when the user says so", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -258,6 +310,28 @@ describe("topics", () => {
     expect(item("exploited flaws")).toHaveTextContent("exploited flaws query");
     expect(item("exploited flaws")).toHaveTextContent("only exploited flaws");
     expect(item("ransomware")).toHaveTextContent("次の実行で解釈されます");
+  });
+
+  it("says how many misses came after the interpretation, and has the topic interpreted again on request", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const missedTopic = topic(server, category.id, "exploited flaws", true);
+    topic(server, category.id, "ransomware", true);
+    for (const title of ["Off topic one", "Off topic two"]) {
+      const id = server.article(category.id, { title, topicIds: [missedTopic.id] });
+      setArticleFlags(server.db, id, { missed: true }, server.clock().toISOString());
+    }
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const topics = await section("トピック");
+    const item = (await within(topics).findByText("exploited flaws")).closest("li")!;
+    await waitFor(() => expect(item).toHaveTextContent("前の解釈のあとに、外れの印を付けた記事が2件あります"));
+    expect(within(topics).getByText("ransomware").closest("li")).not.toHaveTextContent("外れ");
+
+    await user.click(within(item).getByRole("button", { name: "解釈し直す" }));
+
+    await waitFor(() => expect(getTopic(server.db, missedTopic.id).interpreted).toBe(false));
+    await waitFor(() => expect(item).toHaveTextContent("外れの印を付けた記事が2件あります。次の解釈で、判定基準に反映されます。"));
   });
 
   it("opens the editor of the topic named in the hash, with the focus in its text, and leaves the others closed", async () => {
@@ -442,7 +516,10 @@ describe("reader information and global settings", () => {
     await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
-    expect(field).toHaveAccessibleDescription(/IANA/);
+    // The description keeps the field's hint and adds the reason after it.
+    expect(field).toHaveAccessibleDescription(/タイムゾーンは、Asia\/Tokyo のような IANA のタイムゾーン名にしてください。/);
+    // The server's own words are English, and are not shown.
+    expect(global).not.toHaveTextContent(/is not an IANA time zone name/);
     expect(getSettings(server.db).timeZone).toBe("UTC");
   });
 
@@ -503,7 +580,7 @@ describe("the times digests are made", () => {
     await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
-    expect(field).toHaveAccessibleDescription(/保存できません/);
+    expect(field).toHaveAccessibleDescription(/ダイジェストを作る時刻の1つ目の形が正しくありません。/);
     expect(getSettings(server.db).digestSchedule).toEqual(before);
   });
 });
@@ -591,7 +668,9 @@ describe("the settings file", () => {
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
-    expect(await within(settingsFile).findByRole("alert")).toHaveTextContent("categories.0.kind");
+    const alert = await within(settingsFile).findByRole("alert");
+    expect(alert).toHaveTextContent("categories.0.kind: kindは、選べる値の中から選んでください。");
+    expect(alert).not.toHaveTextContent(/Invalid/);
     expect(listCategories(server.db)).toEqual([]);
   });
 
@@ -887,8 +966,8 @@ describe("the days after which a feed counts as stale", () => {
     await user.clear(field);
     await user.type(field, "0");
     await user.click(within(global).getByRole("button", { name: "保存する" }));
-    expect(await within(global).findByText("1から365までの日数を入れてください。")).toBeInTheDocument();
-    expect(field).toHaveAccessibleDescription(/1から365までの日数/);
+    expect(await within(global).findByText("更新が止まったとみなす日数は1から365までの数にしてください。")).toBeInTheDocument();
+    expect(field).toHaveAccessibleDescription(/1から365までの数にしてください/);
     expect(getSettings(server.db).staleFeedDays).toBe(60);
   });
 });

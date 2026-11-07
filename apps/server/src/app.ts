@@ -489,6 +489,7 @@ export function createApp(deps: AppDeps): Hono {
     };
     return c.json(status);
   });
+  api.get("/usage", (c) => c.json(runner.usageStatus()));
 
   app.route("/api/v1", api);
 

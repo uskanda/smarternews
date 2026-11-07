@@ -145,6 +145,45 @@ categories:
     expect(listCategories(db)).toEqual([]);
   });
 
+  it("names the kind of each refusal and its bounds, for the apps to word", () => {
+    const db = createTestDb();
+    const text = [
+      "version: 1",
+      "categories:",
+      "  - slug: a",
+      `    name: "${"x".repeat(101)}"`,
+      "    kind: news",
+      "    maxArticlesPerRun: 51",
+      "    schedule: ['05:00', '5時']",
+      "",
+    ].join("\n");
+    let caught: unknown;
+    try {
+      importSettings(db, text, clock);
+    } catch (error) {
+      caught = error;
+    }
+    const fields = (caught as { fields: unknown[] }).fields;
+    expect(fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "categories.0.name", code: "too_big", maximum: 100, unit: "chars" }),
+        expect.objectContaining({ path: "categories.0.maxArticlesPerRun", code: "too_big", maximum: 50, unit: "number" }),
+        expect.objectContaining({ path: "categories.0.schedule.1", code: "format" }),
+      ]),
+    );
+  });
+
+  it("calls a missing field required", () => {
+    const db = createTestDb();
+    let caught: unknown;
+    try {
+      importSettings(db, "version: 1\ncategories:\n  - slug: a\n    kind: news\n", clock);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { fields: unknown[] }).fields).toEqual([expect.objectContaining({ path: "categories.0.name", code: "required" })]);
+  });
+
   it("reproduces the exported settings on an empty server", () => {
     const exported = exportSettings(seeded());
     const target = createTestDb();

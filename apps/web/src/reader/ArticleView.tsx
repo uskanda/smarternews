@@ -8,6 +8,7 @@ import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { Attachments } from "./Attachments.tsx";
 import { Mentions } from "./Mentions.tsx";
 
 /** The attribute that makes an element an original part of the body, in which a selection can be highlighted. */
@@ -212,6 +213,7 @@ export function ArticleView({
   neighbors = null,
   onToggleStar,
   onToggleRead,
+  onToggleMiss,
   fullContent,
   terms,
   focusAnnotation = null,
@@ -227,6 +229,8 @@ export function ArticleView({
   neighbors?: ArticleNeighbors | null;
   onToggleStar: (article: Article) => void;
   onToggleRead: (article: Article) => void;
+  /** Marks a generated article as a miss, or takes the mark away. Not offered for a feed article. */
+  onToggleMiss: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
@@ -425,6 +429,7 @@ export function ArticleView({
           }
         />
         {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
+        <Attachments article={article} />
         <Mentions article={article} />
         {previous ? (
           <p className="type-body-md">
@@ -457,6 +462,11 @@ export function ArticleView({
             {article.starred ? "スターを外す" : "スターを付ける"}
           </Button>
           <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
+          {delivered ? null : (
+            <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
+              {article.missed ? "外れの印を外す" : "外れの印を付ける"}
+            </Button>
+          )}
         </div>
         {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}
       </div>

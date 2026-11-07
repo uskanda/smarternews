@@ -1,9 +1,9 @@
-import type { Category, Feed, FeedStats, Settings } from "@smarternews/core/api";
+import { FEED_INTERVAL_MINUTES_MAX, FEED_INTERVAL_MINUTES_MIN, FEED_TITLE_MAX_CHARS, type Category, type Feed, type FeedStats, type Settings } from "@smarternews/core/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
 import { useFetchFeedNow } from "../lib/fetch-now.ts";
-import { ApiError, conflictLabel, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
+import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -20,11 +20,13 @@ import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const RANGE = "5分から1440分（24時間）の範囲で入力してください。";
 
+const INTERVAL = { label: "取得周期（分）", min: FEED_INTERVAL_MINUTES_MIN, max: FEED_INTERVAL_MINUTES_MAX };
+
 /** A whole number of minutes within the allowed range, or null. */
 function minutesOf(text: string): number | null {
   if (!/^\d+$/.test(text.trim())) return null;
   const value = Number(text.trim());
-  return value >= 5 && value <= 1440 ? value : null;
+  return value >= FEED_INTERVAL_MINUTES_MIN && value <= FEED_INTERVAL_MINUTES_MAX ? value : null;
 }
 
 function useRefresh() {
@@ -119,6 +121,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
+  const [titleProblem, setTitleProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   useUnsaved(
     `購読フィード『${feed.title}』の編集`,
@@ -136,10 +139,10 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   async function save(event: FormEvent) {
     event.preventDefault();
     const intervalMinutes = ownInterval ? minutesOf(minutes) : null;
-    if (ownInterval && intervalMinutes === null) {
-      setIntervalError(RANGE);
-      return;
-    }
+    const titleError = checkText(title, { label: "名前", max: FEED_TITLE_MAX_CHARS });
+    setTitleProblem(titleError);
+    if (ownInterval && intervalMinutes === null) setIntervalError(RANGE);
+    if (titleError !== null || (ownInterval && intervalMinutes === null)) return;
     const chosenSelectors = feed.format === "page" ? selectorsOf(selectors) : null;
     try {
       await api.updateFeed(feed.id, {
@@ -162,16 +165,26 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   }
 
   const id = `feed-${feed.id}`;
+  const categoryProblem = fieldMessage(error, "categoryId", "カテゴリ");
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
     <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
       <FeedStatsSection feed={feed} />
-      <Field label="名前" value={title} onChange={(event) => setTitle(event.target.value)} error={fieldError(error, "title")} />
+      <Field
+        label="名前"
+        value={title}
+        onChange={(event) => {
+          setTitle(event.target.value);
+          setTitleProblem(null);
+        }}
+        error={titleProblem ?? fieldMessage(error, "title", "名前")}
+      />
       <div className="flex flex-col gap-xs">
         <label htmlFor={`${id}-category`} className="type-label-md">
           カテゴリ
         </label>
         <CategorySelect id={`${id}-category`} value={category} onChange={setCategory} categories={categories} />
+        {categoryProblem ? <p className="type-label-sm text-error">{categoryProblem}</p> : null}
       </div>
       <fieldset className="flex flex-col gap-xs type-body-md">
         <legend className="pb-xs type-label-md">取得周期</legend>
@@ -196,7 +209,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
             setMinutes(event.target.value);
             setIntervalError(null);
           }}
-          error={intervalError}
+          error={intervalError ?? fieldMessage(error, "intervalMinutes", INTERVAL)}
         />
       ) : null}
       <Checkbox label="取得を一時停止する" checked={paused} onChange={(event) => setPaused(event.target.checked)} />
@@ -498,7 +511,7 @@ function Opml() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込むOPMLファイル
           <input type="file" accept=".opml,.xml,text/x-opml,text/xml,application/xml" className="type-body-md" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />

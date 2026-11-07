@@ -26,8 +26,31 @@ RSS feeds use a separate, read-only token in the query string. The API rejects t
 An error response has this shape:
 
 ```json
-{ "error": { "code": "invalid_input", "message": "the input is invalid", "fields": [{ "path": "minImportance", "message": "Too big: expected number to be <=5" }] } }
+{ "error": { "code": "invalid_input", "message": "the input is invalid", "fields": [{ "path": "minImportance", "message": "Too big: expected number to be <=5", "code": "too_big", "maximum": 5, "unit": "number" }] } }
 ```
+
+Each entry of `fields` has `path` and `message`. The message is English and meant for logs and the CLI; a client words the problem from these optional fields instead:
+
+| Field | Meaning |
+|---|---|
+| `code` | The kind of problem, listed below. A client words an entry without a code, or with a code it does not know, as a value that cannot be saved |
+| `minimum`, `maximum` | The bound that `too_small` or `too_big` broke |
+| `unit` | What the bound counts: `chars` (characters of a text), `number` (the value itself) or `items` (entries of a list) |
+
+| `code` | Meaning |
+|---|---|
+| `required` | The value is missing, or of another type |
+| `too_small`, `too_big` | The value, its length or its number of entries is out of range |
+| `format` | The value is not in the expected form: a time that is not `HH:MM`, a URL, a regular expression or CSS selector that cannot be read, a number that is not whole |
+| `invalid_value` | The value is not one of the allowed values |
+| `custom` | Another rule of the schema |
+| `unknown_time_zone` | The time zone is not an IANA time zone name |
+| `no_such_item` | The value names a category, feed or term group that does not exist |
+| `not_allowed` | The value cannot be combined with the rest, such as a keep filter over everything or selectors for a feed |
+| `unreachable` | The URL could not be fetched or read as what it should be |
+| `no_items` | The selectors take no article out of the page |
+
+The element of a list is named by its index, such as `schedule.1` for the second time.
 
 | Status | `code` | Meaning |
 |---|---|---|
@@ -108,7 +131,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   "$API/api/v1/categories/1/topics"
 ```
 
-A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override.
+A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override. `missesSinceInterpretation` counts the [misses](#misses) of the topic's articles marked after its last interpretation; a topic interpreted before this count existed counts all of its misses.
 
 ## Articles
 
@@ -116,7 +139,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 |---|---|
 | `GET /api/v1/articles` | List articles |
 | `GET /api/v1/articles/:id` | Read one with body, references and topics |
-| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred` |
+| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, or mark a generated article as a miss with `missed` (see [Misses](#misses)) |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
@@ -216,7 +239,7 @@ The detail adds these:
 
 | Field | Content |
 |---|---|
-| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered, reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
+| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered (or, for an item without content, its Media RSS description), reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
@@ -233,6 +256,19 @@ The detail adds these:
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
 | `annotations` | The reader's annotations on the article: `note`, the note on the whole article or `null`, and `highlights`, the oldest first. See [Annotations](#annotations). The list does not have this field |
 | `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
+| `attachments` | The files the feed attached to a feed article (RSS enclosures, Media RSS contents and thumbnails), in the order the feed listed them: `url` (the original address), `kind` (`image`, `audio`, `video` or `other`), `mimeType`, `size` in bytes, `title`, `thumbnailOf` (for a thumbnail, the article's page; otherwise `null`) and `imageUrl` (for an image, its address on the image relay; otherwise `null`). They are not part of `body`. Empty for a generated article and for a feed article without attachments. The list does not have this field |
+| `missed` | True when the reader marked the generated article as a [miss](#misses). Always `false` for a feed article. The list does not have this field |
+
+### Misses
+
+A miss is the reader's mark on a generated article that should not have been made for its topics. `PATCH /api/v1/articles/:id` with `{"missed":true}` marks it and marks it read; marking it again keeps the first mark. `{"missed":false}` takes the mark away and leaves the read mark as it is. When the same request gives `isRead`, that wins, so an undo can send `{"missed":false,"isRead":false}` to put back an article that was unread. A feed article gets 400, with `missed` as the field and `not_allowed` as the code.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"missed":true}' "$API/api/v1/articles/1"
+```
+
+The server keeps each miss with the article's title and topics as they were when it was marked. The record stays when the article is deleted, and a miss does not keep the article from being deleted. Deleting a topic takes it off the misses; deleting a category deletes its misses. When a topic is interpreted, at the start of a run after it was created, after its text changed, or after `POST /api/v1/topics/:id/interpret`, the interpret task also reads the titles of the topic's misses of the last 90 days, the newest 20 at most, and writes into the criteria what to leave out. A miss never makes a topic be interpreted again by itself.
 
 ### Open times
 
@@ -672,6 +708,14 @@ A run with the status `stopped_by_limit` names the limit in `stoppedBy`. Every o
 | `day` | The day reached `limits.llmCallsPerDay` |
 | `budget` | The budget period spent `limits.monthlyBudgetUsd` on providers that cost money. Those providers are not called again until the next period starts |
 
+Three fields say what the run's model calls used. Money is counted as the monthly budget counts it: the known costs of the calls to billable providers (see [Providers](#providers)).
+
+| Field | Meaning |
+|---|---|
+| `costUsd` | US dollars the run spent on billable providers. `null` for a run that called no billable provider |
+| `unknownCostCalls` | The run's calls to billable providers whose cost is unknown, such as a timeout. `costUsd` leaves them out |
+| `callsByTask` | For each task the run called, `calls` (every call, those to providers that cost nothing included) and `costUsd` (`null` when none of the calls went to a billable provider). A task the run did not call is absent |
+
 A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
 
 | Field | Meaning |
@@ -735,6 +779,27 @@ A provider is `billable` when calling it costs money: today that means the `anth
 | `byTask`, `byProvider` | `spentUsd` split by task and by provider name. A task or provider without a cost in the period has 0 |
 
 These amounts are the server's own estimate from published prices, not the amount Anthropic bills.
+
+### Usage
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/usage"
+```
+
+`GET /api/v1/usage` splits the model calls of the current budget period, from its first day to now, several ways. Money is counted as `budget.spentUsd` counts it; `calls` counts every call, those to providers that cost nothing included. The model is not called to make it.
+
+| Field | Meaning |
+|---|---|
+| `periodStart`, `periodEnd` | The first and the last day of the budget period, as `YYYY-MM-DD` |
+| `elapsedRatio` | The share of the period that has passed, from 0 to 1 |
+| `billable` | `false` when no provider costs money. Every amount is then 0, and `calls` tells the usage |
+| `monthlyBudgetUsd`, `spentUsd`, `unknownCostCalls` | The same as in `budget` |
+| `byCategory` | Every category, in the order of the list, with `calls`, `costUsd` and `unknownCostCalls` of its runs, `articlesCreated` (its generated articles made in the period), `articlesOpened` (those of them the reader opened) and `costPerOpenedUsd` (`costUsd` divided by `articlesOpened`, or `null` when none was opened) |
+| `outsideRuns` | `calls`, `costUsd` and `unknownCostCalls` of the calls that belong to no run: summaries, translations, proposals of selectors and digests, and calls whose run was deleted |
+| `byDay` | Every UTC day from `periodStart` to today, with `day`, `calls` and `costUsd`. Days without calls have 0. The amounts add up to `spentUsd` |
+| `projection` | `projectedUsd`, the money at the end of the period if it goes on at its average pace so far (`spentUsd` divided by the time passed, times the length of the period), and `exceedsBudget`, `true` when that is more than `monthlyBudgetUsd` |
+
+The records of model calls are kept for 30 days, or from the first day of the current budget period when that is earlier, so that the period counts every call. Runs are still deleted after 30 days; their calls then count outside runs.
 
 ## RSS
 

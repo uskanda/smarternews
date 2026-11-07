@@ -176,6 +176,25 @@ describe("images in the answers of the API", () => {
     expect(relayed(result.fullContent.body).map(original)).toEqual(["http://img.example.org/f.png"]);
   });
 
+  it("name the relay for the image attachments of a feed article, and the original address for the others", async () => {
+    const s = testServer();
+    const id = feedArticle(s, "Notes.", "https://video.example.org/watch/1");
+    const stored = [
+      { url: "http://img.example.org/thumb.jpg", kind: "image", mimeType: null, size: null, title: "A video", thumbnail: true },
+      { url: "https://cdn.example.org/ep.mp3", kind: "audio", mimeType: "audio/mpeg", size: 2048, title: null, thumbnail: false },
+    ];
+    s.db.prepare("UPDATE articles SET attachments = ? WHERE id = ?").run(JSON.stringify(stored), id);
+    const article = await (await s.get(`/api/v1/articles/${id}`)).json();
+    expect(article.attachments).toHaveLength(2);
+    const [image, audio] = article.attachments;
+    expect(image).toMatchObject({ url: "http://img.example.org/thumb.jpg", kind: "image", thumbnailOf: "https://video.example.org/watch/1" });
+    expect(image.imageUrl.startsWith(IMAGE_PROXY_PATH)).toBe(true);
+    expect(original(image.imageUrl)).toBe("http://img.example.org/thumb.jpg");
+    expect(audio).toEqual({ url: "https://cdn.example.org/ep.mp3", kind: "audio", mimeType: "audio/mpeg", size: 2048, title: null, thumbnailOf: null, imageUrl: null });
+    // The body is left as it was: the attachments are not part of it.
+    expect(article.body).toBe("Notes.");
+  });
+
   it("leave the body of a generated article alone", async () => {
     const s = testServer();
     const id = s.article(s.category().id, { body: "Model wrote ![x](https://img.example.org/x.png)" });
