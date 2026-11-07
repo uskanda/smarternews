@@ -187,13 +187,23 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
   const dated: Found[] = [];
   for (const entry of fresh) {
     if (entry.candidate.publishedAt) dated.push(entry);
-    else store(ctx, entry, "rejected", reasonText("no-date", ctx.settings.outputLanguage), null);
+    else store(ctx, entry, "rejected", reasonText("no-date", ctx.settings.outputLanguage), null, "no-date");
   }
   return dated;
 }
 
-/** Saves a candidate whose judgement is settled and remembers its URLs so that it is not judged again. */
-function store(ctx: Context, entry: Found, status: "rejected" | "pending", reason: string, importance: number | null): void {
+/**
+ * Saves a candidate whose judgement is settled and remembers its URLs so that it is not judged again. `reasonCode`
+ * is the kind of the program's reason; the judge's verdicts have none.
+ */
+function store(
+  ctx: Context,
+  entry: Found,
+  status: "rejected" | "pending",
+  reason: string,
+  importance: number | null,
+  reasonCode: ReasonCode | null = null,
+): void {
   const { candidate } = entry;
   const now = ctx.now.toISOString();
   insertCandidate(ctx.db, {
@@ -208,6 +218,7 @@ function store(ctx: Context, entry: Found, status: "rejected" | "pending", reaso
     sourceKind: candidate.sourceKind,
     status,
     reason,
+    reasonCode,
     importance,
     topicIds: [...entry.topicIds],
     now,
@@ -338,7 +349,8 @@ function reject(ctx: Context, story: Story, code: ReasonCode): void {
   rejectCandidates(
     ctx.db,
     story.candidates.map((candidate) => candidate.id),
-    reasonText(code, ctx.settings.outputLanguage),
+    code,
+    ctx.settings.outputLanguage,
     ctx.run.id,
   );
   ctx.stats.rejected += story.candidates.length;

@@ -1,5 +1,8 @@
 // Reasons the program itself gives when it rejects a candidate. The judge's reasons come from the model.
-export type ReasonCode = "no-date" | "below-minimum" | "over-limit" | "event-outside-window" | "event-no-date";
+// A rejected candidate keeps the kind of the program's reason as its reason code, beside the text; the judge's
+// rejections have none. The migration that gave the code to earlier candidates matched these texts.
+export const REASON_CODES = ["no-date", "below-minimum", "over-limit", "event-outside-window", "event-no-date"] as const;
+export type ReasonCode = (typeof REASON_CODES)[number];
 
 const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
   ja: {
@@ -20,17 +23,4 @@ const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
 
 export function reasonText(code: ReasonCode, outputLanguage: string): string {
   return REASONS[outputLanguage.toLowerCase().startsWith("ja") ? "ja" : "en"][code];
-}
-
-/**
- * The program's reason a stored reason is, in whichever language it was written; null for a reason of the judge.
- * A candidate keeps only its last reason, so this is how the judge's verdict on it is told apart later.
- */
-export function programReasonCode(reason: string): ReasonCode | null {
-  for (const texts of Object.values(REASONS)) {
-    for (const [code, text] of Object.entries(texts)) {
-      if (text === reason) return code as ReasonCode;
-    }
-  }
-  return null;
 }

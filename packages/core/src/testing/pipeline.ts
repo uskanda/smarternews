@@ -269,6 +269,13 @@ export function pipelineHarness(options: HarnessOptions = {}) {
     candidates(runId: number, status?: Candidate["status"]): Candidate[] {
       return listRunCandidates(db, runId, status);
     },
+    /** The title and the stored reason code of each candidate of the run, by title. */
+    reasonCodes(runId: number): Array<{ title: string; reasonCode: string | null }> {
+      return db
+        .prepare("SELECT title, reason_code FROM candidates WHERE run_id = ? ORDER BY title")
+        .all(runId)
+        .map((row) => ({ title: String(row.title), reasonCode: row.reason_code === null ? null : String(row.reason_code) }));
+    },
   };
 }
 

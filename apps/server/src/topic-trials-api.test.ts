@@ -37,6 +37,7 @@ function seeded(options: Parameters<typeof testServer>[1] = {}) {
       sourceKind: "feed",
       status,
       reason,
+      reasonCode: null,
       importance: 3,
       topicIds: [topic.id],
       now: "2026-03-19T00:00:00.000Z",
