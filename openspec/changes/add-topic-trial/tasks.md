@@ -5,7 +5,7 @@
 ## 1. 呼び出しの用途と上限
 
 - [x] 1.1 `022_llm_call_purpose.sql`で`llm_calls`に`purpose`を足す。既存のテストが通ることを確かめる
-- [x] 1.2 `TaskRunner`に、`CallBudget.purpose`と`topicTrialsToday()`と`trialBlocked(calls)`を足す。上限`topicTrialsPerDay`の既定は30とする
+- [x] 1.2 `TaskRunner`に、`CallBudget`の`purpose`と`topicTrialsToday()`と`trialBlocked(calls)`を足す。上限`topicTrialsPerDay`の既定は30とする
 - [x] 1.3 `runner.test.ts`で確かめる。試しの呼び出しが`purpose='trial'`で記録され、試しと1日の両方に数えられる。試しの上限で止まっても、実行は止まらない
 - [x] 1.4 `config.ts`に`limits.topicTrialsPerDay`（0以上、既定30）を足し、`llmCallsPerDay`の既定を380にする。既定と誤りを`config.test.ts`で確かめる
 - [x] 1.5 `apps/server/src/runtime.ts`から、試しの上限をランナーに渡す
@@ -33,9 +33,9 @@
 
 ## 4. 画面
 
-- [ ] 4.1 `TopicEditor`に「試す」と結果の表示を足す。編集中の文章が送られ、保存の要求が出ないことを`topic-trial.test.tsx`で確かめる
-- [ ] 4.2 `topic-trial.test.tsx`で、結果の一覧と、入れ替わりがないときの表示を確かめる
-- [ ] 4.3 `topic-trial.test.tsx`で、上限で断られたときの表示を確かめる
+- [x] 4.1 `TopicEditor`に「試す」と結果の表示を足す。編集中の文章が送られ、保存の要求が出ないことを`topic-trial.test.tsx`で確かめる
+- [x] 4.2 `topic-trial.test.tsx`で、結果の一覧と、入れ替わりがないときの表示を確かめる
+- [x] 4.3 `topic-trial.test.tsx`で、上限で断られたときの表示を確かめる
 
 ## 5. 確かめ
 

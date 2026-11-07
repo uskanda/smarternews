@@ -1,4 +1,4 @@
-import type { Category, CategoryUpdate, Topic, TopicUpdate } from "@smarternews/core/api";
+import type { Category, CategoryUpdate, SearchLocale, Topic, TopicUpdate } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
@@ -8,6 +8,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { TopicTrialResults, useTopicTrial } from "./TopicTrial.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { KIND_LABEL, refusal } from "./SettingsPage.tsx";
@@ -173,6 +174,14 @@ function TopicEditor({
     setForm({ ...form, [name]: event.target.value });
   // 閉じる reads like "save and close" to some, so changes are only dropped once the user says so.
   const close = () => (dirty ? setClosing(true) : onClose());
+  const searchOf = (): SearchLocale | null =>
+    form.language.trim() || form.region.trim() ? { language: form.language.trim(), region: form.region.trim() } : null;
+  const trial = useTopicTrial(topic.id);
+  // Tries the text and search locale being edited. Nothing is saved, so the changes stay unsaved.
+  const tryText = () => {
+    setError(null);
+    void trial.start({ text: form.text, search: searchOf() }, setError);
+  };
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -184,9 +193,7 @@ function TopicEditor({
       patch.sources = { feeds: lines(form.feeds), newsSearch: form.newsSearch, llmSearch: form.llmSearch };
     }
     if (form.queries !== initial.queries) patch.queries = lines(form.queries);
-    if (form.language !== initial.language || form.region !== initial.region) {
-      patch.search = form.language.trim() || form.region.trim() ? { language: form.language.trim(), region: form.region.trim() } : null;
-    }
+    if (form.language !== initial.language || form.region !== initial.region) patch.search = searchOf();
     try {
       await api.updateTopic(topic.id, patch);
       await client.invalidateQueries({ queryKey: ["topics", topic.categoryId] });
@@ -253,9 +260,16 @@ function TopicEditor({
         <Button type="submit" variant="primary">
           保存する
         </Button>
+        <Button onClick={tryText} disabled={trial.running}>
+          試す
+        </Button>
         <Button onClick={close}>閉じる</Button>
         <Button onClick={() => setConfirming(true)}>トピックを削除</Button>
       </div>
+      <p className="type-label-sm text-on-surface-muted">
+        「試す」は、編集中の文章で保存してある候補を判定し直し、結論の入れ替わる候補を示します。何も保存せず、LLMを約3回呼びます。
+      </p>
+      <TopicTrialResults trial={trial} />
       <ConfirmDialog
         open={closing}
         title="保存していない変更があります"
