@@ -225,6 +225,13 @@ describe("the shipped schema", () => {
     migrate(db);
     expect(tableNames(db)).toEqual(before);
   });
+
+  it("gives each shipped migration a version of its own", () => {
+    const versions = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(versions.filter((version, index) => versions.indexOf(version) !== index)).toEqual([]);
+  });
 });
 
 describe("the migration to an order of categories and feeds", () => {
@@ -532,7 +539,7 @@ describe("the migration to reasons on references", () => {
 
   it("copies the reason and importance of the first accepted candidate, and leaves the rest empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "024")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "027")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const now = "2026-01-01T00:00:00.000Z";
@@ -559,7 +566,7 @@ describe("the migration to reasons on references", () => {
     candidate.run(4, "https://example.org/rejected", "rejected", "Off topic", 1, null, now);
     candidate.run(5, "https://example.org/blank", "accepted", "", null, 1, now);
 
-    copyFileSync(join(SHIPPED, "024_ref_reasons.sql"), join(dir, "024_ref_reasons.sql"));
+    copyFileSync(join(SHIPPED, "027_ref_reasons.sql"), join(dir, "027_ref_reasons.sql"));
     migrate(db, dir);
 
     expect(db.prepare("SELECT url, reason, importance FROM article_refs ORDER BY position").all()).toEqual([

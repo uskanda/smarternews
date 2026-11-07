@@ -25,7 +25,7 @@
 
 ## Impact
 
-- `packages/core/src/db/migrations/024_ref_reasons.sql`（新規）
+- `packages/core/src/db/migrations/027_ref_reasons.sql`（新規。024の`024_feed_http_failures.sql`と版が重なったので027に改めた）
 - `packages/core/src/api.ts`（`articleRefSchema`）
 - `packages/core/src/db/articles.ts`、`packages/core/src/db/candidates.ts`
 - `packages/core/src/pipeline/run.ts`（記事を書く段階）
