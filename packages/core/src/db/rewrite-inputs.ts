@@ -1,6 +1,5 @@
 // What a proposal of a topic rewrite reads about a topic: the articles the reader opened and starred, the misses,
 // and the candidates the judge found not relevant. Only reads; no model is involved.
-import { programReasonCode } from "../pipeline/reasons.ts";
 import type { Database } from "./database.ts";
 import { recentMissTitles } from "./misses.ts";
 import { str } from "./rows.ts";
@@ -37,20 +36,14 @@ export function rewriteInputs(db: Database, topicId: number, now: string): Rewri
       .all(topicId, since, limit)
       .map((row) => ({ title: str(row.title), summary: str(row.summary) }));
 
-  const rejected: RewriteInputs["rejected"] = [];
-  const rows = db
+  const rejected = db
     .prepare(
       `SELECT c.title, c.reason FROM candidates c JOIN candidate_topics ct ON ct.candidate_id = c.id
-        WHERE ct.topic_id = ? AND c.status = 'rejected' AND c.created_at >= ?
-        ORDER BY c.created_at DESC, c.id DESC`,
+        WHERE ct.topic_id = ? AND c.status = 'rejected' AND c.reason_code IS NULL AND c.created_at >= ?
+        ORDER BY c.created_at DESC, c.id DESC LIMIT ?`,
     )
-    .all(topicId, since);
-  for (const row of rows) {
-    if (rejected.length >= REWRITE_REJECTED_LIMIT) break;
-    const reason = str(row.reason);
-    if (programReasonCode(reason) !== null) continue;
-    rejected.push({ title: str(row.title), reason });
-  }
+    .all(topicId, since, REWRITE_REJECTED_LIMIT)
+    .map((row) => ({ title: str(row.title), reason: str(row.reason) }));
 
   return {
     opened: articles("a.opened_at", "a.opened_at", REWRITE_OPENED_LIMIT),

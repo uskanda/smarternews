@@ -238,6 +238,7 @@ describe("judging", () => {
     const run = await h.run();
 
     expect(h.candidates(run.id, "rejected")).toMatchObject([{ title: "Undated", reason: "公開日時が不明" }]);
+    expect(h.reasonCodes(run.id)).toContainEqual({ title: "Undated", reasonCode: "no-date" });
     expect(materialLines(h.requests.judge[0]!.prompt).map((candidate) => candidate.title)).toEqual(["Dated"]);
   });
 
@@ -281,6 +282,8 @@ describe("judging", () => {
     expect(h.candidates(run.id, "rejected")).toMatchObject([
       { title: "Buy now [skip]", url: "https://example.org/ad", reason: "advertising without new information", status: "rejected" },
     ]);
+    // The judge's rejection has no kind of the program's.
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Buy now [skip]", reasonCode: null }]);
     expect(h.articles()).toEqual([]);
   });
 

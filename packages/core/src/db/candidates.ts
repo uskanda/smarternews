@@ -1,5 +1,5 @@
 import type { Candidate, SourceKind } from "../api.ts";
-import { programReasonCode, type ReasonCode } from "../pipeline/reasons.ts";
+import { reasonText, type ReasonCode } from "../pipeline/reasons.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
@@ -24,6 +24,8 @@ export interface NewCandidate {
   sourceKind: SourceKind;
   status: "rejected" | "pending";
   reason: string;
+  /** The kind of the program's reason for a candidate the program rejected; null for the judge's verdicts. */
+  reasonCode: ReasonCode | null;
   importance: number | null;
   topicIds: number[];
   now: string;
@@ -34,8 +36,8 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
     .prepare(
       `INSERT INTO candidates
          (category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-          importance, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reason_code, importance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       candidate.categoryId,
@@ -49,6 +51,7 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
       candidate.sourceKind,
       candidate.status,
       candidate.reason,
+      candidate.reasonCode,
       candidate.importance,
       candidate.now,
     );
@@ -101,10 +104,13 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
     }));
 }
 
-/** Closes pending candidates as rejected, and files them under the run that decided it. */
-export function rejectCandidates(db: Database, ids: number[], reason: string, runId: number): void {
-  const statement = db.prepare("UPDATE candidates SET status = 'rejected', reason = ?, run_id = ? WHERE id = ?");
-  for (const id of ids) statement.run(reason, runId, id);
+/**
+ * Closes pending candidates as rejected for one of the program's reasons, written in the output language, and files
+ * them under the run that decided it.
+ */
+export function rejectCandidates(db: Database, ids: number[], code: ReasonCode, outputLanguage: string, runId: number): void {
+  const statement = db.prepare("UPDATE candidates SET status = 'rejected', reason = ?, reason_code = ?, run_id = ? WHERE id = ?");
+  for (const id of ids) statement.run(reasonText(code, outputLanguage), code, runId, id);
 }
 
 export function acceptCandidates(db: Database, ids: number[], articleId: number, groupKey: string, runId: number): void {
@@ -181,7 +187,7 @@ export function listTrialCandidates(db: Database, topicId: number, perSide: numb
   for (const row of rows) {
     const status = str(row.status) as Candidate["status"];
     const reason = str(row.reason);
-    const code = status === "rejected" ? programReasonCode(reason) : null;
+    const code = status === "rejected" ? (strOrNull(row.reason_code) as ReasonCode | null) : null;
     if (code === "no-date") continue;
     all.push({
       id: num(row.id),

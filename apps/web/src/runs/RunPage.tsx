@@ -18,7 +18,7 @@ import {
 } from "@smarternews/client";
 import { useCategories, useProviders, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
-import { topicEditPath } from "../lib/paths.ts";
+import { topicEditPath, topicStatsPath } from "../lib/paths.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -242,10 +242,15 @@ export function RunPage() {
                   <span className="pl-sm type-label-sm text-on-surface-muted tabular-nums">{group.candidates.length}件</span>
                 </h3>
                 {category && group.key !== "0" ? (
-                  // One such link per group: the name read out says which topic, the text stays short.
-                  <Link to={topicEditPath(category.id, Number(group.key))} aria-label={`${group.text} を直す`} className={`type-label-sm ${LINK}`}>
-                    このトピックを直す
-                  </Link>
+                  // One pair of such links per group: the names read out say which topic, the texts stay short.
+                  <span className="flex flex-wrap gap-x-md">
+                    <Link to={topicEditPath(category.id, Number(group.key))} aria-label={`${group.text} を直す`} className={`type-label-sm ${LINK}`}>
+                      このトピックを直す
+                    </Link>
+                    <Link to={topicStatsPath(category.id, Number(group.key))} aria-label={`${group.text} の成績`} className={`type-label-sm ${LINK}`}>
+                      このトピックの成績
+                    </Link>
+                  </span>
                 ) : null}
               </div>
               <ul>

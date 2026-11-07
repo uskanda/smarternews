@@ -73,6 +73,7 @@ describe("event categories", () => {
 
     expect(h.articles()).toEqual([]);
     expect(h.candidates(run.id, "rejected")).toMatchObject([{ title: "Far Away Fair", reason: "開催日が対象期間の外" }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Far Away Fair", reasonCode: "event-outside-window" }]);
   });
 
   it("rejects an event that has already ended", async () => {
@@ -101,6 +102,7 @@ describe("event categories", () => {
 
     expect(h.articles()).toEqual([]);
     expect(h.candidates(run.id, "rejected")).toMatchObject([{ title: "Mystery Meetup", reason: "開催日を確認できない" }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Mystery Meetup", reasonCode: "event-no-date" }]);
   });
 
   it("rejects a page for which the writer returns no event at all", async () => {

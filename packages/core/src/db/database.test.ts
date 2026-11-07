@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { migrate, openDatabase, transaction } from "./database.ts";
 import { deleteUnstarredFeedArticlesBefore } from "./articles.ts";
 import { buildPendingFilterMatches, listFilters } from "./filters.ts";
+import { REASON_CODES, reasonText } from "../pipeline/reasons.ts";
 import { searchText } from "../search/plain.ts";
 
 function tableNames(db: ReturnType<typeof openDatabase>): string[] {
@@ -39,6 +40,14 @@ describe("migrate", () => {
 
     expect(() => migrate(db, dir)).toThrow();
     expect(tableNames(db)).toEqual(["schema_migrations"]);
+  });
+
+  it("ships each migration under a number of its own", () => {
+    // Two files with one number: a database migrated past it runs neither again, a new one fails on the second.
+    const numbers = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(numbers.filter((number, index) => numbers.indexOf(number) !== index)).toEqual([]);
   });
 });
 
@@ -110,6 +119,15 @@ describe("a migration that rebuilds a table", () => {
     expect(copy.prepare("SELECT count(*) AS n FROM child").get()).toEqual({ n: 1 });
     copy.close();
     db.close();
+  });
+});
+
+describe("the shipped migrations", () => {
+  it("each have their own number, as the number is what the database records", () => {
+    const numbers = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(numbers.filter((n, i) => numbers.indexOf(n) !== i)).toEqual([]);
   });
 });
 
@@ -532,7 +550,7 @@ describe("the migration to reasons on references", () => {
 
   it("copies the reason and importance of the first accepted candidate, and leaves the rest empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "024")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "026")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const now = "2026-01-01T00:00:00.000Z";
@@ -559,7 +577,7 @@ describe("the migration to reasons on references", () => {
     candidate.run(4, "https://example.org/rejected", "rejected", "Off topic", 1, null, now);
     candidate.run(5, "https://example.org/blank", "accepted", "", null, 1, now);
 
-    copyFileSync(join(SHIPPED, "024_ref_reasons.sql"), join(dir, "024_ref_reasons.sql"));
+    copyFileSync(join(SHIPPED, "026_ref_reasons.sql"), join(dir, "026_ref_reasons.sql"));
     migrate(db, dir);
 
     expect(db.prepare("SELECT url, reason, importance FROM article_refs ORDER BY position").all()).toEqual([
@@ -569,6 +587,43 @@ describe("the migration to reasons on references", () => {
       { url: "https://example.org/rejected", reason: null, importance: null },
       { url: "https://example.org/blank", reason: null, importance: null },
     ]);
+  });
+});
+
+describe("the migration to reason codes", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives the kinds of the program's reasons to the rejected candidates, in either language, and none to the judge's", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "027")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    const candidate = db.prepare(
+      "INSERT INTO candidates (category_id, url, title, source_kind, status, reason, created_at) VALUES (1, ?, 't', 'feed', ?, ?, ?)",
+    );
+    const expected: Array<{ url: string; reason_code: string | null }> = [];
+    for (const code of REASON_CODES) {
+      for (const language of ["ja", "en"]) {
+        const url = `https://example.org/${code}/${language}`;
+        candidate.run(url, "rejected", reasonText(code, language), now);
+        expected.push({ url, reason_code: code });
+      }
+    }
+    candidate.run("https://example.org/judge", "rejected", "advertising", now);
+    expected.push({ url: "https://example.org/judge", reason_code: null });
+    candidate.run("https://example.org/pending", "pending", "重要度が基準未満", now);
+    expected.push({ url: "https://example.org/pending", reason_code: null });
+
+    copyFileSync(join(SHIPPED, "027_candidate_reason_code.sql"), join(dir, "027_candidate_reason_code.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT url, reason_code FROM candidates ORDER BY id").all()).toEqual(expected);
+    expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 1").run()).toThrow();
   });
 });
 

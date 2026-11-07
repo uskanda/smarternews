@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reasonText } from "../pipeline/reasons.ts";
+import { type ReasonCode, reasonText } from "../pipeline/reasons.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { insertArticle, recordArticleOpened, setArticleFlags } from "./articles.ts";
 import { insertCandidate } from "./candidates.ts";
@@ -38,7 +38,14 @@ function setup() {
       topicIds,
     });
   let n = 0;
-  const candidate = (title: string, reason: string, at: string, topicIds = [topic.id], status: "pending" | "rejected" = "rejected") => {
+  const candidate = (
+    title: string,
+    reason: string,
+    at: string,
+    topicIds = [topic.id],
+    status: "pending" | "rejected" = "rejected",
+    reasonCode: ReasonCode | null = null,
+  ) => {
     n += 1;
     return insertCandidate(db, {
       categoryId,
@@ -52,6 +59,7 @@ function setup() {
       sourceKind: "feed",
       status,
       reason,
+      reasonCode,
       importance: 1,
       topicIds,
       now: at,
@@ -114,9 +122,12 @@ describe("rewriteInputs", () => {
   it("takes only the candidates the judge found not relevant, with the judge's reason", () => {
     const s = setup();
     s.candidate("Off topic", "A tutorial, not a release.", daysAgo(2));
-    s.candidate("Below the minimum", reasonText("below-minimum", "ja"), daysAgo(2));
-    s.candidate("Over the cap", reasonText("over-limit", "en"), daysAgo(2));
-    s.candidate("No date", reasonText("no-date", "ja"), daysAgo(2));
+    const program = (title: string, code: ReasonCode) =>
+      s.candidate(title, reasonText(code, "ja"), daysAgo(2), [s.topic.id], "rejected", code);
+    program("Below the minimum", "below-minimum");
+    program("Over the cap", "over-limit");
+    program("No date", "no-date");
+    program("Outside the window", "event-outside-window");
     s.candidate("Waiting", "Relevant.", daysAgo(2), [s.topic.id], "pending");
     s.candidate("Another topic's", "Not relevant.", daysAgo(2), [s.other.id]);
     s.candidate("Too old", "Not relevant.", daysAgo(31));

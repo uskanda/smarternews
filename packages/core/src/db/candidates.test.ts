@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ReasonCode } from "../pipeline/reasons.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { insertCandidate, listTrialCandidates, rejectCandidates } from "./candidates.ts";
 import { createCategory } from "./categories.ts";
@@ -14,7 +15,11 @@ function setup() {
   const other = createTopic(db, category.id, { text: "Go releases" }, clock);
   const run = createRun(db, { categoryId: category.id, trigger: "manual", slot: null }, clock);
   let day = 0;
-  const add = (status: "pending" | "rejected", reason: string, options: { topicIds?: number[]; publishedAt?: string | null } = {}) => {
+  const add = (
+    status: "pending" | "rejected",
+    reason: string,
+    options: { topicIds?: number[]; publishedAt?: string | null; reasonCode?: ReasonCode } = {},
+  ) => {
     day += 1;
     return insertCandidate(db, {
       categoryId: category.id,
@@ -28,6 +33,7 @@ function setup() {
       sourceKind: "feed",
       status,
       reason,
+      reasonCode: options.reasonCode ?? null,
       importance: status === "pending" ? 3 : 1,
       topicIds: options.topicIds ?? [topic.id],
       now: new Date(Date.parse("2026-03-01T00:00:00.000Z") + day * 3_600_000).toISOString(),
@@ -53,8 +59,8 @@ describe("listTrialCandidates", () => {
 
   it("leaves out candidates rejected for an unknown publication time, and those of other topics", () => {
     const s = setup();
-    s.add("rejected", "公開日時が不明", { publishedAt: null });
-    s.add("rejected", "publication time unknown", { publishedAt: null });
+    s.add("rejected", "公開日時が不明", { publishedAt: null, reasonCode: "no-date" });
+    s.add("rejected", "publication time unknown", { publishedAt: null, reasonCode: "no-date" });
     s.add("pending", "relevant", { topicIds: [s.other.id] });
     const kept = s.add("rejected", "off topic", { topicIds: [s.topic.id, s.other.id] });
 
@@ -66,14 +72,14 @@ describe("listTrialCandidates", () => {
   it("counts a candidate the program rejected after the judge accepted it on the accepted side", () => {
     const s = setup();
     const below = s.add("pending", "relevant");
-    rejectCandidates(s.db, [below], "重要度が基準未満", s.run.id);
+    rejectCandidates(s.db, [below], "below-minimum", "ja", s.run.id);
     const over = s.add("pending", "relevant");
-    rejectCandidates(s.db, [over], "over the article limit of the run", s.run.id);
+    rejectCandidates(s.db, [over], "over-limit", "en", s.run.id);
     const judged = s.add("rejected", "advertising");
 
     const byId = new Map(listTrialCandidates(s.db, s.topic.id, 30).map((candidate) => [candidate.id, candidate]));
-    expect(byId.get(below)).toMatchObject({ verdict: "accepted", programReason: "below-minimum", status: "rejected" });
-    expect(byId.get(over)).toMatchObject({ verdict: "accepted", programReason: "over-limit" });
+    expect(byId.get(below)).toMatchObject({ verdict: "accepted", programReason: "below-minimum", status: "rejected", reason: "重要度が基準未満" });
+    expect(byId.get(over)).toMatchObject({ verdict: "accepted", programReason: "over-limit", reason: "over the article limit of the run" });
     expect(byId.get(judged)).toMatchObject({ verdict: "rejected", programReason: null, reason: "advertising" });
   });
 });

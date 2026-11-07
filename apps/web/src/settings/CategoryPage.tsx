@@ -16,7 +16,7 @@ import {
   type Topic,
   type TopicUpdate,
 } from "@smarternews/core/api";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, checkText, checkTimes, checkWholeNumber, describeProblem, fieldMessage, linesOf } from "@smarternews/client";
@@ -26,6 +26,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { TopicRewrite } from "./TopicRewrite.tsx";
+import { TopicStatsSection } from "./TopicStats.tsx";
 import { TopicTrialResults, useTopicTrial } from "./TopicTrial.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
@@ -208,6 +209,12 @@ function CategoryForm({ category }: { category: Category }) {
 
 // ---- topics ------------------------------------------------------------------------------------
 
+/** After a topic of the category was added, changed or removed: its list and its stats are stale. */
+async function refreshTopics(client: QueryClient, categoryId: number): Promise<void> {
+  void client.invalidateQueries({ queryKey: ["topic-stats", categoryId] });
+  await client.invalidateQueries({ queryKey: ["topics", categoryId] });
+}
+
 function TopicEditor({
   topic,
   canSearch,
@@ -286,7 +293,7 @@ function TopicEditor({
     if (form.language !== initial.language || form.region !== initial.region) patch.search = searchOf();
     try {
       await api.updateTopic(topic.id, patch);
-      await client.invalidateQueries({ queryKey: ["topics", topic.categoryId] });
+      await refreshTopics(client, topic.categoryId);
       toast({ message: "トピックを保存しました" });
       onClose();
     } catch (caught) {
@@ -297,7 +304,7 @@ function TopicEditor({
   async function remove() {
     try {
       await api.deleteTopic(topic.id);
-      await client.invalidateQueries({ queryKey: ["topics", topic.categoryId] });
+      await refreshTopics(client, topic.categoryId);
       toast({ message: "トピックを削除しました" });
     } catch (caught) {
       setConfirming(false);
@@ -503,7 +510,7 @@ function TopicMisses({ topic }: { topic: Topic }) {
     setSending(true);
     try {
       await api.interpretTopic(topic.id);
-      await client.invalidateQueries({ queryKey: ["topics", topic.categoryId] });
+      await refreshTopics(client, topic.categoryId);
       toast({ message: "次の実行で解釈し直します。" });
     } catch {
       toast({ message: "解釈し直す予定を入れられませんでした。もう一度試してください。" });
@@ -547,7 +554,7 @@ function Topics({ category }: { category: Category }) {
       await api.createTopic(category.id, { text });
       setText("");
       setError(null);
-      await client.invalidateQueries({ queryKey: ["topics", category.id] });
+      await refreshTopics(client, category.id);
       toast({ message: "追加しました。次の実行で解釈されます。" });
     } catch (caught) {
       setError(caught);
@@ -698,7 +705,7 @@ function DeleteCategory({ category }: { category: Category }) {
 
 // ---- page --------------------------------------------------------------------------------------
 
-/** One category: its settings, its topics, running it now, and deleting it. */
+/** One category: its settings, its topics and their stats, running it now, and deleting it. */
 export function CategoryPage() {
   const params = useParams();
   const categories = useCategories();
@@ -730,6 +737,7 @@ export function CategoryPage() {
           <CategoryForm key={`${category.id}:${JSON.stringify(category)}`} category={category} />
         </section>
         <Topics category={category} />
+        <TopicStatsSection category={category} />
         <RunNow category={category} />
         <DeleteCategory category={category} />
       </div>

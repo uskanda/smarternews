@@ -304,14 +304,14 @@ describe("mentions in the outputs of the write and summarize tasks", () => {
     const { adapter } = scripted([{ ...article, mentions }]);
     const { runner } = setup({ providers: [provider("a", adapter)] });
 
-    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions });
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions, updateNote: null });
   });
 
   it("does not ask again when only a name lacks its kind, and gives null for the names", async () => {
     const { adapter, requests } = scripted([{ ...article, mentions: [{ name: "日本銀行" }] }, { ...article, mentions: [] }]);
     const { runner, calls } = setup({ providers: [provider("a", adapter)] });
 
-    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions: null });
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions: null, updateNote: null });
     expect(requests).toHaveLength(1);
     expect(calls()).toEqual([{ task: "write", provider: "a", ok: 1, error: null }]);
   });

@@ -61,6 +61,7 @@ describe("grouping and selecting stories", () => {
     expect(h.articles()).toEqual([]);
     expect(h.requests.write).toHaveLength(0);
     expect(h.candidates(run.id, "rejected")).toMatchObject([{ title: "Minor [i2]", reason: "重要度が基準未満" }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Minor [i2]", reasonCode: "below-minimum" }]);
   });
 
   it("writes only the most important stories up to the category's limit", async () => {
@@ -82,6 +83,10 @@ describe("grouping and selecting stories", () => {
     expect(h.candidates(run.id, "rejected").map((candidate) => [candidate.title, candidate.reason]).sort()).toEqual([
       ["A [i3]", "件数上限"],
       ["D [i3]", "件数上限"],
+    ]);
+    expect(h.reasonCodes(run.id).filter((candidate) => candidate.reasonCode !== null)).toEqual([
+      { title: "A [i3]", reasonCode: "over-limit" },
+      { title: "D [i3]", reasonCode: "over-limit" },
     ]);
     expect(run).toMatchObject({ articlesCreated: 5, rejected: 2 });
   });

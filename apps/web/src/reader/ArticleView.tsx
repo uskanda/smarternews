@@ -1,7 +1,7 @@
 import type { Article, ArticleRef, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
+import { ApiError, type TermMatcher, eventTime, formatDate, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { listPathOf, topicEditPath } from "../lib/paths.ts";
@@ -250,7 +250,6 @@ export function ArticleView({
 }) {
   const query = useArticle(id);
   const article = query.data;
-  const previous = useArticle(article?.previousArticleId ?? null).data;
   const translating = useArticleTranslation(article);
   const summaryState = useSummaryRequest(article);
   const groups = useTermMatcher();
@@ -353,6 +352,16 @@ export function ArticleView({
             <span>噂や非公式の情報に基づいています。</span>
           </p>
         ) : null}
+        {article.revision > 0 && article.updateNote ? (
+          // What the last follow-up added, in the model's words: before the impact, so that a reader who read the
+          // article before sees first what is new. The line is not the impact's mark colour, to tell the two apart.
+          <section aria-label="今回の更新で加わったこと" className="border-l-4 border-outline-strong pl-md">
+            <h3 className="type-label-sm text-on-surface-muted">今回の更新で加わったこと</h3>
+            <p className="type-body-md">
+              <Highlighted text={article.updateNote} terms={terms} />
+            </p>
+          </section>
+        ) : null}
         {article.impact ? (
           <section aria-label="読み手への影響" className="border-l-4 border-mark pl-md">
             <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
@@ -441,13 +450,21 @@ export function ArticleView({
         {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
         <Attachments article={article} />
         <Mentions article={article} />
-        {previous ? (
-          <p className="type-body-md">
-            <span className="text-on-surface-muted">この話題の前の記事 </span>
-            <Link to={articlePath(previous.id)} className="text-primary underline underline-offset-4">
-              {previous.title}
-            </Link>
-          </p>
+        {article.previousArticles.length > 0 ? (
+          // The earlier articles of the story, newest first, each with the day it was first published.
+          <section aria-label="この話題の前の記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">この話題の前の記事</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.previousArticles.map((earlier) => (
+                <li key={earlier.id} className="min-w-0">
+                  <Link to={articlePath(earlier.id)} className="tap break-words text-primary underline underline-offset-4">
+                    {earlier.title}
+                  </Link>
+                  <span className="pl-sm text-on-surface-muted tabular-nums">{formatDate(earlier.firstPublishedAt, timeZone)}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null}
         {delivered ? null : (
         <section aria-label="出典" className="flex flex-col gap-xs">
@@ -462,6 +479,11 @@ export function ArticleView({
                   {ref.title || ref.url}
                 </a>
                 {ref.siteName ? <span className="pl-sm text-on-surface-muted">{ref.siteName}</span> : null}
+                {ref.isNew ? (
+                  <span className="pl-sm">
+                    <Badge>新しい出典</Badge>
+                  </span>
+                ) : null}
                 <SourceReason source={ref} />
               </li>
             ))}

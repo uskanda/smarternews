@@ -362,6 +362,8 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
       void client.invalidateQueries({ queryKey: ["counts"] });
       // A miss changes how many misses a topic has had since its interpretation.
       if (variables.missed !== undefined) void client.invalidateQueries({ queryKey: ["topics"] });
+      // Misses and stars are counted in the stats of the topics.
+      if (variables.missed !== undefined || variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["topic-stats"] });
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
@@ -374,6 +376,12 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
 export function useTopics(categoryId: number | null) {
   const { api } = useApp();
   return useQuery({ queryKey: ["topics", categoryId], queryFn: () => api.topics(categoryId!), enabled: categoryId !== null });
+}
+
+/** What each topic of the category brought in the last 30 days. Stale once a topic of it is added, changed or removed. */
+export function useTopicStats(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
 }
 
 export function useProviders() {

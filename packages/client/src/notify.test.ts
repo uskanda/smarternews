@@ -16,6 +16,7 @@ function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
     translatedTitle: null,
     summary: "",
     impact: null,
+    updateNote: null,
     importance: 5,
     unconfirmed: false,
     firstPublishedAt: "2026-03-01T06:00:00.000Z",

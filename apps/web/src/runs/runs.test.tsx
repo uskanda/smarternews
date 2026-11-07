@@ -177,6 +177,7 @@ describe("one run", () => {
         sourceKind: "feed",
         status: "rejected",
         reason: index < 8 ? "advertising without new information" : "about another product",
+        reasonCode: null,
         importance: 1,
         topicIds: [index < 8 ? flaws.id : ransom.id],
         now: server.clock().toISOString(),
@@ -233,6 +234,31 @@ describe("one run", () => {
       "href",
       `/settings/categories/${category.id}#topic-${ransom.id}`,
     );
+  });
+
+  it("leads from each topic of the grouped candidates to the topic's row in the topic stats", async () => {
+    const { server, category, id, flaws, ransom } = withRejections();
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { user, path } = renderApp({ server, route: `/runs/${id}` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    await within(rejected).findByRole("link", { name: "Rejected 0" });
+    await user.click(within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" }));
+
+    const groups = within(rejected).getAllByRole("group");
+    const stats = within(groups[0]!).getByRole("link", { name: "exploited flaws の成績" });
+    expect(stats).toHaveTextContent("このトピックの成績");
+    expect(stats).toHaveAttribute("href", `/settings/categories/${category.id}#topic-stats-${flaws.id}`);
+    expect(within(groups[1]!).getByRole("link", { name: "ransomware の成績" })).toHaveAttribute(
+      "href",
+      `/settings/categories/${category.id}#topic-stats-${ransom.id}`,
+    );
+
+    await user.click(stats);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    const region = await screen.findByRole("region", { name: "トピックの成績" });
+    await waitFor(() => expect(scroll.mock.contexts).toContain(region.querySelector(`#topic-stats-${flaws.id}`)));
+    scroll.mockRestore();
   });
 
   it("says that a run does not exist", async () => {

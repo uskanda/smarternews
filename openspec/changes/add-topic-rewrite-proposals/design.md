@@ -45,7 +45,7 @@ LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録さ�
 
 - 開いた記事：`origin = 'generated'`で、`opened_at`が30日以内のもの。`opened_at`の降順で20件まで。
 - スターの記事：`starred = 1`で、`created_at`が30日以内のもの。`created_at`の降順で20件まで。スターの時刻がないので、記事の作られた時刻で区切る。
-- 除外：`status = 'rejected'`で、`created_at`が30日以内の候補を読む。`programReasonCode(reason)`がnullのものだけを、`created_at`と`id`の降順で30件まで取る。
+- 除外：`status = 'rejected'`で、`created_at`が30日以内の候補を読む。プログラムの理由の種類（`reason_code`、add-topic-statsで足された列）がNULLのものだけを、`created_at`と`id`の降順で30件まで取る。
 - 外れ：`recentMissTitles`をそのまま使う。
 
 記事の要約は`summary`の列を使う。どの記事の情報も、プロンプトでは`material()`で包む。

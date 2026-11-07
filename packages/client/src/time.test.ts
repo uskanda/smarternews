@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { dayKey, formatClock, formatDay, formatFull, formatShort } from "./time.ts";
+import { dayKey, formatClock, formatDate, formatDay, formatFull, formatShort } from "./time.ts";
 
 const now = new Date("2026-03-02T03:00:00Z"); // noon on March 2 in Tokyo
 
@@ -8,6 +8,7 @@ describe("time formatting in the configured zone", () => {
     expect(formatClock("2026-03-01T20:00:00Z", "Asia/Tokyo")).toBe("05:00");
     expect(formatFull("2026-03-01T20:00:00Z", "Asia/Tokyo")).toBe("2026年3月2日 05:00");
     expect(formatFull("2026-03-01T20:00:00Z", "UTC")).toBe("2026年3月1日 20:00");
+    expect(formatDate("2026-03-01T20:00:00Z", "Asia/Tokyo")).toBe("2026年3月2日");
   });
 
   it("shortens a time by how long ago it was in calendar days of the zone", () => {
