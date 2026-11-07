@@ -76,7 +76,7 @@ async function fetchPageOrRefuse(pages: PageFetcher, url: string): Promise<{ htm
   const page = await pages.fetchPage(target);
   if (!page.ok) {
     const message = `the page could not be fetched: ${pageFailureReason(page, target)}`;
-    throw new DomainError("invalid", message, [{ path: "url", message }]);
+    throw new DomainError("invalid", message, [{ path: "url", message, code: "unreachable" }]);
   }
   return page;
 }

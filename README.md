@@ -4,7 +4,7 @@
 
 smarternews is a self-hosted news crawler for one reader. You describe the topics you want to follow, in keywords or in sentences. The server collects pages about them on a schedule, groups pages about the same story, and writes one article per story with links to its sources. Read them through an HTTP API or as RSS feeds.
 
-It is also a feed reader. Subscribe to RSS and Atom feeds, and their articles appear beside the written ones, as the feeds deliver them.
+It is also a feed reader. Subscribe to RSS, Atom and JSON feeds, and their articles appear beside the written ones, as the feeds deliver them.
 
 A language model does the judging and the writing, and ordinary code does the rest. Fetching, deduplication, scheduling, feed generation, and the fetching and storing of subscribed feeds never call a model. The model is called for eight tasks only: interpreting a topic, searching the web, judging candidates, grouping them into stories, writing an article, summarising or translating the articles of the subscribed feeds you chose, and proposing selectors for a web page feed when you ask for candidates. Each task has a fixed input and a JSON Schema for its output, so the provider behind it can be replaced.
 
@@ -133,7 +133,7 @@ A topic is a keyword or a sentence. The model turns it into search queries and a
 
 A subscribed feed is read as it is. The server fetches it on an interval and stores each item as an article with the feed's own title and content. No model is involved in this, so subscribing costs no model calls unless you switch summaries or translation on for the feed (see below). This is separate from the `feeds` of a topic, which are material the model writes from.
 
-Add a feed in the web app under "設定" and "購読フィードを設定する". Enter the address of the feed, or of a site: the server then looks for the feeds that the page announces. A feed belongs to one `news` category or to none.
+Add a feed in the web app under "設定" and "購読フィードを設定する". Enter the address of the feed, or of a site: the server then looks for the feeds that the page announces. When the page announces none, the server tries `/feed`, `/rss.xml`, `/feed.xml`, `/atom.xml`, `/index.xml` and `/feed.json` at the top of the site, in that order. RSS 2.0, RSS 1.0, Atom and JSON Feed (1.0 and 1.1) can be read. A feed belongs to one `news` category or to none.
 
 - The base interval is 30 minutes and can be set from 5 minutes to one day. A feed can have an interval of its own, and can be paused.
 - "自動で要約する" in the form of a feed has a model summarise the articles the feed delivers from then on. It is off by default, and articles stored before it was switched on are not summarised. The article is stored and readable at once; the summary follows a little later and is shown above the content under "AIによる要約". An article you read before its summary is made gets none.

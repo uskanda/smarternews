@@ -80,7 +80,7 @@ describe("refused annotations", () => {
     const articleId = s.article(s.category().id);
     const response = await s.post(`/api/v1/articles/${articleId}/highlights`, { ...anchor, quote: "" });
     expect(response.status).toBe(400);
-    expect((await response.json()).error.fields).toEqual([{ path: "quote", message: "is empty" }]);
+    expect((await response.json()).error.fields).toEqual([{ path: "quote", message: "is empty", code: "required" }]);
     expect((await (await s.get(`/api/v1/articles/${articleId}`)).json()).annotations.highlights).toEqual([]);
   });
 
