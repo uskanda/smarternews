@@ -146,6 +146,14 @@ terms:
     definition: "利用者が記事に付ける印で、付いた記事は保存期間を過ぎても残る。"
     aliases: ["お気に入り", "ブックマーク"]
     en: "star"
+  - term: "外れ"
+    definition: "利用者が生成記事に付ける、トピックに合わなかったことを示す否定の印。"
+    aliases: ["ハズレ", "不要の印"]
+    en: "miss"
+  - term: "外れの記録"
+    definition: "外れの印を付けた時点の記事の見出し、カテゴリ、トピック、時刻を写した記録で、記事が消えても残る。"
+    aliases: []
+    en: "miss record"
   - term: "スケジュール"
     definition: "カテゴリごとに決めた、実行を始める時刻の一覧。"
     aliases: []
