@@ -50,6 +50,7 @@ import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
+import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
@@ -719,6 +720,8 @@ export function ReaderPage({ view }: { view: View }) {
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
+          {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
+          {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">
