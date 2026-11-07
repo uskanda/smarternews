@@ -192,11 +192,11 @@ function ListItem({
  * management pages. A category that has subscribed feeds can be folded.
  */
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
+  // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
+  const { shown: model, pathOf: pathOfTarget } = useNavModels();
   const feeds = useFeeds().data;
   const collapsed = useCollapsed();
   const { pathname } = useLocation();
-  // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
-  const { shown: model, pathOf: pathOfTarget } = useNavModels();
   const pathOf = (entry: NavEntry) => pathOfTarget(entry.target) ?? "/unread";
   // The fold buttons take a column of their own. It exists only once something can be folded.
   const foldable = model.groups.some((group) => group.children.length > 0);
