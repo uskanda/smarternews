@@ -84,6 +84,69 @@ describe("what only generated articles take part in", () => {
   });
 });
 
+describe("why each source was chosen", () => {
+  const content = { title: "Generated", summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null };
+
+  it("keeps the reason and importance of each source, and null for a source without them", () => {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW));
+    const id = insertArticle(db, {
+      ...content,
+      categoryId: category.id,
+      kind: "news",
+      now: NOW,
+      previousArticleId: null,
+      refs: [
+        { url: "https://example.org/a", siteName: "A", title: "a", publishedAt: null, reason: "A new flaw", importance: 4 },
+        { url: "https://example.org/b", siteName: "B", title: "b", publishedAt: null },
+      ],
+      topicIds: [],
+    });
+
+    expect(getArticle(db, id).refs).toEqual([
+      { url: "https://example.org/a", siteName: "A", title: "a", publishedAt: null, reason: "A new flaw", importance: 4 },
+      { url: "https://example.org/b", siteName: "B", title: "b", publishedAt: null, reason: null, importance: null },
+    ]);
+  });
+
+  it("keeps the first reason of a source when a follow-up names it again", () => {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW));
+    const ref = { url: "https://example.org/a", siteName: "A", title: "a", publishedAt: null };
+    const id = insertArticle(db, {
+      ...content,
+      categoryId: category.id,
+      kind: "news",
+      now: NOW,
+      previousArticleId: null,
+      refs: [{ ...ref, reason: "First look", importance: 3 }],
+      topicIds: [],
+    });
+
+    reviseArticle(db, id, {
+      ...content,
+      now: NOW,
+      refs: [
+        { ...ref, reason: "Second look", importance: 5 },
+        { url: "https://example.org/b", siteName: "B", title: "b", publishedAt: null, reason: "Follow-up", importance: 2 },
+      ],
+      topicIds: [],
+    });
+
+    expect(getArticle(db, id).refs.map(({ url, reason, importance }) => ({ url, reason, importance }))).toEqual([
+      { url: "https://example.org/a", reason: "First look", importance: 3 },
+      { url: "https://example.org/b", reason: "Follow-up", importance: 2 },
+    ]);
+  });
+
+  it("returns null for the source of a feed article", () => {
+    const db = createTestDb();
+    const article = seedFeedArticle(db, seedFeed(db), { at: NOW });
+
+    expect(getArticle(db, article).refs[0]).toMatchObject({ reason: null, importance: null });
+  });
+});
+
 describe("duplicates across feeds", () => {
   /**
    * Feed A (category X) keeps an article; feed B (category Y) and feed C (no category) delivered the same one,

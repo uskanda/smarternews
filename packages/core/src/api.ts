@@ -249,6 +249,10 @@ export const articleRefSchema = z.object({
   siteName: z.string(),
   title: z.string(),
   publishedAt: z.string().nullable(),
+  /** Why the judgement chose this source, as the model wrote it. Null for feed articles and for older sources. */
+  reason: z.string().nullable(),
+  /** The importance the judgement gave this source. Null where no judgement was kept. */
+  importance: z.number().int().nullable(),
 });
 export type ArticleRef = z.infer<typeof articleRefSchema>;
 

@@ -35,6 +35,22 @@ describe("grouping and selecting stories", () => {
     expect(h.articles()).toMatchObject([{ importance: 4 }]);
   });
 
+  it("keeps on each source of the article the reason and importance its judgement gave", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [
+      { title: "{s} a [i2]", link: "https://example.org/1" },
+      { title: "{s} b [i4]", link: "https://example.org/2" },
+    ]);
+
+    await h.run();
+
+    expect(h.articles()[0]!.refs.map(({ url, reason, importance }) => ({ url, reason, importance }))).toEqual([
+      { url: "https://example.org/2", reason: "matches the topic", importance: 4 },
+      { url: "https://example.org/1", reason: "matches the topic", importance: 2 },
+    ]);
+  });
+
   it("writes no article for a story below the category's minimum importance", async () => {
     const h = pipelineHarness({ outputLanguage: "ja", category: { minImportance: 3 } });
     h.addTopic("Topic", { feeds: [FEED] });

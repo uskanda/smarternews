@@ -452,6 +452,8 @@ async function writeStories(ctx: Context): Promise<void> {
         siteName: candidate.siteName,
         title: candidate.title,
         publishedAt: candidate.publishedAt,
+        reason: candidate.reason,
+        importance: candidate.judgedImportance,
       })),
       topicIds: [...new Set(story.candidates.flatMap((candidate) => candidate.topicIds))],
     };
