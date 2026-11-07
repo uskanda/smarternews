@@ -500,7 +500,8 @@ export function ReaderPage({ view }: { view: View }) {
     if (!target) return;
     keyStep.current = step;
     keyFocus.current = focusWithin(scrollingList());
-    void navigate(articlePath(target.id));
+    // Only the first article opened adds to the history; a run of keys after it would make back slow to leave.
+    void navigate(articlePath(target.id), { replace: articleId !== null });
   };
   useLayoutEffect(() => {
     const step = keyStep.current;

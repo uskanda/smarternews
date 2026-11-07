@@ -4,7 +4,7 @@ import { createTermMatcher } from "@smarternews/client";
 import { ANNOTATION_SAMPLE_MARKDOWN, ANNOTATION_SAMPLE_TEXT, withoutSpaces } from "@smarternews/client/testing";
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { useBodyAnnotations } from "./Annotations.tsx";
 import { SKIP_ATTRIBUTE } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -452,6 +452,29 @@ describe("the list of annotations", () => {
     expect(await within(pane()).findByRole("region", { name: "記事へのメモ" })).toHaveTextContent("全体へのメモ");
     await user.keyboard("j");
     await waitFor(() => expect(path()).toBe(`/annotations/${gone}?annotation=${lost.id}`));
+  });
+
+  it("goes back from j and k to the list as it was before an annotation was opened", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    addHighlight(server.db, a, anchor("電池の工場を新設すると発表した。"), at(20));
+    saveArticleNote(server.db, b, "全体へのメモ", at(10));
+    const { user } = renderApp({ server, route: "/annotations", browserHistory: true });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("全体へのメモ");
+    const here = () => window.location.pathname;
+
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/annotations/${b}`));
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/annotations/${a}`));
+    await user.keyboard("k");
+    await waitFor(() => expect(here()).toBe(`/annotations/${b}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/annotations"));
   });
 
   it("draws the line on the selected row only, and takes the focus along with j", async () => {

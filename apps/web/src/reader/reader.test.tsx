@@ -2,7 +2,7 @@ import { createTopic, getArticle, insertArticle, insertFeed, listListViews, mark
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const MINUTE = 60_000;
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -1139,6 +1139,78 @@ describe("Space through the article", () => {
     expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     expect(pane.scrollTop).toBe(0);
     expect(path()).toBe(`/all/${newer}`);
+  });
+});
+
+describe("the browser's history while moving with keys", () => {
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const [third, second, first] = articles(server, category.id, [{ title: "Third story" }, { title: "Second story" }, { title: "First story" }]);
+    return { server, first: first!, second: second!, third: third! };
+  }
+  const here = () => window.location.pathname;
+
+  it("goes back from j and k to the list the first article was opened from", async () => {
+    const { server, second, third } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await user.click(await screen.findByRole("link", { name: /First story/ }));
+    await screen.findByRole("heading", { level: 2, name: "First story" });
+
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/all/${third}`));
+    await user.keyboard("k");
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/all"));
+    for (const name of ["First story", "Second story", "Third story"]) {
+      expect(screen.queryByRole("heading", { level: 2, name })).not.toBeInTheDocument();
+    }
+  });
+
+  it("adds an entry when j opens the first article, so that back closes it", async () => {
+    const { server, first } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await screen.findByRole("link", { name: /First story/ });
+
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/all/${first}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/all"));
+  });
+
+  it("still adds an entry when a row is clicked while an article is open", async () => {
+    const { server, first, second } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await user.click(await screen.findByRole("link", { name: /First story/ }));
+    await waitFor(() => expect(here()).toBe(`/all/${first}`));
+    await user.click(screen.getByRole("link", { name: /Second story/ }));
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe(`/all/${first}`));
+  });
+
+  it("adds no entry when Space moves on at the end of the body", async () => {
+    const { server, second } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await user.click(await screen.findByRole("link", { name: /First story/ }));
+    await screen.findByRole("heading", { level: 2, name: "First story" });
+    const pane = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: 400 });
+    // Space is left to a focused button; the row clicked keeps nothing that Space would press.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+
+    await user.keyboard(" ");
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/all"));
   });
 });
 
