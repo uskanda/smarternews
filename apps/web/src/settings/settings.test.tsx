@@ -925,6 +925,22 @@ describe("the settings of this device", () => {
     renderApp({ route: "/settings", server: first.server });
     expect(await toggle()).toBeChecked();
   });
+
+  it("holds the switch to hide the entries without unread articles, off until chosen and kept in this browser", async () => {
+    const { user, requests } = renderApp({ route: "/settings" });
+    const region = await section("この端末の設定");
+    const hide = within(region).getByRole("checkbox", { name: "未読のない項目を左のペインで隠す" });
+    expect(hide).not.toBeChecked();
+    expect(hide).toHaveAccessibleDescription(/開いている項目と、取得に問題のある購読フィードは出します/);
+
+    await user.click(hide);
+
+    expect(hide).toBeChecked();
+    expect(window.localStorage.getItem("smarternews.nav.hideRead")).toBe("on");
+    expect(requests.filter((request) => !request.startsWith("GET"))).toEqual([]);
+    await user.click(hide);
+    expect(window.localStorage.getItem("smarternews.nav.hideRead")).toBeNull();
+  });
 });
 
 describe("the days after which a feed counts as stale", () => {

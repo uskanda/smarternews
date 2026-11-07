@@ -1,4 +1,5 @@
 import { insertFeed, recordFetchFailure, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
+import { seedFeedArticle } from "@smarternews/core/testing";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -810,5 +811,65 @@ describe("the marks of a feed's state in the left pane", () => {
     await user.click(within(nav()).getByRole("button", { name: "Toolsの下の項目" }));
 
     expect(within(link(/^Tools/)).getByRole("img", { name: "取得に失敗した購読フィードがあります" })).toBeInTheDocument();
+  });
+});
+
+describe("hiding the entries without unread articles", () => {
+  const feedOf = (server: TestServer, title: string, categoryId: number | null) =>
+    insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title, categoryId }, server.clock);
+  const entry = (name: RegExp) => within(nav()).queryByRole("link", { name });
+
+  // Tools: Busy and Late with an unread article each, Empty without one, Failing without one after a failed fetch.
+  // Cars: nothing unread.
+  function seeded() {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const cars = server.category("Cars");
+    const busy = feedOf(server, "Busy", tools.id);
+    const empty = feedOf(server, "Empty", tools.id);
+    const late = feedOf(server, "Late", tools.id);
+    const failing = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failing.id, { now: server.clock().toISOString(), error: "timed out" });
+    seedFeedArticle(server.db, busy.id);
+    seedFeedArticle(server.db, late.id);
+    return { server, tools, cars, busy, empty, late };
+  }
+
+  it("shows every entry while the setting is off", async () => {
+    const { server } = seeded();
+    renderApp({ server });
+
+    expect(await within(nav()).findByRole("link", { name: /^Empty/ })).toBeInTheDocument();
+    expect(entry(/^Cars/)).toBeInTheDocument();
+  });
+
+  it("hides them once it is on, but keeps the views, a failed feed, and the entry that is open", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, empty, busy } = seeded();
+    const { user, path } = renderApp({ server, route: `/f/${empty.id}` });
+
+    await waitFor(() => expect(entry(/^Busy/)).toHaveTextContent("1"));
+    expect(entry(/^Empty/)).toBeInTheDocument();
+    expect(entry(/^Failing/)).toBeInTheDocument();
+    expect(entry(/^Cars/)).not.toBeInTheDocument();
+    expect(within(nav()).getAllByRole("link", { name: /^AI生成/ })).toHaveLength(1);
+    expect(entry(/^すべて/)).toBeInTheDocument();
+
+    await user.click(entry(/^Busy/)!);
+    await waitFor(() => expect(path()).toBe(`/f/${busy.id}`));
+    // Once another list is open, the feed that was open goes too.
+    await waitFor(() => expect(entry(/^Empty/)).not.toBeInTheDocument());
+  });
+
+  it("passes the hidden entries by with Shift+J and Shift+K", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, busy, late } = seeded();
+    const { user, path } = renderApp({ server, route: `/f/${busy.id}` });
+    await waitFor(() => expect(entry(/^Late/)).toHaveTextContent("1"));
+
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/f/${late.id}`));
+    await user.keyboard("{Shift>}K{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/f/${busy.id}`));
   });
 });

@@ -1,6 +1,6 @@
 import type { Category, Feed } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
-import { buildNav, listKey, type ListTarget, type NavModel } from "./nav.ts";
+import { buildNav, hideEmptyEntries, listKey, type ListTarget, type NavModel } from "./nav.ts";
 import { applyMove, dropAt, edgeScroll, groupAt, movableOf, nextEventCategory, nextTarget, stepMove, stepTarget, type Row } from "./order.ts";
 
 const category = (id: number, name: string, kind: Category["kind"] = "news"): Category => ({
@@ -304,6 +304,16 @@ describe("stepTarget", () => {
     expect(stepTarget(model(), null, -1, open)).toEqual(fd(91));
     expect(stepTarget(model(), null, -1, folded("uncategorized"))).toEqual({ type: "uncategorized" });
     expect(stepTarget(model(), fd(999), 1, open)).toEqual(views("unread"));
+  });
+
+  it("passes by the entries without unread articles once they are hidden, but not the one that is open", () => {
+    const counted = model({ "category-1": 3, "feed-11": 1, "feed-13": 2, "category-2": 0 });
+    const shown = (current: ListTarget | null) => hideEmptyEntries(counted, { current, counted: true });
+    expect(stepTarget(shown(fd(11)), fd(11), 1, open)).toEqual(fd(13));
+    expect(stepTarget(shown(fd(13)), fd(13), -1, open)).toEqual(fd(11));
+    expect(stepTarget(shown(fd(13)), fd(13), 1, open)).toBeNull();
+    expect(stepTarget(shown(fd(12)), fd(12), 1, open)).toEqual(fd(13));
+    expect(stepTarget(shown(fd(12)), fd(12), -1, open)).toEqual(fd(11));
   });
 });
 

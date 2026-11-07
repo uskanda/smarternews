@@ -103,6 +103,39 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
   };
 }
 
+/**
+ * The key the choice to hide entries without unread articles is stored under, in the browser and on the
+ * device. Off is stored as no value at all.
+ */
+export const HIDE_READ_STORAGE_KEY = "smarternews.nav.hideRead";
+
+/** The value stored while the entries without unread articles are hidden. */
+export const HIDE_READ_ON = "on";
+
+/** Whether a stored value stands for on. Nothing, or anything this version does not know, is off. */
+export function parseHideRead(stored: string | null): boolean {
+  return stored === HIDE_READ_ON;
+}
+
+/**
+ * The model without the categories, the feeds and the generated articles of a category that have no unread
+ * article. The views at the top stay. So do the open entry with the group above it, and a feed whose fetches
+ * failed or stopped, with its group: hiding it would hide that something is wrong. A group keeps the
+ * `childState` of all its feeds, the hidden ones too. Until the counts have arrived (`counted` false), every
+ * entry counts zero and nothing is hidden.
+ */
+export function hideEmptyEntries(model: NavModel, options: { current: ListTarget | null; counted: boolean }): NavModel {
+  if (!options.counted) return model;
+  const currentKey = options.current === null ? null : listKey(options.current);
+  const isCurrent = (entry: NavEntry) => currentKey !== null && listKey(entry.target) === currentKey;
+  const keeps = (entry: NavEntry) => entry.unread > 0 || entry.state === "failed" || entry.state === "stale" || isCurrent(entry);
+  const groups = model.groups.flatMap((group) => {
+    const children = group.children.filter(keeps);
+    return group.entry.unread > 0 || children.length > 0 || isCurrent(group.entry) ? [{ ...group, children }] : [];
+  });
+  return { ...model, groups };
+}
+
 /** A short text that names a list, for a route or a stored choice. */
 export function listKey(target: ListTarget): string {
   if (target.type === "category") return `category-${target.categoryId}${target.generatedOnly ? "-generated" : ""}`;

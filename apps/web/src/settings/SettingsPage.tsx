@@ -30,6 +30,7 @@ import {
 } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics, useUsage } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { chooseHideRead, useHideRead } from "../lib/hide-read.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -341,12 +342,14 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 }
 
 /**
- * What this browser keeps for itself: the colour scheme, and whether the list marks read what is scrolled past.
- * A change takes effect at once: neither is part of the settings on the server.
+ * What this browser keeps for itself: the colour scheme, whether the list marks read what is scrolled past, and
+ * whether the left pane hides the entries without unread articles. A change takes effect at once: none of them
+ * is part of the settings on the server.
  */
 function DeviceSettings() {
   const choice = useThemeChoice();
   const scrollRead = useScrollRead();
+  const hideRead = useHideRead();
   const id = useId();
   return (
     <section id="device" aria-labelledby={`${id}-title`} className={SECTION}>
@@ -386,6 +389,17 @@ function DeviceSettings() {
         />
         <p id={`${id}-scroll-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
           記事の一覧を送ったとき、一覧の上端を越えた記事を既読にします。最近読んだ記事、検索の結果、イベントの一覧は対象にしません。
+        </p>
+      </div>
+      <div className="flex flex-col gap-xs">
+        <Checkbox
+          label="未読のない項目を左のペインで隠す"
+          checked={hideRead}
+          aria-describedby={`${id}-hide-read-hint`}
+          onChange={(event) => chooseHideRead(event.target.checked)}
+        />
+        <p id={`${id}-hide-read-hint`} className="max-w-measure type-label-sm text-on-surface-muted">
+          未読が0のカテゴリと購読フィードを、左のペインに出しません。開いている項目と、取得に問題のある購読フィードは出します。Shift+JとShift+Kも、隠した項目を通りません。
         </p>
       </div>
     </section>

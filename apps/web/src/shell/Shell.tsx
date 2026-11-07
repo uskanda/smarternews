@@ -3,8 +3,10 @@ import {
   budgetWarningLabel,
   buildNav,
   FEED_STATE_LABEL,
+  hideEmptyEntries,
   listKey,
   nextEventCategory,
+  parseListKey,
   stepTarget,
   type FeedState,
   type ListTarget,
@@ -17,6 +19,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useArticle, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
+import { useHideRead } from "../lib/hide-read.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { PANES, usePanes } from "../lib/panes.ts";
@@ -192,14 +195,12 @@ function ListItem({
  * management pages. A category that has subscribed feeds can be folded.
  */
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
-  const counts = useCounts().data;
-  const categories = useCategories().data;
+  // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
+  const { shown: model, pathOf: pathOfTarget } = useNavModels();
   const feeds = useFeeds().data;
   const collapsed = useCollapsed();
   const { pathname } = useLocation();
-  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
-  const slugOf = (categoryId: number) => categories?.find((category) => category.id === categoryId)?.slug;
-  const pathOf = (entry: NavEntry) => listPathOf(entry.target, slugOf) ?? "/unread";
+  const pathOf = (entry: NavEntry) => pathOfTarget(entry.target) ?? "/unread";
   // The fold buttons take a column of their own. It exists only once something can be folded.
   const foldable = model.groups.some((group) => group.children.length > 0);
 
@@ -386,6 +387,28 @@ function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTa
   );
 }
 
+/**
+ * The entries of the left pane: `full` holds every one, `shown` those the pane shows — without the entries that
+ * have no unread article when this browser hides them. The open entry is found in `full`, so that it stays.
+ */
+function useNavModels(): { full: NavModel; shown: NavModel; current: ListTarget | null; pathOf: (target: ListTarget) => string | null } {
+  const counts = useCounts().data;
+  const categories = useCategories().data;
+  const feeds = useFeeds().data;
+  const hideRead = useHideRead();
+  const { pathname } = useLocation();
+  const full = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
+  const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
+  const current = currentEntry(full, pathname, pathOf);
+  const currentKey = current === null ? null : listKey(current);
+  const counted = counts !== undefined;
+  const shown = useMemo(
+    () => (hideRead ? hideEmptyEntries(full, { current: currentKey === null ? null : parseListKey(currentKey), counted }) : full),
+    [full, hideRead, currentKey, counted],
+  );
+  return { full, shown, current, pathOf };
+}
+
 const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";
 
 function KeyHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -448,14 +471,9 @@ export function Shell() {
   const [helpOpen, setHelpOpen] = useState(false);
   const { now } = useApp();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
   const counts = useCounts().data;
-  const categories = useCategories().data;
-  const feeds = useFeeds().data;
   const collapsed = useCollapsed();
-  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
-  const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
-  const current = currentEntry(model, pathname, pathOf);
+  const { full: model, shown, current, pathOf } = useNavModels();
   const open = (target: ListTarget | null | undefined) => {
     const path = target ? pathOf(target) : null;
     if (path !== null) void navigate(path);
@@ -469,8 +487,9 @@ export function Shell() {
         if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
         else setNavOpen(true);
       },
-      "Shift+J": () => open(stepTarget(model, current, 1, collapsed.isCollapsed)),
-      "Shift+K": () => open(stepTarget(model, current, -1, collapsed.isCollapsed)),
+      // Through the entries the pane shows: the hidden ones are passed by.
+      "Shift+J": () => open(stepTarget(shown, current, 1, collapsed.isCollapsed)),
+      "Shift+K": () => open(stepTarget(shown, current, -1, collapsed.isCollapsed)),
       "g a": () => open(view("unread")),
       "g s": () => open(view("starred")),
       "g e": () => open(nextEventCategory(model, current)),
