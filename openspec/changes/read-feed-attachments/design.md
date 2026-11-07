@@ -18,6 +18,7 @@
 - 一覧のサムネイル（#49、`grilling.md` のQ6）。
 - 再生と埋め込み。「埋め込みの枠は出さない」という決定を守る。
 - 変更の前に保存し、配信元のフィードからもう消えた記事の読み直し。
+- JSON Feedの `attachments` を読むこと。JSON Feedを足した変更（`add-json-feed`）が、読まないと決めている。JSON Feedの項目の添付は空のままにする。
 
 ## Decisions
 

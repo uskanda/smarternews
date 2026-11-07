@@ -1,8 +1,24 @@
-import type { Category, CategoryUpdate, Topic, TopicUpdate } from "@smarternews/core/api";
+import {
+  CATEGORY_NAME_MAX_CHARS,
+  IMPORTANCE_MAX,
+  IMPORTANCE_MIN,
+  MAX_ARTICLES_PER_RUN,
+  SCHEDULE_MAX_TIMES,
+  TOPIC_FEEDS_MAX,
+  TOPIC_QUERIES_MAX,
+  TOPIC_QUERY_MAX_CHARS,
+  TOPIC_TEXT_MAX_CHARS,
+  WINDOW_DAYS_MAX,
+  WINDOW_HOURS_MAX,
+  type Category,
+  type CategoryUpdate,
+  type Topic,
+  type TopicUpdate,
+} from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { ApiError } from "@smarternews/client";
+import { ApiError, checkText, checkTimes, checkWholeNumber, describeProblem, fieldMessage, linesOf } from "@smarternews/client";
 import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -10,15 +26,47 @@ import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
-import { KIND_LABEL, refusal } from "./SettingsPage.tsx";
+import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
+import { KIND_LABEL } from "./SettingsPage.tsx";
 import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
-const lines = (text: string) =>
-  text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+
+// The number fields of a category: their names and ranges, for the hints, the checks and the server's refusals.
+const SCHEDULE = { label: "実行時刻", formatHint: TIME_FORMAT_HINT };
+const MIN_IMPORTANCE = { label: "最低重要度", min: IMPORTANCE_MIN, max: IMPORTANCE_MAX };
+const MAX_ARTICLES = { label: "件数上限", min: 1, max: MAX_ARTICLES_PER_RUN };
+const WINDOW_DAYS = { label: "対象期間（今後の日数）", min: 1, max: WINDOW_DAYS_MAX };
+const WINDOW_HOURS = { label: "対象期間（時間）", min: 1, max: WINDOW_HOURS_MAX };
+
+// The fields of a topic.
+const TOPIC_TEXT = { label: "トピックの文章" };
+const NEW_TOPIC = { label: "新しいトピック" };
+const TOPIC_FEEDS = { label: "フィードのURL", formatHint: "https:// で始まるURLを書いてください。" };
+const TOPIC_QUERIES = { label: "検索語" };
+const TOPIC_LANGUAGE = { label: "検索の言語", formatHint: LANGUAGE_FORMAT_HINT };
+const TOPIC_REGION = { label: "検索の地域", formatHint: REGION_FORMAT_HINT };
+
+/** Why the feed URLs of a topic cannot be sent, or null. */
+function feedsProblem(feeds: string[]): string | null {
+  const isWebUrl = (url: string) => {
+    try {
+      return /^https?:$/.test(new URL(url).protocol);
+    } catch {
+      return false;
+    }
+  };
+  const wrong = feeds.findIndex((url) => !isWebUrl(url));
+  if (wrong >= 0) return describeProblem({ code: "format" }, TOPIC_FEEDS, wrong + 1);
+  return feeds.length > TOPIC_FEEDS_MAX ? describeProblem({ code: "too_big", maximum: TOPIC_FEEDS_MAX, unit: "items" }, TOPIC_FEEDS) : null;
+}
+
+/** Why the search words of a topic cannot be sent, or null. */
+function queriesProblem(queries: string[]): string | null {
+  const long = queries.findIndex((query) => query.length > TOPIC_QUERY_MAX_CHARS);
+  if (long >= 0) return describeProblem({ code: "too_big", maximum: TOPIC_QUERY_MAX_CHARS, unit: "chars" }, TOPIC_QUERIES, long + 1);
+  return queries.length > TOPIC_QUERIES_MAX ? describeProblem({ code: "too_big", maximum: TOPIC_QUERIES_MAX, unit: "items" }, TOPIC_QUERIES) : null;
+}
 
 function generalError(error: unknown) {
   return error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null;
@@ -40,18 +88,35 @@ function CategoryForm({ category }: { category: Category }) {
     enabled: category.enabled,
   };
   const [form, setForm] = useState(initial);
+  const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
   useUnsaved("カテゴリの設定", JSON.stringify(form) !== JSON.stringify(initial));
-  const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
+  const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
+    setForm({ ...form, [name]: event.target.value });
+    setProblems((shown) => ({ ...shown, [name]: undefined }));
+  };
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const schedule = checkTimes(form.schedule, { label: SCHEDULE.label, max: SCHEDULE_MAX_TIMES, formatHint: TIME_FORMAT_HINT });
+    const minImportance = checkWholeNumber(form.minImportance, MIN_IMPORTANCE);
+    const maxArticlesPerRun = checkWholeNumber(form.maxArticlesPerRun, MAX_ARTICLES);
+    const span = checkWholeNumber(form.window, isEvent ? WINDOW_DAYS : WINDOW_HOURS);
+    const found = problemsOf({
+      name: checkText(form.name, { label: "名前", max: CATEGORY_NAME_MAX_CHARS }),
+      schedule: schedule.ok ? null : schedule.message,
+      minImportance: minImportance.ok ? null : minImportance.message,
+      maxArticlesPerRun: maxArticlesPerRun.ok ? null : maxArticlesPerRun.message,
+      window: span.ok ? null : span.message,
+    });
+    setProblems(found ?? {});
+    if (found !== null || !schedule.ok || !minImportance.ok || !maxArticlesPerRun.ok || !span.ok) return;
     const patch: CategoryUpdate = {
       name: form.name,
-      schedule: form.schedule.split(/[\s,、]+/).filter((time) => time.length > 0),
-      minImportance: Number(form.minImportance),
-      maxArticlesPerRun: Number(form.maxArticlesPerRun),
-      ...(isEvent ? { windowDays: Number(form.window) } : { windowHours: Number(form.window) }),
+      schedule: schedule.value,
+      minImportance: minImportance.value,
+      maxArticlesPerRun: maxArticlesPerRun.value,
+      ...(isEvent ? { windowDays: span.value } : { windowHours: span.value }),
       enabled: form.enabled,
     };
     try {
@@ -65,9 +130,9 @@ function CategoryForm({ category }: { category: Category }) {
   }
 
   return (
-    <form onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
+    <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
       <div className="sm:col-span-2">
-        <Field label="名前" value={form.name} onChange={set("name")} error={refusal(error, "name")} />
+        <Field label="名前" value={form.name} onChange={set("name")} error={problems.name ?? fieldMessage(error, "name", "名前")} />
       </div>
       <dl className="flex gap-md type-body-md sm:col-span-2">
         <dt className="text-on-surface-muted">種別</dt>
@@ -75,51 +140,54 @@ function CategoryForm({ category }: { category: Category }) {
       </dl>
       <div className="sm:col-span-2">
         <Field
-          label="実行時刻"
+          label={SCHEDULE.label}
           value={form.schedule}
           onChange={set("schedule")}
-          error={refusal(error, "schedule")}
+          error={problems.schedule ?? fieldMessage(error, "schedule", SCHEDULE)}
           hint="24時間表記の時刻を、コンマで区切って並べます。例は 05:00, 12:00, 18:00。全体設定のタイムゾーンで実行します。"
         />
       </div>
       <Field
-        label="最低重要度"
+        label={MIN_IMPORTANCE.label}
         type="number"
-        min={1}
-        max={5}
+        min={MIN_IMPORTANCE.min}
+        max={MIN_IMPORTANCE.max}
         value={form.minImportance}
         onChange={set("minImportance")}
-        error={refusal(error, "minImportance")}
-        hint="1から5。これより低い話題は記事にしません。"
+        error={problems.minImportance ?? fieldMessage(error, "minImportance", MIN_IMPORTANCE)}
+        hint={`${MIN_IMPORTANCE.min}から${MIN_IMPORTANCE.max}。これより低い話題は記事にしません。`}
       />
       <Field
-        label="件数上限"
+        label={MAX_ARTICLES.label}
         type="number"
-        min={1}
+        min={MAX_ARTICLES.min}
+        max={MAX_ARTICLES.max}
         value={form.maxArticlesPerRun}
         onChange={set("maxArticlesPerRun")}
-        error={refusal(error, "maxArticlesPerRun")}
-        hint="1回の実行で新しく作る記事の数。"
+        error={problems.maxArticlesPerRun ?? fieldMessage(error, "maxArticlesPerRun", MAX_ARTICLES)}
+        hint={`1回の実行で新しく作る記事の数。${MAX_ARTICLES.min}から${MAX_ARTICLES.max}まで。`}
       />
       {isEvent ? (
         <Field
-          label="対象期間（今後の日数）"
+          label={WINDOW_DAYS.label}
           type="number"
-          min={1}
+          min={WINDOW_DAYS.min}
+          max={WINDOW_DAYS.max}
           value={form.window}
           onChange={set("window")}
-          error={refusal(error, "windowDays")}
-          hint="この日数以内に開催されるイベントを集めます。"
+          error={problems.window ?? fieldMessage(error, "windowDays", WINDOW_DAYS)}
+          hint={`この日数以内に開催されるイベントを集めます。${WINDOW_DAYS.min}から${WINDOW_DAYS.max}まで。`}
         />
       ) : (
         <Field
-          label="対象期間（時間）"
+          label={WINDOW_HOURS.label}
           type="number"
-          min={1}
+          min={WINDOW_HOURS.min}
+          max={WINDOW_HOURS.max}
           value={form.window}
           onChange={set("window")}
-          error={refusal(error, "windowHours")}
-          hint="この時間以内に公開されたページを集めます。"
+          error={problems.window ?? fieldMessage(error, "windowHours", WINDOW_HOURS)}
+          hint={`この時間以内に公開されたページを集めます。${WINDOW_HOURS.min}から${WINDOW_HOURS.max}まで。`}
         />
       )}
       <div className="flex items-end">
@@ -164,26 +232,39 @@ function TopicEditor({
     region: topic.search?.region ?? "",
   };
   const [form, setForm] = useState(initial);
+  const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
   const [closing, setClosing] = useState(false);
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   useUnsaved(`トピック『${topic.text}』の編集`, dirty);
-  const text = (name: "text" | "feeds" | "queries" | "language" | "region") => (event: { target: { value: string } }) =>
+  const text = (name: "text" | "feeds" | "queries" | "language" | "region") => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
+    setProblems((shown) => ({ ...shown, [name]: undefined }));
+  };
   // 閉じる reads like "save and close" to some, so changes are only dropped once the user says so.
   const close = () => (dirty ? setClosing(true) : onClose());
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const found = problemsOf({
+      text: checkText(form.text, { label: TOPIC_TEXT.label, max: TOPIC_TEXT_MAX_CHARS }),
+      feeds: feedsProblem(linesOf(form.feeds)),
+      queries: queriesProblem(linesOf(form.queries)),
+      // A search locale has both a language and a region, or neither.
+      language: form.region.trim() && !form.language.trim() ? describeProblem({ code: "required" }, TOPIC_LANGUAGE) : null,
+      region: form.language.trim() && !form.region.trim() ? describeProblem({ code: "required" }, TOPIC_REGION) : null,
+    });
+    setProblems(found ?? {});
+    if (found !== null) return;
     // Only what the user changed is sent: sending the sources marks them as chosen by the user for good.
     const patch: TopicUpdate = {};
     if (form.text !== initial.text) patch.text = form.text;
     if (form.enabled !== initial.enabled) patch.enabled = form.enabled;
     if (form.feeds !== initial.feeds || form.newsSearch !== initial.newsSearch || form.llmSearch !== initial.llmSearch) {
-      patch.sources = { feeds: lines(form.feeds), newsSearch: form.newsSearch, llmSearch: form.llmSearch };
+      patch.sources = { feeds: linesOf(form.feeds), newsSearch: form.newsSearch, llmSearch: form.llmSearch };
     }
-    if (form.queries !== initial.queries) patch.queries = lines(form.queries);
+    if (form.queries !== initial.queries) patch.queries = linesOf(form.queries);
     if (form.language !== initial.language || form.region !== initial.region) {
       patch.search = form.language.trim() || form.region.trim() ? { language: form.language.trim(), region: form.region.trim() } : null;
     }
@@ -209,16 +290,23 @@ function TopicEditor({
   }
 
   return (
-    <form onSubmit={save} className="flex flex-col gap-md pt-sm">
-      <Field label="トピックの文章" multiline autoFocus={focusText} value={form.text} onChange={text("text")} error={refusal(error, "text")} />
+    <form noValidate onSubmit={save} className="flex flex-col gap-md pt-sm">
+      <Field
+        label={TOPIC_TEXT.label}
+        multiline
+        autoFocus={focusText}
+        value={form.text}
+        onChange={text("text")}
+        error={problems.text ?? fieldMessage(error, "text", TOPIC_TEXT)}
+      />
       <Checkbox label="有効" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
       <Field
-        label="フィードのURL"
+        label={TOPIC_FEEDS.label}
         multiline
         rows={3}
         value={form.feeds}
         onChange={text("feeds")}
-        error={refusal(error, "sources.feeds")}
+        error={problems.feeds ?? fieldMessage(error, "sources.feeds", TOPIC_FEEDS)}
         hint="RSSまたはAtomのURLを、1行に1つ書きます。"
       />
       <div className="flex flex-col gap-xs">
@@ -236,17 +324,28 @@ function TopicEditor({
         )}
       </div>
       <Field
-        label="検索語"
+        label={TOPIC_QUERIES.label}
         multiline
         rows={3}
         value={form.queries}
         onChange={text("queries")}
-        error={refusal(error, "queries")}
+        error={problems.queries ?? fieldMessage(error, "queries", TOPIC_QUERIES)}
         hint="ニュース検索に使う語を、1行に1つ書きます。文章を変えると、次の実行で作り直されます。"
       />
       <div className="grid grid-cols-2 gap-md">
-        <Field label="検索の言語" value={form.language} onChange={text("language")} error={refusal(error, "search.language")} hint="空なら全体設定に従います。" />
-        <Field label="検索の地域" value={form.region} onChange={text("region")} error={refusal(error, "search.region")} />
+        <Field
+          label={TOPIC_LANGUAGE.label}
+          value={form.language}
+          onChange={text("language")}
+          error={problems.language ?? fieldMessage(error, "search.language", TOPIC_LANGUAGE)}
+          hint="空なら全体設定に従います。"
+        />
+        <Field
+          label={TOPIC_REGION.label}
+          value={form.region}
+          onChange={text("region")}
+          error={problems.region ?? fieldMessage(error, "search.region", TOPIC_REGION)}
+        />
       </div>
       {generalError(error)}
       <div className="flex flex-wrap gap-sm">
@@ -364,11 +463,15 @@ function Topics({ category }: { category: Category }) {
   const providers = useProviders().data;
   const canSearch = providers ? (providers.providers.find((provider) => provider.name === providers.tasks.search)?.webSearch ?? false) : true;
   const [text, setText] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   useUnsaved("新しいトピック", text.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(text, { label: NEW_TOPIC.label, max: TOPIC_TEXT_MAX_CHARS });
+    setProblem(found);
+    if (found !== null) return;
     try {
       await api.createTopic(category.id, { text });
       setText("");
@@ -389,8 +492,18 @@ function Topics({ category }: { category: Category }) {
       {topics.isError ? <ErrorNotice error={topics.error} onRetry={() => void topics.refetch()} /> : null}
       {topics.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">トピックはまだありません。</p> : null}
       <ul className="max-w-measure">{topics.data?.map((topic) => <TopicItem key={topic.id} topic={topic} canSearch={canSearch} />)}</ul>
-      <form onSubmit={add} className="flex max-w-measure flex-col gap-sm">
-        <Field label="新しいトピック" multiline rows={2} value={text} onChange={(event) => setText(event.target.value)} error={refusal(error, "text")} />
+      <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
+        <Field
+          label={NEW_TOPIC.label}
+          multiline
+          rows={2}
+          value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+            setProblem(null);
+          }}
+          error={problem ?? fieldMessage(error, "text", NEW_TOPIC)}
+        />
         {generalError(error)}
         <div>
           <Button type="submit" variant="primary" disabled={text.trim().length === 0}>

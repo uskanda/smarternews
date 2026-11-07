@@ -45,7 +45,7 @@ describe("subscribed feeds", () => {
     s.site.set(FEED, () => new Response("<html>hello</html>", { headers: { "content-type": "text/html" } }));
     const response = await s.post("/api/v1/feeds", { url: FEED });
     expect(response.status).toBe(400);
-    expect((await response.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/not a feed/) }]);
+    expect((await response.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/not a feed/), code: "unreachable" }]);
     expect(await (await s.get("/api/v1/feeds")).json()).toEqual([]);
   });
 
@@ -70,7 +70,9 @@ describe("subscribed feeds", () => {
     expect((await s.post("/api/v1/feeds", { url: FEED, categoryId: events.id })).status).toBe(400);
     const short = await s.post("/api/v1/feeds", { url: FEED, intervalMinutes: 1 });
     expect(short.status).toBe(400);
-    expect((await short.json()).error.fields).toEqual([{ path: "intervalMinutes", message: "must be between 5 and 1440 minutes" }]);
+    expect((await short.json()).error.fields).toEqual([
+      { path: "intervalMinutes", message: "must be between 5 and 1440 minutes", code: "too_small", minimum: 5, unit: "number" },
+    ]);
     expect((await s.post("/api/v1/feeds", { url: FEED, intervalMinutes: 1441 })).status).toBe(400);
   });
 
@@ -530,7 +532,7 @@ describe("web feeds", () => {
     s.site.set(ROBOTS, () => new Response("User-agent: *\nDisallow: /news", { status: 200 }));
     const forbidden = await s.post("/api/v1/feeds/page/candidates", { url: PAGE });
     expect(forbidden.status).toBe(400);
-    expect((await forbidden.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/robots\.txt forbids/) }]);
+    expect((await forbidden.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/robots\.txt forbids/), code: "unreachable" }]);
     expect(pageRequests(s)).toEqual([]);
 
     const missing = await s.post("/api/v1/feeds/page/candidates", { url: "https://other.example.org/none" });
@@ -549,7 +551,7 @@ describe("web feeds", () => {
     const before = s.site.requests.length;
     const invalid = await s.post("/api/v1/feeds/page/preview", { url: PAGE, selectors: { item: "div[" } });
     expect(invalid.status).toBe(400);
-    expect((await invalid.json()).error.fields).toEqual([{ path: "selectors.item", message: "not a CSS selector" }]);
+    expect((await invalid.json()).error.fields).toEqual([{ path: "selectors.item", message: "not a CSS selector", code: "format" }]);
     expect(s.site.requests.length).toBe(before);
   });
 
@@ -578,7 +580,7 @@ describe("web feeds", () => {
     const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
     const response = await s.patch(`/api/v1/feeds/${feed.id}`, { selectors: { item: "li" } });
     expect(response.status).toBe(400);
-    expect((await response.json()).error.fields).toEqual([{ path: "selectors", message: expect.stringMatching(/has no selectors/) }]);
+    expect((await response.json()).error.fields).toEqual([{ path: "selectors", message: expect.stringMatching(/has no selectors/), code: "not_allowed" }]);
     expect((await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).selectors).toBeNull();
   });
 

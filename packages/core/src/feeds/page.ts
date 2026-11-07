@@ -69,7 +69,7 @@ function select(root: PageDocument | PageElement, selector: string, field: keyof
     return all ? [...root.querySelectorAll(selector)] : root.querySelector(selector);
   } catch (error) {
     const message = `the ${FIELD_NAMES[field]} selector cannot be used: ${error instanceof Error ? error.message : String(error)}`;
-    throw new DomainError("invalid", message, [{ path: `selectors.${field}`, message }]);
+    throw new DomainError("invalid", message, [{ path: `selectors.${field}`, message, code: "format" }]);
   }
 }
 

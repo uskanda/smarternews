@@ -310,6 +310,102 @@ describe("parseSubscription with enclosures and Media RSS", () => {
     expect(parseSubscription(xml, "https://example.org/feed.xml").items[0]!.attachments[0]!.url).toBe("https://example.org/posts/a.mp3");
     expect(parseSubscription(xml).items[0]!.attachments).toEqual([]);
   });
+
+  it("leaves the attachments of a JSON Feed item unread", () => {
+    const json = JSON.stringify({
+      version: "https://jsonfeed.org/version/1.1",
+      title: "Example Cast",
+      items: [{ id: "ep-3", url: "https://example.org/cast/3", title: "Episode 3", attachments: [{ url: "https://cdn.example.org/ep3.m4a", mime_type: "audio/x-m4a" }] }],
+    });
+    expect(parseSubscription(json).items[0]).toMatchObject({ attachments: [], description: null });
+  });
+});
+
+const JSON_FEED = JSON.stringify({
+  version: "https://jsonfeed.org/version/1.1",
+  title: "Example JSON",
+  home_page_url: "https://example.org/blog/",
+  feed_url: "https://example.org/feed.json",
+  items: [
+    {
+      id: "post-2",
+      url: "https://example.org/blog/2?utm_source=feed",
+      title: "Second &amp; last",
+      summary: "A short summary.",
+      content_html: "<p>Full <b>body</b>.</p>",
+      date_published: "2026-03-01T09:00:00Z",
+      authors: [{ name: "Alex Writer" }],
+    },
+    {
+      id: "post-1",
+      external_url: "https://other.example.net/story",
+      title: "First",
+      content_text: "Line <one> & more\nsame paragraph\n\nNext paragraph",
+      date_modified: "2026-02-28T09:00:00Z",
+    },
+  ],
+});
+
+const JSON_FEED_1_0 = `
+  {"version": "https://jsonfeed.org/version/1", "title": "Old JSON", "home_page_url": "ftp://example.org/",
+   "author": {"name": "Feed Author"},
+   "items": [{"id": 42, "url": "https://example.org/42", "title": "Numbered", "content_html": "<p>Body</p>", "author": {"name": "Sam Editor"}}]}`;
+
+describe("JSON Feed", () => {
+  it("reads every field of a JSON Feed 1.1 for a subscription", () => {
+    const feed = parseSubscription(JSON_FEED);
+    expect(feed.title).toBe("Example JSON");
+    expect(feed.siteUrl).toBe("https://example.org/blog/");
+    expect(feed.items[0]).toEqual({
+      title: "Second & last",
+      url: "https://example.org/blog/2?utm_source=feed",
+      snippet: "A short summary.",
+      publishedAt: new Date("2026-03-01T09:00:00Z"),
+      key: "post-2",
+      author: "Alex Writer",
+      contentHtml: "<p>Full <b>body</b>.</p>",
+      attachments: [],
+      description: null,
+    });
+  });
+
+  it("falls back to the external URL, the modified time and the plain text", () => {
+    const item = parseSubscription(JSON_FEED).items[1]!;
+    expect(item).toMatchObject({
+      url: "https://other.example.net/story",
+      publishedAt: new Date("2026-02-28T09:00:00Z"),
+      snippet: "Line <one> & more same paragraph Next paragraph",
+      author: null,
+      contentHtml: "<p>Line &lt;one&gt; &amp; more<br>same paragraph</p><p>Next paragraph</p>",
+    });
+  });
+
+  it("reads the author and a numeric id of JSON Feed 1.0, and leaves out a site that is not a web address", () => {
+    const feed = parseSubscription(JSON_FEED_1_0);
+    expect(feed.siteUrl).toBeNull();
+    expect(feed.items[0]).toMatchObject({ key: "42", author: "Sam Editor", snippet: "Body" });
+  });
+
+  it("reads a JSON Feed for a topic", () => {
+    expect(parseFeed(JSON_FEED)).toEqual({
+      title: "Example JSON",
+      items: [
+        { title: "Second & last", url: "https://example.org/blog/2?utm_source=feed", snippet: "A short summary.", publishedAt: new Date("2026-03-01T09:00:00Z") },
+        {
+          title: "First",
+          url: "https://other.example.net/story",
+          snippet: "Line <one> & more same paragraph Next paragraph",
+          publishedAt: new Date("2026-02-28T09:00:00Z"),
+        },
+      ],
+    });
+  });
+
+  it("refuses JSON that does not say it is a JSON Feed", () => {
+    expect(() => parseSubscription(JSON.stringify({ title: "x", items: [] }))).toThrow(/not a feed/);
+    expect(() => parseFeed(JSON.stringify({ version: "2", items: [] }))).toThrow(/not a feed/);
+    expect(() => parseFeed("{ not json")).toThrow(/not a feed/);
+  });
 });
 
 describe("collectFeed", () => {
@@ -335,6 +431,15 @@ describe("collectFeed", () => {
   it("keeps every item when there is no window", async () => {
     const candidates = await collectFeed(fetcher({ "https://example.org/feed.xml": () => xml(RSS) }), "https://example.org/feed.xml", null);
     expect(candidates).toHaveLength(3);
+  });
+
+  it("turns the items of a JSON Feed into candidates", async () => {
+    const answer = () => new Response(JSON_FEED, { status: 200, headers: { "content-type": "application/feed+json" } });
+    const candidates = await collectFeed(fetcher({ "https://example.org/feed.json": answer }), "https://example.org/feed.json", null);
+    expect(candidates.map((candidate) => [candidate.url, candidate.siteName])).toEqual([
+      ["https://example.org/blog/2", "Example JSON"],
+      ["https://other.example.net/story", "Example JSON"],
+    ]);
   });
 
   it("fails when the feed answers with an error status", async () => {
