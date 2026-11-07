@@ -456,6 +456,52 @@ describe("reading an article", () => {
     renderApp({ server, route: `/f/${feed.id}/${delivered}` });
     await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "Feed post" });
     expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "トピック" })).not.toBeInTheDocument();
+    // Nor, on a feed article, the sources with the reasons they were chosen: no judgement chose them.
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "出典" })).not.toBeInTheDocument();
+  });
+
+  it("says under each source why it was chosen, and nothing under a source without a reason", async () => {
+    const server = makeServer();
+    const ref = (path: string, extra: { reason?: string | null; importance?: number | null }) => ({
+      url: `https://example.org/${path}`,
+      siteName: "Example",
+      title: `Source ${path}`,
+      publishedAt: null,
+      ...extra,
+    });
+    const id = insertArticle(server.db, {
+      categoryId: server.category().id,
+      kind: "news",
+      title: "Chosen story",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 4,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      previousArticleId: null,
+      refs: [
+        ref("judged", { reason: "A new flaw in a widely used library", importance: 4 }),
+        ref("plain", {}),
+        ref("markup", { reason: "Uses <b>bold</b> words", importance: null }),
+        ref("rated", { importance: 2 }),
+      ],
+      topicIds: [],
+    });
+    renderApp({ server, route: `/all/${id}` });
+
+    const sources = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "出典" });
+    const items = within(sources).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("重要度 4・A new flaw in a widely used library");
+    expect(items[1]!.querySelector("p")).toBeNull();
+    expect(items[1]).not.toHaveTextContent("重要度");
+    // A model wrote the reason: it is shown as plain words, never as markup.
+    expect(items[2]).toHaveTextContent("Uses <b>bold</b> words");
+    expect(items[2]).not.toHaveTextContent("重要度");
+    expect(items[2]!.querySelector("b")).toBeNull();
+    expect(items[3]!.querySelector("p")).toHaveTextContent(/^重要度 2$/);
   });
 
   it("says so when an article was written from snippets only", async () => {

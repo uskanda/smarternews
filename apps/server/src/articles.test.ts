@@ -149,11 +149,17 @@ describe("GET /api/v1/articles/:id", () => {
       snippetOnly: false,
       event: null,
       now: s.clock().toISOString(),
-      refs: [{ url: "https://example.org/second", siteName: "Example", title: "Second", publishedAt: null }],
+      refs: [{ url: "https://example.org/second", siteName: "Example", title: "Second", publishedAt: null, reason: "A patch for the flaw", importance: 4 }],
       topicIds: [],
     });
 
     const body = await (await s.get(`/api/v1/articles/${id}`)).json();
+
+    // Each reference carries why it was chosen; one stored without a reason gives null for both.
+    expect(body.refs).toMatchObject([
+      { url: "https://example.org/first", reason: null, importance: null },
+      { url: "https://example.org/second", reason: "A patch for the flaw", importance: 4 },
+    ]);
 
     expect(body).toMatchObject({
       id,

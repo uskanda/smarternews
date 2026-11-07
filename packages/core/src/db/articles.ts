@@ -143,13 +143,15 @@ function toSummary(row: Row): ArticleSummary {
 
 function refsOf(db: Database, articleId: number): ArticleRef[] {
   return db
-    .prepare("SELECT url, site_name, title, published_at FROM article_refs WHERE article_id = ? ORDER BY position, id")
+    .prepare("SELECT url, site_name, title, published_at, reason, importance FROM article_refs WHERE article_id = ? ORDER BY position, id")
     .all(articleId)
     .map((row) => ({
       url: str(row.url),
       siteName: str(row.site_name),
       title: str(row.title),
       publishedAt: strOrNull(row.published_at),
+      reason: strOrNull(row.reason),
+      importance: numOrNull(row.importance),
     }));
 }
 
@@ -249,15 +251,17 @@ export interface ArticleContent {
   event: EventFields | null;
 }
 
-export type NewRef = ArticleRef;
+/** A source to store. The reason and importance of its judgement may be left out, and are then stored as null. */
+export type NewRef = Omit<ArticleRef, "reason" | "importance"> & { reason?: string | null; importance?: number | null };
 
+/** Adds sources after the ones an article has. A URL it already has is skipped, so its first reason stays. */
 function addRefs(db: Database, articleId: number, refs: NewRef[]): void {
   let position = num(db.prepare("SELECT coalesce(max(position), -1) + 1 AS next FROM article_refs WHERE article_id = ?").get(articleId)!.next);
   const statement = db.prepare(
-    "INSERT OR IGNORE INTO article_refs (article_id, url, site_name, title, published_at, position) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO article_refs (article_id, url, site_name, title, published_at, reason, importance, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (const ref of refs) {
-    const result = statement.run(articleId, ref.url, ref.siteName, ref.title, ref.publishedAt, position);
+    const result = statement.run(articleId, ref.url, ref.siteName, ref.title, ref.publishedAt, ref.reason || null, ref.importance ?? null, position);
     if (num(result.changes) > 0) position += 1;
   }
 }

@@ -66,7 +66,11 @@ export interface PendingCandidate {
   snippet: string;
   siteName: string;
   publishedAt: string | null;
+  /** The importance for choosing stories: the judgement's, or 1 when it gave none. */
   importance: number;
+  /** Why the judgement found the candidate relevant, and the importance as it gave it; kept on the article's source. */
+  reason: string;
+  judgedImportance: number | null;
   topicIds: number[];
 }
 
@@ -90,6 +94,8 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
       siteName: str(row.site_name),
       publishedAt: strOrNull(row.published_at),
       importance: numOrNull(row.importance) ?? 1,
+      reason: str(row.reason),
+      judgedImportance: numOrNull(row.importance),
       topicIds: topicIdsOf(db, num(row.id)),
     }));
 }

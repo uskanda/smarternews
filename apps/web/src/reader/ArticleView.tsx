@@ -1,4 +1,4 @@
-import type { Article, ArticleTranslation } from "@smarternews/core/api";
+import type { Article, ArticleRef, ArticleTranslation } from "@smarternews/core/api";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
@@ -158,6 +158,16 @@ export interface ArticleNeighbors {
   next: ArticleNeighbor | null;
   /** Past the last article loaded while the list has more: loads the next page and opens its first article. */
   more: (() => void) | null;
+}
+
+/**
+ * Why the judgement chose a source of a generated article: its importance and its reason, on one quiet line.
+ * The reason is text a model wrote, so it is shown as plain words and never as markup.
+ */
+function SourceReason({ source }: { source: ArticleRef }) {
+  const parts = [source.importance === null ? null : `重要度 ${source.importance}`, source.reason].filter((part) => part);
+  if (parts.length === 0) return null;
+  return <p className="break-words type-label-sm text-on-surface-muted">{parts.join("・")}</p>;
 }
 
 const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline px-lg py-sm text-left";
@@ -447,6 +457,7 @@ export function ArticleView({
                   {ref.title || ref.url}
                 </a>
                 {ref.siteName ? <span className="pl-sm text-on-surface-muted">{ref.siteName}</span> : null}
+                <SourceReason source={ref} />
               </li>
             ))}
           </ul>
