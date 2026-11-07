@@ -242,6 +242,24 @@ export const topicTrialSchema = z.object({
 });
 export type TopicTrial = z.infer<typeof topicTrialSchema>;
 
+/** A new wording of a topic that the model proposes, and what it changed. */
+export const topicRewriteProposalSchema = z.object({
+  text: z.string(),
+  /** In the output language: what changed and why, and how the relevance test is likely to change. */
+  explanation: z.string(),
+});
+export type TopicRewriteProposal = z.infer<typeof topicRewriteProposalSchema>;
+
+/**
+ * The answer to a request for proposals: proposed, or not asked of the model because an allowance is used up
+ * or the topic is not interpreted. The list is empty unless proposed.
+ */
+export const topicRewriteResultSchema = z.object({
+  status: z.enum(["proposed", "limit", "day", "budget", "uninterpreted"]),
+  proposals: z.array(topicRewriteProposalSchema),
+});
+export type TopicRewriteResult = z.infer<typeof topicRewriteResultSchema>;
+
 // ---- articles ----------------------------------------------------------------------------------
 
 export const articleRefSchema = z.object({
@@ -1134,7 +1152,18 @@ export type RetrySkipped = z.infer<typeof retrySkippedSchema>;
 export const stopLimitSchema = z.enum(["run", "day", "budget"]);
 export type StopLimit = z.infer<typeof stopLimitSchema>;
 
-export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);
+export const taskNameSchema = z.enum([
+  "interpret",
+  "search",
+  "judge",
+  "cluster",
+  "write",
+  "summarize",
+  "translate",
+  "proposeSelectors",
+  "digest",
+  "proposeTopicRewrite",
+]);
 export type TaskName = z.infer<typeof taskNameSchema>;
 
 /**

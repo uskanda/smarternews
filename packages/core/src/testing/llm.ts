@@ -25,6 +25,7 @@ export function fakeLlm(
       selectorProposalsPerDay?: number;
       digestsPerDay?: number;
       topicTrialsPerDay?: number;
+      topicRewritesPerDay?: number;
     };
     timeZone?: string;
     timeoutMs?: number;

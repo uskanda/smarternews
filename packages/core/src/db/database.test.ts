@@ -595,7 +595,7 @@ describe("the migration to reason codes", () => {
 
   it("gives the kinds of the program's reasons to the rejected candidates, in either language, and none to the judge's", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "027")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "028")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const now = "2026-01-01T00:00:00.000Z";
@@ -619,7 +619,7 @@ describe("the migration to reason codes", () => {
     candidate.run("https://example.org/pending", "pending", "重要度が基準未満", now);
     expected.push({ url: "https://example.org/pending", reason_code: null });
 
-    copyFileSync(join(SHIPPED, "027_candidate_reason_code.sql"), join(dir, "027_candidate_reason_code.sql"));
+    copyFileSync(join(SHIPPED, "028_candidate_reason_code.sql"), join(dir, "028_candidate_reason_code.sql"));
     migrate(db, dir);
 
     expect(db.prepare("SELECT url, reason_code FROM candidates ORDER BY id").all()).toEqual(expected);
