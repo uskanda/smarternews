@@ -28,4 +28,4 @@
 ## 4. 全体の確認
 
 - [ ] 4.1 `make verify` を通す
-- [ ] 4.2 `openspec validate add-topic-stats --strict` を通す
+- [x] 4.2 `openspec validate add-topic-stats --strict` を通す
