@@ -1,7 +1,7 @@
 import type { Category, Feed, FeedStats, Settings } from "@smarternews/core/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { ApiError, conflictLabel, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -13,6 +13,7 @@ import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
+import { useScrollToHash } from "../ui/useScrollToHash.ts";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const RANGE = "5分から1440分（24時間）の範囲で入力してください。";
@@ -279,12 +280,27 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
   );
 }
 
-function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categories: Category[]; settings: Settings | undefined; timeZone: string }) {
+/** The id of a feed's row, which an address such as /settings/feeds#feed-12 names to open that row's form. */
+const rowId = (feedId: number) => `feed-${feedId}`;
+
+function FeedRow({
+  feed,
+  categories,
+  settings,
+  timeZone,
+  initiallyEditing = false,
+}: {
+  feed: Feed;
+  categories: Category[];
+  settings: Settings | undefined;
+  timeZone: string;
+  initiallyEditing?: boolean;
+}) {
   const { api } = useApp();
   const client = useQueryClient();
   const refresh = useRefresh();
   const toast = useToast();
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(initiallyEditing);
   const [confirming, setConfirming] = useState(false);
   const [fetching, setFetching] = useState(false);
   // When the form closes, the focus goes back to the button that opened it.
@@ -331,7 +347,7 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
   }
 
   return (
-    <li className="flex flex-col gap-xs border-b border-outline py-md type-body-md">
+    <li id={rowId(feed.id)} className="flex flex-col gap-xs border-b border-outline py-md type-body-md">
       <div className="flex flex-wrap items-baseline gap-x-lg gap-y-xs">
         <span className="type-label-md">{feed.title}</span>
         <span className="text-on-surface-muted">{categoryName}</span>
@@ -344,7 +360,10 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
       {editing ? (
         <EditFeed feed={feed} categories={categories} onDone={() => setEditing(false)} />
       ) : (
-        <div className="flex flex-wrap gap-sm pt-xs">
+        <div className="flex flex-wrap items-center gap-sm pt-xs">
+          <Link to={`/f/${feed.id}`} aria-label={`${feed.title}の記事の一覧`} className="tap text-primary underline underline-offset-4">
+            記事の一覧
+          </Link>
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>
@@ -548,6 +567,9 @@ export function FeedsPage() {
   const categories = useCategories().data ?? [];
   const settings = useSettings().data;
   const timeZone = useTimeZone();
+  // A row named in the address, as the settings dialog above a feed's list links to, starts with its form open.
+  const { hash } = useLocation();
+  useScrollToHash(feeds.data !== undefined);
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
@@ -568,7 +590,18 @@ export function FeedsPage() {
         {feeds.data && feeds.data.length > 0 ? (
           <Checkbox label="問題のある購読フィードを先頭に並べる" checked={problemsFirst} onChange={(event) => setProblemsFirst(event.target.checked)} />
         ) : null}
-        <ul>{listed?.map((feed) => <FeedRow key={feed.id} feed={feed} categories={categories} settings={settings} timeZone={timeZone} />)}</ul>
+        <ul>
+          {listed?.map((feed) => (
+            <FeedRow
+              key={feed.id}
+              feed={feed}
+              categories={categories}
+              settings={settings}
+              timeZone={timeZone}
+              initiallyEditing={hash === `#${rowId(feed.id)}`}
+            />
+          ))}
+        </ul>
       </section>
       {settings ? <BaseInterval settings={settings} /> : null}
       <TranslationUsage />

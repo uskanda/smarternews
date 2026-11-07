@@ -1,6 +1,7 @@
 import type { Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import { useApp } from "../app/context.ts";
 import { AutoSummarize, FetchFullContent, Translate } from "../settings/FeedSwitches.tsx";
 import { useToast } from "../shell/toast.tsx";
@@ -44,7 +45,11 @@ function FeedOptionsForm({ feed, onDone }: { feed: Feed; onDone: () => void }) {
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
       {error ? <ErrorNotice error={error} /> : null}
-      <div className="flex flex-wrap justify-end gap-sm">
+      <div className="flex flex-wrap items-center justify-end gap-sm">
+        {/* The rest of the feed's settings, in its form among the settings of feeds. What was switched here and not saved is dropped. */}
+        <Link to={`/settings/feeds#feed-${feed.id}`} onClick={onDone} className="tap mr-auto type-body-md text-primary underline underline-offset-4">
+          ほかの設定
+        </Link>
         <Button type="submit" variant="primary" disabled={busy}>
           保存する
         </Button>

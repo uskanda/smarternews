@@ -211,6 +211,59 @@ describe("the focus in the list of feeds", () => {
   });
 });
 
+describe("the way from a row to the feed's articles", () => {
+  it("leads from each row to the list of that feed", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    feedOf(server, "Slow");
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(await rowOf("Slow")).getByRole("link", { name: "Slowの記事の一覧" })).toHaveTextContent("記事の一覧");
+    await user.click(within(row).getByRole("link", { name: "Blogの記事の一覧" }));
+
+    await waitFor(() => expect(path()).toBe(`/f/${blog.id}`));
+  });
+
+  it("is not shown while the row's form is open", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+
+    expect(within(row).queryByRole("link", { name: "Blogの記事の一覧" })).not.toBeInTheDocument();
+  });
+});
+
+describe("a feed named in the address", () => {
+  it("opens that row's form with the focus in it, and scrolls to the row once the list is in", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const slow = feedOf(server, "Slow");
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderApp({ server, route: `/settings/feeds#feed-${slow.id}` });
+
+    const row = await rowOf("Slow");
+    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    expect(within(row).getByLabelText("名前")).toHaveValue("Slow");
+    expect(within(await rowOf("Blog")).queryByLabelText("名前")).not.toBeInTheDocument();
+    await waitFor(() => expect(scroll.mock.contexts).toContain(row));
+    scroll.mockRestore();
+  });
+
+  it("opens nothing for a feed that is not there", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    renderApp({ server, route: "/settings/feeds#feed-999" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).queryByLabelText("名前")).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Blogを編集" })).toBeInTheDocument();
+  });
+});
+
 describe("editing a feed", () => {
   it("saves the name, the category, the interval and the pause", async () => {
     const server = makeServer();
