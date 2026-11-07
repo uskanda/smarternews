@@ -142,6 +142,7 @@ export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize" | 
       unconfirmed: false,
       impact: null,
       event: null,
+      updateNote: null,
       mentions: [],
     };
   },

@@ -241,6 +241,7 @@ Fields of an article in the list:
 | `unconfirmed` | True when the sources are only rumours or unofficial |
 | `firstPublishedAt`, `updatedAt` | When the article was first written and last rewritten |
 | `revision` | How many times a follow-up rewrote it |
+| `updateNote` | One or two sentences on what the last rewrite by a follow-up added, in the output language. `null` for an article never rewritten, when the model gave none, after a rewrite whose writer did not read the earlier article (the same event found under another headline), and for a feed article |
 | `isRead`, `starred` | The reader's marks |
 | `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
 | `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
@@ -252,7 +253,7 @@ The detail adds these:
 | Field | Content |
 |---|---|
 | `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered (or, for an item without content, its Media RSS description), reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
-| `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
+| `refs` | Every source: `url`, `siteName`, `title`, `publishedAt`, `reason`, `importance` and `isNew`. `reason` and `importance` are what the judgement gave the source, `null` for a feed article and for older sources. `isNew` is true when a follow-up added the source after the reader last read the article before that follow-up; opening the article again keeps it. It is false in an article never read, for a source stored before the time sources were added was recorded, and in a feed article |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
 | `autoSummary` | The summary a model wrote of a feed article: `text`, `source` and `createdAt`. `source` is `page` when it was written from the article's page, and `feed` when that page could not be read and only what the feed delivered was used. `null` when there is no summary, and always for a generated article |
@@ -262,6 +263,7 @@ The detail adds these:
 | `sourceLanguage` | The language of the original as the translation API found it, such as `en`. `null` when a model translated or nothing did |
 | `translation` | The stored translation of the content, in the shape `POST /api/v1/articles/:id/translation` returns. `null` until the article is translated |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
+| `previousArticles` | The chain of earlier articles of the same story, newest first, at most 20: the article of `previousArticleId`, the article that one follows up, and so on. Each has `id`, `title` and `firstPublishedAt`. The chain ends where an article was deleted or where it comes back on itself. Empty without `previousArticleId` |
 | `otherFeeds` | The other feeds that delivered a feed article: one entry per copy recorded as its duplicate, with `articleId` (the copy), `feedId` and `feedTitle`, in the order the copies were stored. Empty for an article without duplicates |
 | `fullContent` | The full content of a feed article, taken from its page: `body` (Markdown), `bodyHtml` and `fetchedAt`. It comes apart from `body`, which stays what the feed delivered. `null` when there is none, and always for a generated article |
 | `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |

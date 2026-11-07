@@ -4,7 +4,7 @@
 
 ## 1. データベースとcore
 
-- [x] 1.1 migration 024で`article_refs`に`reason`と`importance`を足し、採用済みの候補から既存の出典を埋める。候補のない出典と、却下された候補しかない出典がNULLのままであることをテストで確かめる
+- [x] 1.1 migration 026で`article_refs`に`reason`と`importance`を足し、採用済みの候補から既存の出典を埋める。候補のない出典と、却下された候補しかない出典がNULLのままであることをテストで確かめる
 - [x] 1.2 `articleRefSchema`と`NewRef`に理由と重要度を足し、`addRefs`と`refsOf`で書き込みと読み出しをする。続報で同じURLを渡したとき、`reviseArticle`が最初の理由を残すことをテストで確かめる
 - [x] 1.3 `listPending`が理由と判定の重要度を返し、`writeStories`がそれを出典へ渡す。実行のテストで、書いた記事の出典に理由と重要度が入ることを確かめる
 

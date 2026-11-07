@@ -164,7 +164,7 @@ describe("the claude command adapter", () => {
 describe("the claude command adapter under the task runner", () => {
   it("receives the schema made from the wire schema of the write task, with the form of the names", async () => {
     const mentions = [{ name: "日本銀行", kind: "organization" }];
-    const answer = { title: "t", summary: "s", body: "b", unconfirmed: false, impact: null, event: null, mentions };
+    const answer = { title: "t", summary: "s", body: "b", unconfirmed: false, impact: null, event: null, mentions, updateNote: null };
     const { adapter, readLog } = fake({ FAKE_OUTPUT: success(answer) });
     const runner = runnerWith(adapter);
 
