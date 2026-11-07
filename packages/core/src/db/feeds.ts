@@ -178,11 +178,11 @@ export function checkFeedCategory(db: Database, categoryId: number | null | unde
   if (categoryId === null || categoryId === undefined) return;
   const category = findCategory(db, categoryId);
   if (!category) {
-    throw new DomainError("invalid", `category ${categoryId} does not exist`, [{ path: "categoryId", message: "no such category" }]);
+    throw new DomainError("invalid", `category ${categoryId} does not exist`, [{ path: "categoryId", message: "no such category", code: "no_such_item" }]);
   }
   if (category.kind !== "news") {
     throw new DomainError("invalid", `a feed cannot belong to the ${category.kind} category "${category.name}"`, [
-      { path: "categoryId", message: "must be a news category or none" },
+      { path: "categoryId", message: "must be a news category or none", code: "not_allowed" },
     ]);
   }
 }
@@ -224,7 +224,7 @@ export function moveFeed(db: Database, id: number, to: FeedMove): Feed {
   checkFeedCategory(db, to.categoryId);
   const others = feedIdsOf(db, to.categoryId).filter((other) => other !== id);
   if (to.before !== null && to.before !== id && !others.includes(to.before)) {
-    throw new DomainError("invalid", `feed ${to.before} is not in that category`, [{ path: "before", message: "not a feed of the target category" }]);
+    throw new DomainError("invalid", `feed ${to.before} is not in that category`, [{ path: "before", message: "not a feed of the target category", code: "no_such_item" }]);
   }
   if (to.before === id && to.categoryId === current.categoryId) return current;
   const at = to.before === null || to.before === id ? others.length : others.indexOf(to.before);
@@ -265,7 +265,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
   const format = input.format ?? "feed";
   checkSelectorsFit(format, input.selectors);
   if (format === "page" && input.selectors === undefined) {
-    throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors" }]);
+    throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors", code: "required" }]);
   }
   const now = clock().toISOString();
   const result = db
@@ -300,7 +300,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
 function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefined): void {
   if (format === "feed" && selectors !== undefined) {
     throw new DomainError("invalid", "this feed has no selectors: only a web feed takes them", [
-      { path: "selectors", message: "this feed has no selectors: only a web feed takes them" },
+      { path: "selectors", message: "this feed has no selectors: only a web feed takes them", code: "not_allowed" },
     ]);
   }
   if (selectors !== undefined) checkSelectorsUsable(selectors);

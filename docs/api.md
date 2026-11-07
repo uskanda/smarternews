@@ -26,8 +26,31 @@ RSS feeds use a separate, read-only token in the query string. The API rejects t
 An error response has this shape:
 
 ```json
-{ "error": { "code": "invalid_input", "message": "the input is invalid", "fields": [{ "path": "minImportance", "message": "Too big: expected number to be <=5" }] } }
+{ "error": { "code": "invalid_input", "message": "the input is invalid", "fields": [{ "path": "minImportance", "message": "Too big: expected number to be <=5", "code": "too_big", "maximum": 5, "unit": "number" }] } }
 ```
+
+Each entry of `fields` has `path` and `message`. The message is English and meant for logs and the CLI; a client words the problem from these optional fields instead:
+
+| Field | Meaning |
+|---|---|
+| `code` | The kind of problem, listed below. A client words an entry without a code, or with a code it does not know, as a value that cannot be saved |
+| `minimum`, `maximum` | The bound that `too_small` or `too_big` broke |
+| `unit` | What the bound counts: `chars` (characters of a text), `number` (the value itself) or `items` (entries of a list) |
+
+| `code` | Meaning |
+|---|---|
+| `required` | The value is missing, or of another type |
+| `too_small`, `too_big` | The value, its length or its number of entries is out of range |
+| `format` | The value is not in the expected form: a time that is not `HH:MM`, a URL, a regular expression or CSS selector that cannot be read, a number that is not whole |
+| `invalid_value` | The value is not one of the allowed values |
+| `custom` | Another rule of the schema |
+| `unknown_time_zone` | The time zone is not an IANA time zone name |
+| `no_such_item` | The value names a category, feed or term group that does not exist |
+| `not_allowed` | The value cannot be combined with the rest, such as a keep filter over everything or selectors for a feed |
+| `unreachable` | The URL could not be fetched or read as what it should be |
+| `no_items` | The selectors take no article out of the page |
+
+The element of a list is named by its index, such as `schedule.1` for the second time.
 
 | Status | `code` | Meaning |
 |---|---|---|
@@ -216,7 +239,7 @@ The detail adds these:
 
 | Field | Content |
 |---|---|
-| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered, reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
+| `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered (or, for an item without content, its Media RSS description), reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt` |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
@@ -233,6 +256,7 @@ The detail adds these:
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
 | `annotations` | The reader's annotations on the article: `note`, the note on the whole article or `null`, and `highlights`, the oldest first. See [Annotations](#annotations). The list does not have this field |
 | `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
+| `attachments` | The files the feed attached to a feed article (RSS enclosures, Media RSS contents and thumbnails), in the order the feed listed them: `url` (the original address), `kind` (`image`, `audio`, `video` or `other`), `mimeType`, `size` in bytes, `title`, `thumbnailOf` (for a thumbnail, the article's page; otherwise `null`) and `imageUrl` (for an image, its address on the image relay; otherwise `null`). They are not part of `body`. Empty for a generated article and for a feed article without attachments. The list does not have this field |
 
 ### Open times
 

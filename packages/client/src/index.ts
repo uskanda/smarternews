@@ -2,6 +2,7 @@
 // screen is drawn. Nothing here may import a UI library or a Node module.
 export * from "./annotations.ts";
 export * from "./api.ts";
+export * from "./attachments.ts";
 export * from "./connect.ts";
 export * from "./events.ts";
 export * from "./feed-state.ts";

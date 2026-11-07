@@ -449,7 +449,9 @@ describe("POST /api/v1/articles/mark-read with the articles a screen showed", ()
     const response = await s.post("/api/v1/articles/mark-read", { articles });
 
     expect(response.status).toBe(400);
-    expect((await response.json()).error.fields).toEqual([{ path: "articles", message: "too many articles: at most 500" }]);
+    expect((await response.json()).error.fields).toEqual([
+      { path: "articles", message: "too many articles: at most 500", code: "too_big", maximum: 500, unit: "items" },
+    ]);
     expect((await (await s.get(`/api/v1/articles/${id}`)).json()).isRead).toBe(false);
   });
 

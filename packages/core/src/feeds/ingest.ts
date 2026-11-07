@@ -26,11 +26,11 @@ import { PageFetcher } from "../fetch/pages.ts";
 import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
-import { convertContent } from "./content.ts";
+import { convertContent, convertDescription, type ConvertedContent } from "./content.ts";
 import { extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
-const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, */*";
+const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*";
 const SUMMARY_CHARS = 300;
 const KEY_CHARS = 500;
 /** A feed article is compared with what other feeds delivered within this many days. */
@@ -87,6 +87,20 @@ interface Prepared {
   body: string;
   text: string;
   publishedAt: Date | null;
+  /** The attachments as stored: JSON, or null for none. */
+  attachments: string | null;
+}
+
+/** The attachments of an item as the column stores them. */
+function storedAttachments(item: SubscriptionItem): string | null {
+  return item.attachments.length > 0 ? JSON.stringify(item.attachments) : null;
+}
+
+/** The content of an item, or its Media RSS description when the feed gives no content. */
+function contentOf(item: SubscriptionItem, baseUrl: string, language: string): ConvertedContent {
+  return item.description !== null && item.contentHtml.length === 0
+    ? convertDescription(item.description, baseUrl, language)
+    : convertContent(item.contentHtml, baseUrl, language);
 }
 
 function setReference(db: Database, articleId: number, url: string | null, feedTitle: string, title: string): void {
@@ -143,7 +157,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const stored = new Map(
     db
       .prepare(
-        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
+        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.attachments, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
                 (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
            FROM articles a WHERE a.feed_id = ?`,
       )
@@ -155,6 +169,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
      ON CONFLICT (feed_id, item_key) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
   );
   const rewrite = db.prepare("UPDATE articles SET title = ?, summary = ?, body = ?, content_text = ?, author = ? WHERE id = ?");
+  // Neither filters nor translations look at attachments: a change of them alone is no rewrite.
+  const reattach = db.prepare("UPDATE articles SET attachments = ? WHERE id = ?");
 
   const forgetTitle = db.prepare("UPDATE articles SET translated_title = NULL WHERE id = ?");
   // Only an article stored since duplicate removal exists has values to compare, and keeps having them.
@@ -179,10 +195,19 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     if (!known && item.publishedAt && item.publishedAt < cutoff) continue;
     if (!known && fresh.length >= MAX_NEW_ITEMS) continue;
 
-    const content = convertContent(item.contentHtml, url ?? feed.url, language);
+    const content = contentOf(item, url ?? feed.url, language);
     const title = item.title || summaryOf(content.text).slice(0, 80) || url || "";
     if (title.length === 0) continue;
-    const prepared: Prepared = { key, url, title, author: item.author, body: content.markdown, text: content.text, publishedAt: item.publishedAt };
+    const prepared: Prepared = {
+      key,
+      url,
+      title,
+      author: item.author,
+      body: content.markdown,
+      text: content.text,
+      publishedAt: item.publishedAt,
+      attachments: storedAttachments(item),
+    };
     if (!known) {
       fresh.push(prepared);
       continue;
@@ -200,6 +225,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       // The full content is what was translated when the article has one; it stays as it was.
       if (str(known.body) !== prepared.body && known.full_content_status !== "fetched") deleteArticleTranslation(db, id);
     }
+    if ((known.attachments ?? null) !== prepared.attachments) reattach.run(prepared.attachments, id);
     const moved = (known.url ?? null) !== url;
     if (moved || str(known.title) !== title) {
       setReference(db, id, url, feedTitle, title);
@@ -213,8 +239,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const insert = db.prepare(
     `INSERT INTO articles
        (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at,
-        created_at, dedup_url, dedup_title, duplicate_of)
-     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, dedup_url, dedup_title, duplicate_of, attachments)
+     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Lists show the highest id first among articles of the same time, so the first item of the document goes in last.
   for (const item of fresh.reverse()) {
@@ -239,6 +265,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
         compared.url,
         compared.title,
         kept,
+        item.attachments,
       ).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
@@ -257,7 +284,7 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   const response = await deps.fetcher.get(url, { headers });
   if (response.status === 304) return null;
   if (response.status < 200 || response.status >= 300) throw new Error(`HTTP status ${response.status}: ${url}`);
-  return { parsed: parseSubscription(response.text), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
+  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
 }
 
 /**
@@ -311,7 +338,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
 }
 
 function refuse(message: string): DomainError {
-  return new DomainError("invalid", message, [{ path: "url", message }]);
+  return new DomainError("invalid", message, [{ path: "url", message, code: "unreachable" }]);
 }
 
 async function firstFeed(deps: FeedDeps, url: string) {
@@ -330,7 +357,7 @@ async function firstPage(deps: FeedDeps, url: string, selectors: PageSelectors) 
   const extracted = extractPage(page.html, page.url, selectors, getSettings(deps.db).timeZone);
   if (extracted.items.length === 0) {
     const message = "no article could be taken out of the page with these selectors";
-    throw new DomainError("invalid", message, [{ path: "selectors.item", message }]);
+    throw new DomainError("invalid", message, [{ path: "selectors.item", message, code: "no_items" }]);
   }
   return { parsed: { title: extracted.title, siteUrl: page.url, items: extracted.items }, etag: undefined, lastModified: undefined };
 }

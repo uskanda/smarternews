@@ -19,8 +19,23 @@ describe("categories", () => {
     expect(response.status).toBe(400);
     const body = await response.json();
     expect(body.error.code).toBe("invalid_input");
-    expect(body.error.fields).toEqual([{ path: "minImportance", message: expect.stringMatching(/5/) }]);
+    expect(body.error.fields).toEqual([{ path: "minImportance", message: expect.stringMatching(/5/), code: "too_big", maximum: 5, unit: "number" }]);
     expect((await (await s.get(`/api/v1/categories/${category.id}`)).json()).name).toBe("Security");
+  });
+
+  it("names the kind of refusal and its bound, for the apps to say it in their own words", async () => {
+    const s = testServer();
+    const category = s.category();
+    const response = await s.patch(`/api/v1/categories/${category.id}`, { maxArticlesPerRun: 51 });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "maxArticlesPerRun", code: "too_big", maximum: 50, unit: "number" })]);
+  });
+
+  it("calls a time zone it does not know by its own kind", async () => {
+    const s = testServer();
+    const response = await s.patch("/api/v1/settings", { timeZone: "Mars/Olympus" });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "timeZone", code: "unknown_time_zone" })]);
   });
 
   it("answers 409 for a slug that is taken", async () => {
