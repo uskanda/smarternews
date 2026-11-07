@@ -26,6 +26,8 @@ export interface AppProps {
   now?: () => Date;
   /** Told the path and query after every navigation, for tests. */
   onLocation?: (path: string) => void;
+  /** Given a way to move through the history, as the browser's back button does, for tests. */
+  onHistory?: (go: (delta: number) => void) => void;
 }
 
 const routes: RouteObject[] = [
@@ -58,7 +60,7 @@ const routes: RouteObject[] = [
   },
 ];
 
-export function App({ fetchImpl, initialEntries, now, onLocation }: AppProps) {
+export function App({ fetchImpl, initialEntries, now, onLocation, onHistory }: AppProps) {
   const [token, setTokenState] = useState<string | null>(readToken);
   const tokenRef = useRef(token);
   const queryClient = useMemo(
@@ -91,6 +93,7 @@ export function App({ fetchImpl, initialEntries, now, onLocation }: AppProps) {
     if (!onLocation) return;
     return router.subscribe((state) => onLocation(`${state.location.pathname}${state.location.search}`));
   }, [router, onLocation]);
+  useEffect(() => onHistory?.((delta) => void router.navigate(delta)), [router, onHistory]);
 
   return (
     <AppContext value={services}>

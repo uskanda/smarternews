@@ -52,7 +52,7 @@ import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
-import { ArticleView } from "./ArticleView.tsx";
+import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
@@ -279,9 +279,46 @@ export function ReaderPage({ view }: { view: View }) {
   const [refreshes, setRefreshes] = useState(0);
   const listScroll = useRef<HTMLDivElement>(null);
   const listRows = useRef<HTMLUListElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+
+  // On a narrow screen the list goes away while an article is open. Where each list was scrolled to, and the
+  // article last opened from it, are kept here, so that going back, by the link or by the browser, finds both.
+  const positions = useRef(new Map<string, number>());
+  const [lastOpened, setLastOpened] = useState<{ key: string; id: number } | null>(null);
+  if (articleId !== null && (lastOpened === null || lastOpened.key !== listKey || lastOpened.id !== articleId)) setLastOpened({ key: listKey, id: articleId });
+  /** The article chosen in the list: the one open, or else the one last opened from this list. */
+  const current = articleId ?? (lastOpened?.key === listKey ? lastOpened.id : null);
+  const listShown = layout !== "narrow" || articleId === null;
+  const listWasShown = useRef(listShown);
+  // Back in the list: where it was left, with the article last read in view and the focus on it. This comes
+  // before the marking of what is scrolled past, so that the marking starts from the place put back and does
+  // not take the scroll that puts it back for the reader's own.
+  useLayoutEffect(() => {
+    const wasShown = listWasShown.current;
+    listWasShown.current = listShown;
+    if (wasShown || !listShown) return;
+    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
+    if (!pane) return;
+    const saved = positions.current.get(listKey);
+    if (saved !== undefined) pane.scrollTop = saved;
+    const link = pane.querySelector<HTMLElement>('[aria-current="true"]');
+    const row = link?.closest("li");
+    if (!link || !row) return;
+    const view = pane.getBoundingClientRect();
+    const box = row.getBoundingClientRect();
+    const height = pane.clientHeight || view.height;
+    const rowTop = box.top - view.top + pane.scrollTop;
+    const rowBottom = rowTop + box.height;
+    // Only as far as it takes: a row below comes in at the bottom edge, a row above at the top edge.
+    const to = followScroll({ top: pane.scrollTop, height, rowTop, rowBottom, step: rowBottom > pane.scrollTop + height ? -1 : 1 });
+    if (to !== null) pane.scrollTop = to;
+    link.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the list comes back, not when it changes
+  }, [listShown]);
+
   const readPatch = useReadPatch();
   const scrollReadChosen = useScrollRead();
-  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && (layout !== "narrow" || articleId === null);
+  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && listShown;
   const scrollRead = useScrollToRead({
     enabled: scrollReadOn,
     scrollRef: listScroll,
@@ -488,20 +525,38 @@ export function ReaderPage({ view }: { view: View }) {
   }, [sort]);
   const narrowing = searchSlug !== null ? `c:${searchSlug}` : searchFeedId !== undefined ? `f:${searchFeedId}` : "";
 
-  const index = items.findIndex((item) => item.id === articleId);
+  const index = current === null ? -1 : items.findIndex((item) => item.id === current);
   // A move with a key takes the list along; a click leaves it where the reader put it.
-  const root = useRef<HTMLDivElement>(null);
   const keyStep = useRef(0);
   // The focus goes along with a move with a key when it was in the list, so it stays on the row chosen.
   const keyFocus = useRef(false);
   const scrollingList = () => root.current?.querySelector<HTMLElement>("[data-list-scroll]");
-  const move = (step: number) => {
-    const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
-    if (!target) return;
+  const loadingMore = useRef(false);
+  const go = (id: number, step: number) => {
     keyStep.current = step;
     keyFocus.current = focusWithin(scrollingList());
     // Only the first article opened adds to the history; a run of keys after it would make back slow to leave.
-    void navigate(articlePath(target.id), { replace: articleId !== null });
+    void navigate(articlePath(id), { replace: articleId !== null });
+  };
+  /** Past the last article loaded, the next page is loaded first, and its first article opened. */
+  const moveOn = async () => {
+    if (loadingMore.current) return;
+    loadingMore.current = true;
+    try {
+      const result = await active.fetchNextPage();
+      const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
+      const first = pages.at(-1)?.items[0];
+      if (first) go(first.id, 1);
+    } finally {
+      loadingMore.current = false;
+    }
+  };
+  const move = (step: number) => {
+    if (loadingMore.current) return;
+    if (step > 0 && index !== -1 && index + step >= items.length && active.hasNextPage) return void moveOn();
+    const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
+    if (!target) return;
+    go(target.id, step);
   };
   useLayoutEffect(() => {
     const step = keyStep.current;
@@ -568,8 +623,20 @@ export function ReaderPage({ view }: { view: View }) {
     return <p className="p-xl type-body-md">この購読フィードはありません。</p>;
   }
 
-  const showList = layout !== "narrow" || articleId === null;
+  const showList = listShown;
   const showArticle = layout !== "narrow" || articleId !== null;
+  // On a narrow screen the list is out of sight: the end of the body leads to the articles beside this one.
+  const headline = (item: ArticleSummary) => item.translatedTitle ?? item.title;
+  const previousItem = items[index - 1];
+  const nextItem = items[index + 1];
+  const neighbors: ArticleNeighbors | null =
+    layout === "narrow" && articleId !== null && index !== -1
+      ? {
+          previous: previousItem ? { title: headline(previousItem), to: articlePath(previousItem.id) } : null,
+          next: nextItem ? { title: headline(nextItem), to: articlePath(nextItem.id) } : null,
+          more: !nextItem && active.hasNextPage ? () => move(1) : null,
+        }
+      : null;
   const title =
     view === "category"
       ? (category?.name ?? "")
@@ -592,7 +659,7 @@ export function ReaderPage({ view }: { view: View }) {
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
   ) : isEvents ? (
-    <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
+    <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
@@ -650,7 +717,12 @@ export function ReaderPage({ view }: { view: View }) {
       </header>
       {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
       {view === "feed" && feed ? <FeedStatusBanner feed={feed} /> : null}
-      <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={listScroll}
+        data-list-scroll
+        onScroll={(event) => positions.current.set(listKey, event.currentTarget.scrollTop)}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
@@ -666,7 +738,7 @@ export function ReaderPage({ view }: { view: View }) {
               key={item.id}
               article={item}
               to={articlePath(item.id)}
-              selected={item.id === articleId}
+              selected={item.id === current}
               sourceName={sourceName(item)}
               timeZone={timeZone}
               now={now()}
@@ -723,6 +795,7 @@ export function ReaderPage({ view }: { view: View }) {
               timeZone={timeZone}
               backTo={layout === "narrow" ? listPath : null}
               articlePath={articlePath}
+              neighbors={neighbors}
               onToggleStar={toggleStar}
               onToggleRead={(article) => setRead(article.id, !article.isRead)}
               fullContent={{

@@ -48,6 +48,9 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
   let path = options.route ?? "/";
+  let go: (delta: number) => void = () => {
+    throw new Error("The app has not rendered its router yet.");
+  };
   if (options.browserHistory) window.history.replaceState(null, "", path);
   const view = render(
     <App
@@ -61,6 +64,9 @@ export function renderApp(options: RenderOptions = {}) {
       onLocation={(next) => {
         path = next;
       }}
+      onHistory={(next) => {
+        go = next;
+      }}
     />,
   );
   return {
@@ -70,5 +76,9 @@ export function renderApp(options: RenderOptions = {}) {
     user: userEvent.setup(options.advanceTimers ? { advanceTimers: options.advanceTimers } : {}),
     /** The path and query the app is on now. */
     path: () => path,
+    /** Goes back one entry in the history, as the browser's back button does. */
+    back: async () => {
+      await act(async () => go(-1));
+    },
   };
 }

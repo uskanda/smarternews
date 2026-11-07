@@ -231,6 +231,71 @@ describe("narrowing and paging", () => {
   });
 });
 
+describe("moving past the last article loaded", () => {
+  /** 51 articles, listed newest first as "Story 51" down to "Story 1": the first page ends at Story 2. */
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const ids = articles(
+      server,
+      category.id,
+      Array.from({ length: 51 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    return { server, ids };
+  }
+
+  it("loads the next page with j and opens its first article", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    await user.keyboard("j");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+    expect(rowTitles()).toHaveLength(51);
+  });
+
+  it("does the same with Space at the end of the body", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+  });
+
+  it("does the same with 次の記事 on a narrow screen", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}`, width: 390 });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+
+    const moves = await screen.findByRole("navigation", { name: "記事の移動" });
+    await user.click(within(moves).getByRole("button", { name: /次の記事/ }));
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+  });
+
+  it("stays on the last article when there is nothing more", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[0]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 1" });
+    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+
+    await user.keyboard("j");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(path()).toBe(`/all/${ids[0]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+  });
+});
+
 describe("reading an article", () => {
   it("sets the article in one column of up to 52 characters, in the middle of its pane", async () => {
     const server = makeServer();
@@ -1599,6 +1664,33 @@ describe("marking read what the list is scrolled past", () => {
 
       await waitFor(() => expect(isRead(server, rows[0]!)).toBe(true), SENT);
     });
+  });
+
+  it("marks nothing read when the list is put back where it was on a narrow screen", async () => {
+    turnOn();
+    const { server, security, rows } = seeded();
+    layOut();
+    const { user } = renderApp({ server, route: "/c/security", width: 390 });
+    await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+    await scrollTo(0);
+    await scrollTo(2 * ROW);
+    await waitFor(() => expect(rows.slice(0, 2).map((id) => isRead(server, id))).toEqual([true, true]), SENT);
+
+    await user.click(within(list()).getByRole("link", { name: /Story 3/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 3" });
+    // Two articles arrive while the reader is in the article, and come in above the place the list was left at.
+    const fresh = articles(server, security.id, [{ title: "Fresh one" }, { title: "Fresh two" }]);
+    await user.keyboard("r");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+    await within(list()).findByRole("link", { name: /Fresh two/ });
+
+    expect(pane().scrollTop).toBe(2 * ROW);
+    // The scroll event a browser sends for the place put back; jsdom sends none by itself.
+    await scrollTo(2 * ROW);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(fresh.map((id) => isRead(server, id))).toEqual([false, false]);
+    expect(row(/Fresh two/)).toHaveAttribute("data-read", "false");
   });
 
   it("does not mark read in the recently read articles what was put back to unread there", async () => {
