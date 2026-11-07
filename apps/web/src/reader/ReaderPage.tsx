@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
+  type ArticleFlagChange,
   useArticle,
   useArticleFlags,
   useRecordOpened,
@@ -20,7 +21,7 @@ import {
 } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
-import { followScroll } from "../lib/follow.ts";
+import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
@@ -54,6 +55,7 @@ import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
+import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -175,7 +177,10 @@ export function ReaderPage({ view }: { view: View }) {
   const toast = useToast();
   const timeZone = useTimeZone();
   const settings = useSettings();
-  const flags = useArticleFlags();
+  // A failed change of flags is answered with what this render holds: the kept rows, the toast, sending again.
+  const flagFailed = useRef<(change: ArticleFlagChange) => void>(() => {});
+  const flagRetry = useRef<(change: ArticleFlagChange) => void>(() => {});
+  const flags = useArticleFlags((change) => flagFailed.current(change));
 
   const categories = useCategories();
   const feeds = useFeeds();
@@ -310,25 +315,55 @@ export function ReaderPage({ view }: { view: View }) {
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
-  function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
+  function setRead(id: number, isRead: boolean) {
     // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
-    if (!isRead) scrollRead.exclude(target.id);
-    const summary = items.find((item) => item.id === target.id);
+    if (!isRead) scrollRead.exclude(id);
+    const summary = items.find((item) => item.id === id);
     if ((unreadOnly || recentlyRead) && summary) {
       setKept((current) => ({
         key: listKey,
-        items: [...current.items.filter((item) => item.id !== target.id), { ...summary, isRead }],
+        items: [...current.items.filter((item) => item.id !== id), { ...summary, isRead }],
       }));
     }
-    flags.mutate({ id: target.id, isRead });
+    flags.mutate({ id, isRead });
   }
-  function toggleStar(target: { id: number; starred: boolean }) {
+  function setStar(id: number, starred: boolean) {
     setKept((current) => ({
       key: current.key,
-      items: current.items.map((item) => (item.id === target.id ? { ...item, starred: !target.starred } : item)),
+      items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)),
     }));
-    flags.mutate({ id: target.id, starred: !target.starred });
+    flags.mutate({ id, starred });
   }
+  function toggleStar(target: { id: number; starred: boolean }) {
+    setStar(target.id, !target.starred);
+  }
+  /** Sends a change of flags again, as the screen of now has it: a retry after a failure. */
+  function sendFlags({ id, isRead, starred }: ArticleFlagChange) {
+    if (isRead !== undefined) setRead(id, isRead);
+    if (starred !== undefined) setStar(id, starred);
+  }
+  flagFailed.current = (change) => {
+    const { id, isRead, starred } = change;
+    // The rows kept in an unread or recently read list are not in the cache, so they are put back here.
+    setKept((current) => ({
+      key: current.key,
+      items: current.items.map((item) =>
+        item.id === id
+          ? { ...item, ...(isRead !== undefined ? { isRead: !isRead } : {}), ...(starred !== undefined ? { starred: !starred } : {}) }
+          : item,
+      ),
+    }));
+    const message =
+      isRead !== undefined
+        ? isRead
+          ? "既読にできませんでした"
+          : "未読に戻せませんでした"
+        : starred
+          ? "スターを付けられませんでした"
+          : "スターを外せませんでした";
+    toast({ message, durationMs: 10_000, action: { label: "もう一度試す", run: () => flagRetry.current(change) } });
+  };
+  flagRetry.current = sendFlags;
 
   // Full content: the fetch is kept here, for the `w` key and the article pane alike. Which content is shown is
   // held for one visit to an article; choosing it again shows the full content.
@@ -347,7 +382,7 @@ export function ReaderPage({ view }: { view: View }) {
     autoMarked.current = opened.id;
     recordOpened(opened);
     if (opened.fullContentStatus === "waiting") fullContent.fetch(opened.id);
-    if (!opened.isRead) setRead(opened, true);
+    if (!opened.isRead) setRead(opened.id, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when another article is opened, not on every change
   }, [opened?.id]);
   useEffect(() => {
@@ -404,12 +439,19 @@ export function ReaderPage({ view }: { view: View }) {
         durationMs: 10_000,
         action: {
           label: "取り消す",
-          run: () => void api.markUnread(result.ids).then(refresh),
+          run: () => undoMarkAll(result.ids),
         },
       });
     } catch (error) {
       toast({ message: error instanceof Error ? "既読にできませんでした。もう一度試してください。" : "既読にできませんでした。" });
     }
+  }
+
+  /** Puts back to unread what marking everything read read; a failure says so and offers to send it again. */
+  function undoMarkAll(ids: number[]) {
+    void api.markUnread(ids).then(refresh, () =>
+      toast({ message: "既読を取り消せませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: () => undoMarkAll(ids) } }),
+    );
   }
 
   function toggleParam(name: "read" | "min" | "unread", value: string, on: boolean) {
@@ -450,18 +492,27 @@ export function ReaderPage({ view }: { view: View }) {
   // A move with a key takes the list along; a click leaves it where the reader put it.
   const root = useRef<HTMLDivElement>(null);
   const keyStep = useRef(0);
+  // The focus goes along with a move with a key when it was in the list, so it stays on the row chosen.
+  const keyFocus = useRef(false);
+  const scrollingList = () => root.current?.querySelector<HTMLElement>("[data-list-scroll]");
   const move = (step: number) => {
     const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
     if (!target) return;
     keyStep.current = step;
-    void navigate(articlePath(target.id));
+    keyFocus.current = focusWithin(scrollingList());
+    // Only the first article opened adds to the history; a run of keys after it would make back slow to leave.
+    void navigate(articlePath(target.id), { replace: articleId !== null });
   };
   useLayoutEffect(() => {
     const step = keyStep.current;
+    const focus = keyFocus.current;
     keyStep.current = 0;
-    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
-    const row = pane?.querySelector('[aria-current="true"]')?.closest("li");
-    if (step === 0 || !pane || !row) return;
+    keyFocus.current = false;
+    const pane = scrollingList();
+    const link = pane?.querySelector<HTMLElement>('[aria-current="true"]');
+    const row = link?.closest("li");
+    if (step === 0 || !pane || !link || !row) return;
+    if (focus) link.focus({ preventScroll: true });
     const view = pane.getBoundingClientRect();
     const box = row.getBoundingClientRect();
     const rowTop = box.top - view.top + pane.scrollTop;
@@ -499,7 +550,7 @@ export function ReaderPage({ view }: { view: View }) {
       r: refresh,
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
-      m: selected ? () => setRead(selected, !selected.isRead) : undefined,
+      m: selected ? () => setRead(selected.id, !selected.isRead) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
@@ -551,7 +602,7 @@ export function ReaderPage({ view }: { view: View }) {
           </h1>
           <div className="flex shrink-0 gap-sm">
             {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
-            <Button onClick={refresh}>更新</Button>
+            <Button onClick={refresh}>読み直す</Button>
           </div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
@@ -562,7 +613,7 @@ export function ReaderPage({ view }: { view: View }) {
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
           {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
-          {/* Beside the switches rather than beside 更新: a third button there leaves the list's name no room.
+          {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
@@ -597,6 +648,8 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
+      {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
+      {view === "feed" && feed ? <FeedStatusBanner feed={feed} /> : null}
       <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
@@ -671,7 +724,7 @@ export function ReaderPage({ view }: { view: View }) {
               backTo={layout === "narrow" ? listPath : null}
               articlePath={articlePath}
               onToggleStar={toggleStar}
-              onToggleRead={(article) => setRead(article, !article.isRead)}
+              onToggleRead={(article) => setRead(article.id, !article.isRead)}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),

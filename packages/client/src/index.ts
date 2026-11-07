@@ -4,6 +4,7 @@ export * from "./annotations.ts";
 export * from "./api.ts";
 export * from "./connect.ts";
 export * from "./events.ts";
+export * from "./feed-state.ts";
 export * from "./full-content.ts";
 export * from "./highlight.ts";
 export * from "./images.ts";

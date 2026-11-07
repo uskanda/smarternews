@@ -1,5 +1,5 @@
 import { applyInterpretation, createTopic, getCategory, getSettings, getTopic, insertFeed, listCategories, listTopics, updateCategory } from "@smarternews/core";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
@@ -137,7 +137,7 @@ describe("editing a category", () => {
     const schedule = await screen.findByLabelText("実行時刻");
     await first.user.clear(schedule);
     await first.user.type(schedule, "05:00, 12:00, 18:00");
-    await first.user.click(screen.getByRole("button", { name: "保存する" }));
+    await first.user.click(within(await section("カテゴリの設定")).getByRole("button", { name: "保存する" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("保存しました");
     expect(getCategory(server.db, category.id).schedule).toEqual(["05:00", "12:00", "18:00"]);
@@ -163,7 +163,7 @@ describe("editing a category", () => {
     const field = await screen.findByLabelText("最低重要度");
     await user.clear(field);
     await user.type(field, "9");
-    await user.click(screen.getByRole("button", { name: "保存する" }));
+    await user.click(within(await section("カテゴリの設定")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toHaveAccessibleDescription(/5/));
     expect(field).toBeInvalid();
@@ -179,6 +179,7 @@ describe("editing a category", () => {
     await user.click(within(screen.getByRole("navigation", { name: "項目" })).getByRole("link", { name: /^未読/ }));
 
     const dialog = await screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+    expect(dialog).toHaveTextContent("このまま移動すると、次の変更は保存されません：カテゴリの設定");
     await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
 
     expect(path()).toBe(`/settings/categories/${category.id}`);
@@ -259,6 +260,31 @@ describe("topics", () => {
     expect(item("ransomware")).toHaveTextContent("次の実行で解釈されます");
   });
 
+  it("opens the editor of the topic named in the hash, with the focus in its text, and leaves the others closed", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const target = topic(server, category.id, "ransomware");
+    renderApp({ server, route: `/settings/categories/${category.id}#topic-${target.id}` });
+
+    const text = await screen.findByLabelText("トピックの文章");
+    expect(text).toHaveValue("ransomware");
+    expect(text).toHaveFocus();
+    expect(text.closest("li")).toHaveAttribute("id", `topic-${target.id}`);
+    expect(screen.getAllByLabelText("トピックの文章")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "exploited flaws を編集" })).toBeInTheDocument();
+  });
+
+  it("opens no editor when the hash names a topic that is not there", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    renderApp({ server, route: `/settings/categories/${category.id}#topic-9999` });
+
+    expect(await screen.findByRole("button", { name: "exploited flaws を編集" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+  });
+
   it("adds a topic, says when it will be interpreted, offers to run now, and starts no run by itself", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -284,7 +310,7 @@ describe("topics", () => {
 
     await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
     await user.type(screen.getByLabelText("フィードのURL"), "https://example.org/feed.xml");
-    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getTopic(server.db, created.id).sources.feeds).toEqual(["https://example.org/feed.xml"]));
     expect(await screen.findByRole("status")).toHaveTextContent("保存しました");
@@ -300,7 +326,7 @@ describe("topics", () => {
     const text = screen.getByLabelText("トピックの文章");
     await user.clear(text);
     await user.type(text, "exploited flaws in routers");
-    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getTopic(server.db, created.id).interpreted).toBe(false));
     const item = (await within(await section("トピック")).findByText("exploited flaws in routers")).closest("li")!;
@@ -319,7 +345,7 @@ describe("topics", () => {
     await user.type(queries, "zero day{Enter}kev catalog");
     await user.type(screen.getByLabelText("検索の言語"), "en");
     await user.type(screen.getByLabelText("検索の地域"), "US");
-    await user.click(screen.getByRole("button", { name: "トピックを保存" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getTopic(server.db, created.id).queries).toEqual(["zero day", "kev catalog"]));
     expect(getTopic(server.db, created.id).search).toEqual({ language: "en", region: "US" });
@@ -349,6 +375,31 @@ describe("topics", () => {
     expect(screen.getByRole("checkbox", { name: "LLM検索" })).not.toHaveAccessibleDescription(/使われません/);
   });
 
+  it("moves the focus into the editor that opens, and back to the button when it closes", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
+    expect(screen.getByLabelText("トピックの文章")).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    expect(screen.getByRole("button", { name: "exploited flaws を編集" })).toHaveFocus();
+  });
+
+  it("returns the focus to the button after a topic is saved", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
+    await user.click(within(await section("トピック")).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "exploited flaws を編集" })).toHaveFocus());
+  });
+
   it("deletes a topic after confirmation and keeps the articles", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -372,7 +423,7 @@ describe("reader information and global settings", () => {
 
     const reader = await section("読み手情報");
     await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
-    await user.click(within(reader).getByRole("button", { name: "読み手情報を保存" }));
+    await user.click(within(reader).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
     expect(reader).toHaveTextContent("次の実行から");
@@ -388,7 +439,7 @@ describe("reader information and global settings", () => {
     await waitFor(() => expect(field).toHaveValue("UTC"));
     await user.clear(field);
     await user.type(field, "Mars/Olympus");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
     expect(field).toHaveAccessibleDescription(/IANA/);
@@ -404,7 +455,7 @@ describe("reader information and global settings", () => {
     await waitFor(() => expect(language).toHaveValue("ja"));
     await user.clear(language);
     await user.type(language, "en");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).outputLanguage).toBe("en"));
   });
@@ -420,7 +471,7 @@ describe("the times digests are made", () => {
     await waitFor(() => expect(field).toHaveValue(getSettings(server.db).digestSchedule.join(", ")));
     await user.clear(field);
     await user.type(field, "18:30, 06:30");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).digestSchedule).toEqual(["06:30", "18:30"]));
     await waitFor(() => expect(field).toHaveValue("06:30, 18:30"));
@@ -434,7 +485,7 @@ describe("the times digests are made", () => {
     const field = within(global).getByLabelText("ダイジェストを作る時刻");
     await waitFor(() => expect(field).not.toHaveValue(""));
     await user.clear(field);
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).digestSchedule).toEqual([]));
   });
@@ -449,7 +500,7 @@ describe("the times digests are made", () => {
     await waitFor(() => expect(field).not.toHaveValue(""));
     await user.clear(field);
     await user.type(field, "25:00");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
     expect(field).toHaveAccessibleDescription(/保存できません/);
@@ -466,7 +517,7 @@ describe("moving on after marking all as read", () => {
     const box = within(global).getByRole("checkbox", { name: "「すべて既読にする」のあと、未読のある次の項目へ移る" });
     expect(box).not.toBeChecked();
     await user.click(box);
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(getSettings(server.db).advanceAfterMarkAll).toBe(true));
   });
@@ -488,7 +539,7 @@ describe("duplicate removal", () => {
     const { user } = renderApp({ server, route: "/settings" });
     const global = await section("全体設定");
     await user.click(within(global).getByRole("checkbox", { name: label }));
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
     await waitFor(() => expect(getSettings(server.db).removeDuplicates).toBe(false));
   });
 });
@@ -523,6 +574,7 @@ describe("the settings file", () => {
     const settingsFile = await section("設定ファイル");
     await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
     await waitFor(() => expect(settingsFile).toHaveTextContent("カテゴリを2件作成"));
     expect(settingsFile).toHaveTextContent("トピックを1件作成");
@@ -537,9 +589,44 @@ describe("the settings file", () => {
     const settingsFile = await section("設定ファイル");
     await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
     await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
 
     expect(await within(settingsFile).findByRole("alert")).toHaveTextContent("categories.0.kind");
     expect(listCategories(server.db)).toEqual([]);
+  });
+
+  it("asks before loading, with the file's name and what loading overwrites", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const file = new File(["version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n"], "moved.yaml");
+
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "設定ファイルを読み込みますか" });
+    expect(dialog).toHaveTextContent("moved.yaml");
+    expect(dialog).toHaveTextContent("一致するカテゴリ、トピック、購読フィードを更新します");
+    expect(dialog).toHaveTextContent("読み手情報と全体設定を上書きします");
+    expect(dialog).toHaveTextContent("元に戻せません");
+    expect(dialog).toHaveTextContent("先に「書き出す」で控えを取れます");
+    expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus();
+    expect(listCategories(server.db)).toEqual([]);
+  });
+
+  it("loads nothing when the loading is called off", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const file = new File(["version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n"], "moved.yaml");
+
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(listCategories(server.db)).toEqual([]);
+    expect(settingsFile).not.toHaveTextContent("件作成");
   });
 
   it("explains that loading updates, creates and never deletes", async () => {
@@ -622,13 +709,36 @@ describe("qrPath", () => {
 });
 
 describe("the stored token", () => {
-  it("is removed on request, and the app asks for it again", async () => {
+  it("asks before it is removed, saying that it has to be entered again", async () => {
     const { user } = renderApp({ route: "/settings" });
 
     await user.click(await screen.findByRole("button", { name: "このブラウザーからトークンを消す" }));
 
+    const dialog = await screen.findByRole("alertdialog", { name: "トークンを消しますか" });
+    expect(dialog).toHaveTextContent("サーバーで表示したトークンをもう一度入力");
+    expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus();
+    expect(window.localStorage.getItem("smarternews.token")).not.toBeNull();
+  });
+
+  it("is removed once confirmed, and the app asks for it again", async () => {
+    const { user } = renderApp({ route: "/settings" });
+
+    await user.click(await screen.findByRole("button", { name: "このブラウザーからトークンを消す" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "消す" }));
+
     expect(await screen.findByLabelText("APIのトークン")).toBeInTheDocument();
     expect(window.localStorage.getItem("smarternews.token")).toBeNull();
+  });
+
+  it("stays when the removal is called off", async () => {
+    const { user } = renderApp({ route: "/settings" });
+
+    await user.click(await screen.findByRole("button", { name: "このブラウザーからトークンを消す" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(window.localStorage.getItem("smarternews.token")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "設定", level: 1 })).toBeInTheDocument();
   });
 });
 
@@ -762,7 +872,7 @@ describe("the days after which a feed counts as stale", () => {
     const field = within(global).getByLabelText(label);
     await user.clear(field);
     await user.type(field, "90");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
     await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(90));
 
     await user.click(await screen.findByRole("link", { name: "購読フィードを設定する" }));
@@ -776,9 +886,208 @@ describe("the days after which a feed counts as stale", () => {
     const field = within(global).getByLabelText(label);
     await user.clear(field);
     await user.type(field, "0");
-    await user.click(within(global).getByRole("button", { name: "全体設定を保存" }));
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
     expect(await within(global).findByText("1から365までの日数を入れてください。")).toBeInTheDocument();
     expect(field).toHaveAccessibleDescription(/1から365までの日数/);
     expect(getSettings(server.db).staleFeedDays).toBe(60);
+  });
+});
+
+describe("changes not saved yet", () => {
+  const pane = () => screen.getByRole("navigation", { name: "項目" });
+  const toUnread = (user: ReturnType<typeof renderApp>["user"]) => user.click(within(pane()).getByRole("link", { name: /^未読/ }));
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+  /** Whether the page asked the browser to confirm before a reload or closing the tab. */
+  const unloadStopped = () => !fireEvent(window, new Event("beforeunload", { cancelable: true }));
+
+  function withTopic() {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "ransomware", true);
+    return { server, category };
+  }
+
+  it("asks before leaving an edited topic for the left pane, names it, and keeps the text when the user stays", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("トピック『ransomware』の編集");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(screen.getByLabelText("トピックの文章")).toHaveValue("ransomware gangs");
+  });
+
+  it("asks before Shift+J leaves an edited topic", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard("{Shift>}J{/Shift}");
+
+    expect(await question()).toHaveTextContent("トピック『ransomware』の編集");
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+  });
+
+  it("names every part with changes", async () => {
+    const { server, category } = withTopic();
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("名前"), " and more");
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("カテゴリの設定");
+    expect(dialog).toHaveTextContent("トピック『ransomware』の編集");
+  });
+
+  it("closes an unchanged topic at once, and asks before closing a changed one", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("このトピックに加えた変更は保存されません。");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(screen.getByLabelText("トピックの文章")).toHaveValue("ransomware gangs");
+
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    await user.click(within(await question()).getByRole("button", { name: "破棄して閉じる" }));
+    await waitFor(() => expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument());
+    expect(getTopic(server.db, listTopics(server.db, category.id)[0]!.id).text).toBe("ransomware");
+
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks for a new topic being written, and not for one of spaces only", async () => {
+    const { server, category } = withTopic();
+    const first = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await first.user.type(await screen.findByLabelText("新しいトピック"), "supply chain");
+    await toUnread(first.user);
+    expect(await question()).toHaveTextContent("新しいトピック");
+    first.unmount();
+
+    const second = renderApp({ server, route: `/settings/categories/${category.id}` });
+    await second.user.type(await screen.findByLabelText("新しいトピック"), "   ");
+    await toUnread(second.user);
+    await waitFor(() => expect(second.path()).toBe("/unread"));
+  });
+
+  it("does not ask after the category is deleted", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("名前"), " and more");
+    await user.click(screen.getByRole("button", { name: "カテゴリを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+
+    await waitFor(() => expect(path()).toBe("/settings"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("asks for a category name being written, and opens the category once it is added", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    await user.type(await screen.findByLabelText("カテゴリの名前"), "Security");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("新しいカテゴリの名前");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(screen.getByRole("button", { name: "カテゴリを追加" }));
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(path()).toBe(`/settings/categories/${listCategories(server.db)[0]!.id}`);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("asks for the reader information, and not once it is saved", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    const reader = await section("読み手情報");
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("読み手情報");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(within(reader).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks for the global settings, and discards them when the user leaves", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    const field = within(await section("全体設定")).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(field).toHaveValue("UTC"));
+    await user.clear(field);
+    await user.type(field, "Asia/Tokyo");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("全体設定");
+    await user.click(within(dialog).getByRole("button", { name: "破棄して移動" }));
+
+    await waitFor(() => expect(path()).toBe("/unread"));
+    expect(getSettings(server.db).timeZone).toBe("UTC");
+  });
+
+  it("does not ask once the global settings are saved", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings" });
+
+    const global = await section("全体設定");
+    const language = within(global).getByLabelText("出力言語");
+    await waitFor(() => expect(language).toHaveValue("ja"));
+    await user.clear(language);
+    await user.type(language, "en");
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getSettings(server.db).outputLanguage).toBe("en"));
+
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("does not ask for the settings of this device", async () => {
+    const { user, path } = renderApp({ route: "/settings" });
+
+    await user.click(within(await screen.findByRole("radiogroup", { name: "配色" })).getByRole("radio", { name: "ダーク" }));
+    await user.click(screen.getByRole("checkbox", { name: "スクロールした記事を既読にする" }));
+    await toUnread(user);
+
+    await waitFor(() => expect(path()).toBe("/unread"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("has the browser confirm a reload or closing the tab only while something is not saved", async () => {
+    const { user } = renderApp({ route: "/settings" });
+    const reader = await section("読み手情報");
+    expect(unloadStopped()).toBe(false);
+
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    expect(unloadStopped()).toBe(true);
+
+    await user.clear(within(reader).getByLabelText("読み手情報"));
+    expect(unloadStopped()).toBe(false);
   });
 });

@@ -47,7 +47,7 @@ function FeedOptionsForm({ feed, onDone }: { feed: Feed; onDone: () => void }) {
       {error ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap items-center justify-end gap-sm">
         {/* The rest of the feed's settings, in its form among the settings of feeds. What was switched here and not saved is dropped. */}
-        <Link to={`/settings/feeds#feed-${feed.id}`} onClick={onDone} className="tap mr-auto type-body-md text-primary underline underline-offset-4">
+        <Link to={`/settings/feeds#feed-${feed.id}-edit`} onClick={onDone} className="tap mr-auto type-body-md text-primary underline underline-offset-4">
           ほかの設定
         </Link>
         <Button type="submit" variant="primary" disabled={busy}>
@@ -63,7 +63,7 @@ function FeedOptionsForm({ feed, onDone }: { feed: Feed; onDone: () => void }) {
 export function FeedOptionsDialog({ feed }: { feed: Feed }) {
   const [open, setOpen] = useState(false);
   return (
-    <FormDialog open={open} onOpenChange={setOpen} trigger={<Button>フィードの設定</Button>} title="フィードの設定">
+    <FormDialog open={open} onOpenChange={setOpen} trigger={<Button>購読フィードの設定</Button>} title="購読フィードの設定">
       <FeedOptionsForm feed={feed} onDone={() => setOpen(false)} />
     </FormDialog>
   );

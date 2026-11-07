@@ -7,6 +7,7 @@ import { useToast } from "../shell/toast.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Button, Field, messageFor } from "../ui/controls.tsx";
+import { useUnsaved } from "./unsaved.tsx";
 
 const SELECT = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 export const NO_CATEGORY = "";
@@ -74,6 +75,8 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
   const id = useId();
   const initialCategory = categoryId === null ? NO_CATEGORY : String(categoryId);
   const [url, setUrl] = useState("");
+  // Only on the page of feeds: the dialog above a category's list has no guard, and this does nothing there.
+  useUnsaved("購読フィードの追加", url.trim() !== "");
   const [category, setCategory] = useState(initialCategory);
   const [found, setFound] = useState<Array<{ url: string; title: string }> | null>(null);
   const [chosen, setChosen] = useState("");
@@ -266,7 +269,7 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
           </Button>
         ) : (
           <Button type="submit" variant="primary" disabled={busy || url.trim().length === 0}>
-            {found ? "選んだフィードを追加" : "フィードを追加"}
+            {found ? "選んだフィードを追加" : "購読フィードを追加"}
           </Button>
         )}
       </div>

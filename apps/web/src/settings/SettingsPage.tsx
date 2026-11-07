@@ -8,9 +8,11 @@ import { useApp } from "../app/context.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
+import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const TASK_LABEL = {
@@ -31,6 +33,11 @@ function daysOf(text: string): number | null {
   if (!/^\d+$/.test(text.trim())) return null;
   const value = Number(text.trim());
   return value >= 1 && value <= 365 ? value : null;
+}
+
+/** The times written in a field, separated by commas, 、 or spaces. */
+function timesOf(text: string): string[] {
+  return text.split(/[\s,、]+/).filter((time) => time.length > 0);
 }
 
 /** The reason the server gave for refusing a value, introduced in the app's own words. */
@@ -62,6 +69,8 @@ function Categories() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"news" | "event">("news");
   const [error, setError] = useState<unknown>(null);
+  const leave = useUnsavedLeaving();
+  useUnsaved("新しいカテゴリの名前", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -69,6 +78,8 @@ function Categories() {
       const created = await api.createCategory({ name, kind });
       await client.invalidateQueries({ queryKey: ["categories"] });
       void client.invalidateQueries({ queryKey: ["counts"] });
+      // The name is saved now, in the category this opens.
+      leave();
       void navigate(`/settings/categories/${created.id}`);
     } catch (caught) {
       setError(caught);
@@ -114,6 +125,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [text, setText] = useState(settings.readerInfo);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -141,7 +153,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
           <Button type="submit">
-            読み手情報を保存
+            保存する
           </Button>
         </div>
       </form>
@@ -167,6 +179,18 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   const [staleError, setStaleError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => setForm({ ...form, [name]: event.target.value });
+  // Compared the way they are saved, so that nothing is left to ask about once they are.
+  useUnsaved(
+    "全体設定",
+    form.outputLanguage.trim() !== settings.outputLanguage ||
+      form.timeZone.trim() !== settings.timeZone ||
+      form.language.trim() !== settings.search.language ||
+      form.region.trim() !== settings.search.region ||
+      timesOf(form.digestSchedule).join(",") !== settings.digestSchedule.join(",") ||
+      advance !== settings.advanceAfterMarkAll ||
+      removeDuplicates !== settings.removeDuplicates ||
+      staleDays.trim() !== String(settings.staleFeedDays),
+  );
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -183,7 +207,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         advanceAfterMarkAll: advance,
         removeDuplicates,
         staleFeedDays,
-        digestSchedule: form.digestSchedule.split(/[\s,、]+/).filter((time) => time.length > 0),
+        digestSchedule: timesOf(form.digestSchedule),
       });
       client.setQueryData(["settings"], saved);
       // The server puts the times in order and drops the same time given twice.
@@ -269,7 +293,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
           <Button type="submit">
-            全体設定を保存
+            保存する
           </Button>
         </div>
       </form>
@@ -335,6 +359,7 @@ function SettingsFile() {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [confirming, setConfirming] = useState(false);
 
   async function download() {
     try {
@@ -350,8 +375,13 @@ function SettingsFile() {
     }
   }
 
-  async function upload(event: FormEvent) {
+  function ask(event: FormEvent) {
     event.preventDefault();
+    if (file) setConfirming(true);
+  }
+
+  async function upload() {
+    setConfirming(false);
     if (!file) return;
     setResult(null);
     try {
@@ -376,7 +406,7 @@ function SettingsFile() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
+      <form onSubmit={ask} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込む設定ファイル
           <input
@@ -410,6 +440,26 @@ function SettingsFile() {
           ) : null}
         </div>
       ) : null}
+      <ConfirmDialog
+        open={confirming}
+        title="設定ファイルを読み込みますか"
+        onDismiss={() => setConfirming(false)}
+        actions={
+          <>
+            <Button variant="primary" onClick={() => void upload()}>
+              読み込む
+            </Button>
+            <Button onClick={() => setConfirming(false)}>やめる</Button>
+          </>
+        }
+      >
+        <p className="break-all">ファイル：{file?.name}</p>
+        <ul className="list-disc pl-lg">
+          <li>一致するカテゴリ、トピック、購読フィードを更新します。</li>
+          <li>ファイルにある読み手情報と全体設定を上書きします。</li>
+        </ul>
+        <p>読み込みは元に戻せません。先に「書き出す」で控えを取れます。</p>
+      </ConfirmDialog>
     </section>
   );
 }
@@ -554,12 +604,21 @@ function SectionLinks() {
 
 /** Everything that is configured rather than read: categories, the reader, global settings, the settings file. */
 export function SettingsPage() {
+  return (
+    <UnsavedGuard>
+      <SettingsSections />
+    </UnsavedGuard>
+  );
+}
+
+function SettingsSections() {
   const { clearToken } = useApp();
   const settings = useSettings();
   const providers = useProviders();
   // The reader and the global settings appear only once the settings are in, and the providers' section grows when
   // they are, so the page scrolls to the section the address names after both.
   useScrollToHash(!settings.isPending && !providers.isPending);
+  const [clearing, setClearing] = useState(false);
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-md border-b border-outline px-lg py-md md:px-2xl">
@@ -614,8 +673,23 @@ export function SettingsPage() {
           このブラウザーに保存したAPIのトークンを消します。次に開くとき、もう一度入力が必要になります。
         </p>
         <div>
-          <Button onClick={clearToken}>このブラウザーからトークンを消す</Button>
+          <Button onClick={() => setClearing(true)}>このブラウザーからトークンを消す</Button>
         </div>
+        <ConfirmDialog
+          open={clearing}
+          title="トークンを消しますか"
+          onDismiss={() => setClearing(false)}
+          actions={
+            <>
+              <Button variant="danger" onClick={clearToken}>
+                消す
+              </Button>
+              <Button onClick={() => setClearing(false)}>やめる</Button>
+            </>
+          }
+        >
+          <p>このブラウザーに保存したトークンを消します。次に開くとき、サーバーで表示したトークンをもう一度入力する必要があります。</p>
+        </ConfirmDialog>
         <ConnectCode />
       </section>
     </div>
