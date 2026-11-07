@@ -156,6 +156,11 @@ export const topicSchema = z.object({
   sourcesSetByUser: z.boolean(),
   search: searchLocaleSchema.nullable(),
   createdAt: z.string(),
+  /**
+   * How many misses of the topic's articles were marked after its last interpretation, which the next
+   * interpretation reads. Every miss counts for a topic interpreted before the time of interpretation was kept.
+   */
+  missesSinceInterpretation: z.number().int(),
 });
 export type Topic = z.infer<typeof topicSchema>;
 
@@ -489,6 +494,8 @@ export const articleSchema = articleSummarySchema.extend({
    * highlights, translations, search and filters never see them. Empty for a generated article.
    */
   attachments: z.array(articleAttachmentSchema),
+  /** True when the reader marked the generated article as a miss. Always false for a feed article. */
+  missed: z.boolean(),
 });
 export type Article = z.infer<typeof articleSchema>;
 
@@ -592,7 +599,16 @@ export const mentionArticlesQuerySchema = z.object({
 });
 export type MentionArticlesQuery = z.infer<typeof mentionArticlesQuerySchema>;
 
-export const articleUpdateSchema = z.object({ isRead: z.boolean().optional(), starred: z.boolean().optional() });
+export const articleUpdateSchema = z.object({
+  isRead: z.boolean().optional(),
+  starred: z.boolean().optional(),
+  /**
+   * Marks a generated article as a miss, which also marks it read, or takes the mark away, which leaves whether it
+   * is read as it is. `isRead` in the same request wins, so that an undo puts back how it was. Refused for a feed
+   * article.
+   */
+  missed: z.boolean().optional(),
+});
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
 
 export const markReadSchema = z.object({

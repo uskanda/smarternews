@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../config.ts";
-import { getTopic, updateTopic } from "../db/topics.ts";
+import { setArticleFlags } from "../db/articles.ts";
+import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 
@@ -39,6 +40,41 @@ describe("interpretation before a run", () => {
     expect(getTopic(h.db, broken.id).interpreted).toBe(false);
     expect(run.status).toBe("partial");
     expect(run.failures).toEqual([expect.objectContaining({ stage: "interpret", target: "Broken topic" })]);
+  });
+});
+
+describe("misses in the interpretation", () => {
+  async function missedTopic() {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Rust releases", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Rust conference tickets on sale", link: "https://example.org/tickets" }]);
+    await h.run();
+    const article = h.articles()[0]!;
+    setArticleFlags(h.db, article.id, { missed: true }, h.clock().toISOString());
+    return { h, topic, article };
+  }
+
+  it("passes the titles of the topic's misses to an interpretation the reader asked for", async () => {
+    const { h, topic, article } = await missedTopic();
+    expect(getTopic(h.db, topic.id).missesSinceInterpretation).toBe(1);
+    requestInterpretation(h.db, topic.id);
+
+    await h.run();
+
+    expect(h.requests.interpret).toHaveLength(1);
+    const prompt = h.requests.interpret[0]!.prompt;
+    expect(prompt).toContain(`<material>\n- ${article.title}\n</material>`);
+    expect(prompt).toMatch(/what to exclude/);
+    expect(getTopic(h.db, topic.id)).toMatchObject({ interpreted: true, missesSinceInterpretation: 0 });
+  });
+
+  it("does not interpret a topic again because of a miss", async () => {
+    const { h, topic } = await missedTopic();
+
+    await h.run();
+
+    expect(h.requests.interpret).toHaveLength(0);
+    expect(getTopic(h.db, topic.id).missesSinceInterpretation).toBe(1);
   });
 });
 

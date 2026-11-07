@@ -131,7 +131,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   "$API/api/v1/categories/1/topics"
 ```
 
-A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override.
+A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override. `missesSinceInterpretation` counts the [misses](#misses) of the topic's articles marked after its last interpretation; a topic interpreted before this count existed counts all of its misses.
 
 ## Articles
 
@@ -139,7 +139,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 |---|---|
 | `GET /api/v1/articles` | List articles |
 | `GET /api/v1/articles/:id` | Read one with body, references and topics |
-| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred` |
+| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, or mark a generated article as a miss with `missed` (see [Misses](#misses)) |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
@@ -257,6 +257,18 @@ The detail adds these:
 | `annotations` | The reader's annotations on the article: `note`, the note on the whole article or `null`, and `highlights`, the oldest first. See [Annotations](#annotations). The list does not have this field |
 | `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
 | `attachments` | The files the feed attached to a feed article (RSS enclosures, Media RSS contents and thumbnails), in the order the feed listed them: `url` (the original address), `kind` (`image`, `audio`, `video` or `other`), `mimeType`, `size` in bytes, `title`, `thumbnailOf` (for a thumbnail, the article's page; otherwise `null`) and `imageUrl` (for an image, its address on the image relay; otherwise `null`). They are not part of `body`. Empty for a generated article and for a feed article without attachments. The list does not have this field |
+| `missed` | True when the reader marked the generated article as a [miss](#misses). Always `false` for a feed article. The list does not have this field |
+
+### Misses
+
+A miss is the reader's mark on a generated article that should not have been made for its topics. `PATCH /api/v1/articles/:id` with `{"missed":true}` marks it and marks it read; marking it again keeps the first mark. `{"missed":false}` takes the mark away and leaves the read mark as it is. When the same request gives `isRead`, that wins, so an undo can send `{"missed":false,"isRead":false}` to put back an article that was unread. A feed article gets 400, with `missed` as the field and `not_allowed` as the code.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"missed":true}' "$API/api/v1/articles/1"
+```
+
+The server keeps each miss with the article's title and topics as they were when it was marked. The record stays when the article is deleted, and a miss does not keep the article from being deleted. Deleting a topic takes it off the misses; deleting a category deletes its misses. When a topic is interpreted, at the start of a run after it was created, after its text changed, or after `POST /api/v1/topics/:id/interpret`, the interpret task also reads the titles of the topic's misses of the last 90 days, the newest 20 at most, and writes into the criteria what to leave out. A miss never makes a topic be interpreted again by itself.
 
 ### Open times
 

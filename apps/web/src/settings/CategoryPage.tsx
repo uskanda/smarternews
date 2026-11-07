@@ -446,12 +446,52 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
       ) : (
         <p className="type-label-sm text-on-surface-muted">次の実行で解釈されます。検索語と判定基準は、そのとき作られます。</p>
       )}
+      <TopicMisses topic={topic} />
       {editing ? (
         <div ref={focus.region}>
           <TopicEditor topic={topic} canSearch={canSearch} focusText={focusText} onClose={close} />
         </div>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * How many articles of the topic were marked as misses after its last interpretation, and a way to interpret it
+ * again so that the criteria leave such articles out. Nothing while there are none.
+ */
+function TopicMisses({ topic }: { topic: Topic }) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const toast = useToast();
+  const [sending, setSending] = useState(false);
+  const count = topic.missesSinceInterpretation;
+  if (count === 0) return null;
+
+  async function interpret() {
+    setSending(true);
+    try {
+      await api.interpretTopic(topic.id);
+      await client.invalidateQueries({ queryKey: ["topics", topic.categoryId] });
+      toast({ message: "次の実行で解釈し直します。" });
+    } catch {
+      toast({ message: "解釈し直す予定を入れられませんでした。もう一度試してください。" });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return topic.interpreted ? (
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs">
+      <p className="type-label-sm text-on-surface-muted">
+        前の解釈のあとに、外れの印を付けた記事が{count}件あります。解釈し直すと、判定基準に反映されます。
+      </p>
+      <Button disabled={sending} onClick={() => void interpret()}>
+        解釈し直す
+      </Button>
+    </div>
+  ) : (
+    <p className="type-label-sm text-on-surface-muted">外れの印を付けた記事が{count}件あります。次の解釈で、判定基準に反映されます。</p>
   );
 }
 

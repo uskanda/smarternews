@@ -242,6 +242,8 @@ export function createApi(options: ApiOptions) {
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
+    /** Has the topic interpreted again before the next run of its category. */
+    interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>

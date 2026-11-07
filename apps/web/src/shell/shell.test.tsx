@@ -462,7 +462,8 @@ describe("keyboard", () => {
     expect(within(dialog).getByText("次の記事")).toBeInTheDocument();
     expect(within(dialog).getByText("スターの切り替え")).toBeInTheDocument();
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
+    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "x", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
+    expect(within(dialog).getByText("生成記事の外れの印の切り替え。付けると既読にする")).toBeInTheDocument();
     expect(within(dialog).getByText("「最近読んだ記事」へ移る")).toBeInTheDocument();
   });
 
