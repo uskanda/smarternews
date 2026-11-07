@@ -325,8 +325,8 @@
     overflow-wrap: anywhere;
   }
 
-  /* Images come with feed articles only. They never grow wider than the column of text. */
-  .article-body .article-image {
+  /* Images come with feed articles only, in the body and among the attachments. They never grow wider than the column of text. */
+  :is(.article-body, .attachment-list) .article-image {
     display: block;
     max-width: 100%;
     height: auto;
@@ -334,13 +334,18 @@
     border-radius: var(--radius-md);
   }
 
-  .article-body .article-image-pending {
+  /* The list sets the attachments apart by its own gaps. */
+  .attachment-list .article-image {
+    margin-block: 0;
+  }
+
+  :is(.article-body, .attachment-list) .article-image-pending {
     width: 100%;
     aspect-ratio: 16 / 9;
     background: var(--color-background);
   }
 
-  .article-body .article-image-missing {
+  :is(.article-body, .attachment-list) .article-image-missing {
     @apply type-label-sm;
     color: var(--color-on-surface-muted);
   }
