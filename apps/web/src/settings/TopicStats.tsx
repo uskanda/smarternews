@@ -1,10 +1,18 @@
-import { rankTopicStats, TOPIC_STATS_DAYS, type Category, type SourceKind, type TopicStatsEntry } from "@smarternews/core/api";
+import {
+  rankTopicStats,
+  TOPIC_STATS_DAYS,
+  type Category,
+  type SourceKind,
+  type TopicStatsCounts,
+  type TopicStatsEntry,
+} from "@smarternews/core/api";
 import { formatDay } from "@smarternews/client";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useTimeZone, useTopicStats } from "../api/queries.ts";
 import { topicEditPath } from "../lib/paths.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { TOPIC_VERSION_TRIGGER_LABEL } from "./TopicHistory.tsx";
 
 const LINK = "tap text-primary underline underline-offset-4";
 
@@ -19,7 +27,7 @@ function ofCreated(count: number, created: number): string {
   return created === 0 ? `${count}件` : `${count}/${created}件（${Math.round((count / created) * 100)}%）`;
 }
 
-function rowsOf(entry: TopicStatsEntry): Array<[string, string]> {
+function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
   const sources = (Object.keys(SOURCE_LABEL) as SourceKind[])
     .filter((kind) => entry.collected.bySource[kind] > 0)
     .map((kind) => `${SOURCE_LABEL[kind]} ${entry.collected.bySource[kind]}`);
@@ -41,8 +49,47 @@ function rowsOf(entry: TopicStatsEntry): Array<[string, string]> {
   ];
 }
 
+function StatsList({ counts, wide }: { counts: TopicStatsCounts; wide: boolean }) {
+  return (
+    <dl className={`grid grid-cols-[auto_1fr] gap-x-lg gap-y-xs type-label-sm ${wide ? "sm:grid-cols-[auto_1fr_auto_1fr]" : ""}`}>
+      {rowsOf(counts).map(([term, value]) => (
+        <div key={term} className="contents">
+          <dt className="text-on-surface-muted">{term}</dt>
+          <dd className="break-words tabular-nums">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** The counts before and after the topic's last change in the period, side by side, or one above the other when narrow. */
+function BeforeAfter({ entry, timeZone }: { entry: Required<Pick<TopicStatsEntry, "boundary" | "before" | "after">>; timeZone: string }) {
+  const day = formatDay(entry.boundary.at, timeZone).date;
+  return (
+    <div className="flex flex-col gap-xs">
+      <p className="type-label-sm text-on-surface-muted">
+        {day}の{TOPIC_VERSION_TRIGGER_LABEL[entry.boundary.trigger]}で分けています。
+      </p>
+      <div className="grid grid-cols-1 gap-md sm:grid-cols-2">
+        {(
+          [
+            [`変更前（${day}まで）`, entry.before],
+            [`変更後（${day}から）`, entry.after],
+          ] as const
+        ).map(([label, counts]) => (
+          <section key={label} aria-label={label} className="flex flex-col gap-xs">
+            <h3 className="type-label-md">{label}</h3>
+            <StatsList counts={counts} wide={false} />
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** One topic's row. A link to `#topic-stats-<id>` scrolls to it once the stats are in. */
 function TopicStatsRow({ entry, categoryId }: { entry: TopicStatsEntry; categoryId: number }) {
+  const timeZone = useTimeZone();
   const { hash } = useLocation();
   const anchor = `topic-stats-${entry.topicId}`;
   const targeted = hash === `#${anchor}`;
@@ -58,14 +105,11 @@ function TopicStatsRow({ entry, categoryId }: { entry: TopicStatsEntry; category
       {entry.collected.total === 0 ? (
         <p className="type-label-sm text-warning">直近{TOPIC_STATS_DAYS}日に集めた候補がありません。取得元と検索語を確かめてください。</p>
       ) : null}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-lg gap-y-xs type-label-sm sm:grid-cols-[auto_1fr_auto_1fr]">
-        {rowsOf(entry).map(([term, value]) => (
-          <div key={term} className="contents">
-            <dt className="text-on-surface-muted">{term}</dt>
-            <dd className="break-words tabular-nums">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      {entry.boundary && entry.before && entry.after ? (
+        <BeforeAfter entry={{ boundary: entry.boundary, before: entry.before, after: entry.after }} timeZone={timeZone} />
+      ) : (
+        <StatsList counts={entry} wide />
+      )}
     </li>
   );
 }
@@ -98,7 +142,7 @@ export function TopicStatsSection({ category }: { category: Category }) {
         ))}
       </ul>
       <p className="max-w-measure type-label-sm text-on-surface-muted">
-        候補は集めた日から、記事は作った日から{TOPIC_STATS_DAYS}日以内のものを数えます。開いた記事、スター、外れは、作った記事のうちの数です。「問題のあるトピックを先頭へ」は、候補のないトピック、外れの割合の大きいトピック、記事にならなかった候補の割合の大きいトピックの順に並べます。
+        候補は集めた日から、記事は作った日から{TOPIC_STATS_DAYS}日以内のものを数えます。開いた記事、スター、外れは、作った記事のうちの数です。期間の中でトピックを直したときは、最後に直した日の前と後に分けて並べます。外れは、記事を作った側に数えます。「問題のあるトピックを先頭へ」は、候補のないトピック、外れの割合の大きいトピック、記事にならなかった候補の割合の大きいトピックの順に並べます。
       </p>
     </section>
   );
