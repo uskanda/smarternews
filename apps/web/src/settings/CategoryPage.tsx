@@ -25,6 +25,8 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { CategoryHistory } from "./CategoryHistory.tsx";
+import { TopicHistory } from "./TopicHistory.tsx";
 import { TopicRewrite } from "./TopicRewrite.tsx";
 import { TopicStatsSection } from "./TopicStats.tsx";
 import { TopicTrialResults, useTopicTrial } from "./TopicTrial.tsx";
@@ -126,6 +128,7 @@ function CategoryForm({ category }: { category: Category }) {
     try {
       await api.updateCategory(category.id, patch);
       setError(null);
+      void client.invalidateQueries({ queryKey: ["category-versions", category.id] });
       await client.invalidateQueries({ queryKey: ["categories"] });
       toast({ message: "保存しました" });
     } catch (caught) {
@@ -209,9 +212,10 @@ function CategoryForm({ category }: { category: Category }) {
 
 // ---- topics ------------------------------------------------------------------------------------
 
-/** After a topic of the category was added, changed or removed: its list and its stats are stale. */
+/** After a topic of the category was added, changed or removed: its list, its stats and its versions are stale. */
 async function refreshTopics(client: QueryClient, categoryId: number): Promise<void> {
   void client.invalidateQueries({ queryKey: ["topic-stats", categoryId] });
+  void client.invalidateQueries({ queryKey: ["topic-versions"] });
   await client.invalidateQueries({ queryKey: ["topics", categoryId] });
 }
 
@@ -220,12 +224,15 @@ function TopicEditor({
   canSearch,
   focusText = false,
   onClose,
+  onRestored,
 }: {
   topic: Topic;
   canSearch: boolean;
   /** Puts the focus in the text when the editor opens: when a link to the topic opened it. */
   focusText?: boolean;
   onClose: () => void;
+  /** The topic went back to a version: the editor is to start again from the values the server answered. */
+  onRestored: (topic: Topic) => void;
 }) {
   const { api } = useApp();
   const client = useQueryClient();
@@ -393,6 +400,7 @@ function TopicEditor({
           setProblems((shown) => ({ ...shown, text: undefined }));
         }}
       />
+      <TopicHistory topicId={topic.id} categoryId={topic.categoryId} dirty={dirty} onRestored={onRestored} />
       <ConfirmDialog
         open={closing}
         title="保存していない変更があります"
@@ -450,9 +458,13 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
   useEffect(() => {
     if (targeted) item.current?.scrollIntoView?.({ block: "start" });
   }, [targeted]);
+  // Going back to a version gives the topic new values; the editor starts again from them. The list of topics
+  // catches up a moment later, so the editor takes them from the server's answer until it closes.
+  const [restored, setRestored] = useState<Topic | null>(null);
   const close = () => {
     setEditing(false);
     setFocusText(false);
+    setRestored(null);
   };
   const focus = useInlineEditFocus(editing);
   const sources = [
@@ -487,7 +499,18 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
       <TopicMisses topic={topic} />
       {editing ? (
         <div ref={focus.region}>
-          <TopicEditor topic={topic} canSearch={canSearch} focusText={focusText} onClose={close} />
+          <TopicEditor
+            key={restored ? `restored:${restored.id}:${JSON.stringify(restored)}` : "topic"}
+            topic={restored ?? topic}
+            canSearch={canSearch}
+            focusText={focusText}
+            onClose={close}
+            onRestored={(next) => {
+              // The button that went back is gone with the old editor; the focus goes to the restored text.
+              setFocusText(true);
+              setRestored(next);
+            }}
+          />
         </div>
       ) : null}
     </li>
@@ -735,6 +758,7 @@ export function CategoryPage() {
         </header>
         <section aria-label="カテゴリの設定" className={SECTION}>
           <CategoryForm key={`${category.id}:${JSON.stringify(category)}`} category={category} />
+          <CategoryHistory categoryId={category.id} />
         </section>
         <Topics category={category} />
         <TopicStatsSection category={category} />

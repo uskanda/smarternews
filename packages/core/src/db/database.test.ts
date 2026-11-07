@@ -1137,6 +1137,77 @@ describe("the migration to mentions", () => {
   });
 });
 
+describe("the migration to versions", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives every topic and category a first version with its current values, at the time it was made", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "030")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at)
+       VALUES (1, 'sec', 'Security', 'news', '[]', 4, 7, '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO topics (id, category_id, text, interpreted, queries, criteria, feeds, news_search, llm_search, search_language, search_region, created_at)
+       VALUES (3, 1, 'Rust', 1, '["rust"]', 'releases', '["https://example.org/feed"]', 1, 0, 'en', 'US', '2026-01-02T00:00:00.000Z'),
+              (4, 1, 'Go', 0, '[]', '', '[]', 0, 0, NULL, NULL, '2026-01-03T00:00:00.000Z')`,
+    ).run();
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("030"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(
+      db
+        .prepare(
+          `SELECT topic_id, created_at, trigger, restored_from, text, interpreted, queries, criteria, feeds, news_search, llm_search,
+                  search_language, search_region FROM topic_versions ORDER BY topic_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        topic_id: 3,
+        created_at: "2026-01-02T00:00:00.000Z",
+        trigger: "created",
+        restored_from: null,
+        text: "Rust",
+        interpreted: 1,
+        queries: '["rust"]',
+        criteria: "releases",
+        feeds: '["https://example.org/feed"]',
+        news_search: 1,
+        llm_search: 0,
+        search_language: "en",
+        search_region: "US",
+      },
+      {
+        topic_id: 4,
+        created_at: "2026-01-03T00:00:00.000Z",
+        trigger: "created",
+        restored_from: null,
+        text: "Go",
+        interpreted: 0,
+        queries: "[]",
+        criteria: "",
+        feeds: "[]",
+        news_search: 0,
+        llm_search: 0,
+        search_language: null,
+        search_region: null,
+      },
+    ]);
+    expect(db.prepare("SELECT category_id, created_at, trigger, min_importance, max_articles_per_run FROM category_versions").all()).toEqual([
+      { category_id: 1, created_at: "2026-01-01T00:00:00.000Z", trigger: "created", min_importance: 4, max_articles_per_run: 7 },
+    ]);
+
+    db.prepare("DELETE FROM categories WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM topic_versions").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM category_versions").get()).toEqual({ n: 0 });
+  });
+});
+
 describe("the migration to web feeds", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 

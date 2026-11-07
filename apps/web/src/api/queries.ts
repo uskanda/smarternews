@@ -385,6 +385,18 @@ export function useTopicStats(categoryId: number) {
   return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
 }
 
+/** The versions of a topic, newest first. Stale once the topic is saved or goes back to a version. */
+export function useTopicVersions(topicId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["topic-versions", topicId], queryFn: () => api.topicVersions(topicId) });
+}
+
+/** The minimum importance and limit of articles of a category each time they changed. Stale once the category is saved. */
+export function useCategoryVersions(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["category-versions", categoryId], queryFn: () => api.categoryVersions(categoryId) });
+}
+
 export function useProviders() {
   const { api } = useApp();
   return useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), refetchInterval: REFRESH_MS });

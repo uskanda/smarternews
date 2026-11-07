@@ -65,6 +65,9 @@ import {
   listFilterArticles,
   listRuns,
   listTopics,
+  listCategoryVersions,
+  listTopicVersions,
+  restoreTopicVersion,
   markArticlesRead,
   moveCategory,
   moveFeed,
@@ -290,8 +293,9 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/categories", async (c) => c.json(createCategory(db, parse(categoryCreateSchema, await jsonBody(c)), clock), 201));
   api.get("/categories/:id", (c) => c.json(getCategory(db, idParam(c, "category"))));
   api.patch("/categories/:id", async (c) =>
-    c.json(updateCategory(db, idParam(c, "category"), parse(categoryUpdateSchema, await jsonBody(c)))),
+    c.json(updateCategory(db, idParam(c, "category"), parse(categoryUpdateSchema, await jsonBody(c)), clock)),
   );
+  api.get("/categories/:id/versions", (c) => c.json(listCategoryVersions(db, idParam(c, "category"))));
   api.post("/categories/:id/move", async (c) =>
     c.json(moveCategory(db, idParam(c, "category"), parse(categoryMoveSchema, await jsonBody(c)).before)),
   );
@@ -310,7 +314,12 @@ export function createApp(deps: AppDeps): Hono {
     c.json(createTopic(db, idParam(c, "category"), parse(topicCreateSchema, await jsonBody(c)), clock), 201),
   );
   api.get("/topics/:id", (c) => c.json(getTopic(db, idParam(c, "topic"))));
-  api.patch("/topics/:id", async (c) => c.json(updateTopic(db, idParam(c, "topic"), parse(topicUpdateSchema, await jsonBody(c)))));
+  api.patch("/topics/:id", async (c) => c.json(updateTopic(db, idParam(c, "topic"), parse(topicUpdateSchema, await jsonBody(c)), clock)));
+  // The versions of a topic, and going back to one. Nothing asks a model: an interpreted version stays interpreted.
+  api.get("/topics/:id/versions", (c) => c.json(listTopicVersions(db, idParam(c, "topic"))));
+  api.post("/topics/:id/versions/:versionId/restore", (c) =>
+    c.json(restoreTopicVersion(db, idParam(c, "topic"), idParam(c, "topic version", "versionId"), clock)),
+  );
   api.delete("/topics/:id", (c) => {
     deleteTopic(db, idParam(c, "topic"));
     return c.body(null, 204);

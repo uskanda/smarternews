@@ -3,6 +3,7 @@ import { parseConfig } from "../config.ts";
 import { setArticleFlags } from "../db/articles.ts";
 import { listSearchAttempts } from "../db/search-attempts.ts";
 import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
+import { listTopicVersions } from "../db/versions.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 
@@ -24,6 +25,21 @@ describe("interpretation before a run", () => {
     expect(getTopic(h.db, topic.id)).toMatchObject({ interpreted: true, sources: { newsSearch: true, llmSearch: false } });
     expect(h.articles().map((article) => article.title)).toEqual(["Rust 2.0 is out"]);
     expect(h.requests.judge[0]!.prompt).toContain("official releases only");
+  });
+
+  it("keeps the interpretation as a version of the topic, made at the time of the run", async () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Rust releases", { interpreted: false });
+    h.handlers.interpret = () => ({ queries: ["rust"], criteria: "official releases only", suggestedSources: { newsSearch: true, llmSearch: false } });
+
+    await h.run();
+
+    expect(listTopicVersions(h.db, topic.id)[0]).toMatchObject({
+      trigger: "interpreted",
+      createdAt: h.clock().toISOString(),
+      interpreted: true,
+      criteria: "official releases only",
+    });
   });
 
   it("skips a topic whose interpretation fails and still processes the others", async () => {
