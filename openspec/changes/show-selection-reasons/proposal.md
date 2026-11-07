@@ -25,7 +25,7 @@
 
 ## Impact
 
-- `packages/core/src/db/migrations/023_ref_reasons.sql`（新規）
+- `packages/core/src/db/migrations/024_ref_reasons.sql`（新規）
 - `packages/core/src/api.ts`（`articleRefSchema`）
 - `packages/core/src/db/articles.ts`、`packages/core/src/db/candidates.ts`
 - `packages/core/src/pipeline/run.ts`（記事を書く段階）

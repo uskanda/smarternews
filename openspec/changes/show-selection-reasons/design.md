@@ -22,7 +22,7 @@
 
 ## Decisions
 
-- **理由は出典に写す。** migration 023で`article_refs`に`reason TEXT`と`importance INTEGER`を足す。どちらもNULLを許す。候補を結合して読む案は、30日を過ぎた記事で理由が消えるため採らない。
+- **理由は出典に写す。** migration 024で`article_refs`に`reason TEXT`と`importance INTEGER`を足す。どちらもNULLを許す。候補を結合して読む案は、30日を過ぎた記事で理由が消えるため採らない。
 - **既存の記事はmigrationで埋める。** 採用済みの候補のうち、`article_id`と`url`が出典と一致するものから写す。同じURLの候補が複数あるときは、最小のidの候補を使う。最初に判定した理由を残すためである。続報で`INSERT OR IGNORE`が最初の行を残すのと同じ考え方である。空の理由はNULLにする。
 - **書く段階で渡す。** `PendingCandidate`へ`reason`と`judgedImportance`を足す。`judgedImportance`は、既定値1で埋める前の重要度である。記事の重要度の計算は、今の`importance`を使い続ける。`writeStories`は、両方を`refs`の各項目へ渡す。空の理由はNULLとして保存する。
 - **`NewRef`では理由を省略できる。** `ArticleRef`は`reason`と`importance`を必ず持つ（nullを含む）。`NewRef`は、その2つを省ける型とする。省略したときはNULLを書く。理由のない出典を作る箇所（テストの手助けなど）は、変えずに済む。
