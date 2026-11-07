@@ -27,6 +27,7 @@ import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
 import { normalizeForMatch } from "./search/text.ts";
 import { createTopic, listTopics, updateTopic, applyInterpretation } from "./db/topics.ts";
+import { recordTopicVersion } from "./db/versions.ts";
 import { DomainError, FIELD_ERROR_CODES, type FieldError, type FieldErrorCode, type FieldErrorUnit } from "./errors.ts";
 import { conditionProblems } from "./filters/match.ts";
 
@@ -389,7 +390,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
         ]);
       }
       const category = existing
-        ? updateCategory(db, existing.id, fields)
+        ? updateCategory(db, existing.id, fields, clock, "settings-file")
         : createCategory(db, { slug, kind, ...fields }, clock);
       if (existing) result.categoriesUpdated += 1;
       else result.categoriesCreated += 1;
@@ -403,14 +404,22 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
           result.topicsCreated += 1;
           continue;
         }
-        updateTopic(db, match.id, { enabled: topic.enabled, sources: topic.sources, search: topic.search });
+        // One version for all the file changed of the topic.
+        updateTopic(db, match.id, { enabled: topic.enabled, sources: topic.sources, search: topic.search }, clock, false);
         if (topic.interpretation) {
           const updated = listTopics(db, category.id).find((candidate) => candidate.id === match.id)!;
-          applyInterpretation(db, match.id, {
-            ...topic.interpretation,
-            suggestedSources: { newsSearch: updated.sources.newsSearch, llmSearch: updated.sources.llmSearch },
-          });
+          applyInterpretation(
+            db,
+            match.id,
+            {
+              ...topic.interpretation,
+              suggestedSources: { newsSearch: updated.sources.newsSearch, llmSearch: updated.sources.llmSearch },
+            },
+            undefined,
+            false,
+          );
         }
+        recordTopicVersion(db, match.id, "settings-file", clock().toISOString());
         result.topicsUpdated += 1;
       }
       importSubscriptions(db, subscriptions, category.id, `categories.${index}.subscriptions`, result, clock);

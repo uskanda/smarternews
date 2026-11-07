@@ -1,10 +1,11 @@
-import type { Category, CategoryCreate, CategoryUpdate } from "../api.ts";
-import type { Clock } from "../clock.ts";
+import type { Category, CategoryCreate, CategoryUpdate, CategoryVersionTrigger } from "../api.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { transaction, type Database } from "./database.ts";
 import { releaseFeedsOfCategory } from "./feeds.ts";
 import { refreshFiltered } from "./filters.ts";
 import { bool, json, num, numOrNull, str, type Row } from "./rows.ts";
+import { recordCategoryVersion } from "./versions.ts";
 
 const DEFAULTS = {
   schedule: ["05:00"],
@@ -96,10 +97,19 @@ export function createCategory(db: Database, input: CategoryCreate, clock: Clock
       (input.enabled ?? true) ? 1 : 0,
       clock().toISOString(),
     );
-  return getCategory(db, num(result.lastInsertRowid));
+  const category = getCategory(db, num(result.lastInsertRowid));
+  recordCategoryVersion(db, category.id, "created", category.createdAt);
+  return category;
 }
 
-export function updateCategory(db: Database, id: number, patch: CategoryUpdate): Category {
+/** Stores the changes. A change of the minimum importance or the limit of articles makes a version, made by `trigger`. */
+export function updateCategory(
+  db: Database,
+  id: number,
+  patch: CategoryUpdate,
+  clock: Clock = systemClock,
+  trigger: Exclude<CategoryVersionTrigger, "created"> = "edited",
+): Category {
   const current = getCategory(db, id);
   const isEvent = current.kind === "event";
   const next = {
@@ -122,6 +132,7 @@ export function updateCategory(db: Database, id: number, patch: CategoryUpdate):
     next.enabled ? 1 : 0,
     id,
   );
+  recordCategoryVersion(db, id, trigger, clock().toISOString());
   return getCategory(db, id);
 }
 

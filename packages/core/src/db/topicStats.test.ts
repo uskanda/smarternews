@@ -7,7 +7,8 @@ import { insertCandidate } from "./candidates.ts";
 import { createCategory } from "./categories.ts";
 import { createRun } from "./runs.ts";
 import { topicStats } from "./topicStats.ts";
-import { createTopic } from "./topics.ts";
+import { applyInterpretation, createTopic, restoreTopicVersion, updateTopic } from "./topics.ts";
+import { listTopicVersions } from "./versions.ts";
 
 const NOW = new Date("2026-03-31T12:00:00.000Z");
 const DAY = 86_400_000;
@@ -218,6 +219,84 @@ describe("topicStats", () => {
   it("refuses a category that does not exist", () => {
     const s = setup();
     expect(() => topicStats(s.db, 999, NOW)).toThrow(expect.objectContaining({ code: "not_found" }));
+  });
+});
+
+describe("topicStats around the last version", () => {
+  const interpretation = (criteria: string) => ({ queries: ["q"], criteria, suggestedSources: { newsSearch: true, llmSearch: false } });
+
+  /** A topic made and interpreted 40 days ago, as the setup's topics are not. */
+  function versioned() {
+    const s = setup();
+    const topic = createTopic(s.db, s.categoryId, { text: "Ransomware" }, fakeClock(daysAgo(40)));
+    applyInterpretation(s.db, topic.id, interpretation("A"), daysAgo(40));
+    return { ...s, versioned: topic };
+  }
+
+  it("splits the candidates, the articles and their misses at the last version within the period", () => {
+    const s = versioned();
+    const id = s.versioned.id;
+    updateTopic(s.db, id, { text: "Ransomware gangs" }, fakeClock(daysAgo(20)));
+    applyInterpretation(s.db, id, interpretation("B"), daysAgo(10));
+    s.candidate({ topicIds: [id], at: daysAgo(15), sourceKind: "news-search", siteName: "a.example" });
+    s.candidate({ topicIds: [id], at: daysAgo(15), reasonCode: "below-minimum", siteName: "a.example" });
+    s.candidate({ topicIds: [id], at: daysAgo(5), status: "accepted" });
+    const missedBefore = s.article({ topicIds: [id], at: daysAgo(12) });
+    s.article({ topicIds: [id], at: daysAgo(11) });
+    s.article({ topicIds: [id], at: daysAgo(3) });
+    // Marked after the change: still counted where the article was made.
+    setArticleFlags(s.db, missedBefore, { missed: true }, daysAgo(1));
+
+    const entry = s.of(id);
+
+    expect(entry.boundary).toEqual({ at: daysAgo(10), trigger: "interpreted" });
+    expect(entry).toMatchObject({ collected: { total: 3 }, created: 3, missed: 1 });
+    expect(entry.before).toEqual({
+      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0 } },
+      rejectedByJudge: 1,
+      belowMinimum: 1,
+      overLimit: 0,
+      rejectedByDate: 0,
+      created: 2,
+      updated: 0,
+      opened: 0,
+      starred: 0,
+      missed: 1,
+      topRejectedSites: [{ siteName: "a.example", count: 2 }],
+    });
+    expect(entry.after).toMatchObject({ collected: { total: 1 }, rejectedByJudge: 0, created: 1, missed: 0, topRejectedSites: [] });
+  });
+
+  it("has no boundary for a topic with only its first version, or with only versions up to its first interpretation", () => {
+    const s = setup();
+    const fresh = createTopic(s.db, s.categoryId, { text: "Fresh" }, fakeClock(daysAgo(5)));
+    updateTopic(s.db, fresh.id, { text: "Fresh, edited" }, fakeClock(daysAgo(4)));
+    applyInterpretation(s.db, fresh.id, interpretation("A"), daysAgo(3));
+
+    expect(s.of(s.topic.id).boundary).toBeUndefined();
+    expect(s.of(fresh.id)).not.toHaveProperty("boundary");
+    expect(s.of(fresh.id)).not.toHaveProperty("before");
+  });
+
+  it("has no boundary when the last version is older than the period", () => {
+    const s = versioned();
+    updateTopic(s.db, s.versioned.id, { queries: ["ransomware"] }, fakeClock(daysAgo(31)));
+
+    expect(s.of(s.versioned.id).boundary).toBeUndefined();
+  });
+
+  it("keeps the counts of the whole period as they were", () => {
+    const s = versioned();
+    s.candidate({ topicIds: [s.versioned.id], at: daysAgo(15) });
+    s.article({ topicIds: [s.versioned.id], at: daysAgo(15) });
+    const without = s.of(s.versioned.id);
+    restoreTopicVersion(s.db, s.versioned.id, listTopicVersions(s.db, s.versioned.id).at(-1)!.id, fakeClock(daysAgo(10)));
+
+    const { boundary, before, after, ...whole } = s.of(s.versioned.id);
+    expect(boundary).toEqual({ at: daysAgo(10), trigger: "restored" });
+    expect(before).toMatchObject({ collected: { total: 1 }, created: 1 });
+    expect(after).toMatchObject({ collected: { total: 0 }, created: 0 });
+    expect(whole).toEqual(without);
   });
 });
 

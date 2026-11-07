@@ -50,6 +50,8 @@ import {
   topicSchema,
   topicRewriteResultSchema,
   topicStatsSchema,
+  topicVersionSchema,
+  categoryVersionSchema,
   topicTrialSchema,
   topicTrialStartSchema,
   translationStatusSchema,
@@ -109,6 +111,8 @@ import {
   type TopicCreate,
   type TopicStats,
   type TopicUpdate,
+  type TopicVersion,
+  type CategoryVersion,
   type TopicRewriteResult,
   type TopicTrial,
   type TopicTrialRequest,
@@ -250,6 +254,8 @@ export function createApi(options: ApiOptions) {
     moveCategory: (id: number, before: number | null): Promise<Category[]> =>
       json(z.array(categorySchema), `/categories/${id}/move`, body("POST", { before })),
     deleteCategory: async (id: number): Promise<void> => void (await request(`/categories/${id}`, { method: "DELETE" })),
+    /** The minimum importance and the limit of articles of the category each time they changed, newest first. */
+    categoryVersions: (id: number): Promise<CategoryVersion[]> => json(z.array(categoryVersionSchema), `/categories/${id}/versions`),
 
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
     /** What each topic of the category brought in the last 30 days. */
@@ -260,6 +266,11 @@ export function createApi(options: ApiOptions) {
     /** Has the topic interpreted again before the next run of its category. */
     interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
+    /** The versions of the topic, newest first. */
+    topicVersions: (id: number): Promise<TopicVersion[]> => json(z.array(topicVersionSchema), `/topics/${id}/versions`),
+    /** Makes a version of the topic its current values. An interpreted version stays interpreted. */
+    restoreTopicVersion: (id: number, versionId: number): Promise<Topic> =>
+      json(topicSchema, `/topics/${id}/versions/${versionId}/restore`, { method: "POST" }),
     /** Starts a trial of a text that is not saved. Answers at once; the result is asked for with `topicTrial`. */
     startTopicTrial: (id: number, draft: TopicTrialRequest): Promise<TopicTrialStart> =>
       json(topicTrialStartSchema, `/topics/${id}/trials`, body("POST", draft)),

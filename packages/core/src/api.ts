@@ -184,6 +184,45 @@ export const topicUpdateSchema = z.object({
 });
 export type TopicUpdate = z.infer<typeof topicUpdateSchema>;
 
+/** What made a version of a topic: its creation, an edit, an interpretation, a settings file, or going back to a version. */
+export const topicVersionTriggerSchema = z.enum(["created", "edited", "interpreted", "settings-file", "restored"]);
+export type TopicVersionTrigger = z.infer<typeof topicVersionTriggerSchema>;
+
+/**
+ * The kept values of a topic after a change of one of them: its text, search words, relevance test, sources and
+ * search locale. Whether it is enabled is not kept.
+ */
+export const topicVersionSchema = z.object({
+  id: z.number().int(),
+  topicId: z.number().int(),
+  createdAt: z.string(),
+  trigger: topicVersionTriggerSchema,
+  /** The version gone back to, when the trigger is "restored"; null otherwise. */
+  restoredFrom: z.number().int().nullable(),
+  text: z.string(),
+  /** Whether the search words and the relevance test came from an interpretation of the text. */
+  interpreted: z.boolean(),
+  queries: z.array(z.string()),
+  criteria: z.string(),
+  sources: topicSourcesSchema,
+  search: searchLocaleSchema.nullable(),
+});
+export type TopicVersion = z.infer<typeof topicVersionSchema>;
+
+export const categoryVersionTriggerSchema = z.enum(["created", "edited", "settings-file"]);
+export type CategoryVersionTrigger = z.infer<typeof categoryVersionTriggerSchema>;
+
+/** A category's minimum importance and limit of articles per run, after a change of either. */
+export const categoryVersionSchema = z.object({
+  id: z.number().int(),
+  categoryId: z.number().int(),
+  createdAt: z.string(),
+  trigger: categoryVersionTriggerSchema,
+  minImportance: z.number().int(),
+  maxArticlesPerRun: z.number().int(),
+});
+export type CategoryVersion = z.infer<typeof categoryVersionSchema>;
+
 /** A text to try on a topic before it is saved, with the search locale being edited. Null or left out: the settings'. */
 export const topicTrialRequestSchema = z.object({
   text: topicText,
@@ -1278,10 +1317,8 @@ export const TOPIC_STATS_DAYS = 30;
 /** How many sites the stats of a topic name among those whose candidates were rejected most. */
 export const TOPIC_STATS_TOP_SITES = 3;
 
-/** What one topic of a category brought within the last `TOPIC_STATS_DAYS` days. Generated articles only. */
-export const topicStatsEntrySchema = z.object({
-  topicId: z.number().int(),
-  text: z.string(),
+/** What one topic brought within a period. Generated articles only. */
+export const topicStatsCountsSchema = z.object({
   /** The candidates collected for the topic, and how many each kind of source found. */
   collected: z.object({
     total: z.number().int(),
@@ -1307,6 +1344,21 @@ export const topicStatsEntrySchema = z.object({
   missed: z.number().int(),
   /** The sites with the most rejected candidates, most first, `TOPIC_STATS_TOP_SITES` at most. */
   topRejectedSites: z.array(z.object({ siteName: z.string(), count: z.number().int() })),
+});
+export type TopicStatsCounts = z.infer<typeof topicStatsCountsSchema>;
+
+/**
+ * What one topic of a category brought within the last `TOPIC_STATS_DAYS` days. When a version of the topic was made
+ * within them, after the first one and after its first interpretation, the last such version splits the period:
+ * `before` counts from the start of the period up to it and `after` from it on. Candidates go by when they were
+ * collected and articles by when they were made. The three are left out without such a version.
+ */
+export const topicStatsEntrySchema = topicStatsCountsSchema.extend({
+  topicId: z.number().int(),
+  text: z.string(),
+  boundary: z.object({ at: z.string(), trigger: topicVersionTriggerSchema }).optional(),
+  before: topicStatsCountsSchema.optional(),
+  after: topicStatsCountsSchema.optional(),
 });
 export type TopicStatsEntry = z.infer<typeof topicStatsEntrySchema>;
 
