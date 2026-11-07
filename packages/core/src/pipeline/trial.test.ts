@@ -59,6 +59,7 @@ function setup(options: { judge?: FakeHandler; count?: { accepted: number; rejec
       sourceKind: "feed",
       status,
       reason,
+      reasonCode: null,
       importance: status === "pending" ? 4 : 1,
       topicIds,
       now,
@@ -132,7 +133,7 @@ describe("a topic trial", () => {
     const kept = s.add("pending", "Rust release 1.90", "relevant");
     const dropped = s.add("pending", "Rust conference", "relevant");
     const below = s.add("pending", "Rust story", "relevant");
-    rejectCandidates(s.db, [below], "重要度が基準未満", s.run.id);
+    rejectCandidates(s.db, [below], "below-minimum", "ja", s.run.id);
     const gained = s.add("rejected", "Rust minor release", "advertising");
     const ignored = s.add("rejected", "Rust blog", "off topic");
 

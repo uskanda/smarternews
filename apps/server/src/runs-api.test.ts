@@ -57,6 +57,7 @@ describe("runs", () => {
       siteName: "Example",
       publishedAt: null,
       sourceKind: "feed" as const,
+      reasonCode: null,
       topicIds: [topic.id],
       now: s.clock().toISOString(),
     };

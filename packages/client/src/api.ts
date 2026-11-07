@@ -46,6 +46,7 @@ import {
   filterUpdateResultSchema,
   termGroupSchema,
   topicSchema,
+  topicStatsSchema,
   topicTrialSchema,
   topicTrialStartSchema,
   translationStatusSchema,
@@ -103,6 +104,7 @@ import {
   type TermGroupUpdate,
   type Topic,
   type TopicCreate,
+  type TopicStats,
   type TopicUpdate,
   type TopicTrial,
   type TopicTrialRequest,
@@ -246,6 +248,8 @@ export function createApi(options: ApiOptions) {
     deleteCategory: async (id: number): Promise<void> => void (await request(`/categories/${id}`, { method: "DELETE" })),
 
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
+    /** What each topic of the category brought in the last 30 days. */
+    topicStats: (categoryId: number): Promise<TopicStats> => json(topicStatsSchema, `/categories/${categoryId}/topic-stats`),
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
