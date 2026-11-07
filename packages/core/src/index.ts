@@ -23,6 +23,7 @@ export * from "./db/mentions.ts";
 export * from "./db/misses.ts";
 export * from "./db/topics.ts";
 export * from "./db/topicStats.ts";
+export * from "./db/versions.ts";
 export * from "./db/translations.ts";
 export * from "./feeds/content.ts";
 export * from "./filters/match.ts";

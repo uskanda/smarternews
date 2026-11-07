@@ -235,6 +235,24 @@ describe("the API client", () => {
     await expect(api.topicStats(999)).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("reads the versions of a topic and of a category, and goes back to a version of a topic", async () => {
+    const { api, server, seen } = setup();
+    const category = server.category();
+    const topic = await api.createTopic(category.id, { text: "Rust" });
+    await api.updateTopic(topic.id, { text: "Rust compiler" });
+
+    const versions = await api.topicVersions(topic.id);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/topics/${topic.id}/versions`);
+    expect(versions.map((version) => version.trigger)).toEqual(["edited", "created"]);
+
+    const restored = await api.restoreTopicVersion(topic.id, versions[1]!.id);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/topics/${topic.id}/versions/${versions[1]!.id}/restore`);
+    expect(restored.text).toBe("Rust");
+
+    expect(await api.categoryVersions(category.id)).toMatchObject([{ trigger: "created", minImportance: 3 }]);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/versions`);
+  });
+
   it("asks for candidates and a preview of a page, and subscribes to it and changes its selectors, on the paths of web feeds", async () => {
     const proposal = { candidates: [{ item: "li.post", title: null, link: null, date: "time" }] };
     const { api, server, seen } = setup(API_TOKEN, { proposeSelectors: () => proposal });

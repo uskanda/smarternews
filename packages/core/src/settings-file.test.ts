@@ -8,6 +8,7 @@ import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
 import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
 import { getListView, listListViews, updateListView } from "./db/list-views.ts";
+import { listCategoryVersions, listTopicVersions } from "./db/versions.ts";
 import { exportSettings, importSettings } from "./settings-file.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "./testing/db.ts";
 
@@ -111,6 +112,51 @@ categories:
     );
     expect(result).toMatchObject({ topicsCreated: 0, topicsUpdated: 1 });
     expect(listTopics(db, security.id)).toMatchObject([{ text: "Ransomware", sources: { newsSearch: true } }]);
+  });
+
+  it("makes one version for a topic whose sources and interpretation it changes, and one for a changed category", () => {
+    const db = createTestDb();
+    const security = createCategory(db, { name: "Security", kind: "news" }, clock);
+    const topic = createTopic(db, security.id, { text: "Ransomware" }, clock);
+    clock.set("2026-03-05T00:00:00.000Z");
+    importSettings(
+      db,
+      `version: 1
+categories:
+  - slug: security
+    name: Security
+    kind: news
+    minImportance: 4
+    topics:
+      - text: Ransomware
+        sources: { newsSearch: true }
+        interpretation: { queries: [ransomware], criteria: attacks }
+      - text: Phishing
+`,
+      clock,
+    );
+    clock.set("2026-03-01T00:00:00.000Z");
+
+    expect(listTopicVersions(db, topic.id).map((version) => [version.trigger, version.createdAt, version.criteria, version.sources.newsSearch])).toEqual([
+      ["settings-file", "2026-03-05T00:00:00.000Z", "attacks", true],
+      ["created", "2026-03-01T00:00:00.000Z", "", false],
+    ]);
+    const phishing = listTopics(db, security.id).find((entry) => entry.text === "Phishing")!;
+    expect(listTopicVersions(db, phishing.id).map((version) => version.trigger)).toEqual(["created"]);
+    expect(listCategoryVersions(db, security.id).map((version) => [version.trigger, version.minImportance])).toEqual([
+      ["settings-file", 4],
+      ["created", 3],
+    ]);
+  });
+
+  it("makes no version for a topic or a category the file leaves as they are", () => {
+    const db = createTestDb();
+    const security = createCategory(db, { name: "Security", kind: "news" }, clock);
+    const topic = createTopic(db, security.id, { text: "Ransomware", sources: { newsSearch: true } }, clock);
+    importSettings(db, "version: 1\ncategories:\n  - slug: security\n    name: Security\n    kind: news\n    topics:\n      - text: Ransomware\n        sources: { newsSearch: true }\n", clock);
+
+    expect(listTopicVersions(db, topic.id)).toHaveLength(1);
+    expect(listCategoryVersions(db, security.id)).toHaveLength(1);
   });
 
   it("changes nothing when one entry is invalid and names the entry", () => {

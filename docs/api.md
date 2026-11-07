@@ -105,6 +105,7 @@ Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`
 | `GET /api/v1/categories/:id` | Read one |
 | `PATCH /api/v1/categories/:id` | Change `name`, `schedule`, `minImportance`, `maxArticlesPerRun`, `windowHours`, `windowDays`, `enabled` |
 | `POST /api/v1/categories/:id/move` | Put it before another category, or last. Returns all categories in their new order |
+| `GET /api/v1/categories/:id/versions` | Its `minImportance` and `maxArticlesPerRun` each time they changed, newest first (see [Topic versions](#topic-versions)) |
 | `DELETE /api/v1/categories/:id` | Delete it with its topics, generated articles, candidates and runs (status 204). Its subscribed feeds stay, without a category |
 
 ```bash
@@ -128,6 +129,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | `POST /api/v1/topics/:id/trials` | Try a text on the topic without saving it (status 202) |
 | `GET /api/v1/topic-trials/:id` | Read a trial: its status and, once it succeeded, its result |
 | `POST /api/v1/topics/:id/rewrite-proposals` | Ask the model for new wordings of the topic, without saving anything |
+| `GET /api/v1/topics/:id/versions` | The [versions](#topic-versions) of the topic, newest first |
+| `POST /api/v1/topics/:id/versions/:versionId/restore` | Make a version the topic's current values, without interpreting it again |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -172,11 +175,27 @@ Nothing is stored but the record of the call, which belongs to no run. To use a 
 | `opened`, `starred` | Of the articles in `created`: the ones opened, and the ones with a star now |
 | `missed` | Of the articles in `created`: the ones marked as a [miss](#misses) for this topic, whenever the mark was made |
 | `topRejectedSites` | Up to three sites with the most rejected candidates, as `siteName` and `count`, most first; candidates without a site name are left out |
+| `boundary`, `before`, `after` | Only when the topic [changed](#topic-versions) in the period: `boundary` is the last change, as `at` and `trigger`; `before` and `after` hold the fields above from `collected` to `topRejectedSites`, counted up to it and from it on |
 
 A candidate that matched two topics counts for both. A candidate keeps only its last reason, so one the judge accepted and the program then rejected counts under the program's reason. An unknown category answers 404.
 
+A change is a version of the topic made after its first interpretation; the versions up to that one are where the topic started. `before` and `after` split candidates by when they were collected and articles by when they were made, so a miss counts on the side where its article was made. The fields of the whole period stay as they are.
+
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/topic-stats"
+```
+
+### Topic versions
+
+The server keeps a version of a topic each time its `text`, `queries`, `criteria`, `sources` or `search` changes, and never for `enabled` alone or for a request to interpret it again. `GET /api/v1/topics/:id/versions` lists them newest first. Each has `id`, `topicId`, `createdAt`, `trigger`, `restoredFrom`, `interpreted`, and the kept fields as a topic has them. `trigger` says what made it: `created`, `edited` (`PATCH`), `interpreted` (a run), `settings-file` (one version for all a [settings file](#settings) changed of the topic), or `restored`. Topics that existed before versions were kept start with one `created` version of their values then, made at their creation time.
+
+`POST /api/v1/topics/:id/versions/:versionId/restore` takes no body and answers the topic. It makes the version's kept fields the topic's own and adds a `restored` version whose `restoredFrom` names the version. The older versions stay. The `sources` then count as set by you, so a later interpretation leaves them alone. An interpreted version stays interpreted, with the time of the restore as the time of its interpretation, so `missesSinceInterpretation` starts again from it and no model is called; a version that was not interpreted is interpreted before the next run. A version of another topic answers 404, like one that does not exist.
+
+`GET /api/v1/categories/:id/versions` lists the versions of a category's `minImportance` and `maxArticlesPerRun`, newest first, each with `id`, `categoryId`, `createdAt`, `trigger` (`created`, `edited` or `settings-file`) and the two values. A change of the other fields makes none. There is no restore for a category.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/topics/7/versions"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/topics/7/versions/12/restore"
 ```
 
 ## Articles
