@@ -9,7 +9,13 @@ export interface DiscoveredFeed {
   title: string;
 }
 
-const FEED_TYPES = new Set(["application/rss+xml", "application/atom+xml", "application/rdf+xml"]);
+const FEED_TYPES = new Set(["application/rss+xml", "application/atom+xml", "application/rdf+xml", "application/feed+json"]);
+
+/**
+ * Where blogs keep their feed by default, tried in this order when a page points to none: WordPress, two
+ * common names, Jekyll, Atom, Hugo and JSON Feed. Each place costs one request to the same host.
+ */
+export const COMMON_FEED_PATHS = ["/feed", "/rss.xml", "/feed.xml", "/atom.xml", "/index.xml", "/feed.json"] as const;
 
 interface LinkElement {
   getAttribute(name: string): string | null;
@@ -19,9 +25,24 @@ function refuse(message: string): DomainError {
   return new DomainError("invalid", message, [{ path: "url", message }]);
 }
 
+/** The first common place under the page's origin that answers with a feed, or null when none does. */
+async function commonFeed(fetcher: Fetcher, pageUrl: string): Promise<DiscoveredFeed | null> {
+  for (const path of COMMON_FEED_PATHS) {
+    try {
+      const response = await fetcher.get(new URL(path, pageUrl).toString());
+      if (response.status < 200 || response.status >= 300) continue;
+      return { url: normalizeUrl(response.url), title: parseSubscription(response.text).title };
+    } catch {
+      // not fetched or not a feed: try the next place
+    }
+  }
+  return null;
+}
+
 /**
  * The feeds behind a URL. When the URL is a feed, that is the one answer; when it is a page, the answers are
- * the feeds the page points to with `<link rel="alternate">`. Nothing is subscribed.
+ * the feeds the page points to with `<link rel="alternate">`. A page that points to none gets the first feed
+ * found at a common place under its origin. Nothing is subscribed.
  */
 export async function discoverFeeds(fetcher: Fetcher, url: string): Promise<DiscoveredFeed[]> {
   let response;
@@ -52,5 +73,7 @@ export async function discoverFeeds(fetcher: Fetcher, url: string): Promise<Disc
     const feedUrl = normalizeUrl(target.toString());
     if (!found.has(feedUrl)) found.set(feedUrl, { url: feedUrl, title: (link.getAttribute("title") ?? "").replace(/\s+/g, " ").trim() });
   }
-  return [...found.values()];
+  if (found.size > 0) return [...found.values()];
+  const common = await commonFeed(fetcher, response.url);
+  return common ? [common] : [];
 }

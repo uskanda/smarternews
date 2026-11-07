@@ -197,7 +197,7 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
           setFound(null);
           leavePage();
         }}
-        hint="サイトのURLを入れると、そのページが案内しているフィードを探します。"
+        hint="サイトのURLを入れると、そのページが案内しているフィードと、よくある場所のフィードを探します。"
       />
       <div className="flex flex-col gap-xs">
         <label htmlFor={`${id}-category`} className="type-label-md">

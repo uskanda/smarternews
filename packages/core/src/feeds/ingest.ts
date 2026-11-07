@@ -30,7 +30,7 @@ import { convertContent } from "./content.ts";
 import { extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
-const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, */*";
+const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*";
 const SUMMARY_CHARS = 300;
 const KEY_CHARS = 500;
 /** A feed article is compared with what other feeds delivered within this many days. */
