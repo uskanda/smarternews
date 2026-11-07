@@ -237,3 +237,59 @@ describe("runs", () => {
     });
   });
 });
+
+describe("attention", () => {
+  /** A category whose scheduled run failed with no retry left. */
+  function failedCategory(s: ReturnType<typeof testServer>, name: string) {
+    const category = s.category(name);
+    const run = createRun(s.db, { categoryId: category.id, trigger: "schedule", slot: `${name}-slot` }, s.clock);
+    finishRun(s.db, run.id, {
+      status: "failed",
+      finishedAt: s.clock().toISOString(),
+      collected: 0,
+      rejected: 0,
+      articlesCreated: 0,
+      articlesUpdated: 0,
+      llmCalls: 0,
+      failures: [{ stage: "run", target: null, message: "boom" }],
+    });
+    setRetry(s.db, run.id, { skipped: "limit" });
+    return { category, run };
+  }
+
+  it("lists the items and how many there are", async () => {
+    const s = testServer();
+    const { category, run } = failedCategory(s, "A");
+
+    const response = await s.get("/api/v1/attention");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      items: [expect.objectContaining({ kind: "run-failed", key: `run:${run.id}`, categoryId: category.id, categoryName: "A", runId: run.id, runStatus: "failed" })],
+      count: 1,
+    });
+  });
+
+  it("leaves a dismissed item out, and takes the same key twice", async () => {
+    const s = testServer();
+    const { run } = failedCategory(s, "A");
+    failedCategory(s, "B");
+
+    const first = await s.post("/api/v1/attention/dismissals", { key: `run:${run.id}` });
+    const again = await s.post("/api/v1/attention/dismissals", { key: `run:${run.id}` });
+    const list = await (await s.get("/api/v1/attention")).json();
+
+    expect([first.status, again.status]).toEqual([204, 204]);
+    expect(list.count).toBe(1);
+    expect(list.items.map((item: { categoryName: string }) => item.categoryName)).toEqual(["B"]);
+  });
+
+  it("refuses an empty key", async () => {
+    const s = testServer();
+
+    const response = await s.post("/api/v1/attention/dismissals", { key: " " });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "key" })]);
+  });
+});

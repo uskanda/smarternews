@@ -1,6 +1,7 @@
 // What the web app and the Android app share: the API client and the logic that does not depend on how a
 // screen is drawn. Nothing here may import a UI library or a Node module.
 export * from "./annotations.ts";
+export * from "./attention.ts";
 export * from "./api.ts";
 export * from "./attachments.ts";
 export * from "./connect.ts";

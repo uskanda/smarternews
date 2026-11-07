@@ -12,6 +12,9 @@ import {
   updateHighlightNote,
   articleListQuerySchema,
   articleSearchQuerySchema,
+  attentionDismissalSchema,
+  dismissAttention,
+  listAttention,
   listMentionArticles,
   mentionArticlesQuerySchema,
   articleUpdateSchema,
@@ -155,6 +158,8 @@ export interface AppDeps {
   images: { key: Uint8Array; proxy: ImageProxy };
   tokens: { api: string; feed: string };
   version: string;
+  /** The news engines the runs ask. Searches of an engine they no longer ask are not pointed out. Every engine counts without it. */
+  newsEngines?: readonly string[];
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
   webDir?: string;
 }
@@ -481,6 +486,13 @@ export function createApp(deps: AppDeps): Hono {
       throw new DomainError("invalid", "the input is invalid", [{ path: "status", message: "must be rejected, pending, accepted or all" }]);
     }
     return c.json(listRunCandidates(db, run.id, status === "all" ? undefined : (status as Candidate["status"])));
+  });
+
+  // attention
+  api.get("/attention", (c) => c.json(listAttention(db, clock(), { engines: deps.newsEngines })));
+  api.post("/attention/dismissals", async (c) => {
+    dismissAttention(db, parse(attentionDismissalSchema, await jsonBody(c)).key, clock);
+    return c.body(null, 204);
   });
 
   // digests

@@ -786,6 +786,33 @@ A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been q
 
 `GET /api/v1/runs/:id/candidates` accepts `status=rejected` (the default), `pending`, `accepted` or `all`. Each candidate has `title`, `url`, `siteName`, `publishedAt`, `sourceKind`, `topics`, `importance` and `reason`. Runs and candidates are deleted after 30 days.
 
+### Attention
+
+The server points out what the runs went through that you should look at. It works the items out from the run history each time you ask, and calls no model.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/attention` | List the items you have not dismissed, as `{ items, count }` |
+| `POST /api/v1/attention/dismissals` | Dismiss the item whose `key` the body gives (status 204) |
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/attention"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"key":"run:42"}' "$API/api/v1/attention/dismissals"
+```
+
+| `kind` | When |
+|---|---|
+| `run-failed` | The latest scheduled run of an enabled category, or its last retry, failed with no retry planned, or stopped at a limit, and no later run succeeded or partly failed |
+| `uninterpreted` | An enabled topic is still uninterpreted, and the latest finished run of its category failed to interpret it |
+| `empty-search` | A news search (one engine and one query of a topic) or a topic's web search by the model returned nothing in its last three attempts. Attempts that failed are left out |
+| `no-adoption` | An enabled topic, made at least 14 days ago, has had no article written or updated in the last 14 days |
+| `google-unresolved` | The last three runs that tried to resolve Google News redirect links resolved none |
+
+An item has `kind`, `key`, and the fields that fit its kind: `categoryId`, `categoryName`, `topicId`, `topicText`, `runId`, `runStatus`, `source` (`news-search` or `llm-search`), `engine`, `query` and `since`, the time the state began. The other fields are `null`.
+
+The `key` names the kind, the target and what set the item off: the failed run, or the first of the searches that found nothing, for example. A dismissed item stays hidden while that holds, and comes back when something new sets it off. Dismissing the same key again is not an error. Dismissals, and the record of each search behind `empty-search` and `google-unresolved`, are deleted after 30 days.
+
 ## Digests
 
 | Operation | Purpose |

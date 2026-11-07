@@ -100,6 +100,15 @@ function bingResults(xml: string): SearchResult[] {
 
 // ------------------------------------------------------------------------------------------------
 
+/** What one query brought back, with the counts a run records about the attempt. */
+export interface NewsSearchResult {
+  candidates: RawCandidate[];
+  /** The results in the window, up to the limit, before those an earlier run settled were left out. */
+  returned: number;
+  /** Google News only: the redirect links this search tried to resolve, and how many of them it could not. */
+  google: { attempted: number; unresolved: number };
+}
+
 /** Candidates for one query. Results older than the window are left out, and the newest ones win the limit. */
 export async function collectNews(
   deps: NewsSearchDeps,
@@ -107,6 +116,16 @@ export async function collectNews(
   locale: SearchLocale,
   window: CollectWindow,
 ): Promise<RawCandidate[]> {
+  return (await searchNews(deps, query, locale, window)).candidates;
+}
+
+/** As `collectNews`, and also says how many results the engine returned and how many redirect links failed. */
+export async function searchNews(
+  deps: NewsSearchDeps,
+  query: string,
+  locale: SearchLocale,
+  window: CollectWindow,
+): Promise<NewsSearchResult> {
   const google = deps.engine === "google-news";
   const xml = await fetchXml(deps.fetcher, google ? googleUrl(query, locale, window.hours) : bingUrl(query, locale, window.hours));
   const results = (google ? googleResults(xml) : bingResults(xml))
@@ -116,6 +135,7 @@ export async function collectNews(
     .slice(0, deps.maxResultsPerQuery);
 
   const candidates: RawCandidate[] = [];
+  const counts = { attempted: 0, unresolved: 0 };
   for (const result of results) {
     const link = normalizeUrl(result.link);
     if (deps.isSeen(link)) continue;
@@ -131,11 +151,13 @@ export async function collectNews(
       continue;
     }
     const resolved = await resolveGoogleNewsUrl(deps.fetcher, link);
+    counts.attempted += 1;
+    if (!resolved) counts.unresolved += 1;
     candidates.push(
       resolved
         ? { url: normalizeUrl(resolved), aliases: [link], fetchable: true, ...base }
         : { url: link, aliases: [], fetchable: false, ...base },
     );
   }
-  return candidates;
+  return { candidates, returned: results.length, google: counts };
 }

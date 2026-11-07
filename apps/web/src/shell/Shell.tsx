@@ -16,7 +16,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { useArticle, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
+import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
 import { useHideRead } from "../lib/hide-read.ts";
@@ -102,11 +102,33 @@ function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
 
 const ITEM = "tap flex min-w-0 flex-1 items-center justify-between gap-sm rounded-md px-sm py-xs type-body-md";
 
-function NavItem({ to, label, count, onNavigate }: { to: string; label: string; count?: number; onNavigate?: () => void }) {
+function NavItem({
+  to,
+  label,
+  count,
+  attention,
+  onNavigate,
+}: {
+  to: string;
+  label: string;
+  count?: number;
+  /** The attention items not yet dismissed, shown in the warning colour and read out as what they are. */
+  attention?: number;
+  onNavigate?: () => void;
+}) {
   return (
     <NavLink to={to} onClick={onNavigate} className={({ isActive }) => `${ITEM} ${isActive ? "bg-selected font-semibold" : ""}`}>
       <span className="min-w-0 truncate">{label}</span>
       {count ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
+      {attention ? (
+        <>
+          {/* Read out apart from the name, and as what the number counts. */}
+          <span className="sr-only">{`、注意${attention}件`}</span>
+          <span aria-hidden="true" className="tabular-nums text-warning">
+            {attention}
+          </span>
+        </>
+      ) : null}
     </NavLink>
   );
 }
@@ -198,6 +220,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
   const { shown: model, pathOf: pathOfTarget } = useNavModels();
   const feeds = useFeeds().data;
+  const attention = useAttention().data?.count ?? 0;
   const collapsed = useCollapsed();
   const { pathname } = useLocation();
   const pathOf = (entry: NavEntry) => pathOfTarget(entry.target) ?? "/unread";
@@ -337,7 +360,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             <NavItem to="/settings" label="設定" onNavigate={onNavigate} />
           </li>
           <li className="flex">
-            <NavItem to="/runs" label="実行履歴" onNavigate={onNavigate} />
+            <NavItem to="/runs" label="実行履歴" attention={attention} onNavigate={onNavigate} />
           </li>
         </ul>
       </div>

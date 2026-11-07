@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../config.ts";
 import { setArticleFlags } from "../db/articles.ts";
+import { listSearchAttempts } from "../db/search-attempts.ts";
 import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
@@ -226,6 +227,47 @@ describe("collecting candidates", () => {
   });
 });
 
+describe("recording search attempts", () => {
+  it("records each query with the number of results before the settled ones are left out", async () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Rust", { newsSearch: true, queries: ["rust release", "rust compiler"] });
+    h.news({ "rust release": [{ title: "Rust 2.0 [skip]", link: "https://example.org/rust-2" }] });
+    await h.run();
+
+    const second = await h.run();
+
+    expect(second.collected).toBe(0);
+    expect(listSearchAttempts(h.db, second.id)).toEqual([
+      expect.objectContaining({ runId: second.id, topicId: topic.id, kind: "news-search", engine: "bing-news", query: "rust release", ok: true, returned: 1 }),
+      expect.objectContaining({ runId: second.id, topicId: topic.id, kind: "news-search", engine: "bing-news", query: "rust compiler", ok: true, returned: 0 }),
+    ]);
+  });
+
+  it("records a search that failed as not ok", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.routes["https://www.bing.com/news/search"] = () => new Response("oops", { status: 500 });
+
+    const run = await h.run();
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([expect.objectContaining({ query: "rust", ok: false, returned: 0 })]);
+  });
+
+  it("records the model's web search under the topic's text, and leaves the topic's feeds out", async () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Topic", { feeds: [FEED], llmSearch: true });
+    h.feed(FEED, [{ title: "From the feed", link: "https://example.org/a" }]);
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/found", title: "Found by search", snippet: "s" }] });
+    h.page("https://example.org/found", "The page text.", "2026-03-01T10:00:00Z");
+
+    const run = await h.run();
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([
+      expect.objectContaining({ topicId: topic.id, kind: "llm-search", engine: null, query: "Topic", ok: true, returned: 1 }),
+    ]);
+  });
+});
+
 describe("judging", () => {
   it("rejects a news item without a publication time before any model sees it", async () => {
     const h = pipelineHarness({ outputLanguage: "ja" });
@@ -433,6 +475,21 @@ describe("news search with several engines", () => {
 
     expect(h.articles().map((article) => article.title)).toEqual(["From Bing"]);
     expect(run.status).toBe("partial");
+  });
+
+  it("records how many redirect links of Google News it tried to resolve and how many it could not", async () => {
+    const h = pipelineHarness({ newsSearch: BOTH });
+    const topic = h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "One [skip]", link: "https://example.org/one" }, { title: "Two [skip]", link: "https://example.org/two" }] });
+    h.routes["https://news.google.com/_/DotsSplashUi/data/batchexecute"] = () => new Response("gone", { status: 500 });
+    h.news({});
+
+    const run = await h.run();
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([
+      expect.objectContaining({ topicId: topic.id, engine: "google-news", ok: true, returned: 2, googleAttempted: 2, googleUnresolved: 2 }),
+      expect.objectContaining({ topicId: topic.id, engine: "bing-news", ok: true, returned: 0, googleAttempted: 0, googleUnresolved: 0 }),
+    ]);
   });
 
   it("records which engine failed with the query, and counts each engine as a source of its own", async () => {

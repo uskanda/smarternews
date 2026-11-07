@@ -6,6 +6,7 @@ import type {
   ArticleNote,
   ArticleSearchQuery,
   ArticleSummary,
+  AttentionList,
   Highlight,
   HighlightCreate,
   ListSort,
@@ -403,6 +404,37 @@ export function useRuns(category?: number) {
     queryFn: () => api.runs({ category, limit: 100 }),
     refetchInterval: (query) =>
       query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 3000 : REFRESH_MS,
+  });
+}
+
+/** What the runs went through that the user should look at. Fetched again like the counts. */
+export function useAttention() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["attention"], queryFn: () => api.attention(), refetchInterval: REFRESH_MS });
+}
+
+/**
+ * Dismisses an attention item. The item leaves the screen at once, and comes back when the server cannot store
+ * the dismissal; `onFailed` then says so.
+ */
+export function useDismissAttention(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => api.dismissAttention(key),
+    onMutate: async (key) => {
+      await client.cancelQueries({ queryKey: ["attention"] });
+      const before = client.getQueryData<AttentionList>(["attention"]);
+      if (before) {
+        const items = before.items.filter((item) => item.key !== key);
+        client.setQueryData<AttentionList>(["attention"], { items, count: items.length });
+      }
+      return { before };
+    },
+    onError: (_error, _key, context) => {
+      if (context?.before) client.setQueryData<AttentionList>(["attention"], context.before);
+      onFailed();
+    },
   });
 }
 

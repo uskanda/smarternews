@@ -243,6 +243,13 @@ describe("the shipped schema", () => {
     migrate(db);
     expect(tableNames(db)).toEqual(before);
   });
+
+  it("gives each shipped migration a version of its own", () => {
+    const versions = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(versions.filter((version, index) => versions.indexOf(version) !== index)).toEqual([]);
+  });
 });
 
 describe("the migration to an order of categories and feeds", () => {

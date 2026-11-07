@@ -1,9 +1,46 @@
 import { Link, useSearchParams } from "react-router";
-import { useCategories, useRuns, useTimeZone } from "../api/queries.ts";
-import { formatFull, retryLabel, runCostLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
-import { ErrorNotice, Loading } from "../ui/controls.tsx";
+import { useAttention, useCategories, useDismissAttention, useRuns, useTimeZone } from "../api/queries.ts";
+import { attentionLink, attentionText, formatFull, retryLabel, runCostLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
+import { useToast } from "../shell/toast.tsx";
+import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const NUMBER = "py-sm pr-lg text-right tabular-nums";
+
+/**
+ * What the runs went through that the user should look at, above the runs. Not shown when there is nothing.
+ * Each item leads to what it is about, and can be dismissed until something new sets it off.
+ */
+function AttentionSection() {
+  const attention = useAttention().data;
+  const toast = useToast();
+  const dismiss = useDismissAttention(() => toast({ message: "確認したことを保存できませんでした。もう一度試してください。" }));
+  if (!attention || attention.items.length === 0) return null;
+  return (
+    <section aria-labelledby="attention-heading" className="flex flex-col gap-sm border-b border-outline px-lg py-md md:px-2xl">
+      <h2 id="attention-heading" className="type-label-md text-warning">
+        注意
+      </h2>
+      <ul className="flex max-w-measure flex-col gap-sm type-body-md">
+        {attention.items.map((item) => {
+          const link = attentionLink(item);
+          return (
+            <li key={item.key} className="flex flex-wrap items-center justify-between gap-sm border-b border-outline pb-sm last:border-b-0">
+              <span className="flex min-w-0 flex-col gap-px">
+                <span className="break-words">{attentionText(item)}</span>
+                {link ? (
+                  <Link to={link.to} className="tap self-start type-label-md text-primary underline underline-offset-4">
+                    {link.label}
+                  </Link>
+                ) : null}
+              </span>
+              <Button onClick={() => dismiss.mutate(item.key)}>確認した</Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 /** Every run of the last 30 days, newest first. Rows update by themselves while a run is in progress. */
 export function RunsPage() {
@@ -35,6 +72,7 @@ export function RunsPage() {
           </select>
         </label>
       </header>
+      <AttentionSection />
       {runs.isError ? <ErrorNotice error={runs.error} onRetry={() => void runs.refetch()} /> : null}
       {runs.isPending && !runs.isError ? <Loading /> : null}
       {runs.data?.length === 0 ? (
