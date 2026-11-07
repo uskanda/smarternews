@@ -117,6 +117,14 @@ terms:
     definition: "実行ごとの契機、時刻、状態、件数、失敗を残した記録。"
     aliases: ["実行ログ"]
     en: "run history"
+  - term: "注意の項目"
+    definition: "実行の失敗や0件が続く検索のように、利用者に確かめてほしい実行の異常を、実行履歴から作った1件の知らせ。"
+    aliases: ["アラート", "警告の項目"]
+    en: "attention item"
+  - term: "検索の試行"
+    definition: "実行がニュース検索の検索先と検索語の組か、LLM検索のトピックで、1回検索したことの記録。"
+    aliases: []
+    en: "search attempt"
   # 一般語。terms-checkの一般語リストに無いので、この用語集で使う表記を決める。
   - term: "ニュース"
     definition: "最近公開または更新された出来事の報道や発表で、種別の1つでもある。"

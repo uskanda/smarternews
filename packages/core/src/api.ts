@@ -1021,6 +1021,50 @@ export const candidateSchema = z.object({
 });
 export type Candidate = z.infer<typeof candidateSchema>;
 
+// ---- attention ---------------------------------------------------------------------------------
+
+/**
+ * What an attention item points out: a category whose latest scheduled run failed with no retry left or stopped
+ * at a limit, a topic a run could not interpret, a search that found nothing three times in a row, a topic
+ * without an article for 14 days, and Google News redirect links that three runs in a row could not resolve.
+ */
+export const attentionKindSchema = z.enum(["run-failed", "uninterpreted", "empty-search", "no-adoption", "google-unresolved"]);
+export type AttentionKind = z.infer<typeof attentionKindSchema>;
+
+/** One thing the runs went through that the user should look at. The fields that do not fit its kind are null. */
+export const attentionItemSchema = z.object({
+  kind: attentionKindSchema,
+  /** Names the kind, the target and what set the item off. Dismissing it hides the item until that changes. */
+  key: z.string(),
+  categoryId: z.number().int().nullable(),
+  categoryName: z.string().nullable(),
+  topicId: z.number().int().nullable(),
+  topicText: z.string().nullable(),
+  /** The run that failed, or that could not interpret the topic. */
+  runId: z.number().int().nullable(),
+  runStatus: runStatusSchema.nullable(),
+  /** The source of a search that found nothing. */
+  source: z.enum(["news-search", "llm-search"]).nullable(),
+  engine: z.string().nullable(),
+  query: z.string().nullable(),
+  /**
+   * When the state began: the end of the failed run, the first search that found nothing, the last time an
+   * article of the topic was written (null when none ever was), the first run that resolved no link.
+   */
+  since: z.string().nullable(),
+});
+export type AttentionItem = z.infer<typeof attentionItemSchema>;
+
+export const attentionListSchema = z.object({
+  /** The items that were not dismissed. */
+  items: z.array(attentionItemSchema),
+  count: z.number().int(),
+});
+export type AttentionList = z.infer<typeof attentionListSchema>;
+
+export const attentionDismissalSchema = z.object({ key: z.string().trim().min(1).max(1000) });
+export type AttentionDismissal = z.infer<typeof attentionDismissalSchema>;
+
 // ---- providers ---------------------------------------------------------------------------------
 
 export const taskNameSchema = z.enum(["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"]);

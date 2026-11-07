@@ -182,6 +182,7 @@ export function createRuntime(options: { env: Record<string, string | undefined>
     images: { key: imageKey.key, proxy: imageProxy },
     tokens: { api: api.token, feed: feed.token },
     version,
+    newsEngines: config.newsSearch.engines,
     webDir: join(import.meta.dirname, "../../web/dist"),
   });
 

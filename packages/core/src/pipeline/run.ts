@@ -25,6 +25,7 @@ import { getCategory } from "../db/categories.ts";
 import { transaction, type Database } from "../db/database.ts";
 import { replaceMentions } from "../db/mentions.ts";
 import { finishRun, getRun, startRun } from "../db/runs.ts";
+import { recordSearchAttempt, type SearchAttempt } from "../db/search-attempts.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyInterpretation, listTopics } from "../db/topics.ts";
 import type { Fetcher } from "../fetch/http.ts";
@@ -33,7 +34,7 @@ import { LlmLimitError, type CallBudget, type TaskRunner } from "../llm/runner.t
 import { extractArticle } from "../sources/extract.ts";
 import { collectFeed } from "../sources/feed.ts";
 import { collectLlmSearch } from "../sources/llm-search.ts";
-import { collectNews, type NewsEngine } from "../sources/news-search.ts";
+import { searchNews, type NewsEngine, type NewsSearchResult } from "../sources/news-search.ts";
 import type { CollectWindow, RawCandidate } from "../sources/types.ts";
 import { resolveEvent } from "./events.ts";
 import { reasonText, type ReasonCode } from "./reasons.ts";
@@ -70,6 +71,9 @@ interface Context extends PipelineDeps {
   stats: { collected: number; rejected: number; created: number; updated: number };
   sources: { attempted: number; failed: number };
 }
+
+/** What one source brought back. A source other than news search has no redirect links to count. */
+type Loaded = NewsSearchResult;
 
 interface Found {
   candidate: RawCandidate;
@@ -121,24 +125,46 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
   const isSeen = (url: string) => isSeenUrl(ctx.db, ctx.category.id, url);
   const found = new Map<string, Found>();
 
-  const attempt = async (topic: Topic, stage: string, target: string, load: () => Promise<RawCandidate[]>) => {
+  /** A search is recorded with what it returned, so that searches that keep finding nothing can be pointed out. */
+  type Searched = { kind: SearchAttempt["kind"]; engine: string | null; query: string };
+  const attempt = async (topic: Topic, stage: string, target: string, load: () => Promise<Loaded>, searched?: Searched) => {
     ctx.sources.attempted += 1;
+    const record = (ok: boolean, loaded?: Loaded) => {
+      if (!searched) return;
+      recordSearchAttempt(ctx.db, {
+        runId: ctx.run.id,
+        topicId: topic.id,
+        ...searched,
+        ok,
+        returned: loaded?.returned ?? 0,
+        googleAttempted: loaded?.google.attempted ?? 0,
+        googleUnresolved: loaded?.google.unresolved ?? 0,
+        createdAt: ctx.now.toISOString(),
+      });
+    };
     try {
-      for (const candidate of await load()) {
+      const loaded = await load();
+      for (const candidate of loaded.candidates) {
         const entry = found.get(candidate.url) ?? { candidate, topicIds: new Set<number>(), aliases: new Set<string>() };
         entry.topicIds.add(topic.id);
         for (const alias of candidate.aliases) entry.aliases.add(alias);
         found.set(candidate.url, entry);
       }
+      record(true, loaded);
     } catch (error) {
       ctx.sources.failed += 1;
+      record(false);
       fail(ctx, stage, target, error);
     }
+  };
+  const plain = async (load: Promise<RawCandidate[]>): Promise<Loaded> => {
+    const candidates = await load;
+    return { candidates, returned: candidates.length, google: { attempted: 0, unresolved: 0 } };
   };
 
   for (const topic of topics) {
     for (const feedUrl of topic.sources.feeds) {
-      await attempt(topic, "feed", feedUrl, () => collectFeed(ctx.fetcher, feedUrl, window.since));
+      await attempt(topic, "feed", feedUrl, () => plain(collectFeed(ctx.fetcher, feedUrl, window.since)));
     }
     if (topic.sources.newsSearch) {
       const locale = topic.search ?? ctx.settings.search;
@@ -146,8 +172,12 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
       for (const query of topic.queries) {
         // Each engine is a source of its own, so one that fails leaves the results of the others.
         for (const engine of engines) {
-          await attempt(topic, "news-search", `${engine}: ${query}`, () =>
-            collectNews({ fetcher: ctx.fetcher, isSeen, engine, maxResultsPerQuery }, query, locale, window),
+          await attempt(
+            topic,
+            "news-search",
+            `${engine}: ${query}`,
+            () => searchNews({ fetcher: ctx.fetcher, isSeen, engine, maxResultsPerQuery }, query, locale, window),
+            { kind: "news-search", engine, query },
           );
         }
       }
@@ -155,7 +185,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     if (topic.sources.llmSearch) {
       await attempt(topic, "llm-search", topic.text, () => {
         if (!ctx.runner.canSearch()) throw new Error("the provider assigned to the search task cannot search the web");
-        return collectLlmSearch(
+        return plain(collectLlmSearch(
           { runner: ctx.runner, budget: ctx.budget, pages: ctx.pages },
           {
             topicText: topic.text,
@@ -166,8 +196,8 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
             now: ctx.now,
             since: window.since,
           },
-        );
-      });
+        ));
+      }, { kind: "llm-search", engine: null, query: topic.text });
     }
   }
 

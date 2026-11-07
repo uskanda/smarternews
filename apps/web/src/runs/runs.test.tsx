@@ -123,6 +123,84 @@ describe("the run history", () => {
   });
 });
 
+describe("attention", () => {
+  const section = () => screen.getByRole("region", { name: "注意" });
+  /** A scheduled run of the category that failed with its retries used up. */
+  function failedSchedule(server: TestServer, categoryId: number, slot: string) {
+    const id = finished(server, categoryId, { status: "failed", failures: [{ stage: "run", target: null, message: "boom" }] }, slot);
+    setRetry(server.db, id, { skipped: "limit" });
+    return id;
+  }
+
+  it("lists what to look at above the runs, with a link to the failed run", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const run = failedSchedule(server, category.id, "2026-03-01T05:00");
+    const { user, path } = renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByRole("region", { name: "注意" })).toHaveTextContent("Securityの定時の実行が失敗しました。やり直しの予定はありません。");
+    await user.click(within(section()).getByRole("link", { name: "実行の詳細" }));
+
+    expect(path()).toBe(`/runs/${run}`);
+  });
+
+  it("leads from a topic without articles to its editor", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const topic = createTopic(server.db, category.id, { text: "Exploited bugs", interpretation: { queries: ["q"], criteria: "c" } }, server.clock);
+    server.clock.advance(15 * 24 * 60 * MINUTE);
+    const { user, path } = renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByRole("region", { name: "注意" })).toHaveTextContent("Securityのトピック「Exploited bugs」で、14日間、記事の作成も更新もありません。");
+    const link = within(section()).getByRole("link", { name: "トピックの設定" });
+    expect(link).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${topic.id}`);
+    await user.click(link);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("Exploited bugs");
+  });
+
+  it("is not shown when there is nothing to look at", async () => {
+    const server = makeServer();
+    finished(server, server.category("Security").id);
+    renderApp({ server, route: "/runs" });
+
+    await screen.findByRole("table", { name: "実行履歴" });
+    expect(screen.queryByRole("region", { name: "注意" })).not.toBeInTheDocument();
+  });
+
+  it("drops an item that is dismissed, and lowers the count in the left pane", async () => {
+    const server = makeServer();
+    failedSchedule(server, server.category("Security").id, "2026-03-01T05:00");
+    failedSchedule(server, server.category("Tools").id, "2026-03-01T05:00");
+    const { user } = renderApp({ server, route: "/runs" });
+    await screen.findByRole("region", { name: "注意" });
+    expect(await screen.findByRole("link", { name: "実行履歴、注意2件" })).toBeInTheDocument();
+
+    const [first] = within(section()).getAllByRole("listitem");
+    await user.click(within(first!).getByRole("button", { name: "確認した" }));
+
+    await waitFor(() => expect(within(section()).getAllByRole("listitem")).toHaveLength(1));
+    expect(section()).not.toHaveTextContent("Securityの定時の実行");
+    expect(screen.getByRole("link", { name: "実行履歴、注意1件" })).toBeInTheDocument();
+    expect(server.db.prepare("SELECT COUNT(*) AS n FROM attention_dismissals").get()).toEqual({ n: 1 });
+  });
+
+  it("keeps an item and says so when the dismissal cannot be stored", async () => {
+    const server = makeServer();
+    failedSchedule(server, server.category("Security").id, "2026-03-01T05:00");
+    let down = false;
+    const { user } = renderApp({ server, route: "/runs", offline: () => down });
+    await screen.findByRole("region", { name: "注意" });
+
+    down = true;
+    await user.click(within(section()).getByRole("button", { name: "確認した" }));
+
+    expect(await screen.findByText("確認したことを保存できませんでした。もう一度試してください。")).toBeInTheDocument();
+    expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
+  });
+});
+
 describe("one run", () => {
   it("names the step that failed, what it was working on, and why", async () => {
     const server = makeServer();

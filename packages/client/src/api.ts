@@ -1,6 +1,8 @@
 // The only code in the web app and the Android app that talks to the server. Every answer is checked against
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
+  attentionListSchema,
+  type AttentionList,
   annotationListSchema,
   articleNoteSchema,
   digestListSchema,
@@ -341,6 +343,10 @@ export function createApi(options: ApiOptions) {
     run: (id: number): Promise<Run> => json(runSchema, `/runs/${id}`),
     runCandidates: (id: number, status: Candidate["status"] | "all" = "rejected"): Promise<Candidate[]> =>
       json(z.array(candidateSchema), `/runs/${id}/candidates${query({ status })}`),
+    /** What the runs went through that the user should look at, leaving out what was dismissed. */
+    attention: (): Promise<AttentionList> => json(attentionListSchema, "/attention"),
+    /** Hides the item of this key until what set it off changes. */
+    dismissAttention: async (key: string): Promise<void> => void (await request("/attention/dismissals", body("POST", { key }))),
 
     /** The digests, the latest first, and whether one is being made. */
     digests: (filter: DigestListQuery = {}): Promise<DigestList> => json(digestListSchema, `/digests${query(filter)}`),

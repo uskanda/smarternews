@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { getArticle, setArticleFlags } from "../db/articles.ts";
 import { getDigest, saveDigest } from "../db/digests.ts";
 import { getRun } from "../db/runs.ts";
+import { listSearchAttempts } from "../db/search-attempts.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
+import { dismissAttention, isAttentionDismissed } from "./attention.ts";
 import { purgeExpired } from "./retention.ts";
 
 const FEED = "https://example.org/feed.xml";
@@ -42,6 +44,24 @@ describe("purgeExpired", () => {
 
     expect(() => getRun(h.db, run.id)).toThrow(expect.objectContaining({ code: "not_found" }));
     expect(h.candidates(run.id)).toEqual([]);
+  });
+
+  it("removes the record of searches and of dismissed attention items after thirty days", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { newsSearch: true, queries: ["q"] });
+    h.news({});
+    const run = await h.run();
+    dismissAttention(h.db, "run:1", h.clock);
+    h.clock.advance(29 * DAY);
+    purgeExpired(h.db, h.clock);
+    expect(listSearchAttempts(h.db, run.id)).toHaveLength(1);
+    expect(isAttentionDismissed(h.db, "run:1")).toBe(true);
+
+    h.clock.advance(2 * DAY);
+    purgeExpired(h.db, h.clock);
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([]);
+    expect(isAttentionDismissed(h.db, "run:1")).toBe(false);
   });
 
   it("removes an article without a star 180 days after its last update", async () => {

@@ -1,4 +1,4 @@
-import { insertFeed, recordFetchFailure, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
+import { createTopic, insertFeed, recordFetchFailure, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -100,6 +100,27 @@ describe("the list of views and categories", () => {
     renderApp();
     expect(await within(nav()).findByRole("link", { name: "設定" })).toBeInTheDocument();
     expect(within(nav()).getByRole("link", { name: "実行履歴" })).toBeInTheDocument();
+  });
+
+  it("puts the number of attention items beside the run history, read out as such, and none when there are none", async () => {
+    const server = makeServer();
+    // Topics without an article for 14 days: one in each category.
+    for (const name of ["Security", "Tools"]) {
+      createTopic(server.db, server.category(name).id, { text: `${name} topic`, interpretation: { queries: ["q"], criteria: "c" } }, server.clock);
+    }
+    server.clock.advance(15 * 86_400_000);
+    renderApp({ server });
+
+    const marked = await within(nav()).findByRole("link", { name: "実行履歴、注意2件" });
+    expect(within(marked).getByText("2")).toHaveClass("text-warning");
+  });
+
+  it("puts no number beside the run history when there is nothing to look at", async () => {
+    const server = makeServer();
+    server.category("Security");
+    renderApp({ server });
+
+    expect(await within(nav()).findByRole("link", { name: "実行履歴" })).toHaveTextContent(/^実行履歴$/);
   });
 });
 

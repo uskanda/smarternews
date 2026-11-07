@@ -24,7 +24,18 @@
 
 ### 検索の試行を表に残す
 
-移行`022_attention.sql`で表`search_attempts`を足す。列は`run_id`、`topic_id`、`kind`（`news-search`か`llm-search`）、`engine`（LLM検索ではNULL）、`query`（LLM検索ではトピックの文）、`ok`、`returned`、`google_attempted`、`google_unresolved`、`created_at`である。
+移行`022_attention.sql`で表`search_attempts`を足す。主な列は次のとおりである。
+
+| 列 | 中身 |
+|---|---|
+| `run_id`、`topic_id` | 試行した実行とトピック |
+| `kind` | `news-search`か`llm-search` |
+| `engine` | 検索先。LLM検索ではNULL |
+| `query` | 検索語。LLM検索ではトピックの文 |
+| `ok` | エラーで終わったら0 |
+| `returned` | 判定済みのURLを除く前の結果の数 |
+| `google_attempted`、`google_unresolved` | 転送用URLの解決を試した数と、解決できなかった数 |
+
 `run_id`と`topic_id`は`ON DELETE CASCADE`にする。実行の削除（30日）とトピックの削除で、記録も消える。`purgeExpired`は、念のため`created_at`でも30日で消す。
 
 `run.ts`の`collect`の`attempt`が、ニュース検索とLLM検索の試行ごとに1行を書く。フィードの試行は書かない。
@@ -62,9 +73,9 @@ APIの項目は、種類と、カテゴリの名前、トピックの文、検�
 
 `GET /api/attention`は`{ items, count }`を返す。`POST /api/attention/dismissals`は`{ key }`を受け取り、204を返す。同じ鍵の2回目は上書きする。
 
-Webでは`useAttention()`で一覧を取り、ほかと同じ1分ごとに取り直す。実行の一覧が変わったとき（`useRuns`の取り直し）にも、注意の一覧を取り直す。
+Webでは`useAttention()`で一覧を取り、ほかと同じ1分ごとに取り直す。実行が終わってから項目が消えるまで、最長で1分かかる。
 「確認した」は、送る前に画面から項目を除く。失敗したら元に戻し、画面の下で知らせる。
-左のペインの「実行履歴」は、件数を`text-warning`で表示する。読み上げ名は「注意 N件」にし、行の名前と続けて読まれないよう、間に読点を置く。
+左のペインの「実行履歴」は、件数を`text-warning`で表示する。読み上げ名は`注意N件`にし、行の名前と続けて読まれないよう、間に読点を置く。
 
 ## Risks / Trade-offs
 
