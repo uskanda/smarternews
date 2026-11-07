@@ -263,6 +263,22 @@ describe("the settings of a feed from its list", () => {
     expect(screen.getByRole("dialog", { name: "購読フィードの設定" })).toBeInTheDocument();
     expect(within(view.dialog).getByRole("checkbox", { name: "翻訳する" })).toBeChecked();
   });
+
+  it("goes to the feed's form among the settings of feeds, dropping the switches it did not save", async () => {
+    const { server, blog } = seeded();
+    const view = await openOptions(server, blog.id);
+    await view.user.click(within(view.dialog).getByRole("checkbox", { name: "翻訳する" }));
+    await view.user.click(within(view.dialog).getByRole("link", { name: "ほかの設定" }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "購読フィード" })).toBeInTheDocument();
+    expect(view.path()).toBe("/settings/feeds");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const row = (await within(screen.getByRole("region", { name: "購読フィードの一覧" })).findByText("Blog")).closest("li")!;
+    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    expect(within(row).getByRole("checkbox", { name: "翻訳する" })).not.toBeChecked();
+    expect(getFeed(server.db, blog.id).translate).toBe(false);
+    expect(view.requests.filter((request) => request.startsWith("PATCH"))).toEqual([]);
+  });
 });
 
 describe("keys while a dialog is open", () => {

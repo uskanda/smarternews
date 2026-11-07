@@ -22,6 +22,62 @@ function topic(server: TestServer, categoryId: number, text: string, interpreted
   return created;
 }
 
+describe("the links to the sections", () => {
+  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "トークン"];
+
+  it("lists the nine sections at the top, each pointing at its section", async () => {
+    renderApp({ route: "/settings" });
+    await section("全体設定");
+    await section("プロバイダー");
+
+    const links = within(screen.getByRole("navigation", { name: "設定の区画" })).getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(SECTIONS);
+    for (const [index, link] of links.entries()) {
+      const target = document.getElementById(link.getAttribute("href")!.split("#")[1]!);
+      expect(target).toHaveAccessibleName(SECTIONS[index]);
+    }
+  });
+
+  it("scrolls to a section that appears once the settings are in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderApp({ route: "/settings#reader" });
+
+    const reader = await section("読み手情報");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(reader));
+    scroll.mockRestore();
+  });
+
+  it("still scrolls to the providers", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderApp({ route: "/settings#providers" });
+
+    const providers = await section("プロバイダー");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(providers));
+    scroll.mockRestore();
+  });
+
+  it("moves to the section a link names", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { user } = renderApp({ route: "/settings" });
+    const tokens = await section("トークン");
+    await section("プロバイダー");
+
+    await user.click(within(screen.getByRole("navigation", { name: "設定の区画" })).getByRole("link", { name: "トークン" }));
+
+    await waitFor(() => expect(scroll.mock.contexts).toContain(tokens));
+    scroll.mockRestore();
+  });
+});
+
+describe("the main action of the settings", () => {
+  it("is none: no button stands out over the others", async () => {
+    renderApp({ route: "/settings" });
+    await section("全体設定");
+
+    for (const button of screen.getAllByRole("button")) expect(button).not.toHaveClass("bg-primary");
+  });
+});
+
 describe("the list of categories", () => {
   it("shows every category with its kind, schedule and number of topics, and marks the disabled ones", async () => {
     const server = makeServer();
