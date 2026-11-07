@@ -677,7 +677,7 @@ Three fields say what the run's model calls used. Money is counted as the monthl
 |---|---|
 | `costUsd` | US dollars the run spent on billable providers. `null` for a run that called no billable provider |
 | `unknownCostCalls` | The run's calls to billable providers whose cost is unknown, such as a timeout. `costUsd` leaves them out |
-| `callsByTask` | For each task the run called, `calls` (every call, those to providers that cost nothing included) and `costUsd`. A task the run did not call is absent |
+| `callsByTask` | For each task the run called, `calls` (every call, those to providers that cost nothing included) and `costUsd` (`null` when none of the calls went to a billable provider). A task the run did not call is absent |
 
 A scheduled run that ends as `failed` is retried, as the README describes. Four more fields of a run say where it stands:
 

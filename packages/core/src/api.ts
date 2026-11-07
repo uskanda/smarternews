@@ -981,9 +981,9 @@ export type TaskName = z.infer<typeof taskNameSchema>;
 
 /**
  * Model calls and what they cost. `calls` counts every call, those to providers that cost nothing included; `costUsd`
- * adds up the known costs of the calls to providers that cost money.
+ * adds up the known costs of the calls to providers that cost money, and is null when none of the calls was one.
  */
-export const taskCallsSchema = z.object({ calls: z.number().int(), costUsd: z.number() });
+export const taskCallsSchema = z.object({ calls: z.number().int(), costUsd: z.number().nullable() });
 export type TaskCalls = z.infer<typeof taskCallsSchema>;
 
 export const runSchema = z.object({

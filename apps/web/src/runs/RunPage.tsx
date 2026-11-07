@@ -1,4 +1,4 @@
-import type { Candidate } from "@smarternews/core/api";
+import type { Candidate, TaskName } from "@smarternews/core/api";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
@@ -9,9 +9,11 @@ import {
   periodDayLabel,
   RETRY_SKIPPED_LABEL,
   retryLabel,
+  runCostLabel,
   stageLabel,
   STATUS_LABEL,
   stopLimitLabel,
+  TASK_LABEL,
   TRIGGER_LABEL,
 } from "@smarternews/client";
 import { useCategories, useProviders, useRun, useTimeZone } from "../api/queries.ts";
@@ -97,6 +99,10 @@ export function RunPage() {
   const data = run.data;
   const category = categories.find((entry) => entry.id === data.categoryId);
   const rejected = candidates.data ?? [];
+  const calledTasks = (Object.keys(TASK_LABEL) as TaskName[]).flatMap((task) => {
+    const calls = data.callsByTask[task];
+    return calls ? [[task, calls] as const] : [];
+  });
 
   return (
     <div className="h-full overflow-y-auto bg-surface">
@@ -149,7 +155,44 @@ export function RunPage() {
           <dd className="tabular-nums">{data.articlesUpdated}</dd>
           <dt className="text-on-surface-muted">LLMの呼び出し</dt>
           <dd className="tabular-nums">{data.llmCalls}</dd>
+          <dt className="text-on-surface-muted">金額</dt>
+          <dd className="tabular-nums">{runCostLabel(data.costUsd)}</dd>
+          {data.unknownCostCalls > 0 ? (
+            <>
+              <dt className="text-on-surface-muted">金額のわからない呼び出し</dt>
+              <dd className="tabular-nums">{data.unknownCostCalls}件</dd>
+            </>
+          ) : null}
         </dl>
+        {calledTasks.length > 0 ? (
+          <div className="max-w-measure overflow-x-auto">
+            <table aria-label="タスクごとの呼び出し" className="w-full text-left type-body-md">
+              <thead className="type-label-sm text-on-surface-muted">
+                <tr>
+                  <th className="py-xs pr-lg font-normal">タスク</th>
+                  <th className="py-xs pr-lg text-right font-normal">回数</th>
+                  <th className="py-xs text-right font-normal">金額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calledTasks.map(([task, calls]) => (
+                  <tr key={task} className="border-t border-outline">
+                    <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
+                      {TASK_LABEL[task]}
+                    </th>
+                    <td className="py-xs pr-lg text-right tabular-nums">{calls.calls}</td>
+                    <td className="py-xs text-right tabular-nums">{runCostLabel(calls.costUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {data.unknownCostCalls > 0 ? (
+          <p className="max-w-measure type-label-sm text-on-surface-muted">
+            金額のわからない呼び出しは、時間切れなどで応答が届かなかった呼び出しです。金額には入っていません。
+          </p>
+        ) : null}
         {data.status === "stopped_by_limit" ? (
           <p className="max-w-measure type-body-md">
             {stopLimitLabel(data.stoppedBy)}

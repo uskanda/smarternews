@@ -27,10 +27,11 @@ function callsOf(db: Database, ids: number[]): Map<number, RunCalls> {
     const id = num(row.run_id);
     const entry = byRun.get(id) ?? { costUsd: 0, unknownCostCalls: 0, callsByTask: {}, billable: false };
     const cost = Number(row.cost);
-    entry.callsByTask[str(row.task) as TaskName] = { calls: num(row.calls), costUsd: cost };
+    const billable = num(row.billable) === 1;
+    entry.callsByTask[str(row.task) as TaskName] = { calls: num(row.calls), costUsd: billable ? cost : null };
     entry.costUsd = (entry.costUsd ?? 0) + cost;
     entry.unknownCostCalls += num(row.unknown);
-    entry.billable ||= num(row.billable) === 1;
+    entry.billable ||= billable;
     byRun.set(id, entry);
   }
   return new Map(

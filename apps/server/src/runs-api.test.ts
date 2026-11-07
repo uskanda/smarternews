@@ -162,7 +162,7 @@ describe("runs", () => {
       expect(await (await s.get(`/api/v1/runs/${free}`)).json()).toMatchObject({
         costUsd: null,
         unknownCostCalls: 0,
-        callsByTask: { judge: { calls: 1, costUsd: 0 }, write: { calls: 1, costUsd: 0 } },
+        callsByTask: { judge: { calls: 1, costUsd: null }, write: { calls: 1, costUsd: null } },
       });
       expect((await (await s.get("/api/v1/runs")).json())[0]).toMatchObject({ id: none, costUsd: null, unknownCostCalls: 0, callsByTask: {} });
     });

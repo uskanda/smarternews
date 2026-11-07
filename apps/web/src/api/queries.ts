@@ -374,6 +374,12 @@ export function useProviders() {
   return useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), refetchInterval: REFRESH_MS });
 }
 
+/** The model calls of the budget period, split by category and by day. Fetched as often as the providers. */
+export function useUsage() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
+}
+
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */
 export function useRuns(category?: number) {
   const { api } = useApp();

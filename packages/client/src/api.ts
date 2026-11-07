@@ -47,6 +47,7 @@ import {
   termGroupSchema,
   topicSchema,
   translationStatusSchema,
+  usageSchema,
   type Article,
   type ArticleList,
   type ArticleListQuery,
@@ -82,6 +83,7 @@ import {
   type PageSelectors,
   type SelectorPreview,
   type ProviderStatus,
+  type Usage,
   type Run,
   type Settings,
   type SettingsUpdate,
@@ -349,6 +351,7 @@ export function createApi(options: ApiOptions) {
     requestDigest: (): Promise<DigestRequestResult> => json(digestRequestResultSchema, "/digests", { method: "POST" }),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
+    usage: (): Promise<Usage> => json(usageSchema, "/usage"),
     /** How much the translation API was used this month, and whether it has a key. */
     translation: (): Promise<TranslationStatus> => json(translationStatusSchema, "/translation"),
   };
