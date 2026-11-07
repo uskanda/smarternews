@@ -186,6 +186,10 @@ terms:
     definition: "押すと1つの操作が実行される画面上の部品。"
     aliases: []
     en: "button"
+  - term: "フォーム"
+    definition: "画面の中で、入力欄と、その値を送るボタンをまとめた区画。"
+    aliases: []
+    en: "form"
   - term: "スクロール"
     definition: "画面に入りきらない内容を上下に送って見ること。"
     aliases: []

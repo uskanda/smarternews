@@ -311,7 +311,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
 }
 
 function refuse(message: string): DomainError {
-  return new DomainError("invalid", message, [{ path: "url", message }]);
+  return new DomainError("invalid", message, [{ path: "url", message, code: "unreachable" }]);
 }
 
 async function firstFeed(deps: FeedDeps, url: string) {
@@ -330,7 +330,7 @@ async function firstPage(deps: FeedDeps, url: string, selectors: PageSelectors) 
   const extracted = extractPage(page.html, page.url, selectors, getSettings(deps.db).timeZone);
   if (extracted.items.length === 0) {
     const message = "no article could be taken out of the page with these selectors";
-    throw new DomainError("invalid", message, [{ path: "selectors.item", message }]);
+    throw new DomainError("invalid", message, [{ path: "selectors.item", message, code: "no_items" }]);
   }
   return { parsed: { title: extracted.title, siteUrl: page.url, items: extracted.items }, etag: undefined, lastModified: undefined };
 }

@@ -60,7 +60,7 @@ describe("a hide filter", () => {
   it("refuses a regular expression it cannot use, naming the condition", () => {
     const db = createTestDb();
     expect(() => createFilter(db, hide([title("ok"), { fields: ["title"], match: "regex", value: "(sale" }]), clock)).toThrow(
-      expect.objectContaining({ code: "invalid", fields: [{ path: "conditions.1.value", message: expect.stringMatching(/regular expression/) }] }),
+      expect.objectContaining({ code: "invalid", fields: [{ path: "conditions.1.value", message: expect.stringMatching(/regular expression/), code: "format" }] }),
     );
     expect(listFilters(db)).toEqual([]);
   });
@@ -68,10 +68,10 @@ describe("a hide filter", () => {
   it("refuses a scope that names nothing", () => {
     const db = createTestDb();
     expect(() => createFilter(db, hide([title("x")], { type: "feed", feedId: 99 }), clock)).toThrow(
-      expect.objectContaining({ code: "invalid", fields: [{ path: "scope.feedId", message: "no such feed" }] }),
+      expect.objectContaining({ code: "invalid", fields: [{ path: "scope.feedId", message: "no such feed", code: "no_such_item" }] }),
     );
     expect(() => createFilter(db, hide([title("x")], { type: "category", categoryId: 99 }), clock)).toThrow(
-      expect.objectContaining({ fields: [{ path: "scope.categoryId", message: "no such category" }] }),
+      expect.objectContaining({ fields: [{ path: "scope.categoryId", message: "no such category", code: "no_such_item" }] }),
     );
   });
 });

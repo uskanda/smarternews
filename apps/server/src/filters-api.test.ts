@@ -107,17 +107,17 @@ describe("filters", () => {
     const { s } = await setup();
     const regex = await s.post("/api/v1/filters", hide(title("ok"), { fields: ["title"], match: "regex", value: "(sale" }));
     expect(regex.status).toBe(400);
-    expect((await regex.json()).error.fields).toEqual([{ path: "conditions.1.value", message: expect.stringMatching(/regular expression/) }]);
+    expect((await regex.json()).error.fields).toEqual([{ path: "conditions.1.value", message: expect.stringMatching(/regular expression/), code: "format" }]);
 
     const everywhere = await s.post("/api/v1/filters", { action: "keep", scope: { type: "all" }, conditions: [title("x")] });
     expect(everywhere.status).toBe(400);
-    expect((await everywhere.json()).error.fields).toEqual([{ path: "scope", message: "a keep filter cannot apply to everything" }]);
+    expect((await everywhere.json()).error.fields).toEqual([{ path: "scope", message: "a keep filter cannot apply to everything", code: "not_allowed" }]);
 
     const nowhere = await s.post("/api/v1/filters", hide(title("x")));
     const feedless = await s.post("/api/v1/filters", { action: "hide", scope: { type: "feed", feedId: 999 }, conditions: [title("x")] });
     expect(nowhere.status).toBe(201);
     expect(feedless.status).toBe(400);
-    expect((await feedless.json()).error.fields).toEqual([{ path: "scope.feedId", message: "no such feed" }]);
+    expect((await feedless.json()).error.fields).toEqual([{ path: "scope.feedId", message: "no such feed", code: "no_such_item" }]);
 
     const preview = await s.post("/api/v1/filters/preview", hide({ fields: ["title"], match: "regex", value: "(sale" }));
     expect(preview.status).toBe(400);
