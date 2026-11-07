@@ -30,7 +30,7 @@
 
 ## Impact
 
-- `packages/core`：呼び出しの記録に用途の列を足す（`022_llm_call_purpose.sql`）。`TaskRunner`の試しの計数と上限、設定`limits.topicTrialsPerDay`も足す。試しの候補の読み出し、プログラムの理由の見分け、試しの処理、APIの型も足す。
+- `packages/core`：呼び出しの記録に用途の列を足す（`025_llm_call_purpose.sql`）。`TaskRunner`の試しの計数と上限、設定`limits.topicTrialsPerDay`も足す。試しの候補の読み出し、プログラムの理由の見分け、試しの処理、APIの型も足す。
 - `apps/server`：試しをメモリーに置く仕組みと、2つの操作。
 - `packages/client`：2つの操作の呼び出し。
 - `apps/web`：トピックの編集の「試す」と結果の表示。

@@ -1,8 +1,9 @@
 import { z } from "zod";
-import type { BudgetStatus, TaskName } from "../api.ts";
+import type { BudgetStatus, TaskName, Usage } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import type { Database } from "../db/database.ts";
 import { num } from "../db/rows.ts";
+import { usageReport } from "../db/usage.ts";
 import { budgetPeriod, startOfLocalDay } from "../time.ts";
 import { LlmCallError, type LlmAdapter, type LlmCompletion, type LlmUsage } from "./adapter.ts";
 import { costOf, type ModelPricing } from "./pricing.ts";
@@ -187,6 +188,19 @@ export class TaskRunner {
       .get(...range)!.n;
     const { monthlyBudgetUsd, warnRatio } = this.budget;
     return { periodStart: firstDay, periodEnd: lastDay, spentUsd, monthlyBudgetUsd, warnRatio, unknownCostCalls: num(unknown), byTask, byProvider };
+  }
+
+  /** The model calls of the current budget period by category, outside runs and by UTC day, with the projection. */
+  usageStatus(): Usage {
+    const { db, clock, providers } = this.#options;
+    const now = clock();
+    const { start, end, firstDay, lastDay } = budgetPeriod(now, this.budget.resetDay);
+    const billable = [...providers.values()].some((provider) => provider.pricing !== null);
+    return {
+      periodStart: firstDay,
+      periodEnd: lastDay,
+      ...usageReport(db, { start, end, now, monthlyBudgetUsd: this.budget.monthlyBudgetUsd, billable }),
+    };
   }
 
   canSearch(): boolean {

@@ -95,7 +95,7 @@ function words(text: string, theme: Drawing, key?: string): ReactNode {
  * An image of a feed article, as wide as the text, loaded from the server's relay. Its height follows from its
  * proportions once it has loaded; when it cannot be loaded, its description takes its place.
  */
-function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
+export function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
   const [ratio, setRatio] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   if (failed) {

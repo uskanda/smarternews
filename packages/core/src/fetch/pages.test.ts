@@ -90,6 +90,17 @@ describe("PageFetcher", () => {
     await expect(pages.fetchPage("https://example.org/gone")).resolves.toEqual({ ok: false, reason: "http", status: 404, detail: "HTTP status 404" });
   });
 
+  it("hands back the Retry-After header of an error status as it came", async () => {
+    const { pages } = setup({ "https://example.org/busy": () => new Response("busy", { status: 429, headers: { "retry-after": "120" } }) });
+    await expect(pages.fetchPage("https://example.org/busy")).resolves.toEqual({
+      ok: false,
+      reason: "http",
+      status: 429,
+      detail: "HTTP status 429",
+      retryAfter: "120",
+    });
+  });
+
   it("reports a response that is not a document", async () => {
     const { pages } = setup({
       "https://example.org/file.pdf": () => new Response("%PDF", { headers: { "content-type": "application/pdf" } }),

@@ -4,7 +4,7 @@
 
 ## 1. 呼び出しの用途と上限
 
-- [x] 1.1 `022_llm_call_purpose.sql`で`llm_calls`に`purpose`を足す。既存のテストが通ることを確かめる
+- [x] 1.1 `025_llm_call_purpose.sql`で`llm_calls`に`purpose`を足す。既存のテストが通ることを確かめる
 - [x] 1.2 `TaskRunner`に、`CallBudget`の`purpose`と`topicTrialsToday()`と`trialBlocked(calls)`を足す。上限`topicTrialsPerDay`の既定は30とする
 - [x] 1.3 `runner.test.ts`で確かめる。試しの呼び出しが`purpose='trial'`で記録され、試しと1日の両方に数えられる。試しの上限で止まっても、実行は止まらない
 - [x] 1.4 `config.ts`に`limits.topicTrialsPerDay`（0以上、既定30）を足し、`llmCallsPerDay`の既定を380にする。既定と誤りを`config.test.ts`で確かめる

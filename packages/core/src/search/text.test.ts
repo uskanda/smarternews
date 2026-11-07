@@ -27,7 +27,7 @@ describe("parseSearchTerms", () => {
     try {
       parseSearchTerms("");
     } catch (error) {
-      expect((error as DomainError).fields).toEqual([{ path: "q", message: "is empty" }]);
+      expect((error as DomainError).fields).toEqual([{ path: "q", message: "is empty", code: "required" }]);
     }
   });
 

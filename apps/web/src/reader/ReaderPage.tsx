@@ -352,7 +352,8 @@ export function ReaderPage({ view }: { view: View }) {
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
-  function setRead(id: number, isRead: boolean) {
+  /** Shows a change of the read state in the list: an unread or recently read list keeps the row. */
+  function showRead(id: number, isRead: boolean) {
     // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
     if (!isRead) scrollRead.exclude(id);
     const summary = items.find((item) => item.id === id);
@@ -362,7 +363,30 @@ export function ReaderPage({ view }: { view: View }) {
         items: [...current.items.filter((item) => item.id !== id), { ...summary, isRead }],
       }));
     }
+  }
+  function setRead(id: number, isRead: boolean) {
+    showRead(id, isRead);
     flags.mutate({ id, isRead });
+  }
+  /**
+   * Marks a generated article as a miss, which reads it too, and offers to undo both; pressed again, takes only the
+   * mark away. The read state is sent only when it changes, so that a failure puts back no more than was changed.
+   */
+  function toggleMiss(target: Pick<Article, "id" | "isRead" | "missed">) {
+    if (target.missed) return void flags.mutate({ id: target.id, missed: false });
+    const wasRead = target.isRead;
+    if (!wasRead) showRead(target.id, true);
+    flags.mutate({ id: target.id, missed: true, ...(wasRead ? {} : { isRead: true }) });
+    toast({
+      message: wasRead ? "外れの印を付けました" : "外れの印を付けて、既読にしました",
+      durationMs: 10_000,
+      action: { label: "取り消す", run: () => undoMiss(target.id, wasRead) },
+    });
+  }
+  /** Takes the mark away, and puts the article back to unread when it was unread before the mark. */
+  function undoMiss(id: number, wasRead: boolean) {
+    if (!wasRead) showRead(id, false);
+    flags.mutate({ id, missed: false, ...(wasRead ? {} : { isRead: false }) });
   }
   function setStar(id: number, starred: boolean) {
     setKept((current) => ({
@@ -375,12 +399,17 @@ export function ReaderPage({ view }: { view: View }) {
     setStar(target.id, !target.starred);
   }
   /** Sends a change of flags again, as the screen of now has it: a retry after a failure. */
-  function sendFlags({ id, isRead, starred }: ArticleFlagChange) {
+  function sendFlags(change: ArticleFlagChange) {
+    const { id, isRead, starred, missed } = change;
+    if (missed !== undefined) {
+      if (isRead !== undefined) showRead(id, isRead);
+      return void flags.mutate(change);
+    }
     if (isRead !== undefined) setRead(id, isRead);
     if (starred !== undefined) setStar(id, starred);
   }
   flagFailed.current = (change) => {
-    const { id, isRead, starred } = change;
+    const { id, isRead, starred, missed } = change;
     // The rows kept in an unread or recently read list are not in the cache, so they are put back here.
     setKept((current) => ({
       key: current.key,
@@ -391,13 +420,17 @@ export function ReaderPage({ view }: { view: View }) {
       ),
     }));
     const message =
-      isRead !== undefined
-        ? isRead
-          ? "既読にできませんでした"
-          : "未読に戻せませんでした"
-        : starred
-          ? "スターを付けられませんでした"
-          : "スターを外せませんでした";
+      missed !== undefined
+        ? missed
+          ? "外れの印を付けられませんでした"
+          : "外れの印を外せませんでした"
+        : isRead !== undefined
+          ? isRead
+            ? "既読にできませんでした"
+            : "未読に戻せませんでした"
+          : starred
+            ? "スターを付けられませんでした"
+            : "スターを外せませんでした";
     toast({ message, durationMs: 10_000, action: { label: "もう一度試す", run: () => flagRetry.current(change) } });
   };
   flagRetry.current = sendFlags;
@@ -606,6 +639,8 @@ export function ReaderPage({ view }: { view: View }) {
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
       m: selected ? () => setRead(selected.id, !selected.isRead) : undefined,
+      // The same as the button under the body of a generated article, and only while it is shown.
+      x: opened?.origin === "generated" && opened.id === articleId ? () => toggleMiss(opened) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
@@ -798,6 +833,7 @@ export function ReaderPage({ view }: { view: View }) {
               neighbors={neighbors}
               onToggleStar={toggleStar}
               onToggleRead={(article) => setRead(article.id, !article.isRead)}
+              onToggleMiss={toggleMiss}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),

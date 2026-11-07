@@ -2,7 +2,7 @@ import type { Category, Feed, Filter, FilterAction, FilterCondition, FilterField
 import { MAX_FILTER_CONDITIONS } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
-import { ApiError } from "@smarternews/client";
+import { ApiError, describeProblem, type FieldProblem } from "@smarternews/client";
 import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -58,12 +58,21 @@ export function useRefresh() {
   };
 }
 
+/** The name a refusal of the server gives a field, as the form shows it: 条件2 for `conditions.1`. */
+function labelOf(path: string): string {
+  const condition = /^conditions\.(\d+)/.exec(path);
+  if (condition) return `条件${Number(condition[1]) + 1}`;
+  if (path.startsWith("scope")) return "範囲";
+  if (path.startsWith("conditions")) return "条件";
+  return "フィルター";
+}
+
 /** Why the server refused a condition or the scope, in the app's words. */
-function problemText(message: string): string {
-  if (/regular expression/.test(message)) return "正規表現として読めません。かっこや記号の対応を確かめてください。";
-  if (/no such (feed|category)/.test(message)) return "この範囲はもうありません。選び直してください。";
-  if (/keep filter cannot apply to everything/.test(message)) return "残すフィルターには全体を選べません。";
-  return message;
+function problemText(problem: FieldProblem): string {
+  if (problem.code === "format" && /^conditions\.\d+\.value$/.test(problem.path)) return "正規表現として読めません。かっこや記号の対応を確かめてください。";
+  if (problem.code === "no_such_item" && problem.path.startsWith("scope")) return "この範囲はもうありません。選び直してください。";
+  if (problem.code === "not_allowed" && problem.path === "scope") return "残すフィルターには全体を選べません。";
+  return describeProblem(problem, labelOf(problem.path));
 }
 
 interface DraftCondition {
@@ -207,7 +216,7 @@ export function FilterForm({
   const categories = useCategories().data ?? [];
   const feeds = useFeeds().data ?? [];
   const [draft, setDraft] = useState<Draft>(() => draftOf(filter ?? initial));
-  const [problems, setProblems] = useState<Array<{ path: string; message: string }>>([]);
+  const [problems, setProblems] = useState<FieldProblem[]>([]);
   const [general, setGeneral] = useState<string | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -229,7 +238,7 @@ export function FilterForm({
   });
   const problemAt = (path: string) => {
     const found = problems.find((problem) => problem.path === path || problem.path.startsWith(`${path}.`));
-    return found ? problemText(found.message) : null;
+    return found ? problemText(found) : null;
   };
 
   function change(next: Partial<Draft>) {
@@ -243,7 +252,7 @@ export function FilterForm({
     if (error instanceof ApiError && error.kind === "invalid" && error.fields.length > 0) {
       setProblems(error.fields);
       const shown = error.fields.some((field) => /^(conditions\.\d+|scope)/.test(field.path));
-      setGeneral(shown ? null : problemText(error.fields[0]!.message));
+      setGeneral(shown ? null : problemText(error.fields[0]!));
     } else if (error instanceof ApiError && error.kind === "conflict") {
       setGeneral("同じフィルターがすでにあります。");
     } else {
@@ -300,7 +309,7 @@ export function FilterForm({
   const newsCategories = categories.filter((category) => category.kind === "news" && !preferredKeys.includes(`c:${category.id}`));
   const otherFeeds = feeds.filter((feed) => !preferredKeys.includes(`f:${feed.id}`));
   return (
-    <form onSubmit={save} className="flex max-w-measure-article flex-col gap-md" aria-label={filter ? "フィルターの編集" : undefined}>
+    <form noValidate onSubmit={save} className="flex max-w-measure-article flex-col gap-md" aria-label={filter ? "フィルターの編集" : undefined}>
       <fieldset className="flex flex-wrap gap-lg type-body-md">
         <legend className="pb-xs type-label-md">種類</legend>
         {(["hide", "keep"] as const).map((action) => (

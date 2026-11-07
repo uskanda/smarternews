@@ -196,9 +196,9 @@ export function testServer(
       return createCategory(db, { name, kind }, clock);
     },
     /** Stores an article at the current clock time. */
-    article(categoryId: number, overrides: Partial<ArticleContent> & { kind?: Kind; refs?: string[] } = {}): number {
+    article(categoryId: number, overrides: Partial<ArticleContent> & { kind?: Kind; refs?: string[]; topicIds?: number[] } = {}): number {
       serial += 1;
-      const { kind, refs, ...content } = overrides;
+      const { kind, refs, topicIds, ...content } = overrides;
       return insertArticle(db, {
         categoryId,
         kind: kind ?? "news",
@@ -214,7 +214,7 @@ export function testServer(
         now: clock().toISOString(),
         previousArticleId: null,
         refs: (refs ?? [`https://example.org/${serial}`]).map((url) => ({ url, siteName: "Example", title: `Ref ${serial}`, publishedAt: null })),
-        topicIds: [],
+        topicIds: topicIds ?? [],
       });
     },
   };

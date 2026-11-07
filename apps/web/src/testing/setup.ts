@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { resetCollapsedState } from "../lib/collapsed.ts";
+import { resetHideReadState } from "../lib/hide-read.ts";
 import { resetHotkeys } from "../lib/keys.ts";
 import { resetPaneState } from "../lib/panes.ts";
 import { resetScrollReadState } from "../lib/scroll-read.ts";
@@ -17,6 +18,7 @@ afterEach(() => {
   resetCollapsedState();
   resetThemeState();
   resetScrollReadState();
+  resetHideReadState();
   resetHotkeys();
 });
 

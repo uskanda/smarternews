@@ -24,7 +24,7 @@ LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録さ�
 
 ### 呼び出しの用途の列
 
-`llm_calls`に`purpose TEXT`を足す（`022_llm_call_purpose.sql`）。NULLは今までの用途、`'trial'`は試しである。
+`llm_calls`に`purpose TEXT`を足す（`025_llm_call_purpose.sql`）。NULLは今までの用途、`'trial'`は試しである。
 `CallBudget`に`purpose?: "trial"`を持たせ、`TaskRunner`の記録の処理が書き込む。試しの回数は`purpose = 'trial'`の行を数える。
 タスクの名前を新しく作る案は採らない。定義済みのタスクだけを使う要件に反し、割り当ても二重になる。
 
@@ -81,5 +81,5 @@ LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録さ�
 
 ## Migration Plan
 
-- `022_llm_call_purpose.sql`は列を足すだけである。既存の行は`purpose`がNULLになり、今までの用途として数えられる。
+- `025_llm_call_purpose.sql`は列を足すだけである。既存の行は`purpose`がNULLになり、今までの用途として数えられる。
 - `llmCallsPerDay`を設定に書いていない環境は、既定が350回から380回に上がる。書いている環境は変わらない。

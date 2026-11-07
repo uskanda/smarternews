@@ -68,7 +68,7 @@ function freeSlug(db: Database, base: string): string {
 export function createCategory(db: Database, input: CategoryCreate, clock: Clock): Category {
   if (input.kind === "status") {
     throw new DomainError("invalid", 'the kind "status" is reserved and not available yet', [
-      { path: "kind", message: 'use "news" or "event"' },
+      { path: "kind", message: 'use "news" or "event"', code: "not_allowed" },
     ]);
   }
   if (input.slug !== undefined && findCategoryBySlug(db, input.slug)) {
@@ -137,7 +137,7 @@ export function orderCategories(db: Database, ids: number[]): void {
 export function moveCategory(db: Database, id: number, before: number | null): Category[] {
   getCategory(db, id);
   if (before !== null && !findCategory(db, before)) {
-    throw new DomainError("invalid", `category ${before} does not exist`, [{ path: "before", message: "no such category" }]);
+    throw new DomainError("invalid", `category ${before} does not exist`, [{ path: "before", message: "no such category", code: "no_such_item" }]);
   }
   if (before !== id) {
     const others = listCategories(db)

@@ -578,6 +578,21 @@ describe("the state of a feed's fetches above its list", () => {
     expect(document.activeElement!.closest("li")).toHaveAttribute("id", `feed-${blog.id}`);
   });
 
+  it("says that the site answers the feed is gone and since when, and suggests unsubscribing in the settings", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    recordFetchFailure(server.db, blog.id, { now: "2026-02-27T09:00:00.000Z", error: "HTTP status 410: https://blog.example.org/feed.xml", gone: true });
+    recordFetchFailure(server.db, blog.id, { now: server.clock().toISOString(), error: "HTTP status 410: https://blog.example.org/feed.xml", gone: true });
+    renderApp({ server, route: `/f/${blog.id}` });
+
+    const line = await findBanner();
+    expect(line).toHaveTextContent("このフィードは配信を終えたと返しています（HTTP 410、2月27日から）。登録の解除をおすすめします。");
+    expect(line).toHaveClass("text-error");
+    expect(within(line).getByRole("link", { name: "設定で登録を解除する" })).toHaveAttribute("href", `/settings/feeds#feed-${blog.id}`);
+    expect(within(line).getByRole("button", { name: "いま取得" })).toBeInTheDocument();
+    expect(line).not.toHaveTextContent("取得に失敗しました");
+  });
+
   it("goes once いま取得 succeeds", async () => {
     const server = makeServer();
     const blog = feedOf(server, "Blog");
