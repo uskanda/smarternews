@@ -417,7 +417,8 @@ describe("reader information and global settings", () => {
     await user.click(within(global).getByRole("button", { name: "保存する" }));
 
     await waitFor(() => expect(field).toBeInvalid());
-    expect(field).toHaveAccessibleDescription("タイムゾーンは、Asia/Tokyo のような IANA のタイムゾーン名にしてください。");
+    // The description keeps the field's hint and adds the reason after it.
+    expect(field).toHaveAccessibleDescription(/タイムゾーンは、Asia\/Tokyo のような IANA のタイムゾーン名にしてください。/);
     // The server's own words are English, and are not shown.
     expect(global).not.toHaveTextContent(/is not an IANA time zone name/);
     expect(getSettings(server.db).timeZone).toBe("UTC");
