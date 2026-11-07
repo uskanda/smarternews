@@ -3,7 +3,7 @@
 ## 1. 用語と記録
 
 - [x] 1.1 `openspec/glossary.yml` に「外れ」と「外れの記録」を足す。用語の検査で確かめる
-- [x] 1.2 移行の022で、`misses` と `miss_topics` の表と、トピックの表の `interpreted_at` の列を足す。記事、トピック、カテゴリを消したときの扱いを `packages/core/src/db/misses.test.ts` で確かめる
+- [x] 1.2 移行の023で、`misses` と `miss_topics` の表と、トピックの表の `interpreted_at` の列を足す。記事、トピック、カテゴリを消したときの扱いを `packages/core/src/db/misses.test.ts` で確かめる
 - [x] 1.3 `packages/core/src/db/misses.ts` に印の付け外しと、解釈に渡す外れ（90日、20件）の選び方を書く。`misses.test.ts` で、2回目の印、配信記事の拒否、180日の削除のあとの残留、選び方を確かめる
 
 ## 2. APIと記事のフラグ

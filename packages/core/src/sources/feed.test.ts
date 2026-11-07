@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Fetcher } from "../fetch/http.ts";
 import { fakeFetch, xml } from "../testing/http.ts";
-import { collectFeed, parseFeed, parseSubscription } from "./feed.ts";
+import { collectFeed, MAX_ATTACHMENT_URL_CHARS, MAX_ATTACHMENTS, parseFeed, parseSubscription } from "./feed.ts";
 
 const RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -156,6 +156,8 @@ describe("parseSubscription", () => {
       key: "release-3",
       author: "Alex Writer",
       contentHtml: "<p>Version 3 is <b>out</b>.</p><p>Second paragraph.</p>",
+      attachments: [],
+      description: null,
     });
     expect(feed.items[1]).toMatchObject({ key: null, author: "Sam Editor", contentHtml: "<p>Only a description.</p>", publishedAt: null });
   });
@@ -176,6 +178,146 @@ describe("parseSubscription", () => {
   it("keeps the order of text and elements in XHTML content", () => {
     const item = parseSubscription(ATOM_FULL).items[1]!;
     expect(item.contentHtml).toContain('<p>Inline <a href="https://example.net/x">link</a> here.</p>');
+  });
+});
+
+const PODCAST = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+  <title>Example Cast</title>
+  <link>https://example.org/cast/</link>
+  <item>
+    <title>Episode 12</title>
+    <link>https://example.org/cast/12</link>
+    <guid>ep-12</guid>
+    <description>Show notes.</description>
+    <enclosure url="https://cdn.example.org/ep12.mp3" type="audio/mpeg" length="12345678"/>
+    <media:content url="covers/ep12.jpg" medium="image" fileSize="2048"><media:title>Cover of episode 12</media:title></media:content>
+    <media:content url="https://cdn.example.org/ep12.mp3" type="audio/mpeg"/>
+    <media:content url="javascript:alert(1)" type="image/png"/>
+    <media:thumbnail url="https://cdn.example.org/ep12-small.jpg"/>
+  </item>
+  <item>
+    <title>Episode 11</title>
+    <link>https://example.org/cast/11</link>
+    <description>Has content.</description>
+    <enclosure url="https://cdn.example.org/ep11.pdf" type="application/pdf" length="0"/>
+    <enclosure url="https://cdn.example.org/ep11.mp4" type="video/mp4" length="nope"/>
+    <media:description>Not used: the item has content.</media:description>
+  </item>
+  <item>
+    <title>Episode 10</title>
+    <link>https://example.org/cast/10</link>
+    <media:description>Only a media description.</media:description>
+  </item>
+</channel></rss>`;
+
+const YOUTUBE = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Channel</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/UC000"/>
+  <entry>
+    <id>yt:video:abc123</id>
+    <title>How the widget works</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=abc123"/>
+    <author><name>Example Channel</name></author>
+    <published>2026-03-01T08:00:00+00:00</published>
+    <media:group>
+      <media:title>How the widget works</media:title>
+      <media:content url="https://www.youtube.com/v/abc123?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+      <media:thumbnail url="https://i.example.com/vi/abc123/hqdefault.jpg" width="480" height="360"/>
+      <media:description>First line.
+Second line: https://example.com/more
+
+New paragraph.</media:description>
+    </media:group>
+  </entry>
+</feed>`;
+
+const RDF_MEDIA = `<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel rdf:about="https://example.com/rss"><title>Example Photos</title></channel>
+  <item rdf:about="https://example.com/photo/1">
+    <title>Photo 1</title>
+    <link>https://example.com/photo/1</link>
+    <media:content url="https://example.com/photo/1.jpg" type="image/jpeg">
+      <media:description type="html">&lt;p&gt;A &lt;b&gt;photo&lt;/b&gt;.&lt;/p&gt;</media:description>
+    </media:content>
+  </item>
+</rdf:RDF>`;
+
+describe("parseSubscription with enclosures and Media RSS", () => {
+  it("reads enclosures, media:content and media:thumbnail, resolving relative URLs against the item's page", () => {
+    const [item] = parseSubscription(PODCAST).items;
+    expect(item!.attachments).toEqual([
+      { url: "https://cdn.example.org/ep12.mp3", kind: "audio", mimeType: "audio/mpeg", size: 12345678, title: null, thumbnail: false },
+      { url: "https://example.org/cast/covers/ep12.jpg", kind: "image", mimeType: null, size: 2048, title: "Cover of episode 12", thumbnail: false },
+      { url: "https://cdn.example.org/ep12-small.jpg", kind: "image", mimeType: null, size: null, title: null, thumbnail: true },
+    ]);
+  });
+
+  it("tells the kind by the media type when there is no medium, and drops a size that is not a positive number", () => {
+    const item = parseSubscription(PODCAST).items[1]!;
+    expect(item.attachments.map(({ kind, size }) => ({ kind, size }))).toEqual([
+      { kind: "other", size: null },
+      { kind: "video", size: null },
+    ]);
+  });
+
+  it("uses media:description only when the item has no content", () => {
+    const items = parseSubscription(PODCAST).items;
+    expect(items[0]!.description).toBeNull();
+    expect(items[1]!.description).toBeNull();
+    expect(items[2]).toMatchObject({ contentHtml: "", description: { text: "Only a media description.", html: false } });
+  });
+
+  it("reads the description, the thumbnail and the content inside a media:group of a video feed", () => {
+    const [item] = parseSubscription(YOUTUBE).items;
+    expect(item!.contentHtml).toBe("");
+    expect(item!.description).toEqual({ text: "First line.\nSecond line: https://example.com/more\n\nNew paragraph.", html: false });
+    expect(item!.attachments).toEqual([
+      {
+        url: "https://www.youtube.com/v/abc123?version=3",
+        kind: "other",
+        mimeType: "application/x-shockwave-flash",
+        size: null,
+        title: "How the widget works",
+        thumbnail: false,
+      },
+      { url: "https://i.example.com/vi/abc123/hqdefault.jpg", kind: "image", mimeType: null, size: null, title: "How the widget works", thumbnail: true },
+    ]);
+  });
+
+  it("reads media:content of RSS 1.0 items, and a description of type html inside it", () => {
+    const [item] = parseSubscription(RDF_MEDIA).items;
+    expect(item!.attachments).toEqual([
+      { url: "https://example.com/photo/1.jpg", kind: "image", mimeType: "image/jpeg", size: null, title: null, thumbnail: false },
+    ]);
+    expect(item!.description).toEqual({ text: "<p>A <b>photo</b>.</p>", html: true });
+  });
+
+  it("keeps a bounded number of attachments, and leaves out URLs that are too long", () => {
+    const enclosures = Array.from({ length: 30 }, (_, index) => `<enclosure url="https://cdn.example.org/${index}.mp3" type="audio/mpeg"/>`).join("");
+    const long = `<enclosure url="https://cdn.example.org/${"a".repeat(MAX_ATTACHMENT_URL_CHARS)}.mp3" type="audio/mpeg"/>`;
+    const xml = `<rss version="2.0"><channel><title>T</title><item><title>A</title><link>https://example.org/a</link>${long}${enclosures}</item></channel></rss>`;
+    const [item] = parseSubscription(xml).items;
+    expect(item!.attachments).toHaveLength(MAX_ATTACHMENTS);
+    expect(item!.attachments[0]!.url).toBe("https://cdn.example.org/0.mp3");
+  });
+
+  it("resolves an item whose page is relative against the URL of the feed", () => {
+    const xml = `<rss version="2.0"><channel><title>T</title><item><title>A</title><link>/posts/a</link><enclosure url="a.mp3" type="audio/mpeg"/></item></channel></rss>`;
+    expect(parseSubscription(xml, "https://example.org/feed.xml").items[0]!.attachments[0]!.url).toBe("https://example.org/posts/a.mp3");
+    expect(parseSubscription(xml).items[0]!.attachments).toEqual([]);
+  });
+
+  it("leaves the attachments of a JSON Feed item unread", () => {
+    const json = JSON.stringify({
+      version: "https://jsonfeed.org/version/1.1",
+      title: "Example Cast",
+      items: [{ id: "ep-3", url: "https://example.org/cast/3", title: "Episode 3", attachments: [{ url: "https://cdn.example.org/ep3.m4a", mime_type: "audio/x-m4a" }] }],
+    });
+    expect(parseSubscription(json).items[0]).toMatchObject({ attachments: [], description: null });
   });
 });
 
@@ -222,6 +364,8 @@ describe("JSON Feed", () => {
       key: "post-2",
       author: "Alex Writer",
       contentHtml: "<p>Full <b>body</b>.</p>",
+      attachments: [],
+      description: null,
     });
   });
 

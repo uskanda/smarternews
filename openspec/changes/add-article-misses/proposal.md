@@ -30,7 +30,7 @@
 
 ## Impact
 
-- データベース：`misses` と `miss_topics` の表と、トピックの表の `interpreted_at` の列を足す移行（022）。
+- データベース：`misses` と `miss_topics` の表と、トピックの表の `interpreted_at` の列を足す移行（023）。
 - core：外れの記録（`db/misses.ts`、新規）、`setArticleFlags`、トピックの読み書き、APIのスキーマ、解釈のタスク、実行前の解釈。
 - client：トピックを解釈し直す呼び出しを足す。
 - Web：本文のペイン、一覧の画面のキー操作と知らせ、キー操作の一覧、カテゴリの編集の画面。

@@ -429,6 +429,25 @@ export const articleSummarySchema = z.object({
 });
 export type ArticleSummary = z.infer<typeof articleSummarySchema>;
 
+export const attachmentKindSchema = z.enum(["image", "audio", "video", "other"]);
+export type AttachmentKind = z.infer<typeof attachmentKindSchema>;
+
+/** A file the feed attached to a feed article: an RSS enclosure, a Media RSS content or thumbnail. */
+export const articleAttachmentSchema = z.object({
+  /** The original address. A screen links to it and never loads it. */
+  url: z.string(),
+  kind: attachmentKindSchema,
+  mimeType: z.string().nullable(),
+  /** In bytes, as the feed said. Null when it said nothing usable. */
+  size: z.number().int().nullable(),
+  title: z.string().nullable(),
+  /** For the thumbnail of what the article's page shows, such as a video: that page. Null otherwise. */
+  thumbnailOf: z.string().nullable(),
+  /** The address a screen loads an image from: the image relay. Null for what is not an image. */
+  imageUrl: z.string().nullable(),
+});
+export type ArticleAttachment = z.infer<typeof articleAttachmentSchema>;
+
 export const articleSchema = articleSummarySchema.extend({
   body: z.string(),
   bodyHtml: z.string(),
@@ -470,6 +489,11 @@ export const articleSchema = articleSummarySchema.extend({
    * stored. Empty for an article without them, such as one stored before names were kept.
    */
   mentions: z.array(mentionSchema),
+  /**
+   * The files the feed attached to a feed article, in the order it listed them. Kept apart from the body:
+   * highlights, translations, search and filters never see them. Empty for a generated article.
+   */
+  attachments: z.array(articleAttachmentSchema),
   /** True when the reader marked the generated article as a miss. Always false for a feed article. */
   missed: z.boolean(),
 });

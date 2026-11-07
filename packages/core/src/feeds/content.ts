@@ -275,3 +275,50 @@ export function convertContent(html: string, baseUrl: string, language = "en"): 
   const text = blocksOf(body, { baseUrl, plain: true }).join(" ").replace(/\s+/g, " ").trim();
   return { markdown: cut(markdown, language), text: text.slice(0, MAX_CONTENT_CHARS) };
 }
+
+function escapeHtml(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+const ADDRESS = /https?:\/\/[^\s<>"]+/gi;
+/** Characters that end a sentence more often than an address. */
+const TRAILING = /[.,;:!?'"、。，．！？」』）\]}]+$/;
+
+/** A line of plain text as HTML, with each HTTP or HTTPS address made a link. */
+function lineHtml(line: string): string {
+  let html = "";
+  let at = 0;
+  for (const match of line.matchAll(ADDRESS)) {
+    let url = match[0];
+    const trailing = TRAILING.exec(url)?.[0] ?? "";
+    url = url.slice(0, url.length - trailing.length);
+    // A closing parenthesis belongs to the address only when the address opened one.
+    while (url.endsWith(")") && (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)) url = url.slice(0, -1);
+    const start = match.index;
+    html += `${escapeHtml(line.slice(at, start))}<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`;
+    at = start + url.length;
+  }
+  return html + escapeHtml(line.slice(at));
+}
+
+/**
+ * A description in plain text, such as the one a video feed gives, as HTML for `convertContent`: blank lines
+ * part paragraphs, other line breaks stay line breaks, and only HTTP and HTTPS addresses become links.
+ */
+export function plainDescriptionHtml(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split(/\n[ \t]*\n\s*/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0)
+    .map((block) => `<p>${block.split("\n").map(lineHtml).join("<br>")}</p>`)
+    .join("");
+}
+
+/**
+ * Rewrites a Media RSS description by the rules of delivered content. One of type html is converted as it is;
+ * any other is plain text, read by `plainDescriptionHtml`.
+ */
+export function convertDescription(description: { text: string; html: boolean }, baseUrl: string, language = "en"): ConvertedContent {
+  return convertContent(description.html ? description.text : plainDescriptionHtml(description.text), baseUrl, language);
+}

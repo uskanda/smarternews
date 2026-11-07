@@ -390,6 +390,22 @@ terms:
     definition: "記事の内容を一覧で示すための小さな画像。"
     aliases: []
     en: "thumbnail"
+  - term: "添付"
+    definition: "購読フィードが項目に添えたファイルで、RSSのenclosureとMedia RSSのcontentとthumbnailから読むもの。"
+    aliases: ["添付ファイル", "エンクロージャー"]
+    en: "attachment"
+  - term: "パーサー"
+    definition: "XMLやHTMLの文書を読み、プログラムが扱える形に分ける処理。"
+    aliases: ["パーザー", "パーザ"]
+    en: "parser"
+  - term: "プレーンテキスト"
+    definition: "HTMLやMarkdownの記法を含まない、文字だけの文章。"
+    aliases: ["平文"]
+    en: "plain text"
+  - term: "エスケープ"
+    definition: "記法として働く文字を、文字そのものとして読まれる形に書き換えること。"
+    aliases: []
+    en: "escape"
   - term: "ディスク"
     definition: "サーバーがファイルを置く記憶装置。"
     aliases: []

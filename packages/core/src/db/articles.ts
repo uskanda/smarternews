@@ -1,5 +1,6 @@
 import type {
   Article,
+  ArticleAttachment,
   ArticleEvent,
   ArticleList,
   ArticleListQuery,
@@ -182,6 +183,40 @@ function fullContentErrorOf(row: Row): FullContentError | null {
   return { reason: str(row.full_content_error) as FullContentErrorReason, detail: strOrNull(row.full_content_error_detail) };
 }
 
+const ATTACHMENT_KINDS = new Set(["image", "audio", "video", "other"]);
+
+/**
+ * The stored attachments of a feed article. A list that cannot be read, and an entry without an address or a
+ * known kind, count as none. The image address is left for the relay to fill in (`relayArticleImages`).
+ */
+function attachmentsOf(row: Row): ArticleAttachment[] {
+  const stored = strOrNull(row.attachments);
+  if (stored === null || str(row.origin) !== "feed") return [];
+  let entries: unknown;
+  try {
+    entries = JSON.parse(stored);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(entries)) return [];
+  const textOrNull = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : null);
+  const primaryUrl = strOrNull(row.primary_url);
+  return entries.flatMap((entry: Record<string, unknown> | null): ArticleAttachment[] => {
+    if (!entry || typeof entry.url !== "string" || !ATTACHMENT_KINDS.has(String(entry.kind))) return [];
+    return [
+      {
+        url: entry.url,
+        kind: entry.kind as ArticleAttachment["kind"],
+        mimeType: textOrNull(entry.mimeType),
+        size: typeof entry.size === "number" && Number.isSafeInteger(entry.size) ? entry.size : null,
+        title: textOrNull(entry.title),
+        thumbnailOf: entry.thumbnail === true ? primaryUrl : null,
+        imageUrl: null,
+      },
+    ];
+  });
+}
+
 function toArticle(db: Database, row: Row): Article {
   const id = num(row.id);
   const body = str(row.body);
@@ -212,6 +247,7 @@ function toArticle(db: Database, row: Row): Article {
       .map((topic) => ({ id: num(topic.id), text: str(topic.text) })),
     annotations: annotationsOf(db, id),
     mentions: mentionsOf(db, id),
+    attachments: attachmentsOf(row),
     missed: isMissed(db, id),
   };
 }
