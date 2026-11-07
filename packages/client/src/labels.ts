@@ -105,6 +105,7 @@ export const TASK_LABEL: Record<TaskName, string> = {
   translate: "翻訳",
   proposeSelectors: "セレクターの提案",
   digest: "ダイジェスト",
+  proposeTopicRewrite: "書き直しの案",
 };
 
 const STAGE_LABEL: Record<string, string> = {

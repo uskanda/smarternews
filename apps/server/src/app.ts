@@ -70,6 +70,7 @@ import {
   pagePreviewRequestSchema,
   previewSelectors,
   proposeSelectors,
+  proposeTopicRewrite,
   markArticlesUnread,
   markReadBodySchema,
   markSeenArticlesRead,
@@ -317,6 +318,9 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(started, started.status === "started" ? 202 : 200);
   });
   api.get("/topic-trials/:id", (c) => c.json(trials.get(c.req.param("id"))));
+  // Proposals of a new wording, from the saved text and relevance test. One model call, so the answer waits for
+  // it, up to its time limit. Nothing is stored but the record of the call.
+  api.post("/topics/:id/rewrite-proposals", async (c) => c.json(await proposeTopicRewrite({ db, clock, runner }, idParam(c, "topic"))));
 
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));

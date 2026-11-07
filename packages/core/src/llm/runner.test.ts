@@ -62,6 +62,7 @@ function setup(options: {
     selectorProposalsPerDay?: number;
     digestsPerDay?: number;
     topicTrialsPerDay?: number;
+    topicRewritesPerDay?: number;
   };
   timeoutMs?: number;
   timeZone?: string;
@@ -84,6 +85,7 @@ function setup(options: {
       translate: first,
       proposeSelectors: first,
       digest: first,
+      proposeTopicRewrite: first,
       ...options.assignment,
     },
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
@@ -450,6 +452,84 @@ describe("the allowance of topic trials", () => {
   });
 });
 
+describe("the allowance of topic rewrite proposals", () => {
+  const rewriteInput = {
+    topicText: "Rust releases",
+    criteria: "official releases",
+    kind: "news" as const,
+    outputLanguage: "ja",
+    readerInfo: "",
+    opened: [],
+    starred: [],
+    misses: [],
+    rejected: [],
+  };
+  const answer = { proposals: [{ text: "Rust releases and security advisories", explanation: "Adds advisories." }] };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("allows 20 a day when no limit is given, and counts each call towards the calls of the day", async () => {
+    const { adapter } = scripted([answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+    expect(runner.limits).toMatchObject({ topicRewritesPerDay: 20 });
+    expect(runner.rewriteBlocked()).toBeNull();
+
+    await runner.run("proposeTopicRewrite", rewriteInput, fresh());
+    expect(runner.topicRewritesToday()).toBe(1);
+    expect(runner.callsToday()).toBe(1);
+  });
+
+  it("stops at its allowance of the day, and leaves runs calling the model", async () => {
+    const { adapter, requests } = scripted([answer, validInterpretation]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicRewritesPerDay: 1 } });
+
+    await runner.run("proposeTopicRewrite", rewriteInput, fresh());
+    expect(runner.rewriteBlocked()).toBe("limit");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(1);
+    await expect(runner.run("interpret", interpretInput, fresh())).resolves.toEqual(validInterpretation);
+  });
+
+  it("is used up by none when its allowance is 0", async () => {
+    const { adapter, requests } = scripted([answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicRewritesPerDay: 0 } });
+    expect(runner.rewriteBlocked()).toBe("limit");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("does not propose once the calls of the day reach their allowance", async () => {
+    const { adapter, requests } = scripted([validInterpretation, answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    expect(runner.rewriteBlocked()).toBe("day");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("does not call a provider that costs money once the budget is used up", async () => {
+    const { adapter, requests } = scripted([answer]);
+    const { runner, db } = setup({ providers: [provider("smart", adapter, SONNET)], budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 1 } });
+    db.prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (NULL, 'write', 'smart', 1, 1, ?, 100, 1)").run(
+      "2026-03-01T01:00:00.000Z",
+    );
+
+    expect(runner.rewriteBlocked()).toBe("budget");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toMatchObject({ scope: "budget" });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("counts the second attempt after a proposal that keeps the text", async () => {
+    const same = { proposals: [{ text: "Rust releases", explanation: "No change." }] };
+    const { adapter } = scripted([same, answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).resolves.toEqual(answer);
+    expect(runner.topicRewritesToday()).toBe(2);
+    expect(runner.callsToday()).toBe(2);
+  });
+});
+
 describe("TaskRunner and the money the calls cost", () => {
   const costs = (db: ReturnType<typeof createTestDb>) =>
     db
@@ -625,7 +705,7 @@ describe("TaskRunner and the monthly budget", () => {
 
     expect(status).toMatchObject({ periodStart: "2026-10-10", periodEnd: "2026-11-09", monthlyBudgetUsd: 100, warnRatio: 0.8, unknownCostCalls: 1 });
     expect(status.spentUsd).toBeCloseTo(4.6, 8);
-    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0, proposeSelectors: 0, digest: 0 });
+    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0, proposeSelectors: 0, digest: 0, proposeTopicRewrite: 0 });
     expect(status.byProvider).toEqual({ fast: 1.2, smart: 3.4, cli: 0 });
   });
 });

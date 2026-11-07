@@ -29,7 +29,7 @@
 
 ## Impact
 
-- `packages/core`：タスクの定義、`TaskRunner`の上限と計数、設定`limits.topicRewritesPerDay`と`tasks.proposeTopicRewrite`、入力を読む関数、案を求める処理、APIの型。
+- `packages/core`：タスクの定義、`TaskRunner`の上限と計数、設定の`limits.topicRewritesPerDay`と、`tasks`の`proposeTopicRewrite`。入力を読む関数、案を求める処理、APIの型も足す。
 - `apps/server`：1つの操作と、上限の受け渡し。
 - `packages/client`：操作の呼び出しと、タスクの表示名。
 - `apps/web`：トピックの編集のボタンと案の一覧。

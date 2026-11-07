@@ -289,6 +289,8 @@ Proposals of selectors for web feeds count towards `llmCallsPerDay` as well, and
 
 A topic trial asks the `interpret` task once and the `judge` task once per batch of stored candidates, about three calls. Its calls count towards `llmCallsPerDay` and the monthly budget, and have a limit of their own: `topicTrialsPerDay` (30 by default, a second attempt after an invalid answer included; 0 switches trials off). The default of `llmCallsPerDay` grew from 350 to 380 by these 30. A trial whose calls do not fit in what the day leaves is refused before it calls a model.
 
+A proposal of a topic rewrite asks the `proposeTopicRewrite` task once, only when you choose "書き直しの案を出す" in the editor of a topic. Its calls count towards `llmCallsPerDay` and the monthly budget, and have a limit of their own: `topicRewritesPerDay` (20 by default, a second attempt after an invalid answer included; 0 switches proposals off). The default of `llmCallsPerDay` stays 380: these 20 fit in it. The task runs on the provider named `smart` unless `tasks` assigns another; see [docs/providers.md](docs/providers.md#proposals-of-topic-rewrites).
+
 ## Development
 
 ```bash

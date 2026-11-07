@@ -25,6 +25,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { TopicRewrite } from "./TopicRewrite.tsx";
 import { TopicTrialResults, useTopicTrial } from "./TopicTrial.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
@@ -377,6 +378,14 @@ function TopicEditor({
         「試す」は、編集中の文章で保存してある候補を判定し直し、結論の入れ替わる候補を示します。何も保存せず、LLMを約3回呼びます。
       </p>
       <TopicTrialResults trial={trial} />
+      <TopicRewrite
+        topicId={topic.id}
+        dirty={dirty}
+        onUse={(proposed) => {
+          setForm({ ...form, text: proposed });
+          setProblems((shown) => ({ ...shown, text: undefined }));
+        }}
+      />
       <ConfirmDialog
         open={closing}
         title="保存していない変更があります"

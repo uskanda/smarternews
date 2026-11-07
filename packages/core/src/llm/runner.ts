@@ -64,13 +64,18 @@ const SELECTOR_PROPOSALS_PER_DAY = 50;
 const DIGESTS_PER_DAY = 4;
 /** Calls for topic trials a day, unless the configuration says otherwise. */
 const TOPIC_TRIALS_PER_DAY = 30;
+/** Calls that propose a rewrite of a topic a day, unless the configuration says otherwise. */
+const TOPIC_REWRITES_PER_DAY = 20;
 
 /** The tasks with an allowance of their own: their calls are not counted towards `llmCallsPerDay`. */
 const OWN_ALLOWANCE = "task NOT IN ('summarize', 'digest')";
 
 export interface TaskLimits {
   llmCallsPerRun: number;
-  /** Calls for runs, proposals of selectors and topic trials. Summaries of feed articles are not counted here. */
+  /**
+   * Calls for runs, proposals of selectors, topic trials and proposals of topic rewrites. Summaries of feed articles
+   * are not counted here.
+   */
   llmCallsPerDay: number;
   /** Calls that summarise feed articles. The calls of runs are not counted here. */
   summariesPerDay: number;
@@ -80,6 +85,8 @@ export interface TaskLimits {
   digestsPerDay: number;
   /** Calls of topic trials, a second attempt included. They count towards `llmCallsPerDay` as well. */
   topicTrialsPerDay: number;
+  /** Calls that propose a rewrite of a topic, a second attempt included. They count towards `llmCallsPerDay` as well. */
+  topicRewritesPerDay: number;
 }
 
 /** The money the providers that cost money may use, and when its period starts again. */
@@ -97,11 +104,12 @@ export interface TaskRunnerOptions {
   clock: Clock;
   providers: Map<string, Provider>;
   assignment: Record<TaskName, string>;
-  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay" | "digestsPerDay" | "topicTrialsPerDay"> & {
+  limits: Omit<TaskLimits, "summariesPerDay" | "selectorProposalsPerDay" | "digestsPerDay" | "topicTrialsPerDay" | "topicRewritesPerDay"> & {
     summariesPerDay?: number;
     selectorProposalsPerDay?: number;
     digestsPerDay?: number;
     topicTrialsPerDay?: number;
+    topicRewritesPerDay?: number;
   };
   timeouts: { defaultMs: number; searchMs: number };
   timeZone: () => string;
@@ -121,6 +129,7 @@ export class TaskRunner {
       selectorProposalsPerDay: SELECTOR_PROPOSALS_PER_DAY,
       digestsPerDay: DIGESTS_PER_DAY,
       topicTrialsPerDay: TOPIC_TRIALS_PER_DAY,
+      topicRewritesPerDay: TOPIC_REWRITES_PER_DAY,
       ...this.#options.limits,
     };
   }
@@ -270,6 +279,23 @@ export class TaskRunner {
     return null;
   }
 
+  /** Calls that proposed a rewrite of a topic since the start of the current day, a second attempt included. */
+  topicRewritesToday(): number {
+    return this.#countToday("task = 'proposeTopicRewrite'");
+  }
+
+  /**
+   * Why a rewrite of a topic cannot be proposed now: the day used its allowance of proposals, or its allowance of
+   * calls, or the provider of the task costs money and the budget period used up its budget. Null when it can.
+   */
+  rewriteBlocked(): "limit" | "day" | "budget" | null {
+    const limits = this.limits;
+    if (this.topicRewritesToday() >= limits.topicRewritesPerDay) return "limit";
+    if (this.callsToday() >= limits.llmCallsPerDay) return "day";
+    if (this.providerFor("proposeTopicRewrite").pricing && this.spentThisPeriod() >= this.budget.monthlyBudgetUsd) return "budget";
+    return null;
+  }
+
   #countToday(condition: string): number {
     const { db, clock, timeZone } = this.#options;
     const since = startOfLocalDay(clock(), timeZone()).toISOString();
@@ -315,6 +341,7 @@ export class TaskRunner {
     } else {
       if (task === "proposeSelectors" && this.selectorProposalsToday() >= this.limits.selectorProposalsPerDay) throw new LlmLimitError("day");
       if (budget.purpose === "trial" && this.topicTrialsToday() >= this.limits.topicTrialsPerDay) throw new LlmLimitError("day");
+      if (task === "proposeTopicRewrite" && this.topicRewritesToday() >= this.limits.topicRewritesPerDay) throw new LlmLimitError("day");
       if (budget.calls >= this.#options.limits.llmCallsPerRun) throw new LlmLimitError("run");
       if (this.callsToday() >= this.#options.limits.llmCallsPerDay) throw new LlmLimitError("day");
     }

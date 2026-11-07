@@ -378,6 +378,11 @@ Webページの購読フィードのセレクターの提案も `llmCallsPerDay`
 `llmCallsPerDay` の既定は、試しを足す前は350回だった。この30回の分を増やした。
 その日の残りの回数が試しに要る回数より少なければ、LLMを呼ばずに断る。
 
+トピックの書き直しの案は、トピックの編集で「書き直しの案を出す」を選んだときだけ、`proposeTopicRewrite` のタスクを1回呼ぶ。
+案の呼び出しは `llmCallsPerDay` と月の予算に数える。案には、別に1日の上限 `topicRewritesPerDay`（既定は20。不正な応答のあとの2回目も数える。0なら案を出さない）がある。
+`llmCallsPerDay` の既定380回は変えていない。この20回も、その中に含む。
+このタスクは、`tasks` で割り当てなければ `smart` という名前のプロバイダーで動く。詳しくは [docs/providers.md](docs/providers.md#proposals-of-topic-rewrites) に書いてある。
+
 ## 開発
 
 ```bash

@@ -1,8 +1,8 @@
-// The nine jobs given to a model. Each has an output schema and a function that builds its prompt.
+// The ten jobs given to a model. Each has an output schema and a function that builds its prompt.
 // Nothing else in the code base talks to a model.
 import { parseHTML } from "linkedom";
 import { z } from "zod";
-import { MAX_SELECTOR_CHARS, registrationSchema, type Kind, type SearchLocale, type TaskName } from "../api.ts";
+import { MAX_SELECTOR_CHARS, registrationSchema, TOPIC_TEXT_MAX_CHARS, type Kind, type SearchLocale, type TaskName } from "../api.ts";
 import { MAX_MENTIONS, mentionKindSchema, parseMentions } from "../mentions.ts";
 
 export interface TaskPrompt {
@@ -575,9 +575,97 @@ const digest: TaskDefinition<DigestInput, DigestOutput> = {
   },
 };
 
+// ---- proposeTopicRewrite -----------------------------------------------------------------------
+
+export const TOPIC_REWRITE_EXPLANATION_MAX_CHARS = 1000;
+
+export interface ProposeTopicRewriteInput {
+  topicText: string;
+  /** The relevance test the last interpretation made from the text. */
+  criteria: string;
+  kind: Kind;
+  outputLanguage: string;
+  readerInfo: string;
+  /** Articles of the topic the reader opened, newest first. */
+  opened: Array<{ title: string; summary: string }>;
+  /** Articles of the topic the reader starred, newest first. */
+  starred: Array<{ title: string; summary: string }>;
+  /** The titles of the topic's articles the reader marked as misses, newest first. */
+  misses: string[];
+  /** Candidates of the topic the judge found not relevant, with its reason, newest first. */
+  rejected: Array<{ title: string; reason: string }>;
+}
+
+const proposeTopicRewriteOutput = z.object({
+  proposals: z
+    .array(
+      z.object({
+        text: z.string().trim().min(1).max(TOPIC_TEXT_MAX_CHARS),
+        explanation: z.string().trim().min(1).max(TOPIC_REWRITE_EXPLANATION_MAX_CHARS),
+      }),
+    )
+    .min(1)
+    .max(2),
+});
+export type ProposeTopicRewriteOutput = z.infer<typeof proposeTopicRewriteOutput>;
+
+function articleLines(articles: Array<{ title: string; summary: string }>): string {
+  return articles.map((article) => JSON.stringify({ title: article.title, summary: article.summary })).join("\n");
+}
+
+const proposeTopicRewrite: TaskDefinition<ProposeTopicRewriteInput, ProposeTopicRewriteOutput> = {
+  output: proposeTopicRewriteOutput,
+  build: (input) => ({
+    system: SYSTEM,
+    prompt: [
+      "Task: a reader follows a topic, written in their own words. Propose a better wording of the topic, so that the articles made for it match what the reader wants.",
+      `Category kind: ${input.kind} (${input.kind === "event" ? "upcoming events with a date and place" : "recent news"})`,
+      `Output language: ${input.outputLanguage}.`,
+      reader(input.readerInfo),
+      `Topic, as the reader wrote it:\n<topic>\n${input.topicText}\n</topic>`,
+      `Relevance test that the pipeline made from the topic, used to judge the pages found for it:\n<criteria>\n${input.criteria}\n</criteria>`,
+      ...(input.opened.length > 0
+        ? [`Articles made for this topic that the reader opened, newest first, one JSON object per line:\n${material(articleLines(input.opened))}`]
+        : []),
+      ...(input.starred.length > 0
+        ? [`Articles made for this topic that the reader starred, newest first, one JSON object per line:\n${material(articleLines(input.starred))}`]
+        : []),
+      ...(input.misses.length > 0
+        ? [
+            `Titles of articles made for this topic that the reader marked as not wanted, newest first:\n${material(input.misses.map((title) => `- ${title}`).join("\n"))}`,
+          ]
+        : []),
+      ...(input.rejected.length > 0
+        ? [
+            `Pages found for this topic that the judge left out as not relevant, with its reason, newest first, one JSON object per line:\n${material(input.rejected.map((page) => JSON.stringify(page)).join("\n"))}`,
+          ]
+        : []),
+      "Rules:",
+      "- Use what is listed above, when anything is: opened and starred articles show what the reader wants, unwanted articles show what the topic should leave out, and pages found not relevant show where the topic may be too narrow or too broad.",
+      "- Propose one or two new wordings of the topic, different from the current one and from each other. Write each as the reader would: plain sentences that say what to follow and what to leave out, in the language of the current topic.",
+      `- text: the new wording, at most ${TOPIC_TEXT_MAX_CHARS} characters. Keep what the current topic gets right.`,
+      `- explanation: written in the output language, what you changed and why, and how the relevance test is likely to change once the pipeline reads the new wording. At most ${TOPIC_REWRITE_EXPLANATION_MAX_CHARS} characters.`,
+      "- Describe kinds of articles, never single titles.",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  }),
+  check: (input, output) => {
+    const current = input.topicText.trim();
+    const seen = new Set<string>();
+    for (const [index, proposal] of output.proposals.entries()) {
+      const text = proposal.text.trim();
+      if (text === current) return `proposal ${index + 1} is the same as the current text`;
+      if (seen.has(text)) return `proposal ${index + 1} has the same text as another proposal`;
+      seen.add(text);
+    }
+    return null;
+  },
+};
+
 // ---- registry ----------------------------------------------------------------------------------
 
-export const tasks = { interpret, search, judge, cluster, write, summarize, translate, proposeSelectors, digest };
+export const tasks = { interpret, search, judge, cluster, write, summarize, translate, proposeSelectors, digest, proposeTopicRewrite };
 
 export interface TaskIo {
   interpret: { input: InterpretInput; output: InterpretOutput };
@@ -589,6 +677,18 @@ export interface TaskIo {
   translate: { input: TranslateInput; output: TranslateOutput };
   proposeSelectors: { input: ProposeSelectorsInput; output: ProposeSelectorsOutput };
   digest: { input: DigestInput; output: DigestOutput };
+  proposeTopicRewrite: { input: ProposeTopicRewriteInput; output: ProposeTopicRewriteOutput };
 }
 
-export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors", "digest"];
+export const TASK_NAMES: TaskName[] = [
+  "interpret",
+  "search",
+  "judge",
+  "cluster",
+  "write",
+  "summarize",
+  "translate",
+  "proposeSelectors",
+  "digest",
+  "proposeTopicRewrite",
+];

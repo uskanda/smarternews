@@ -4,7 +4,7 @@
 
 トピックの文章を保存すると、`updateTopic`がトピックを未解釈に戻す。次の実行の前に、解釈のタスクが検索語と判定基準を作り直す。解釈は`recentMissTitles`で、90日以内の外れの見出しを20件まで読む。
 LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録される。セレクターの提案は、タスクの名前で数える専用の上限を持ち、`llmCallsPerDay`にも数えられる。書き直しの案も同じ形にする。
-記事とトピックは`article_topics`で、候補とトピックは`candidate_topics`で結び付く。開いた記事には`articles.opened_at`があり、スターには`articles.starred`がある。スターを付けた時刻は残っていない。
+記事とトピックは`article_topics`で、候補とトピックは`candidate_topics`で結び付く。記事の表では、開いた時刻を`opened_at`の列に、スターを`starred`の列に持つ。スターを付けた時刻は残っていない。
 
 ## Goals / Non-Goals
 
@@ -29,7 +29,7 @@ LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録さ�
 
 ### 上限の確かめ
 
-`TaskLimits.topicRewritesPerDay`を足し、既定は定数`TOPIC_REWRITES_PER_DAY = 20`とする。`topicRewritesToday()`は`task = 'proposeTopicRewrite'`の行を数える。
+`TaskLimits`に`topicRewritesPerDay`を足し、既定は定数`TOPIC_REWRITES_PER_DAY = 20`とする。`topicRewritesToday()`は`task = 'proposeTopicRewrite'`の行を数える。
 `#spend`は、このタスクのとき、まず専用の上限を確かめ、達していれば`LlmLimitError("day")`を投げる。そのあと、ほかのタスクと同じく、実行あたり、1日あたり、予算を確かめる。
 始める前の確かめは`rewriteBlocked()`が受け持ち、次のどれかを返す。
 
@@ -37,7 +37,7 @@ LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録さ�
 - 1日の上限に達していれば`"day"`
 - 割り当てたプロバイダーが金額のかかるもので、予算に達していれば`"budget"`
 
-やり直しの前に上限に当たったときも、`LlmLimitError`を受けて`rewriteBlocked()`の理由を返す（理由がなければ`"day"`）。
+やり直しの前に上限で止まったときは、`LlmLimitError`を受けて`rewriteBlocked()`の理由を返す（理由がなければ`"day"`）。
 
 ### 入力の集め方
 
@@ -45,14 +45,14 @@ LLMの呼び出しは`TaskRunner`を通り、`llm_calls`に1行ずつ記録さ�
 
 - 開いた記事：`origin = 'generated'`で、`opened_at`が30日以内のもの。`opened_at`の降順で20件まで。
 - スターの記事：`starred = 1`で、`created_at`が30日以内のもの。`created_at`の降順で20件まで。スターの時刻がないので、記事の作られた時刻で区切る。
-- 除外：`status = 'rejected'`で、`created_at`が30日以内の候補から、`programReasonCode(reason)`がnullのものを、`created_at`と`id`の降順で30件まで。
+- 除外：`status = 'rejected'`で、`created_at`が30日以内の候補を読む。`programReasonCode(reason)`がnullのものだけを、`created_at`と`id`の降順で30件まで取る。
 - 外れ：`recentMissTitles`をそのまま使う。
 
 記事の要約は`summary`の列を使う。どの記事の情報も、プロンプトでは`material()`で包む。
 
 ### 処理
 
-`topics/rewrite.ts`の`proposeTopicRewrite(deps, topicId)`は、トピックを読み（なければ404）、未解釈なら呼ばずに`uninterpreted`を返す。
+`pipeline/rewrite.ts`の`proposeTopicRewrite(deps, topicId)`は、試しの`pipeline/trial.ts`と並べて置く。この関数は、トピックを読み（なければ404）、未解釈なら呼ばずに`uninterpreted`を返す。
 `rewriteBlocked()`が理由を返せば、呼ばずにそれを返す。そうでなければ、設定、カテゴリ、入力を読み、`{ runId: null, calls: 0 }`でタスクを1回呼ぶ。
 `TaskFailedError`は`DomainError("unavailable")`にして503で返す。
 
