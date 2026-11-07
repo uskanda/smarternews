@@ -169,6 +169,18 @@ describe("summarizeNext", () => {
     expect(getArticle(s.db, id).autoSummary?.source).toBe("feed");
   });
 
+  it("sends no attachment of the article to the model", async () => {
+    const s = setup({});
+    const id = s.article({ url: null });
+    const attachments = [{ url: "https://cdn.example.org/attached-file.mp3", kind: "audio", mimeType: "audio/mpeg", size: 2048, title: "Attached title", thumbnail: false }];
+    s.db.prepare("UPDATE articles SET attachments = ? WHERE id = ?").run(JSON.stringify(attachments), id);
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+    expect(s.prompts()[0]).toContain("excerpt excerpt");
+    expect(s.prompts()[0]).not.toContain("attached-file");
+    expect(s.prompts()[0]).not.toContain("Attached title");
+  });
+
   it("writes no summary when the page cannot be fetched and the feed delivered less than 200 characters", async () => {
     const s = setup({});
     const id = s.article({ body: prose("short", 50) });

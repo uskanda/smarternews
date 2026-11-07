@@ -29,6 +29,8 @@ interface Item {
   published?: string | null;
   content?: string;
   author?: string;
+  /** XML put inside the item as it is, such as enclosures and Media RSS elements. */
+  extra?: string;
 }
 
 const esc = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -45,6 +47,7 @@ function rss(items: Item[], title = "Example Feed"): string {
         item.author ? `<author>${esc(item.author)}</author>` : "",
         `<description>${esc(item.content ?? `<p>Content of ${item.title}.</p>`)}</description>`,
         published === null ? "" : `<pubDate>${new Date(published).toUTCString()}</pubDate>`,
+        item.extra ?? "",
         "</item>",
       ].join("");
     })
@@ -506,6 +509,103 @@ describe("translating titles when a feed is fetched", () => {
     await fetchFeed(s.deps, feed.id);
 
     expect(getArticle(s.db, id)).toMatchObject({ body: "New excerpt.", translation: { segments: [{ original: "Full text.", translated: "訳:Full text." }] } });
+  });
+
+  it("keeps the translations when only the attachments changed", async () => {
+    const s = translating();
+    const enclosure = (name: string) => `<enclosure url="https://cdn.example.org/${name}.mp3" type="audio/mpeg"/>`;
+    s.serve([{ title: "Title", key: "a", content: "<p>Same content.</p>", extra: enclosure("old") }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    await s.service.translateArticle(id);
+
+    s.serve([{ title: "Title", key: "a", content: "<p>Same content.</p>", extra: enclosure("new") }]);
+    await fetchFeed(s.deps, feed.id);
+
+    const article = getArticle(s.db, id);
+    expect(article.attachments.map((attachment) => attachment.url)).toEqual(["https://cdn.example.org/new.mp3"]);
+    expect(article).toMatchObject({ translatedTitle: "訳:Title", translation: { segments: [{ translated: "訳:Same content." }] } });
+  });
+
+  it("drops the translation of an empty body once the media description fills it", async () => {
+    const s = translating();
+    s.serve([{ title: "Video", key: "v", content: "" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    // An empty body has nothing to translate; a stored translation stands for one made before the fetch.
+    s.db.prepare("INSERT INTO article_translations (article_id, segments, method, created_at) VALUES (?, '[]', 'google', ?)").run(id, START);
+
+    s.serve([{ title: "Video", key: "v", content: "", extra: "<media:group><media:description>What the video shows.</media:description></media:group>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id).body).toBe("What the video shows.");
+    expect(s.db.prepare("SELECT count(*) AS n FROM article_translations").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("attachments and media descriptions", () => {
+  const PAGE_OF_ITEM = "https://example.org/posts/ep";
+  const media = `<enclosure url="https://cdn.example.org/ep.mp3" type="audio/mpeg" length="2048"/>
+    <media:thumbnail url="/thumbs/ep.jpg"/>
+    <media:description>Line one
+https://example.com/x</media:description>`;
+
+  it("stores the attachments of a new article, and makes its body of the media description when it has no content", async () => {
+    const s = setup([{ title: "Episode", key: "ep", link: PAGE_OF_ITEM, content: "", extra: media }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    const article = getArticle(s.db, s.list()[0]!.id);
+    expect(article.body).toBe("Line one\\\n[https://example.com/x](https://example.com/x)");
+    expect(article.attachments).toEqual([
+      { url: "https://cdn.example.org/ep.mp3", kind: "audio", mimeType: "audio/mpeg", size: 2048, title: null, thumbnailOf: null, imageUrl: null },
+      { url: "https://example.org/thumbs/ep.jpg", kind: "image", mimeType: null, size: null, title: null, thumbnailOf: PAGE_OF_ITEM, imageUrl: null },
+    ]);
+  });
+
+  it("keeps the content and leaves the description out when the item has content", async () => {
+    const s = setup([{ title: "Episode", key: "ep", link: PAGE_OF_ITEM, content: "<p>Show notes.</p>", extra: media }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(getArticle(s.db, s.list()[0]!.id).body).toBe("Show notes.");
+  });
+
+  it("rewrites an empty article stored before with the description, and judges it again", async () => {
+    const s = setup([{ title: "Episode", key: "ep", content: "" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(getArticle(s.db, s.list()[0]!.id).attachments).toEqual([]);
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["content"], match: "contains", value: "sponsored" }] }, s.clock);
+    expect(s.list()).toHaveLength(1);
+
+    s.serve([{ title: "Episode", key: "ep", content: "", extra: "<media:description>This episode is sponsored.</media:description>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(s.list()).toEqual([]);
+    expect(s.db.prepare("SELECT body FROM articles").get()).toEqual({ body: "This episode is sponsored." });
+  });
+
+  it("writes only the attachments when nothing else changed, and does not judge the article again", async () => {
+    const s = setup([{ title: "Episode", key: "ep", content: "<p>Notes.</p>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const id = s.list()[0]!.id;
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: [{ fields: ["content"], match: "contains", value: "Notes" }] }, s.clock);
+    // What the filter found is cleared by hand: judging the article again would find it once more.
+    s.db.prepare("DELETE FROM filter_matches").run();
+
+    s.serve([{ title: "Episode", key: "ep", content: "<p>Notes.</p>", extra: '<enclosure url="https://cdn.example.org/ep.mp3" type="audio/mpeg"/>' }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id).attachments.map((attachment) => attachment.url)).toEqual(["https://cdn.example.org/ep.mp3"]);
+    expect(s.db.prepare("SELECT count(*) AS n FROM filter_matches").get()).toEqual({ n: 0 });
+
+    s.serve([{ title: "Episode", key: "ep", content: "<p>Notes.</p>" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(getArticle(s.db, id).attachments).toEqual([]);
+  });
+
+  it("gives no attachments for an article whose stored list cannot be read", async () => {
+    const s = setup([{ title: "Episode", key: "ep" }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    const id = s.list()[0]!.id;
+    s.db.prepare("UPDATE articles SET attachments = 'not json' WHERE id = ?").run(id);
+    expect(getArticle(s.db, id).attachments).toEqual([]);
   });
 });
 
