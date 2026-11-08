@@ -107,10 +107,11 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
   const insets = useSafeAreaInsets();
   const open = useDrawerStatus() === "open";
   const router = useRouter();
-  const onSearch = usePathname() === "/search";
+  const pathname = usePathname();
+  const onDigests = pathname === "/digests";
   const listParam = useGlobalSearchParams<{ key?: string }>().key ?? "unread";
-  // On the search results no entry of the drawer is the one shown.
-  const current = onSearch ? "" : listParam;
+  // On the search results and the digests no list of the drawer is the one shown.
+  const current = pathname === "/search" || onDigests ? "" : listParam;
   const categories = useCategories().data;
   const feeds = useFeeds().data;
   const counts = useCounts().data;
@@ -190,6 +191,17 @@ export function DrawerContent({ closeDrawer }: { closeDrawer: () => void }) {
           {item(entry)}
         </View>
       ))}
+      {/* Fixed below the views, without a count, and never dragged: it is not a list of articles. */}
+      <View style={{ flexDirection: "row" }}>
+        <Item
+          label="ダイジェスト"
+          selected={onDigests}
+          onPress={() => {
+            closeDrawer();
+            router.navigate({ pathname: "/digests", params: { digestId: undefined } });
+          }}
+        />
+      </View>
       {rule}
       {model.groups.flatMap((group) => {
         const key = listKey(group.entry.target);

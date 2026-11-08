@@ -24,7 +24,9 @@ import {
 import { getCategory } from "../db/categories.ts";
 import { transaction, type Database } from "../db/database.ts";
 import { replaceMentions } from "../db/mentions.ts";
+import { recentMissTitles } from "../db/misses.ts";
 import { finishRun, getRun, startRun } from "../db/runs.ts";
+import { recordSearchAttempt, type SearchAttempt } from "../db/search-attempts.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyInterpretation, listTopics } from "../db/topics.ts";
 import type { Fetcher } from "../fetch/http.ts";
@@ -33,7 +35,7 @@ import { LlmLimitError, type CallBudget, type TaskRunner } from "../llm/runner.t
 import { extractArticle } from "../sources/extract.ts";
 import { collectFeed } from "../sources/feed.ts";
 import { collectLlmSearch } from "../sources/llm-search.ts";
-import { collectNews, type NewsEngine } from "../sources/news-search.ts";
+import { searchNews, type NewsEngine, type NewsSearchResult } from "../sources/news-search.ts";
 import type { CollectWindow, RawCandidate } from "../sources/types.ts";
 import { resolveEvent } from "./events.ts";
 import { reasonText, type ReasonCode } from "./reasons.ts";
@@ -71,6 +73,9 @@ interface Context extends PipelineDeps {
   sources: { attempted: number; failed: number };
 }
 
+/** What one source brought back. A source other than news search has no redirect links to count. */
+type Loaded = NewsSearchResult;
+
 interface Found {
   candidate: RawCandidate;
   topicIds: Set<number>;
@@ -97,12 +102,19 @@ async function interpretTopics(ctx: Context): Promise<Topic[]> {
       continue;
     }
     try {
+      // The reader's recent misses go into the interpretation that happens anyway; a miss never asks for one.
+      const now = ctx.now.toISOString();
       const output = await ctx.runner.run(
         "interpret",
-        { topicText: topic.text, kind: ctx.category.kind, search: topic.search ?? ctx.settings.search },
+        {
+          topicText: topic.text,
+          kind: ctx.category.kind,
+          search: topic.search ?? ctx.settings.search,
+          misses: recentMissTitles(ctx.db, topic.id, now),
+        },
         ctx.budget,
       );
-      ready.push(applyInterpretation(ctx.db, topic.id, output));
+      ready.push(applyInterpretation(ctx.db, topic.id, output, now));
     } catch (error) {
       fail(ctx, "interpret", topic.text, error);
     }
@@ -121,24 +133,46 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
   const isSeen = (url: string) => isSeenUrl(ctx.db, ctx.category.id, url);
   const found = new Map<string, Found>();
 
-  const attempt = async (topic: Topic, stage: string, target: string, load: () => Promise<RawCandidate[]>) => {
+  /** A search is recorded with what it returned, so that searches that keep finding nothing can be pointed out. */
+  type Searched = { kind: SearchAttempt["kind"]; engine: string | null; query: string };
+  const attempt = async (topic: Topic, stage: string, target: string, load: () => Promise<Loaded>, searched?: Searched) => {
     ctx.sources.attempted += 1;
+    const record = (ok: boolean, loaded?: Loaded) => {
+      if (!searched) return;
+      recordSearchAttempt(ctx.db, {
+        runId: ctx.run.id,
+        topicId: topic.id,
+        ...searched,
+        ok,
+        returned: loaded?.returned ?? 0,
+        googleAttempted: loaded?.google.attempted ?? 0,
+        googleUnresolved: loaded?.google.unresolved ?? 0,
+        createdAt: ctx.now.toISOString(),
+      });
+    };
     try {
-      for (const candidate of await load()) {
+      const loaded = await load();
+      for (const candidate of loaded.candidates) {
         const entry = found.get(candidate.url) ?? { candidate, topicIds: new Set<number>(), aliases: new Set<string>() };
         entry.topicIds.add(topic.id);
         for (const alias of candidate.aliases) entry.aliases.add(alias);
         found.set(candidate.url, entry);
       }
+      record(true, loaded);
     } catch (error) {
       ctx.sources.failed += 1;
+      record(false);
       fail(ctx, stage, target, error);
     }
+  };
+  const plain = async (load: Promise<RawCandidate[]>): Promise<Loaded> => {
+    const candidates = await load;
+    return { candidates, returned: candidates.length, google: { attempted: 0, unresolved: 0 } };
   };
 
   for (const topic of topics) {
     for (const feedUrl of topic.sources.feeds) {
-      await attempt(topic, "feed", feedUrl, () => collectFeed(ctx.fetcher, feedUrl, window.since));
+      await attempt(topic, "feed", feedUrl, () => plain(collectFeed(ctx.fetcher, feedUrl, window.since)));
     }
     if (topic.sources.newsSearch) {
       const locale = topic.search ?? ctx.settings.search;
@@ -146,8 +180,12 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
       for (const query of topic.queries) {
         // Each engine is a source of its own, so one that fails leaves the results of the others.
         for (const engine of engines) {
-          await attempt(topic, "news-search", `${engine}: ${query}`, () =>
-            collectNews({ fetcher: ctx.fetcher, isSeen, engine, maxResultsPerQuery }, query, locale, window),
+          await attempt(
+            topic,
+            "news-search",
+            `${engine}: ${query}`,
+            () => searchNews({ fetcher: ctx.fetcher, isSeen, engine, maxResultsPerQuery }, query, locale, window),
+            { kind: "news-search", engine, query },
           );
         }
       }
@@ -155,7 +193,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     if (topic.sources.llmSearch) {
       await attempt(topic, "llm-search", topic.text, () => {
         if (!ctx.runner.canSearch()) throw new Error("the provider assigned to the search task cannot search the web");
-        return collectLlmSearch(
+        return plain(collectLlmSearch(
           { runner: ctx.runner, budget: ctx.budget, pages: ctx.pages },
           {
             topicText: topic.text,
@@ -166,8 +204,8 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
             now: ctx.now,
             since: window.since,
           },
-        );
-      });
+        ));
+      }, { kind: "llm-search", engine: null, query: topic.text });
     }
   }
 
@@ -179,13 +217,23 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
   const dated: Found[] = [];
   for (const entry of fresh) {
     if (entry.candidate.publishedAt) dated.push(entry);
-    else store(ctx, entry, "rejected", reasonText("no-date", ctx.settings.outputLanguage), null);
+    else store(ctx, entry, "rejected", reasonText("no-date", ctx.settings.outputLanguage), null, "no-date");
   }
   return dated;
 }
 
-/** Saves a candidate whose judgement is settled and remembers its URLs so that it is not judged again. */
-function store(ctx: Context, entry: Found, status: "rejected" | "pending", reason: string, importance: number | null): void {
+/**
+ * Saves a candidate whose judgement is settled and remembers its URLs so that it is not judged again. `reasonCode`
+ * is the kind of the program's reason; the judge's verdicts have none.
+ */
+function store(
+  ctx: Context,
+  entry: Found,
+  status: "rejected" | "pending",
+  reason: string,
+  importance: number | null,
+  reasonCode: ReasonCode | null = null,
+): void {
   const { candidate } = entry;
   const now = ctx.now.toISOString();
   insertCandidate(ctx.db, {
@@ -200,6 +248,7 @@ function store(ctx: Context, entry: Found, status: "rejected" | "pending", reaso
     sourceKind: candidate.sourceKind,
     status,
     reason,
+    reasonCode,
     importance,
     topicIds: [...entry.topicIds],
     now,
@@ -330,7 +379,8 @@ function reject(ctx: Context, story: Story, code: ReasonCode): void {
   rejectCandidates(
     ctx.db,
     story.candidates.map((candidate) => candidate.id),
-    reasonText(code, ctx.settings.outputLanguage),
+    code,
+    ctx.settings.outputLanguage,
     ctx.run.id,
   );
   ctx.stats.rejected += story.candidates.length;
@@ -388,6 +438,8 @@ async function writeStories(ctx: Context): Promise<void> {
     }
 
     const { sources, snippetOnly } = await loadSources(ctx, story);
+    // Only a model that read the existing article can say what the rewrite adds.
+    const existingArticle = story.mode === "update" && story.existing ? story.existing : null;
     let output;
     try {
       output = await ctx.runner.run(
@@ -399,7 +451,7 @@ async function writeStories(ctx: Context): Promise<void> {
           now: ctx.now.toISOString(),
           timeZone: ctx.settings.timeZone,
           sources,
-          existingArticle: story.mode === "update" && story.existing ? story.existing : null,
+          existingArticle,
         },
         ctx.budget,
       );
@@ -444,6 +496,8 @@ async function writeStories(ctx: Context): Promise<void> {
         siteName: candidate.siteName,
         title: candidate.title,
         publishedAt: candidate.publishedAt,
+        reason: candidate.reason,
+        importance: candidate.judgedImportance,
       })),
       topicIds: [...new Set(story.candidates.flatMap((candidate) => candidate.topicIds))],
     };
@@ -453,7 +507,8 @@ async function writeStories(ctx: Context): Promise<void> {
     const mentions = output.mentions;
     transaction(ctx.db, () => {
       if (story.mode === "update" && story.existing) {
-        reviseArticle(ctx.db, story.existing.id, content);
+        // An article found the same only after it was written, as an event under another headline, gets no note.
+        reviseArticle(ctx.db, story.existing.id, { ...content, updateNote: existingArticle ? output.updateNote : null });
         if (mentions !== null) replaceMentions(ctx.db, story.existing.id, mentions);
         acceptCandidates(ctx.db, candidateIds, story.existing.id, groupKey, ctx.run.id);
         return;

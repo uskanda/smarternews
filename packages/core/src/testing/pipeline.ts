@@ -108,7 +108,7 @@ interface JudgeCandidate {
  *   [i4]       the judge gives importance 4 (default 3)
  *   {story-a}  the cluster step groups pages, and matches published articles, by this key
  */
-export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize" | "translate" | "proposeSelectors">, FakeHandler> = {
+export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize" | "translate" | "proposeSelectors" | "digest" | "proposeTopicRewrite">, FakeHandler> = {
   interpret: () => ({ queries: ["default query"], criteria: "default criteria", suggestedSources: { newsSearch: false, llmSearch: false } }),
   judge: (request): JudgeOutput => ({
     judgments: materialLines<JudgeCandidate>(request.prompt).map((candidate) => ({
@@ -142,6 +142,7 @@ export const defaultHandlers: Record<Exclude<TaskName, "search" | "summarize" | 
       unconfirmed: false,
       impact: null,
       event: null,
+      updateNote: null,
       mentions: [],
     };
   },
@@ -268,6 +269,13 @@ export function pipelineHarness(options: HarnessOptions = {}) {
     },
     candidates(runId: number, status?: Candidate["status"]): Candidate[] {
       return listRunCandidates(db, runId, status);
+    },
+    /** The title and the stored reason code of each candidate of the run, by title. */
+    reasonCodes(runId: number): Array<{ title: string; reasonCode: string | null }> {
+      return db
+        .prepare("SELECT title, reason_code FROM candidates WHERE run_id = ? ORDER BY title")
+        .all(runId)
+        .map((row) => ({ title: String(row.title), reasonCode: row.reason_code === null ? null : String(row.reason_code) }));
     },
   };
 }

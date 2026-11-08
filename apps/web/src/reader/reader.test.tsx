@@ -1,8 +1,8 @@
-import { getArticle, insertArticle, insertFeed, listListViews, markArticlesRead, setArticleFlags, updateListView } from "@smarternews/core";
+import { createTopic, getArticle, insertArticle, insertFeed, listListViews, markArticlesRead, setArticleFlags, updateListView } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const MINUTE = 60_000;
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -159,6 +159,26 @@ describe("a row of the list", () => {
     expect(screen.getByRole("link", { name: /Routine/ })).not.toHaveAccessibleName(/重要度/);
   });
 
+  it("says 未読 before the importance on an unread row, and nothing on a read one", async () => {
+    const server = makeServer();
+    const [read] = articles(server, server.category().id, [{ title: "Read one" }, { title: "Unread one", importance: 4 }]);
+    setArticleFlags(server.db, read!, { isRead: true }, server.clock().toISOString());
+    renderApp({ server, route: "/all" });
+
+    expect(await screen.findByRole("link", { name: /^未読。重要度4。Unread one/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Read one/ })).not.toHaveAccessibleName(/未読/);
+  });
+
+  it("draws the line at the right edge of the selected row only", async () => {
+    const server = makeServer();
+    const [, newer] = articles(server, server.category().id, [{ title: "Older story" }, { title: "Newer story" }]);
+    renderApp({ server, route: `/all/${newer}` });
+
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    expect(row(/Newer story/).querySelector("[data-selected-mark]")).toHaveAttribute("aria-hidden", "true");
+    expect(row(/Older story/).querySelector("[data-selected-mark]")).toBeNull();
+  });
+
   it("labels an updated article and an unconfirmed one", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Rumour", unconfirmed: true });
@@ -168,6 +188,40 @@ describe("a row of the list", () => {
     await screen.findByRole("link", { name: /Rumour/ });
     expect(row(/Rumour/)).toHaveTextContent("更新");
     expect(row(/Rumour/)).toHaveTextContent("未確認");
+  });
+
+  it("shows what the last update added in place of the summary, read or not", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const [, updated, read] = articles(server, category.id, [
+      { title: "Plain story", summary: "Plain summary." },
+      { title: "Updated story", summary: "Old summary." },
+      { title: "Read story", summary: "Read summary." },
+    ]);
+    const note = server.db.prepare("UPDATE articles SET revision = 1, update_note = ? WHERE id = ?");
+    note.run("価格が発表されました。", updated!);
+    note.run("日程が決まりました。", read!);
+    setArticleFlags(server.db, read!, { isRead: true }, server.clock().toISOString());
+    renderApp({ server, route: "/all" });
+
+    await screen.findByRole("link", { name: /Updated story/ });
+    expect(row(/Updated story/)).toHaveTextContent("更新：価格が発表されました。");
+    expect(row(/Updated story/)).not.toHaveTextContent("Old summary.");
+    expect(row(/Updated story/).querySelector("[data-update-note]")).toHaveClass("line-clamp-1");
+    expect(row(/Read story/)).toHaveTextContent("更新：日程が決まりました。");
+    expect(row(/Read story/)).not.toHaveTextContent("Read summary.");
+    expect(row(/Plain story/)).toHaveTextContent("Plain summary.");
+  });
+
+  it("shows the excerpt of a search hit rather than what the last update added", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Battery plant", summary: "新しい電池の工場ができた。" });
+    server.db.prepare("UPDATE articles SET revision = 1, update_note = '稼働の時期が決まりました。' WHERE id = ?").run(id);
+    renderApp({ server, route: `/search?q=${encodeURIComponent("電池")}` });
+
+    await screen.findByRole("link", { name: /Battery plant/ });
+    expect(row(/Battery plant/)).toHaveTextContent("電池の工場");
+    expect(row(/Battery plant/)).not.toHaveTextContent("稼働の時期が決まりました。");
   });
 });
 
@@ -245,6 +299,71 @@ describe("narrowing and paging", () => {
     await user.keyboard("{Shift>}A{/Shift}");
 
     await waitFor(() => expect(ids.slice(0, 70).every((id) => getArticle(server.db, id).isRead)).toBe(true));
+  });
+});
+
+describe("moving past the last article loaded", () => {
+  /** 51 articles, listed newest first as "Story 51" down to "Story 1": the first page ends at Story 2. */
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const ids = articles(
+      server,
+      category.id,
+      Array.from({ length: 51 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    return { server, ids };
+  }
+
+  it("loads the next page with j and opens its first article", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    await user.keyboard("j");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+    expect(rowTitles()).toHaveLength(51);
+  });
+
+  it("does the same with Space at the end of the body", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+  });
+
+  it("does the same with 次の記事 on a narrow screen", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}`, width: 390 });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+
+    const moves = await screen.findByRole("navigation", { name: "記事の移動" });
+    await user.click(within(moves).getByRole("button", { name: /次の記事/ }));
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+  });
+
+  it("stays on the last article when there is nothing more", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[0]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 1" });
+    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+
+    await user.keyboard("j");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(path()).toBe(`/all/${ids[0]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
   });
 });
 
@@ -353,6 +472,185 @@ describe("reading an article", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Flaw disclosed" })).toBeInTheDocument();
   });
 
+  it("lists the whole chain of earlier articles, newest first, with the day each was first published", async () => {
+    const server = makeServer("2026-03-01T09:30:00.000Z");
+    const category = server.category();
+    const write = (title: string, previousArticleId: number | null) => {
+      const id = insertArticle(server.db, {
+        categoryId: category.id,
+        kind: "news",
+        title,
+        summary: "s",
+        body: "b",
+        impact: null,
+        importance: 3,
+        unconfirmed: false,
+        snippetOnly: false,
+        event: null,
+        now: server.clock().toISOString(),
+        previousArticleId,
+        refs: [],
+        topicIds: [],
+      });
+      server.clock.advance(7 * 24 * 60 * MINUTE);
+      return id;
+    };
+    const first = write("Flaw disclosed", null);
+    const second = write("Patch released", first);
+    const third = write("Lawsuit filed", second);
+    const { user } = renderApp({ server, route: `/all/${third}` });
+
+    const chain = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "この話題の前の記事" });
+    const items = within(chain).getAllByRole("listitem");
+    expect(items.map((item) => within(item).getByRole("link").textContent)).toEqual(["Patch released", "Flaw disclosed"]);
+    expect(items[0]).toHaveTextContent("2026年3月8日");
+    expect(items[1]).toHaveTextContent("2026年3月1日");
+
+    await user.click(within(chain).getByRole("link", { name: "Flaw disclosed" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Flaw disclosed" })).toBeInTheDocument();
+  });
+
+  it("puts what the last update added after the headline and before the impact", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw", impact: "Update this week.", body: "Body text here." });
+    server.db.prepare("UPDATE articles SET revision = 1, update_note = '修正版が公開されました。' WHERE id = ?").run(id);
+    renderApp({ server, route: `/all/${id}` });
+
+    const note = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "今回の更新で加わったこと" });
+    expect(note).toHaveTextContent("今回の更新で加わったこと");
+    expect(note).toHaveTextContent("修正版が公開されました。");
+    const heading = within(article()).getByRole("heading", { level: 2, name: "Flaw" });
+    const impact = within(article()).getByRole("region", { name: "読み手への影響" });
+    expect(heading.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(impact) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows nothing of an update note on an article without one", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw" });
+    server.db.prepare("UPDATE articles SET revision = 1 WHERE id = ?").run(id);
+    renderApp({ server, route: `/all/${id}` });
+
+    await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "Flaw" });
+    expect(within(article()).queryByRole("region", { name: "今回の更新で加わったこと" })).not.toBeInTheDocument();
+  });
+
+  it("marks the sources added since the reader last read the article", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw", refs: ["https://example.org/a", "https://example.org/b"] });
+    server.db.prepare("UPDATE articles SET revision = 1, read_before_update_at = '2026-03-01T00:00:00.000Z' WHERE id = ?").run(id);
+    server.db.prepare("UPDATE article_refs SET added_at = CASE url WHEN 'https://example.org/b' THEN '2026-03-02T00:00:00.000Z' ELSE '2026-02-28T00:00:00.000Z' END").run();
+    renderApp({ server, route: `/all/${id}` });
+
+    const sources = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "出典" });
+    const items = within(sources).getAllByRole("listitem");
+    expect(items[0]).not.toHaveTextContent("新しい出典");
+    expect(items[1]).toHaveTextContent("新しい出典");
+  });
+
+  it("links each topic the article matched to the editor of that topic", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = createTopic(server.db, category.id, { text: "exploited flaws in widely used software, but not proof-of-concept code" }, server.clock);
+    const ransom = createTopic(server.db, category.id, { text: "ransomware" }, server.clock);
+    const id = insertArticle(server.db, {
+      categoryId: category.id,
+      kind: "news",
+      title: "Matched story",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      previousArticleId: null,
+      refs: [],
+      topicIds: [flaws.id, ransom.id],
+    });
+    const { user, path } = renderApp({ server, route: `/all/${id}` });
+
+    const topics = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "トピック" });
+    const links = within(topics).getAllByRole("link");
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      `/settings/categories/${category.id}#topic-${flaws.id}`,
+      `/settings/categories/${category.id}#topic-${ransom.id}`,
+    ]);
+    // The text is cut to two lines on the screen, but the whole of it is the name that is read out.
+    expect(links[0]).toHaveAccessibleName(flaws.text);
+    expect(links[0]).toHaveAttribute("title", flaws.text);
+    expect(links[0]).toHaveClass("line-clamp-2");
+
+    await user.click(links[1]!);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("ransomware");
+  });
+
+  it("shows no topics on a feed article or on a generated one that matched none", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const generated = server.article(category.id, { title: "No topics" });
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: category.id }, server.clock);
+    const delivered = seedFeedArticle(server.db, feed.id, { title: "Feed post" });
+
+    const first = renderApp({ server, route: `/all/${generated}` });
+    await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "No topics" });
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "トピック" })).not.toBeInTheDocument();
+    first.unmount();
+
+    renderApp({ server, route: `/f/${feed.id}/${delivered}` });
+    await within(await screen.findByRole("article", { name: "記事" })).findByRole("heading", { name: "Feed post" });
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "トピック" })).not.toBeInTheDocument();
+    // Nor, on a feed article, the sources with the reasons they were chosen: no judgement chose them.
+    expect(within(screen.getByRole("article", { name: "記事" })).queryByRole("region", { name: "出典" })).not.toBeInTheDocument();
+  });
+
+  it("says under each source why it was chosen, and nothing under a source without a reason", async () => {
+    const server = makeServer();
+    const ref = (path: string, extra: { reason?: string | null; importance?: number | null }) => ({
+      url: `https://example.org/${path}`,
+      siteName: "Example",
+      title: `Source ${path}`,
+      publishedAt: null,
+      ...extra,
+    });
+    const id = insertArticle(server.db, {
+      categoryId: server.category().id,
+      kind: "news",
+      title: "Chosen story",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 4,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      previousArticleId: null,
+      refs: [
+        ref("judged", { reason: "A new flaw in a widely used library", importance: 4 }),
+        ref("plain", {}),
+        ref("markup", { reason: "Uses <b>bold</b> words", importance: null }),
+        ref("rated", { importance: 2 }),
+      ],
+      topicIds: [],
+    });
+    renderApp({ server, route: `/all/${id}` });
+
+    const sources = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "出典" });
+    const items = within(sources).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("重要度 4・A new flaw in a widely used library");
+    expect(items[1]!.querySelector("p")).toBeNull();
+    expect(items[1]).not.toHaveTextContent("重要度");
+    // A model wrote the reason: it is shown as plain words, never as markup.
+    expect(items[2]).toHaveTextContent("Uses <b>bold</b> words");
+    expect(items[2]).not.toHaveTextContent("重要度");
+    expect(items[2]!.querySelector("b")).toBeNull();
+    expect(items[3]!.querySelector("p")).toHaveTextContent(/^重要度 2$/);
+  });
+
   it("says so when an article was written from snippets only", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Thin", snippetOnly: true });
@@ -407,7 +705,7 @@ describe("read state", () => {
 
     await user.click(await screen.findByRole("link", { name: /First/ }));
     await waitFor(() => expect(row(/First/)).toHaveAttribute("data-read", "true"));
-    await user.click(screen.getByRole("button", { name: "更新" }));
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
 
     await waitFor(() => expect(rowTitles()).toEqual(["Second"]));
   });
@@ -514,6 +812,216 @@ describe("stars", () => {
   });
 });
 
+describe("misses", () => {
+  const missed = (server: TestServer, id: number) => getArticle(server.db, id).missed;
+
+  it("marks a generated article as a miss with the button, says so, and shows the button pressed", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    const { user } = renderApp({ server, route: `/unread/${id}` });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+
+    await user.click(await screen.findByRole("button", { name: "外れの印を付ける" }));
+
+    await waitFor(() => expect(missed(server, id)).toBe(true));
+    expect(await screen.findByRole("button", { name: "外れの印を外す" })).toHaveAttribute("aria-pressed", "true");
+    const status = await screen.findByText("外れの印を付けました", { selector: '[role="status"] > span' });
+    expect(within(status.closest<HTMLElement>('[role="status"]')!).getByRole("button", { name: "取り消す" })).toBeInTheDocument();
+    expect(getArticle(server.db, id).isRead).toBe(true);
+  });
+
+  it("marks an unread article as a miss and read with x, and puts both back with the undo", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    const { user } = renderApp({ server, route: "/unread" });
+    await user.click(await screen.findByRole("link", { name: /Off topic/ }));
+    await screen.findByRole("heading", { level: 2, name: "Off topic" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+
+    await user.keyboard("x");
+
+    const status = (await screen.findByText("外れの印を付けて、既読にしました", { selector: '[role="status"] > span' })).closest<HTMLElement>(
+      '[role="status"]',
+    )!;
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: true, isRead: true }));
+    await waitFor(() => expect(row(/Off topic/)).toHaveAttribute("data-read", "true"));
+
+    await user.click(within(status).getByRole("button", { name: "取り消す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: false, isRead: false }));
+    await waitFor(() => expect(row(/Off topic/)).toHaveAttribute("data-read", "false"));
+    expect(screen.getByRole("button", { name: "外れの印を付ける" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("takes only the mark away when pressed again, and leaves the article read", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Off topic" });
+    setArticleFlags(server.db, id, { missed: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: `/all/${id}` });
+
+    await user.click(await screen.findByRole("button", { name: "外れの印を外す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ missed: false, isRead: true }));
+    expect(await screen.findByRole("button", { name: "外れの印を付ける" })).toBeInTheDocument();
+  });
+
+  it("offers no miss on a feed article, and x does nothing there", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: null }, server.clock);
+    const post = seedFeedArticle(server.db, feed.id, { title: "A post" });
+    const { user, requests } = renderApp({ server, route: `/all/${post}` });
+    await screen.findByRole("heading", { level: 2, name: "A post" });
+    await waitFor(() => expect(getArticle(server.db, post).isRead).toBe(true));
+
+    await user.keyboard("x");
+
+    expect(screen.queryByRole("button", { name: "外れの印を付ける" })).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    expect(missed(server, post)).toBe(false);
+  });
+});
+
+describe("a star or a read state the server cannot store", () => {
+  /** The toast with the message: the article shows notes of its own as statuses. */
+  const toastSays = async (text: string) =>
+    (await screen.findByText(text, { selector: '[role="status"] > span' })).closest<HTMLElement>('[role="status"]')!;
+
+  /** Opens the article in the unread list, which reads it, and waits until the server has it read. */
+  async function openUnread(server: TestServer, id: number, offline: () => boolean) {
+    const rendered = renderApp({ server, route: "/unread", offline });
+    await rendered.user.click(await screen.findByRole("link", { name: /Story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+    return rendered;
+  }
+
+  it("shows a row kept in the unread list unread again when m fails to read it, and reads it when asked to try again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "false"));
+
+    offline = true;
+    await user.keyboard("m");
+
+    const status = await toastSays("既読にできませんでした");
+    expect(row(/Story/)).toHaveAttribute("data-read", "false");
+    expect(screen.getByRole("button", { name: "既読にする" })).toBeInTheDocument();
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+  });
+
+  it("shows the article read again when m fails to put it back to unread", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+
+    offline = true;
+    await user.keyboard("m");
+
+    await toastSays("未読に戻せませんでした");
+    expect(row(/Story/)).toHaveAttribute("data-read", "true");
+    expect(screen.getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
+    expect(getArticle(server.db, id).isRead).toBe(true);
+  });
+
+  it("takes the star off a row kept in the unread list again when s fails to add it, and adds it when asked to try again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+
+    offline = true;
+    await user.keyboard("s");
+
+    const status = await toastSays("スターを付けられませんでした");
+    expect(within(row(/Story/)).queryByRole("img", { name: "スター" })).toBeNull();
+    expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
+    await waitFor(() => expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
+  });
+
+  it("puts the star back when s fails to take it off, and takes it off when asked to try again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    setArticleFlags(server.db, id, { starred: true }, server.clock().toISOString());
+    let offline = false;
+    const { user } = await openUnread(server, id, () => offline);
+    await waitFor(() => expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
+
+    offline = true;
+    await user.keyboard("s");
+
+    const status = await toastSays("スターを外せませんでした");
+    expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(false));
+  });
+
+  it("says so, and leaves the row unread, when opening an article fails to read it", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    let failing = true;
+    const original = server.app.request.bind(server.app);
+    server.app.request = ((input: string, init?: RequestInit) => {
+      if (failing && init?.method === "PATCH" && /\/articles\/\d+$/.test(String(input))) return Promise.reject(new TypeError("fetch failed"));
+      return original(input, init);
+    }) as typeof server.app.request;
+    onTestFinished(() => {
+      server.app.request = original;
+    });
+    const { user } = renderApp({ server, route: "/unread" });
+
+    await user.click(await screen.findByRole("link", { name: /Story/ }));
+
+    const status = await toastSays("既読にできませんでした");
+    expect(row(/Story/)).toHaveAttribute("data-read", "false");
+    expect(getArticle(server.db, id).isRead).toBe(false);
+    failing = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+  });
+
+  it("says so when undoing everything marked read fails, and undoes it when asked to try again", async () => {
+    const server = makeServer();
+    const ids = articles(server, server.category().id, [{ title: "One" }, { title: "Two" }]);
+    let offline = false;
+    const { user } = renderApp({ server, offline: () => offline });
+    await screen.findByRole("link", { name: /Two/ });
+    await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+    const done = await toastSays("2件を既読にしました");
+
+    offline = true;
+    await user.click(within(done).getByRole("button", { name: "取り消す" }));
+
+    const status = await toastSays("既読を取り消せませんでした");
+    expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true]);
+    offline = false;
+    await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
+
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false]));
+    await waitFor(() => expect(rowTitles()).toEqual(["Two", "One"]));
+  });
+});
+
 describe("events", () => {
   function seeded() {
     const server = makeServer("2026-03-10T12:00:00.000Z");
@@ -570,6 +1078,23 @@ describe("events", () => {
     await screen.findByRole("heading", { level: 2, name: "Morning class" });
     expect(article()).toHaveTextContent("3月11日");
     expect(article()).toHaveTextContent("City Hall");
+  });
+
+  it("says 未読 on an unread event, marks the selected one, and takes the focus along with j", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/c/local-events" });
+
+    const morning = await screen.findByRole("link", { name: /^未読。Morning class/ });
+    await user.click(morning);
+    await screen.findByRole("heading", { level: 2, name: "Morning class" });
+    expect(morning.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    await user.keyboard("j");
+
+    const evening = screen.getByRole("link", { name: /Evening talk/ });
+    await waitFor(() => expect(evening).toHaveAttribute("aria-current", "true"));
+    expect(evening).toHaveFocus();
+    expect(evening.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
+    expect(morning.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
   });
 });
 
@@ -658,7 +1183,7 @@ describe("the recently read articles", () => {
     expect(screen.queryByRole("button", { name: "すべて既読にする" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "既読も表示" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "重要度4以上だけ" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "更新" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "読み直す" })).toBeInTheDocument();
   });
 
   it("says that nothing was read in the last seven days and opens the unread list", async () => {
@@ -713,7 +1238,7 @@ describe("the recently read articles", () => {
       await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 2", "Tools 1", "Article A"]));
       expect(row(/Tools 2/)).toHaveAttribute("data-read", "false");
 
-      await user.click(screen.getByRole("button", { name: "更新" }));
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
       await waitFor(() => expect(rowTitles()).toEqual(["Tools 3", "Tools 1", "Article A"]));
     } finally {
       vi.useRealTimers();
@@ -745,6 +1270,40 @@ describe("the recently read articles", () => {
 });
 
 describe("keys on the list and the article", () => {
+  it("takes the focus to the row j selects when the focus was on the list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Third" }, { title: "Second" }, { title: "First" }]);
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    await screen.findByRole("heading", { level: 2, name: "First" });
+    await user.keyboard("j");
+
+    const second = within(list()).getByRole("link", { name: /Second/ });
+    await waitFor(() => expect(second).toHaveAttribute("aria-current", "true"));
+    expect(second).toHaveFocus();
+    await user.keyboard("k");
+    const first = within(list()).getByRole("link", { name: /First/ });
+    await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
+    expect(first).toHaveFocus();
+  });
+
+  it("leaves the focus where it is when j is pressed outside the list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Second" }, { title: "First" }]);
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /First/ }));
+    const heading = await screen.findByRole("heading", { level: 2, name: "First" });
+    await user.click(heading);
+    expect(heading).toHaveFocus();
+    await user.keyboard("j");
+
+    await screen.findByRole("heading", { level: 2, name: "Second" });
+    await waitFor(() => expect(within(list()).getByRole("link", { name: /Second/ })).toHaveAttribute("aria-current", "true"));
+    expect(list()).not.toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("marks the list as read with Shift+A, and offers the undo", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -873,6 +1432,20 @@ describe("Space through the article", () => {
     expect(pane.scrollTop).toBe(0);
   });
 
+  it("takes the focus to the next row at the end of the body when the focus was on the list", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/all" });
+
+    await user.click(await screen.findByRole("link", { name: /Newer story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    layOut(400);
+    await user.keyboard(" ");
+
+    const older = within(list()).getByRole("link", { name: /Older story/ });
+    await waitFor(() => expect(older).toHaveAttribute("aria-current", "true"));
+    expect(older).toHaveFocus();
+  });
+
   it("moves to the next article at once when the body fits", async () => {
     const { server, newer } = seeded();
     const { user } = renderApp({ server, route: `/all/${newer}` });
@@ -944,6 +1517,78 @@ describe("Space through the article", () => {
     await user.keyboard("j");
 
     await waitFor(() => expect(path()).toMatch(new RegExp(`^/c/security/${older}`)));
+  });
+});
+
+describe("the browser's history while moving with keys", () => {
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const [third, second, first] = articles(server, category.id, [{ title: "Third story" }, { title: "Second story" }, { title: "First story" }]);
+    return { server, first: first!, second: second!, third: third! };
+  }
+  const here = () => window.location.pathname;
+
+  it("goes back from j and k to the list the first article was opened from", async () => {
+    const { server, second, third } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await user.click(await screen.findByRole("link", { name: /First story/ }));
+    await screen.findByRole("heading", { level: 2, name: "First story" });
+
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/all/${third}`));
+    await user.keyboard("k");
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/all"));
+    for (const name of ["First story", "Second story", "Third story"]) {
+      expect(screen.queryByRole("heading", { level: 2, name })).not.toBeInTheDocument();
+    }
+  });
+
+  it("adds an entry when j opens the first article, so that back closes it", async () => {
+    const { server, first } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await screen.findByRole("link", { name: /First story/ });
+
+    await user.keyboard("j");
+    await waitFor(() => expect(here()).toBe(`/all/${first}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/all"));
+  });
+
+  it("still adds an entry when a row is clicked while an article is open", async () => {
+    const { server, first, second } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await user.click(await screen.findByRole("link", { name: /First story/ }));
+    await waitFor(() => expect(here()).toBe(`/all/${first}`));
+    await user.click(screen.getByRole("link", { name: /Second story/ }));
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe(`/all/${first}`));
+  });
+
+  it("adds no entry when Space moves on at the end of the body", async () => {
+    const { server, second } = seeded();
+    const { user } = renderApp({ server, route: "/all", browserHistory: true });
+    await user.click(await screen.findByRole("link", { name: /First story/ }));
+    await screen.findByRole("heading", { level: 2, name: "First story" });
+    const pane = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: 400 });
+    // Space is left to a focused button; the row clicked keeps nothing that Space would press.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+
+    await user.keyboard(" ");
+    await waitFor(() => expect(here()).toBe(`/all/${second}`));
+
+    await back();
+    await waitFor(() => expect(here()).toBe("/all"));
   });
 });
 
@@ -1310,7 +1955,7 @@ describe("marking read what the list is scrolled past", () => {
       const { server, rows } = seeded();
       const user = await putBack(server, /Story 6/);
 
-      await user.click(screen.getByRole("button", { name: "更新" }));
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
       await waitFor(() => expect(row(/Story 6/)).toHaveAttribute("data-read", "false"));
       await scrollTo(0);
       await scrollTo(ROW);
@@ -1332,6 +1977,33 @@ describe("marking read what the list is scrolled past", () => {
 
       await waitFor(() => expect(isRead(server, rows[0]!)).toBe(true), SENT);
     });
+  });
+
+  it("marks nothing read when the list is put back where it was on a narrow screen", async () => {
+    turnOn();
+    const { server, security, rows } = seeded();
+    layOut();
+    const { user } = renderApp({ server, route: "/c/security", width: 390 });
+    await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+    await scrollTo(0);
+    await scrollTo(2 * ROW);
+    await waitFor(() => expect(rows.slice(0, 2).map((id) => isRead(server, id))).toEqual([true, true]), SENT);
+
+    await user.click(within(list()).getByRole("link", { name: /Story 3/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 3" });
+    // Two articles arrive while the reader is in the article, and come in above the place the list was left at.
+    const fresh = articles(server, security.id, [{ title: "Fresh one" }, { title: "Fresh two" }]);
+    await user.keyboard("r");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+    await within(list()).findByRole("link", { name: /Fresh two/ });
+
+    expect(pane().scrollTop).toBe(2 * ROW);
+    // The scroll event a browser sends for the place put back; jsdom sends none by itself.
+    await scrollTo(2 * ROW);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(fresh.map((id) => isRead(server, id))).toEqual([false, false]);
+    expect(row(/Fresh two/)).toHaveAttribute("data-read", "false");
   });
 
   it("does not mark read in the recently read articles what was put back to unread there", async () => {

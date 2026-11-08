@@ -1,22 +1,25 @@
-import { TERM_COLORS, type TermColor, type TermGroup } from "@smarternews/core/api";
+import { HIGHLIGHT_TERM_MAX_CHARS, TERM_COLORS, TERM_GROUP_NAME_MAX_CHARS, type TermColor, type TermGroup } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { ApiError, TERM_COLOR_LABEL } from "@smarternews/client";
+import { ApiError, checkText, fieldMessage, TERM_COLOR_LABEL } from "@smarternews/client";
 import { useTermGroups } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-import { Button, ErrorNotice, Field, fieldError, Loading, messageFor } from "../ui/controls.tsx";
+import { Button, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
+import { useInlineEditFocus } from "./inline-edit-focus.ts";
+import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
 /** Why the server refused a name or a term, in the app's words. */
-function refusalOf(error: unknown, path: string): string | null {
+function refusalOf(error: unknown, path: "name" | "text", label: string): string | null {
   if (error instanceof ApiError && error.kind === "conflict") return path === "name" ? "この名前のまとまりは登録済みです。" : "この語は、このまとまりに登録済みです。";
-  const reason = fieldError(error, path);
-  return reason ? `この値は保存できません（${reason}）` : null;
+  return fieldMessage(error, path, label);
 }
+
+const GROUP_NAME = "まとまりの名前";
 
 /** Sets the term groups the lists and articles colour by, so that they change without a reload. */
 function useStore() {
@@ -64,10 +67,15 @@ function AddGroup() {
   const toast = useToast();
   const [name, setName] = useState("");
   const [color, setColor] = useState<TermColor>("green");
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved("語のまとまりの追加", name.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(name, { label: GROUP_NAME, max: TERM_GROUP_NAME_MAX_CHARS });
+    setProblem(found);
+    if (found !== null) return;
     try {
       const created = await api.createTermGroup({ name, color });
       store.one(created);
@@ -80,8 +88,16 @@ function AddGroup() {
   }
 
   return (
-    <form onSubmit={add} className="flex max-w-measure flex-col gap-md">
-      <Field label="まとまりの名前" value={name} onChange={(event) => setName(event.target.value)} error={refusalOf(error, "name")} />
+    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+      <Field
+        label={GROUP_NAME}
+        value={name}
+        onChange={(event) => {
+          setName(event.target.value);
+          setProblem(null);
+        }}
+        error={problem ?? refusalOf(error, "name", GROUP_NAME)}
+      />
       <ColorChoice value={color} onChange={setColor} />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div>
@@ -99,10 +115,15 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   const toast = useToast();
   const [name, setName] = useState(group.name);
   const [color, setColor] = useState<TermColor>(group.color);
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useUnsaved(`まとまり『${group.name}』の編集`, name !== group.name || color !== group.color);
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(name, { label: GROUP_NAME, max: TERM_GROUP_NAME_MAX_CHARS });
+    setProblem(found);
+    if (found !== null) return;
     try {
       store.one(await api.updateTermGroup(group.id, { name, color }));
       toast({ message: "まとまりを保存しました" });
@@ -113,13 +134,21 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   }
 
   return (
-    <form onSubmit={save} className="flex flex-col gap-md">
-      <Field label="まとまりの名前" value={name} onChange={(event) => setName(event.target.value)} error={refusalOf(error, "name")} />
+    <form noValidate onSubmit={save} className="flex flex-col gap-md">
+      <Field
+        label={GROUP_NAME}
+        value={name}
+        onChange={(event) => {
+          setName(event.target.value);
+          setProblem(null);
+        }}
+        error={problem ?? refusalOf(error, "name", GROUP_NAME)}
+      />
       <ColorChoice value={color} onChange={setColor} />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
         <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
-          保存
+          保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
       </div>
@@ -131,10 +160,16 @@ function AddTerm({ group }: { group: TermGroup }) {
   const { api } = useApp();
   const store = useStore();
   const [text, setText] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const label = `「${group.name}」に足す語`;
+  useUnsaved(`まとまり『${group.name}』への語の追加`, text.trim() !== "");
 
   async function add(event: FormEvent) {
     event.preventDefault();
+    const found = checkText(text, { label: "語", max: HIGHLIGHT_TERM_MAX_CHARS });
+    setProblem(found);
+    if (found !== null) return;
     try {
       store.one(await api.addHighlightTerm(group.id, { text }));
       setText("");
@@ -145,8 +180,16 @@ function AddTerm({ group }: { group: TermGroup }) {
   }
 
   return (
-    <form onSubmit={add} className="flex max-w-measure flex-col gap-sm">
-      <Field label={`「${group.name}」に足す語`} value={text} onChange={(event) => setText(event.target.value)} error={refusalOf(error, "text")} />
+    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
+      <Field
+        label={label}
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+          setProblem(null);
+        }}
+        error={problem ?? refusalOf(error, "text", "語")}
+      />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div>
         <Button type="submit" disabled={text.trim().length === 0}>
@@ -176,7 +219,7 @@ function GroupRow({
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const editButton = useRef<HTMLButtonElement>(null);
+  const focus = useInlineEditFocus(editing);
   const up = useRef<HTMLButtonElement>(null);
   const down = useRef<HTMLButtonElement>(null);
 
@@ -235,13 +278,9 @@ function GroupRow({
         </ul>
       )}
       {editing ? (
-        <EditGroup
-          group={group}
-          onDone={() => {
-            setEditing(false);
-            editButton.current?.focus();
-          }}
-        />
+        <div ref={focus.region}>
+          <EditGroup group={group} onDone={() => setEditing(false)} />
+        </div>
       ) : (
         <>
           <AddTerm group={group} />
@@ -252,7 +291,7 @@ function GroupRow({
             <Button ref={down} aria-label={`${group.name}を下へ`} disabled={last} onClick={() => onMove(group, "down")}>
               下へ
             </Button>
-            <Button ref={editButton} aria-label={`${group.name}を編集`} onClick={() => setEditing(true)}>
+            <Button ref={focus.opener} aria-label={`${group.name}を編集`} onClick={() => setEditing(true)}>
               編集
             </Button>
             <Button aria-label={`${group.name}を削除`} onClick={() => setConfirming(true)}>
@@ -285,6 +324,14 @@ function GroupRow({
 
 /** Term groups and their terms, coloured in the lists and the texts of articles. */
 export function TermHighlightsPage() {
+  return (
+    <UnsavedGuard>
+      <TermHighlights />
+    </UnsavedGuard>
+  );
+}
+
+function TermHighlights() {
   const { api } = useApp();
   const store = useStore();
   const toast = useToast();

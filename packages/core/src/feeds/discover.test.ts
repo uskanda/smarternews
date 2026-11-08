@@ -30,9 +30,55 @@ describe("discoverFeeds", () => {
     expect(await discoverFeeds(f, "https://example.org/feed.xml")).toEqual([{ url: "https://example.org/feed.xml", title: "Example Feed" }]);
   });
 
-  it("finds nothing on a page that points to no feed", async () => {
-    const { fetcher: f } = fetcher({ "https://example.org/": () => html("<html><head><title>Hi</title></head></html>") });
-    expect(await discoverFeeds(f, "https://example.org/")).toEqual([]);
+  it("finds nothing on a page that points to no feed and has none at the common places", async () => {
+    const { fetcher: f, requests } = fetcher({
+      "https://example.org/blog/post": () => html("<html><head><title>Hi</title></head></html>"),
+      "https://example.org/feed.json": () => new Response(JSON.stringify({ title: "not a feed" }), { headers: { "content-type": "application/json" } }),
+    });
+    expect(await discoverFeeds(f, "https://example.org/blog/post")).toEqual([]);
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://example.org/blog/post",
+      "https://example.org/feed",
+      "https://example.org/rss.xml",
+      "https://example.org/feed.xml",
+      "https://example.org/atom.xml",
+      "https://example.org/index.xml",
+      "https://example.org/feed.json",
+    ]);
+  });
+
+  it("gives the first feed at the common places when the page points to none, and asks no further", async () => {
+    const { fetcher: f, requests } = fetcher({
+      "https://example.org/home": () => html("<html><head><title>Hi</title></head></html>"),
+      "https://example.org/rss.xml": () => html("<html><body>Not here</body></html>"),
+      "https://example.org/feed.xml": () => xml(RSS),
+    });
+    expect(await discoverFeeds(f, "https://example.org/home")).toEqual([{ url: "https://example.org/feed.xml", title: "Example Feed" }]);
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://example.org/home",
+      "https://example.org/feed",
+      "https://example.org/rss.xml",
+      "https://example.org/feed.xml",
+    ]);
+  });
+
+  it("does not try the common places when the page points to a feed", async () => {
+    const page = `<link rel="alternate" type="application/rss+xml" href="/posts.rss">`;
+    const { fetcher: f, requests } = fetcher({ "https://example.org/": () => html(page) });
+    expect(await discoverFeeds(f, "https://example.org/")).toEqual([{ url: "https://example.org/posts.rss", title: "" }]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("lists a JSON Feed the page points to", async () => {
+    const page = `<link rel="alternate" type="application/feed+json" title="Posts (JSON)" href="/feed.json">`;
+    const { fetcher: f } = fetcher({ "https://example.org/": () => html(page) });
+    expect(await discoverFeeds(f, "https://example.org/")).toEqual([{ url: "https://example.org/feed.json", title: "Posts (JSON)" }]);
+  });
+
+  it("gives the URL itself, with the feed's title, when it is a JSON Feed", async () => {
+    const body = JSON.stringify({ version: "https://jsonfeed.org/version/1.1", title: "Example JSON", items: [] });
+    const { fetcher: f } = fetcher({ "https://example.org/feed.json": () => new Response(body, { headers: { "content-type": "application/feed+json" } }) });
+    expect(await discoverFeeds(f, "https://example.org/feed.json")).toEqual([{ url: "https://example.org/feed.json", title: "Example JSON" }]);
   });
 
   it("lists a feed once when the page names it twice, and leaves out addresses that are not web addresses", async () => {

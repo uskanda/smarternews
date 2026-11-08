@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setArticleFlags } from "../db/articles.ts";
-import { pipelineHarness, sourcesIn } from "../testing/pipeline.ts";
+import { defaultHandlers, pipelineHarness, sourcesIn } from "../testing/pipeline.ts";
 
 const FEED = "https://example.org/feed.xml";
 const HOUR = 3_600_000;
@@ -93,6 +93,92 @@ describe("follow-up within 72 hours", () => {
 
     expect(h.articles()).toMatchObject([{ revision: 0 }]);
     expect(run.articlesUpdated).toBe(0);
+  });
+});
+
+describe("what a follow-up adds", () => {
+  function rewriteWith(h: ReturnType<typeof pipelineHarness>, updateNote: unknown) {
+    h.handlers.write = (request) => ({ ...(defaultHandlers.write(request) as Record<string, unknown>), updateNote });
+  }
+
+  it("stores the note of a rewrite, and clears it when the next rewrite has none", async () => {
+    const { h } = await published();
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+    rewriteWith(h, "修正版が公開されました。");
+    await h.run();
+    expect(h.articles()[0]!.updateNote).toBe("修正版が公開されました。");
+
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Advisory updated {flaw}", link: "https://example.org/advisory" }]);
+    rewriteWith(h, null);
+    await h.run();
+    expect(h.articles()).toMatchObject([{ revision: 2, updateNote: null }]);
+  });
+
+  it("keeps the rewrite when only its note is not valid, without asking again", async () => {
+    const { h } = await published();
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+    rewriteWith(h, 42);
+
+    const run = await h.run();
+
+    expect(h.articles()).toMatchObject([{ revision: 1, updateNote: null }]);
+    expect(h.requests.write).toHaveLength(2);
+    expect(run).toMatchObject({ articlesUpdated: 1 });
+  });
+
+  it("stores no note on a new article, nor on the new article of a late follow-up", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Flaw disclosed {flaw}", link: "https://example.org/disclosed" }]);
+    rewriteWith(h, "新しい記事には要らない文。");
+    await h.run();
+    h.clock.advance(7 * 24 * HOUR);
+    h.feed(FEED, [{ title: "Lawsuit filed {flaw}", link: "https://example.org/lawsuit" }]);
+    await h.run();
+
+    expect(h.articles().map((article) => article.updateNote)).toEqual([null, null]);
+  });
+
+  it("clears the note when the same event is found again under another headline", async () => {
+    const h = pipelineHarness({ kind: "event", now: "2026-03-01T12:00:00.000Z" });
+    h.addTopic("Fairs", { feeds: [FEED] });
+    h.handlers.write = (request) => ({
+      ...(defaultHandlers.write(request) as Record<string, unknown>),
+      event: { name: "Spring Maker Fair", startsAt: "2026-03-07", endsAt: null, venue: null, fee: null, registration: "unknown" },
+      updateNote: "書き直す前の記事を見ずに書いた文。",
+    });
+    h.feed(FEED, [{ title: "Spring Maker Fair", link: "https://example.org/fair" }]);
+    await h.run();
+    h.db.prepare("UPDATE articles SET update_note = 'earlier note'").run();
+    h.clock.advance(24 * HOUR);
+    h.feed(FEED, [{ title: "Maker fair this weekend", link: "https://example.net/weekend" }]);
+
+    await h.run();
+
+    expect(h.articles()).toMatchObject([{ revision: 1, updateNote: null }]);
+  });
+
+  it("records when each source was added and keeps the time the article was read before the rewrite", async () => {
+    const { h, article } = await published();
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+    await h.run();
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Advisory updated {flaw}", link: "https://example.org/advisory" }]);
+    await h.run();
+
+    const refs = h.db.prepare("SELECT url, added_at FROM article_refs WHERE article_id = ? ORDER BY position").all(article.id);
+    expect(refs).toEqual([
+      { url: "https://example.org/disclosed", added_at: "2026-03-01T12:00:00.000Z" },
+      { url: "https://example.org/patch", added_at: "2026-03-01T13:00:00.000Z" },
+      { url: "https://example.org/advisory", added_at: "2026-03-01T14:00:00.000Z" },
+    ]);
+    expect(h.db.prepare("SELECT read_before_update_at FROM articles WHERE id = ?").get(article.id)).toEqual({
+      read_before_update_at: "2026-03-01T12:00:00.000Z",
+    });
   });
 });
 

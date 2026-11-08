@@ -12,6 +12,9 @@ import {
   updateHighlightNote,
   articleListQuerySchema,
   articleSearchQuerySchema,
+  attentionDismissalSchema,
+  dismissAttention,
+  listAttention,
   listMentionArticles,
   mentionArticlesQuerySchema,
   articleUpdateSchema,
@@ -32,8 +35,12 @@ import {
   feedDiscoverSchema,
   feedUpdateSchema,
   feedStats,
+  topicStats,
   findCategoryBySlug,
   getArticle,
+  getDigest,
+  listDigests,
+  digestListQuerySchema,
   ImageFetchError,
   verifyImageProxyPath,
   relayArticleImages,
@@ -58,6 +65,9 @@ import {
   listFilterArticles,
   listRuns,
   listTopics,
+  listCategoryVersions,
+  listTopicVersions,
+  restoreTopicVersion,
   markArticlesRead,
   moveCategory,
   moveFeed,
@@ -67,6 +77,7 @@ import {
   pagePreviewRequestSchema,
   previewSelectors,
   proposeSelectors,
+  proposeTopicRewrite,
   markArticlesUnread,
   markReadBodySchema,
   markSeenArticlesRead,
@@ -97,6 +108,7 @@ import {
   updateTermGroup,
   subscribe,
   topicCreateSchema,
+  topicTrialRequestSchema,
   topicUpdateSchema,
   updateCategory,
   updateFeed,
@@ -109,6 +121,8 @@ import {
   type Candidate,
   type Clock,
   type Database,
+  type DigestList,
+  type DigestWorker,
   type FeedFetchResult,
   type FeedPoller,
   type Fetcher,
@@ -122,6 +136,7 @@ import {
 } from "@smarternews/core";
 import { Hono, type Context } from "hono";
 import type { z } from "zod";
+import type { TopicTrials } from "./topic-trials.ts";
 import { serveWeb } from "./web.ts";
 
 export interface AppDeps {
@@ -138,10 +153,16 @@ export interface AppDeps {
   summarizer: SummaryWorker;
   /** Fetches the full content of feed articles, one at a time; an article a reader asks for goes first. */
   fullContent: FullContentWorker;
+  /** Makes the digests; asked here to make one now. */
+  digests: DigestWorker;
+  /** Tries the text of a topic before it is saved, one trial at a time, and keeps the results in memory. */
+  trials: TopicTrials;
   /** The relay of images: the key that signs their URLs, and what fetches and keeps them. */
   images: { key: Uint8Array; proxy: ImageProxy };
   tokens: { api: string; feed: string };
   version: string;
+  /** The news engines the runs ask. Searches of an engine they no longer ask are not pointed out. Every engine counts without it. */
+  newsEngines?: readonly string[];
   /** Directory of the built web app. The page is served from it when it holds an index.html. */
   webDir?: string;
 }
@@ -184,7 +205,7 @@ function idParam(c: Context, what: string, name = "id"): number {
 const RELAY_HEADERS = { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" };
 
 export function createApp(deps: AppDeps): Hono {
-  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, images } = deps;
+  const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, digests, trials, images } = deps;
   /** An article as it is answered: the images of a feed article's content load through the relay. */
   const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
   const app = new Hono();
@@ -272,8 +293,9 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/categories", async (c) => c.json(createCategory(db, parse(categoryCreateSchema, await jsonBody(c)), clock), 201));
   api.get("/categories/:id", (c) => c.json(getCategory(db, idParam(c, "category"))));
   api.patch("/categories/:id", async (c) =>
-    c.json(updateCategory(db, idParam(c, "category"), parse(categoryUpdateSchema, await jsonBody(c)))),
+    c.json(updateCategory(db, idParam(c, "category"), parse(categoryUpdateSchema, await jsonBody(c)), clock)),
   );
+  api.get("/categories/:id/versions", (c) => c.json(listCategoryVersions(db, idParam(c, "category"))));
   api.post("/categories/:id/move", async (c) =>
     c.json(moveCategory(db, idParam(c, "category"), parse(categoryMoveSchema, await jsonBody(c)).before)),
   );
@@ -287,16 +309,34 @@ export function createApp(deps: AppDeps): Hono {
     const category = getCategory(db, idParam(c, "category"));
     return c.json(listTopics(db, category.id));
   });
+  api.get("/categories/:id/topic-stats", (c) => c.json(topicStats(db, idParam(c, "category"), clock())));
   api.post("/categories/:id/topics", async (c) =>
     c.json(createTopic(db, idParam(c, "category"), parse(topicCreateSchema, await jsonBody(c)), clock), 201),
   );
   api.get("/topics/:id", (c) => c.json(getTopic(db, idParam(c, "topic"))));
-  api.patch("/topics/:id", async (c) => c.json(updateTopic(db, idParam(c, "topic"), parse(topicUpdateSchema, await jsonBody(c)))));
+  api.patch("/topics/:id", async (c) => c.json(updateTopic(db, idParam(c, "topic"), parse(topicUpdateSchema, await jsonBody(c)), clock)));
+  // The versions of a topic, and going back to one. Nothing asks a model: an interpreted version stays interpreted.
+  api.get("/topics/:id/versions", (c) => c.json(listTopicVersions(db, idParam(c, "topic"))));
+  api.post("/topics/:id/versions/:versionId/restore", (c) =>
+    c.json(restoreTopicVersion(db, idParam(c, "topic"), idParam(c, "topic version", "versionId"), clock)),
+  );
   api.delete("/topics/:id", (c) => {
     deleteTopic(db, idParam(c, "topic"));
     return c.body(null, 204);
   });
   api.post("/topics/:id/interpret", (c) => c.json(requestInterpretation(db, idParam(c, "topic"))));
+  // Judges stored candidates again with a text that is not saved. Answers at once; the result is asked for below.
+  // Nothing is stored but the record of the model calls.
+  api.post("/topics/:id/trials", async (c) => {
+    const id = idParam(c, "topic");
+    const draft = parse(topicTrialRequestSchema, await jsonBody(c));
+    const started = trials.start(id, draft);
+    return c.json(started, started.status === "started" ? 202 : 200);
+  });
+  api.get("/topic-trials/:id", (c) => c.json(trials.get(c.req.param("id"))));
+  // Proposals of a new wording, from the saved text and relevance test. One model call, so the answer waits for
+  // it, up to its time limit. Nothing is stored but the record of the call.
+  api.post("/topics/:id/rewrite-proposals", async (c) => c.json(await proposeTopicRewrite({ db, clock, runner }, idParam(c, "topic"))));
 
   // articles
   api.get("/articles", (c) => c.json(listArticles(db, parse(articleListQuerySchema, c.req.query()), clock().toISOString())));
@@ -457,17 +497,39 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(listRunCandidates(db, run.id, status === "all" ? undefined : (status as Candidate["status"])));
   });
 
+  // attention
+  api.get("/attention", (c) => c.json(listAttention(db, clock(), { engines: deps.newsEngines })));
+  api.post("/attention/dismissals", async (c) => {
+    dismissAttention(db, parse(attentionDismissalSchema, await jsonBody(c)).key, clock);
+    return c.body(null, 204);
+  });
+
+  // digests
+  api.get("/digests", (c) => {
+    const query = parse(digestListQuerySchema, c.req.query());
+    const list: DigestList = { items: listDigests(db, { limit: query.limit }), building: digests.building };
+    return c.json(list);
+  });
+  api.get("/digests/:id", (c) => c.json(getDigest(db, idParam(c, "digest"))));
+  api.post("/digests", (c) => {
+    const status = digests.buildNow();
+    if (status === "busy") throw new DomainError("conflict", "a digest is being made");
+    return c.json({ status }, status === "queued" ? 202 : 200);
+  });
+
   // providers
   api.get("/providers", (c) => {
     const status: ProviderStatus = {
       ...runner.describe(),
       llmCallsToday: runner.callsToday(),
       summariesToday: runner.summariesToday(),
+      digestsToday: runner.digestsToday(),
       limits: runner.limits,
       budget: runner.budgetStatus(),
     };
     return c.json(status);
   });
+  api.get("/usage", (c) => c.json(runner.usageStatus()));
 
   app.route("/api/v1", api);
 

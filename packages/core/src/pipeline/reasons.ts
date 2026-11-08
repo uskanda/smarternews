@@ -1,5 +1,8 @@
 // Reasons the program itself gives when it rejects a candidate. The judge's reasons come from the model.
-export type ReasonCode = "no-date" | "below-minimum" | "over-limit" | "event-outside-window" | "event-no-date";
+// A rejected candidate keeps the kind of the program's reason as its reason code, beside the text; the judge's
+// rejections have none. The migration that gave the code to earlier candidates matched these texts.
+export const REASON_CODES = ["no-date", "below-minimum", "over-limit", "event-outside-window", "event-no-date"] as const;
+export type ReasonCode = (typeof REASON_CODES)[number];
 
 const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
   ja: {

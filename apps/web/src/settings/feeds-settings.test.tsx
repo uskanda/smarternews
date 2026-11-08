@@ -1,7 +1,7 @@
 import { addHighlight, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
@@ -30,6 +30,12 @@ describe("the way to the pages", () => {
     await user.click(await screen.findByRole("link", { name: "フィルターを設定する" }));
     expect(await screen.findByRole("heading", { level: 1, name: "フィルター" })).toBeInTheDocument();
     expect(path()).toBe("/settings/filters");
+  });
+
+  it("says that summaries and translations go only to the feeds the user chose", async () => {
+    renderApp({ route: "/settings/feeds" });
+    expect(await screen.findByText(/要約と翻訳は、選んだ購読フィードの記事だけに行います。/)).toBeInTheDocument();
+    expect(screen.queryByText(/AIによる要約はしません/)).not.toBeInTheDocument();
   });
 });
 
@@ -65,6 +71,18 @@ describe("the list of subscribed feeds", () => {
     expect(row).toHaveTextContent("理由: サイトがエラーを返しました（HTTP 503）");
   });
 
+  it("says that a feed the site answers is gone has ended, instead of that it is failing", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    recordFetchFailure(server.db, blog.id, { now: "2026-03-01T11:00:00.000Z", error: "HTTP status 410: https://blog.example.org/feed.xml", gone: true });
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).toHaveTextContent("配信終了");
+    expect(row).not.toHaveTextContent("取得に失敗");
+    expect(row).toHaveTextContent("理由: 配信を終えたと返しています（HTTP 410）");
+  });
+
   it("says that a paused feed is paused", async () => {
     const server = makeServer();
     updateFeed(server.db, feedOf(server, "Blog").id, { enabled: false });
@@ -88,7 +106,7 @@ describe("adding a feed", () => {
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.selectOptions(within(form).getByLabelText("カテゴリ"), "Tools");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     const row = await rowOf("Example Blog");
     expect(row).toHaveTextContent("Tools");
@@ -114,7 +132,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     await rowOf("Example Blog");
     expect(listFeeds(server.db).map((feed) => feed.url)).toEqual([FEED]);
@@ -131,7 +149,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     const choices = await within(form).findByRole("group", { name: /フィードが2つ見つかりました/ });
     expect(within(choices).getAllByRole("radio")).toHaveLength(2);
@@ -153,7 +171,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(await within(form).findByText("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。")).toBeInTheDocument();
     expect(listFeeds(server.db)).toEqual([]);
@@ -167,7 +185,7 @@ describe("adding a feed", () => {
 
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(await within(form).findByText(`このフィードはすでに購読しています（${FEED}）。`)).toBeInTheDocument();
   });
@@ -176,7 +194,7 @@ describe("adding a feed", () => {
     const { user } = renderApp({ route: "/settings/feeds" });
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://gone.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
     expect(await within(form).findByText(/このURLを取得できませんでした。.*404/)).toBeInTheDocument();
   });
 });
@@ -200,14 +218,67 @@ describe("the focus in the list of feeds", () => {
     feedOf(server, "Blog");
     const { user } = renderApp({ server, route: "/settings/feeds" });
 
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
     const dialog = await screen.findByRole("alertdialog");
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "やめる" })).toHaveFocus());
 
     await user.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(listFeeds(server.db)).toHaveLength(1);
-    await waitFor(async () => expect(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" })).toHaveFocus());
+    await waitFor(async () => expect(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" })).toHaveFocus());
+  });
+});
+
+describe("the way from a row to the feed's articles", () => {
+  it("leads from each row to the list of that feed", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    feedOf(server, "Slow");
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(await rowOf("Slow")).getByRole("link", { name: "Slowの記事の一覧" })).toHaveTextContent("記事の一覧");
+    await user.click(within(row).getByRole("link", { name: "Blogの記事の一覧" }));
+
+    await waitFor(() => expect(path()).toBe(`/f/${blog.id}`));
+  });
+
+  it("is not shown while the row's form is open", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+
+    expect(within(row).queryByRole("link", { name: "Blogの記事の一覧" })).not.toBeInTheDocument();
+  });
+});
+
+describe("a feed named in the address to be edited", () => {
+  it("opens that row's form with the focus in it, and scrolls to the row once the list is in", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const slow = feedOf(server, "Slow");
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderApp({ server, route: `/settings/feeds#feed-${slow.id}-edit` });
+
+    const row = await rowOf("Slow");
+    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    expect(within(row).getByLabelText("名前")).toHaveValue("Slow");
+    expect(within(await rowOf("Blog")).queryByLabelText("名前")).not.toBeInTheDocument();
+    await waitFor(() => expect(scroll.mock.contexts).toContain(row));
+    scroll.mockRestore();
+  });
+
+  it("opens nothing for a feed that is not there", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    renderApp({ server, route: "/settings/feeds#feed-999-edit" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).queryByLabelText("名前")).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Blogを編集" })).toBeInTheDocument();
   });
 });
 
@@ -273,7 +344,7 @@ describe("deleting a feed", () => {
     for (let index = 0; index < 40; index += 1) seedFeedArticle(server.db, feed.id, { starred: index < 2 });
     const { user } = renderApp({ server, route: "/settings/feeds" });
 
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("配信記事40件が消えます");
@@ -281,9 +352,9 @@ describe("deleting a feed", () => {
     expect(dialog).not.toHaveTextContent("注釈");
     expect(listFeeds(server.db)).toHaveLength(1);
 
-    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+    await user.click(within(dialog).getByRole("button", { name: "登録を解除する" }));
 
-    expect(await screen.findByText("購読フィードを削除しました")).toBeInTheDocument();
+    expect(await screen.findByText("購読フィードの登録を解除しました")).toBeInTheDocument();
     expect(listFeeds(server.db)).toEqual([]);
   });
 
@@ -296,7 +367,7 @@ describe("deleting a feed", () => {
     saveArticleNote(server.db, ids[0]!, "メモ", now);
     const { user } = renderApp({ server, route: "/settings/feeds" });
 
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("「Blog」と、その配信記事40件が消えます。注釈のある3件も、注釈とともに消えます。元に戻せません。");
@@ -307,7 +378,7 @@ describe("deleting a feed", () => {
     const server = makeServer();
     feedOf(server, "Blog");
     const { user } = renderApp({ server, route: "/settings/feeds" });
-    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを削除" }));
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogの登録を解除" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "やめる" }));
     expect(listFeeds(server.db)).toHaveLength(1);
   });
@@ -338,6 +409,23 @@ describe("fetching a feed now", () => {
     expect(await screen.findByText("取得できませんでした。理由は一覧に表示しています。")).toBeInTheDocument();
     expect(await rowOf("Blog")).toHaveTextContent("取得に失敗");
   });
+
+  it("opens at the row of a feed named in the address, with the focus on its name", async () => {
+    const server = makeServer();
+    feedOf(server, "Alpha");
+    const blog = feedOf(server, "Blog");
+    feedOf(server, "Charlie");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    onTestFinished(() => scrolled.mockRestore());
+    renderApp({ server, route: `/settings/feeds#feed-${blog.id}` });
+
+    const row = await rowOf("Blog");
+    expect(row).toHaveAttribute("id", `feed-${blog.id}`);
+    await waitFor(() => expect(document.activeElement).toBe(within(row).getByText("Blog")));
+    expect(scrolled.mock.contexts).toContain(row);
+    // Without -edit, the row shows its state and leaves its form closed.
+    expect(within(row).queryByLabelText("名前")).not.toBeInTheDocument();
+  });
 });
 
 describe("the base interval", () => {
@@ -349,7 +437,7 @@ describe("the base interval", () => {
     expect(field).toHaveValue(30);
     await user.clear(field);
     await user.type(field, "60");
-    await user.click(within(form).getByRole("button", { name: "取得周期を保存" }));
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
     expect(await screen.findByText("取得周期を保存しました")).toBeInTheDocument();
     expect(getSettings(server.db).feedIntervalMinutes).toBe(60);
   });
@@ -361,7 +449,7 @@ describe("the base interval", () => {
     const field = await within(form).findByLabelText("基本の取得周期（分）");
     await user.clear(field);
     await user.type(field, "3");
-    await user.click(within(form).getByRole("button", { name: "取得周期を保存" }));
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
     expect(await within(form).findByText("5分から1440分（24時間）の範囲で入力してください。")).toBeInTheDocument();
     expect(field).toHaveAccessibleDescription(/5分から1440分/);
     expect(getSettings(server.db).feedIntervalMinutes).toBe(30);
@@ -522,7 +610,7 @@ describe("summaries of a feed", () => {
     expect(choice).not.toBeChecked();
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(choice);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(within(await rowOf("Example Blog")).getByText("自動で要約")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, autoSummarize: true }]);
@@ -563,7 +651,7 @@ describe("translation of a feed", () => {
     expect(choice).toHaveAccessibleDescription(HINT);
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(choice);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(within(await rowOf("Example Blog")).getByText("翻訳")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, translate: true }]);
@@ -622,7 +710,7 @@ describe("full content of a feed", () => {
     expect(choice).toHaveAccessibleDescription(HINT);
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), FEED);
     await user.click(choice);
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(within(await rowOf("Example Blog")).getByText("全文を取得")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, fetchFullContent: true }]);
@@ -801,7 +889,7 @@ describe("subscribing to a page without a feed", () => {
     const view = renderApp({ server, route: "/settings/feeds" });
     const form = await section("購読フィードの追加");
     await view.user.type(within(form).getByLabelText("フィードまたはサイトのURL"), PAGE);
-    await view.user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
     await within(form).findByRole("button", { name: "このページを購読する" });
     return { ...view, form };
   }
@@ -879,7 +967,7 @@ describe("subscribing to a page without a feed", () => {
     const { user } = renderApp({ server, route: "/settings/feeds" });
     const form = await section("購読フィードの追加");
     await user.type(within(form).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await user.click(within(form).getByRole("button", { name: "フィードを追加" }));
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
     await rowOf("Example Blog");
     expect(within(form).queryByRole("button", { name: "このページを購読する" })).not.toBeInTheDocument();
   });
@@ -941,5 +1029,76 @@ describe("editing a web feed", () => {
     expect(within(row).queryByLabelText("項目のセレクター")).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "見本を見る" })).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "候補を出し直す" })).not.toBeInTheDocument();
+  });
+});
+
+describe("changes to feeds not saved yet", () => {
+  const pane = () => screen.getByRole("navigation", { name: "項目" });
+  const toUnread = (user: ReturnType<typeof renderApp>["user"]) => user.click(within(pane()).getByRole("link", { name: /^未読/ }));
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+  const unloadStopped = () => !fireEvent(window, new Event("beforeunload", { cancelable: true }));
+
+  it("asks before leaving an edited feed, names it, and has the browser confirm a reload", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    expect(unloadStopped()).toBe(false);
+    await user.click(within(row).getByRole("checkbox", { name: "取得を一時停止する" }));
+    expect(unloadStopped()).toBe(true);
+    await toUnread(user);
+
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("購読フィード『Blog』の編集");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+    expect(path()).toBe("/settings/feeds");
+    expect(within(row).getByRole("checkbox", { name: "取得を一時停止する" })).toBeChecked();
+  });
+
+  it("drops the changes without a question when the user backs out with やめる", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    await user.type(within(row).getByLabelText("名前"), " posts");
+    await user.click(within(row).getByRole("button", { name: "やめる" }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText("名前")).not.toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).title).toBe("Blog");
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks before leaving an edited base interval, and not once it is saved", async () => {
+    const server = makeServer();
+    const { user, path } = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("取得周期");
+    const field = await within(form).findByLabelText("基本の取得周期（分）");
+
+    await user.clear(field);
+    await user.type(field, "60");
+    await toUnread(user);
+    const dialog = await question();
+    expect(dialog).toHaveTextContent("基本の取得周期");
+    await user.click(within(dialog).getByRole("button", { name: "編集を続ける" }));
+
+    await user.click(within(form).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getSettings(server.db).feedIntervalMinutes).toBe(60));
+    await toUnread(user);
+    await waitFor(() => expect(path()).toBe("/unread"));
+  });
+
+  it("asks before leaving a URL that was not added", async () => {
+    const { user } = renderApp({ route: "/settings/feeds" });
+
+    await user.type(within(await section("購読フィードの追加")).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await toUnread(user);
+
+    expect(await question()).toHaveTextContent("購読フィードの追加");
   });
 });

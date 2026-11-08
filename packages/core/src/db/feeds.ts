@@ -51,10 +51,13 @@ function waitMs(intervalMinutes: number | null, failureCount: number, baseMinute
   return Math.min(interval * 2 ** Math.min(failureCount, 20), MAX_WAIT_MS);
 }
 
+/** After the wait, and no earlier than the time a Retry-After of the last failure asked for. */
 function nextFetchFrom(row: Row, baseMinutes: number): Date {
   const last = strOrNull(row.last_fetched_at);
   if (last === null) return new Date(str(row.created_at));
-  return new Date(new Date(last).getTime() + waitMs(numOrNull(row.interval_minutes), num(row.failure_count), baseMinutes));
+  const waited = new Date(last).getTime() + waitMs(numOrNull(row.interval_minutes), num(row.failure_count), baseMinutes);
+  const asked = strOrNull(row.retry_after_until);
+  return new Date(asked === null ? waited : Math.max(waited, new Date(asked).getTime()));
 }
 
 interface FeedContext {
@@ -95,6 +98,7 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
     failureCount: num(row.failure_count),
+    goneAt: strOrNull(row.gone_at),
     nextFetchAt: enabled ? nextFetchFrom(row, baseMinutes).toISOString() : null,
     articleCount: num(row.article_count),
     starredCount: num(row.starred_count),
@@ -178,11 +182,11 @@ export function checkFeedCategory(db: Database, categoryId: number | null | unde
   if (categoryId === null || categoryId === undefined) return;
   const category = findCategory(db, categoryId);
   if (!category) {
-    throw new DomainError("invalid", `category ${categoryId} does not exist`, [{ path: "categoryId", message: "no such category" }]);
+    throw new DomainError("invalid", `category ${categoryId} does not exist`, [{ path: "categoryId", message: "no such category", code: "no_such_item" }]);
   }
   if (category.kind !== "news") {
     throw new DomainError("invalid", `a feed cannot belong to the ${category.kind} category "${category.name}"`, [
-      { path: "categoryId", message: "must be a news category or none" },
+      { path: "categoryId", message: "must be a news category or none", code: "not_allowed" },
     ]);
   }
 }
@@ -224,7 +228,7 @@ export function moveFeed(db: Database, id: number, to: FeedMove): Feed {
   checkFeedCategory(db, to.categoryId);
   const others = feedIdsOf(db, to.categoryId).filter((other) => other !== id);
   if (to.before !== null && to.before !== id && !others.includes(to.before)) {
-    throw new DomainError("invalid", `feed ${to.before} is not in that category`, [{ path: "before", message: "not a feed of the target category" }]);
+    throw new DomainError("invalid", `feed ${to.before} is not in that category`, [{ path: "before", message: "not a feed of the target category", code: "no_such_item" }]);
   }
   if (to.before === id && to.categoryId === current.categoryId) return current;
   const at = to.before === null || to.before === id ? others.length : others.indexOf(to.before);
@@ -265,7 +269,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
   const format = input.format ?? "feed";
   checkSelectorsFit(format, input.selectors);
   if (format === "page" && input.selectors === undefined) {
-    throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors" }]);
+    throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors", code: "required" }]);
   }
   const now = clock().toISOString();
   const result = db
@@ -300,7 +304,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
 function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefined): void {
   if (format === "feed" && selectors !== undefined) {
     throw new DomainError("invalid", "this feed has no selectors: only a web feed takes them", [
-      { path: "selectors", message: "this feed has no selectors: only a web feed takes them" },
+      { path: "selectors", message: "this feed has no selectors: only a web feed takes them", code: "not_allowed" },
     ]);
   }
   if (selectors !== undefined) checkSelectorsUsable(selectors);
@@ -377,7 +381,7 @@ export interface FetchSuccess {
 export function recordFetchSuccess(db: Database, id: number, result: FetchSuccess): void {
   db.prepare(
     `UPDATE feeds
-        SET last_fetched_at = ?, last_succeeded_at = ?, last_error = NULL, failure_count = 0,
+        SET last_fetched_at = ?, last_succeeded_at = ?, last_error = NULL, failure_count = 0, retry_after_until = NULL, gone_at = NULL,
             etag = CASE WHEN ? THEN ? ELSE etag END,
             last_modified = CASE WHEN ? THEN ? ELSE last_modified END,
             title = CASE WHEN title_set_by_user = 0 AND ? <> '' THEN ? ELSE title END,
@@ -397,12 +401,22 @@ export function recordFetchSuccess(db: Database, id: number, result: FetchSucces
   );
 }
 
-export function recordFetchFailure(db: Database, id: number, result: { now: string; error: string }): void {
-  db.prepare("UPDATE feeds SET last_fetched_at = ?, last_error = ?, failure_count = failure_count + 1 WHERE id = ?").run(
-    result.now,
-    result.error.slice(0, 500),
-    id,
-  );
+export interface FetchFailure {
+  now: string;
+  error: string;
+  /** The site answered 410: the feed is gone. Kept since the first of such answers in a row. */
+  gone?: boolean;
+  /** The earliest time the next fetch may start, as a Retry-After gave it. Each failure replaces it. */
+  retryAfterUntil?: string | null;
+}
+
+export function recordFetchFailure(db: Database, id: number, result: FetchFailure): void {
+  db.prepare(
+    `UPDATE feeds
+        SET last_fetched_at = ?, last_error = ?, failure_count = failure_count + 1, retry_after_until = ?,
+            gone_at = CASE WHEN ? THEN coalesce(gone_at, ?) ELSE NULL END
+      WHERE id = ?`,
+  ).run(result.now, result.error.slice(0, 500), result.retryAfterUntil ?? null, result.gone ? 1 : 0, result.now, id);
 }
 
 /** Forgets the items a feed has not listed since the given time. Their articles are purged by then. */

@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
+  type ArticleFlagChange,
   useArticle,
   useArticleFlags,
   useRecordOpened,
@@ -20,7 +21,7 @@ import {
 } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold } from "../lib/collapsed.ts";
-import { followScroll } from "../lib/follow.ts";
+import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
@@ -49,11 +50,13 @@ import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
+import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
-import { ArticleView } from "./ArticleView.tsx";
+import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
+import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -175,7 +178,10 @@ export function ReaderPage({ view }: { view: View }) {
   const toast = useToast();
   const timeZone = useTimeZone();
   const settings = useSettings();
-  const flags = useArticleFlags();
+  // A failed change of flags is answered with what this render holds: the kept rows, the toast, sending again.
+  const flagFailed = useRef<(change: ArticleFlagChange) => void>(() => {});
+  const flagRetry = useRef<(change: ArticleFlagChange) => void>(() => {});
+  const flags = useArticleFlags((change) => flagFailed.current(change));
 
   const categories = useCategories();
   const feeds = useFeeds();
@@ -274,9 +280,46 @@ export function ReaderPage({ view }: { view: View }) {
   const [refreshes, setRefreshes] = useState(0);
   const listScroll = useRef<HTMLDivElement>(null);
   const listRows = useRef<HTMLUListElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+
+  // On a narrow screen the list goes away while an article is open. Where each list was scrolled to, and the
+  // article last opened from it, are kept here, so that going back, by the link or by the browser, finds both.
+  const positions = useRef(new Map<string, number>());
+  const [lastOpened, setLastOpened] = useState<{ key: string; id: number } | null>(null);
+  if (articleId !== null && (lastOpened === null || lastOpened.key !== listKey || lastOpened.id !== articleId)) setLastOpened({ key: listKey, id: articleId });
+  /** The article chosen in the list: the one open, or else the one last opened from this list. */
+  const current = articleId ?? (lastOpened?.key === listKey ? lastOpened.id : null);
+  const listShown = layout !== "narrow" || articleId === null;
+  const listWasShown = useRef(listShown);
+  // Back in the list: where it was left, with the article last read in view and the focus on it. This comes
+  // before the marking of what is scrolled past, so that the marking starts from the place put back and does
+  // not take the scroll that puts it back for the reader's own.
+  useLayoutEffect(() => {
+    const wasShown = listWasShown.current;
+    listWasShown.current = listShown;
+    if (wasShown || !listShown) return;
+    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
+    if (!pane) return;
+    const saved = positions.current.get(listKey);
+    if (saved !== undefined) pane.scrollTop = saved;
+    const link = pane.querySelector<HTMLElement>('[aria-current="true"]');
+    const row = link?.closest("li");
+    if (!link || !row) return;
+    const view = pane.getBoundingClientRect();
+    const box = row.getBoundingClientRect();
+    const height = pane.clientHeight || view.height;
+    const rowTop = box.top - view.top + pane.scrollTop;
+    const rowBottom = rowTop + box.height;
+    // Only as far as it takes: a row below comes in at the bottom edge, a row above at the top edge.
+    const to = followScroll({ top: pane.scrollTop, height, rowTop, rowBottom, step: rowBottom > pane.scrollTop + height ? -1 : 1 });
+    if (to !== null) pane.scrollTop = to;
+    link.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the list comes back, not when it changes
+  }, [listShown]);
+
   const readPatch = useReadPatch();
   const scrollReadChosen = useScrollRead();
-  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && (layout !== "narrow" || articleId === null);
+  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && listShown;
   const scrollRead = useScrollToRead({
     enabled: scrollReadOn,
     scrollRef: listScroll,
@@ -310,25 +353,88 @@ export function ReaderPage({ view }: { view: View }) {
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
-  function setRead(target: { id: number; isRead: boolean }, isRead: boolean) {
+  /** Shows a change of the read state in the list: an unread or recently read list keeps the row. */
+  function showRead(id: number, isRead: boolean) {
     // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
-    if (!isRead) scrollRead.exclude(target.id);
-    const summary = items.find((item) => item.id === target.id);
+    if (!isRead) scrollRead.exclude(id);
+    const summary = items.find((item) => item.id === id);
     if ((unreadOnly || recentlyRead) && summary) {
       setKept((current) => ({
         key: listKey,
-        items: [...current.items.filter((item) => item.id !== target.id), { ...summary, isRead }],
+        items: [...current.items.filter((item) => item.id !== id), { ...summary, isRead }],
       }));
     }
-    flags.mutate({ id: target.id, isRead });
   }
-  function toggleStar(target: { id: number; starred: boolean }) {
+  function setRead(id: number, isRead: boolean) {
+    showRead(id, isRead);
+    flags.mutate({ id, isRead });
+  }
+  /**
+   * Marks a generated article as a miss, which reads it too, and offers to undo both; pressed again, takes only the
+   * mark away. The read state is sent only when it changes, so that a failure puts back no more than was changed.
+   */
+  function toggleMiss(target: Pick<Article, "id" | "isRead" | "missed">) {
+    if (target.missed) return void flags.mutate({ id: target.id, missed: false });
+    const wasRead = target.isRead;
+    if (!wasRead) showRead(target.id, true);
+    flags.mutate({ id: target.id, missed: true, ...(wasRead ? {} : { isRead: true }) });
+    toast({
+      message: wasRead ? "外れの印を付けました" : "外れの印を付けて、既読にしました",
+      durationMs: 10_000,
+      action: { label: "取り消す", run: () => undoMiss(target.id, wasRead) },
+    });
+  }
+  /** Takes the mark away, and puts the article back to unread when it was unread before the mark. */
+  function undoMiss(id: number, wasRead: boolean) {
+    if (!wasRead) showRead(id, false);
+    flags.mutate({ id, missed: false, ...(wasRead ? {} : { isRead: false }) });
+  }
+  function setStar(id: number, starred: boolean) {
     setKept((current) => ({
       key: current.key,
-      items: current.items.map((item) => (item.id === target.id ? { ...item, starred: !target.starred } : item)),
+      items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)),
     }));
-    flags.mutate({ id: target.id, starred: !target.starred });
+    flags.mutate({ id, starred });
   }
+  function toggleStar(target: { id: number; starred: boolean }) {
+    setStar(target.id, !target.starred);
+  }
+  /** Sends a change of flags again, as the screen of now has it: a retry after a failure. */
+  function sendFlags(change: ArticleFlagChange) {
+    const { id, isRead, starred, missed } = change;
+    if (missed !== undefined) {
+      if (isRead !== undefined) showRead(id, isRead);
+      return void flags.mutate(change);
+    }
+    if (isRead !== undefined) setRead(id, isRead);
+    if (starred !== undefined) setStar(id, starred);
+  }
+  flagFailed.current = (change) => {
+    const { id, isRead, starred, missed } = change;
+    // The rows kept in an unread or recently read list are not in the cache, so they are put back here.
+    setKept((current) => ({
+      key: current.key,
+      items: current.items.map((item) =>
+        item.id === id
+          ? { ...item, ...(isRead !== undefined ? { isRead: !isRead } : {}), ...(starred !== undefined ? { starred: !starred } : {}) }
+          : item,
+      ),
+    }));
+    const message =
+      missed !== undefined
+        ? missed
+          ? "外れの印を付けられませんでした"
+          : "外れの印を外せませんでした"
+        : isRead !== undefined
+          ? isRead
+            ? "既読にできませんでした"
+            : "未読に戻せませんでした"
+          : starred
+            ? "スターを付けられませんでした"
+            : "スターを外せませんでした";
+    toast({ message, durationMs: 10_000, action: { label: "もう一度試す", run: () => flagRetry.current(change) } });
+  };
+  flagRetry.current = sendFlags;
 
   // Full content: the fetch is kept here, for the `w` key and the article pane alike. Which content is shown is
   // held for one visit to an article; choosing it again shows the full content.
@@ -347,7 +453,7 @@ export function ReaderPage({ view }: { view: View }) {
     autoMarked.current = opened.id;
     recordOpened(opened);
     if (opened.fullContentStatus === "waiting") fullContent.fetch(opened.id);
-    if (!opened.isRead) setRead(opened, true);
+    if (!opened.isRead) setRead(opened.id, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when another article is opened, not on every change
   }, [opened?.id]);
   useEffect(() => {
@@ -459,22 +565,49 @@ export function ReaderPage({ view }: { view: View }) {
   }, [sort, listKey]);
   const narrowing = searchSlug !== null ? `c:${searchSlug}` : searchFeedId !== undefined ? `f:${searchFeedId}` : "";
 
-  const index = items.findIndex((item) => item.id === articleId);
+  const index = current === null ? -1 : items.findIndex((item) => item.id === current);
   // A move with a key takes the list along; a click leaves it where the reader put it.
-  const root = useRef<HTMLDivElement>(null);
   const keyStep = useRef(0);
+  // The focus goes along with a move with a key when it was in the list, so it stays on the row chosen.
+  const keyFocus = useRef(false);
+  const scrollingList = () => root.current?.querySelector<HTMLElement>("[data-list-scroll]");
+  const loadingMore = useRef(false);
+  const go = (id: number, step: number) => {
+    keyStep.current = step;
+    keyFocus.current = focusWithin(scrollingList());
+    // Only the first article opened adds to the history; a run of keys after it would make back slow to leave.
+    void navigate(articlePath(id), { replace: articleId !== null });
+  };
+  /** Past the last article loaded, the next page is loaded first, and its first article opened. */
+  const moveOn = async () => {
+    if (loadingMore.current) return;
+    loadingMore.current = true;
+    try {
+      const result = await active.fetchNextPage();
+      const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
+      const first = pages.at(-1)?.items[0];
+      if (first) go(first.id, 1);
+    } finally {
+      loadingMore.current = false;
+    }
+  };
   const move = (step: number) => {
+    if (loadingMore.current) return;
+    if (step > 0 && index !== -1 && index + step >= items.length && active.hasNextPage) return void moveOn();
     const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
     if (!target) return;
-    keyStep.current = step;
-    void navigate(articlePath(target.id));
+    go(target.id, step);
   };
   useLayoutEffect(() => {
     const step = keyStep.current;
+    const focus = keyFocus.current;
     keyStep.current = 0;
-    const pane = root.current?.querySelector<HTMLElement>("[data-list-scroll]");
-    const row = pane?.querySelector('[aria-current="true"]')?.closest("li");
-    if (step === 0 || !pane || !row) return;
+    keyFocus.current = false;
+    const pane = scrollingList();
+    const link = pane?.querySelector<HTMLElement>('[aria-current="true"]');
+    const row = link?.closest("li");
+    if (step === 0 || !pane || !link || !row) return;
+    if (focus) link.focus({ preventScroll: true });
     const view = pane.getBoundingClientRect();
     const box = row.getBoundingClientRect();
     const rowTop = box.top - view.top + pane.scrollTop;
@@ -513,7 +646,9 @@ export function ReaderPage({ view }: { view: View }) {
       r: refresh,
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
-      m: selected ? () => setRead(selected, !selected.isRead) : undefined,
+      m: selected ? () => setRead(selected.id, !selected.isRead) : undefined,
+      // The same as the button under the body of a generated article, and only while it is shown.
+      x: opened?.origin === "generated" && opened.id === articleId ? () => toggleMiss(opened) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
@@ -531,8 +666,20 @@ export function ReaderPage({ view }: { view: View }) {
     return <p className="p-xl type-body-md">この購読フィードはありません。</p>;
   }
 
-  const showList = layout !== "narrow" || articleId === null;
+  const showList = listShown;
   const showArticle = layout !== "narrow" || articleId !== null;
+  // On a narrow screen the list is out of sight: the end of the body leads to the articles beside this one.
+  const headline = (item: ArticleSummary) => item.translatedTitle ?? item.title;
+  const previousItem = items[index - 1];
+  const nextItem = items[index + 1];
+  const neighbors: ArticleNeighbors | null =
+    layout === "narrow" && articleId !== null && index !== -1
+      ? {
+          previous: previousItem ? { title: headline(previousItem), to: articlePath(previousItem.id) } : null,
+          next: nextItem ? { title: headline(nextItem), to: articlePath(nextItem.id) } : null,
+          more: !nextItem && active.hasNextPage ? () => move(1) : null,
+        }
+      : null;
   const title =
     view === "category"
       ? (category?.name ?? "")
@@ -555,7 +702,7 @@ export function ReaderPage({ view }: { view: View }) {
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
   ) : isEvents ? (
-    <EventList title={title} events={items} selectedId={articleId} to={articlePath} timeZone={timeZone} now={now()} />
+    <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
@@ -565,7 +712,7 @@ export function ReaderPage({ view }: { view: View }) {
           </h1>
           <div className="flex shrink-0 gap-sm">
             {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
-            <Button onClick={refresh}>更新</Button>
+            <Button onClick={refresh}>読み直す</Button>
           </div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
@@ -576,10 +723,12 @@ export function ReaderPage({ view }: { view: View }) {
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
           {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
-          {/* Beside the switches rather than beside 更新: a third button there leaves the list's name no room.
+          {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
+          {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
+          {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">
@@ -611,7 +760,14 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
         </div>
       </header>
-      <div ref={listScroll} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
+      {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
+      {view === "feed" && feed ? <FeedStatusBanner feed={feed} /> : null}
+      <div
+        ref={listScroll}
+        data-list-scroll
+        onScroll={(event) => positions.current.set(listKey, event.currentTarget.scrollTop)}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
@@ -627,7 +783,7 @@ export function ReaderPage({ view }: { view: View }) {
               key={item.id}
               article={item}
               to={articlePath(item.id)}
-              selected={item.id === articleId}
+              selected={item.id === current}
               sourceName={sourceName(item)}
               timeZone={timeZone}
               now={now()}
@@ -684,8 +840,10 @@ export function ReaderPage({ view }: { view: View }) {
               timeZone={timeZone}
               backTo={layout === "narrow" ? listPath : null}
               articlePath={articlePath}
+              neighbors={neighbors}
               onToggleStar={toggleStar}
-              onToggleRead={(article) => setRead(article, !article.isRead)}
+              onToggleRead={(article) => setRead(article.id, !article.isRead)}
+              onToggleMiss={toggleMiss}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),

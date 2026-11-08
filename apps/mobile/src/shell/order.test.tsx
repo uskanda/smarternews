@@ -185,6 +185,17 @@ describe("dragging in the drawer after a long press", () => {
     expect(await names(server)).toEqual(["A", "B", "C", "Events"]);
   });
 
+  it("starts no drag on a long press of ダイジェスト", async () => {
+    const { server } = await seeded();
+    await ready(server);
+
+    await userEvent.setup().longPress(screen.getByRole("button", { name: "ダイジェスト" }));
+
+    expect(screen.queryByTestId("nav-drop-line")).toBeNull();
+    expect(() => getByGestureTestId("drag-digests")).toThrow();
+    expect(await names(server)).toEqual(["A", "B", "C", "Events"]);
+  });
+
   it("still opens an entry on a short press", async () => {
     const { server, x } = await seeded();
     await ready(server);

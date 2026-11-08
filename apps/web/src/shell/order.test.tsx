@@ -192,12 +192,13 @@ describe("unsubscribing from the menu", () => {
 
     fireEvent.contextMenu(link("Y"));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
-    const dialog = await screen.findByRole("alertdialog", { name: "購読フィードを削除しますか" });
+    const dialog = await screen.findByRole("alertdialog", { name: "購読フィードの登録を解除しますか" });
     expect(dialog).toHaveTextContent("「Y」と、その配信記事1件が消えます。うち1件にはスターが付いています。注釈のある1件も、注釈とともに消えます。元に戻せません。");
-    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+    await user.click(within(dialog).getByRole("button", { name: "登録を解除する" }));
 
     await waitFor(() => expect(groupLines().slice(0, 4)).toEqual(["A", "  AI生成", "  X", "  Z"]));
     expect(listFeeds(server.db).map((feed) => feed.title)).not.toContain("Y");
+    expect(await screen.findByText("購読フィードの登録を解除しました")).toBeInTheDocument();
     // The row is gone; the focus goes to the first entry instead of nowhere.
     await waitFor(() => expect(link("未読")).toHaveFocus());
   });
@@ -221,7 +222,7 @@ describe("unsubscribing from the menu", () => {
 
     fireEvent.contextMenu(link("Y"));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
-    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "登録を解除する" }));
 
     await waitFor(() => expect(path()).toBe("/unread"));
   });
@@ -342,12 +343,12 @@ describe("dragging an entry", () => {
     await release(mid("A") - 5);
   });
 
-  it("starts no drag from 最近読んだ記事 or 注釈, and moves nothing above the categories in front of it", async () => {
+  it("starts no drag from 最近読んだ記事, 注釈 or ダイジェスト, and moves nothing above the categories in front of it", async () => {
     const { server } = seeded();
     const { path } = await ready({ server, route: "/all" });
     layOut();
     const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/\d+$/, ""));
-    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"];
+    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈", "ダイジェスト"];
 
     const recent = within(nav()).getByRole("link", { name: "最近読んだ記事" });
     fireEvent.pointerDown(recent, mouse(40));
@@ -361,6 +362,14 @@ describe("dragging an entry", () => {
     fireEvent.pointerDown(annotations, mouse(40));
     await dragTo(mid("B"));
     expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    await release(mid("B"));
+    expect(views()).toEqual(ORDER);
+
+    const digests = within(nav()).getByRole("link", { name: "ダイジェスト" });
+    fireEvent.pointerDown(digests, mouse(40));
+    await dragTo(mid("B"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    expect(nav().querySelector("[data-drop-line]")).not.toBeInTheDocument();
     await release(mid("B"));
     expect(views()).toEqual(ORDER);
 

@@ -1,4 +1,4 @@
-import type { Candidate } from "@smarternews/core/api";
+import type { Candidate, TaskName } from "@smarternews/core/api";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
@@ -9,19 +9,23 @@ import {
   periodDayLabel,
   RETRY_SKIPPED_LABEL,
   retryLabel,
+  runCostLabel,
   stageLabel,
   STATUS_LABEL,
   stopLimitLabel,
+  TASK_LABEL,
   TRIGGER_LABEL,
 } from "@smarternews/client";
 import { useCategories, useProviders, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { topicEditPath, topicStatsPath } from "../lib/paths.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const LINK = "tap text-primary underline underline-offset-4";
 
-function CandidateItem({ candidate, showTopics }: { candidate: Candidate; showTopics: boolean }) {
+/** One rejected candidate. Its topics, when shown, lead to their editors once the category is known. */
+function CandidateItem({ candidate, showTopics, categoryId = null }: { candidate: Candidate; showTopics: boolean; categoryId?: number | null }) {
   return (
     <li className="flex flex-col gap-px border-b border-outline py-sm">
       <span className="min-w-0">
@@ -32,7 +36,17 @@ function CandidateItem({ candidate, showTopics }: { candidate: Candidate; showTo
       <span className="type-body-md">{candidate.reason}</span>
       <span className="flex flex-wrap gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
         {candidate.siteName ? <span>{candidate.siteName}</span> : null}
-        {showTopics ? candidate.topics.map((topic) => <span key={topic.id}>{topic.text}</span>) : null}
+        {showTopics
+          ? candidate.topics.map((topic) =>
+              categoryId === null ? (
+                <span key={topic.id}>{topic.text}</span>
+              ) : (
+                <Link key={topic.id} to={topicEditPath(categoryId, topic.id)} className={`break-words ${LINK}`}>
+                  {topic.text}
+                </Link>
+              ),
+            )
+          : null}
       </span>
     </li>
   );
@@ -85,6 +99,10 @@ export function RunPage() {
   const data = run.data;
   const category = categories.find((entry) => entry.id === data.categoryId);
   const rejected = candidates.data ?? [];
+  const calledTasks = (Object.keys(TASK_LABEL) as TaskName[]).flatMap((task) => {
+    const calls = data.callsByTask[task];
+    return calls ? [[task, calls] as const] : [];
+  });
 
   return (
     <div className="h-full overflow-y-auto bg-surface">
@@ -137,7 +155,44 @@ export function RunPage() {
           <dd className="tabular-nums">{data.articlesUpdated}</dd>
           <dt className="text-on-surface-muted">LLMの呼び出し</dt>
           <dd className="tabular-nums">{data.llmCalls}</dd>
+          <dt className="text-on-surface-muted">金額</dt>
+          <dd className="tabular-nums">{runCostLabel(data.costUsd)}</dd>
+          {data.unknownCostCalls > 0 ? (
+            <>
+              <dt className="text-on-surface-muted">金額のわからない呼び出し</dt>
+              <dd className="tabular-nums">{data.unknownCostCalls}件</dd>
+            </>
+          ) : null}
         </dl>
+        {calledTasks.length > 0 ? (
+          <div className="max-w-measure overflow-x-auto">
+            <table aria-label="タスクごとの呼び出し" className="w-full text-left type-body-md">
+              <thead className="type-label-sm text-on-surface-muted">
+                <tr>
+                  <th className="py-xs pr-lg font-normal">タスク</th>
+                  <th className="py-xs pr-lg text-right font-normal">回数</th>
+                  <th className="py-xs text-right font-normal">金額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calledTasks.map(([task, calls]) => (
+                  <tr key={task} className="border-t border-outline">
+                    <th scope="row" className="py-xs pr-lg text-left font-normal text-on-surface-muted">
+                      {TASK_LABEL[task]}
+                    </th>
+                    <td className="py-xs pr-lg text-right tabular-nums">{calls.calls}</td>
+                    <td className="py-xs text-right tabular-nums">{runCostLabel(calls.costUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {data.unknownCostCalls > 0 ? (
+          <p className="max-w-measure type-label-sm text-on-surface-muted">
+            金額のわからない呼び出しは、時間切れなどで応答が届かなかった呼び出しです。金額には入っていません。
+          </p>
+        ) : null}
         {data.status === "stopped_by_limit" ? (
           <p className="max-w-measure type-body-md">
             {stopLimitLabel(data.stoppedBy)}
@@ -187,9 +242,15 @@ export function RunPage() {
                   <span className="pl-sm type-label-sm text-on-surface-muted tabular-nums">{group.candidates.length}件</span>
                 </h3>
                 {category && group.key !== "0" ? (
-                  <Link to={`/settings/categories/${category.id}`} className={`type-label-sm ${LINK}`}>
-                    このトピックを直す
-                  </Link>
+                  // One pair of such links per group: the names read out say which topic, the texts stay short.
+                  <span className="flex flex-wrap gap-x-md">
+                    <Link to={topicEditPath(category.id, Number(group.key))} aria-label={`${group.text} を直す`} className={`type-label-sm ${LINK}`}>
+                      このトピックを直す
+                    </Link>
+                    <Link to={topicStatsPath(category.id, Number(group.key))} aria-label={`${group.text} の成績`} className={`type-label-sm ${LINK}`}>
+                      このトピックの成績
+                    </Link>
+                  </span>
                 ) : null}
               </div>
               <ul>
@@ -202,7 +263,7 @@ export function RunPage() {
         ) : (
           <ul className="max-w-measure">
             {rejected.map((candidate) => (
-              <CandidateItem key={candidate.id} candidate={candidate} showTopics />
+              <CandidateItem key={candidate.id} candidate={candidate} showTopics categoryId={category?.id ?? null} />
             ))}
           </ul>
         )}

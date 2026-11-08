@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertContent, MAX_CONTENT_CHARS } from "./content.ts";
+import { convertContent, convertDescription, MAX_CONTENT_CHARS, plainDescriptionHtml } from "./content.ts";
 
 const BASE = "https://example.org/posts/1";
 const md = (html: string) => convertContent(html, BASE).markdown;
@@ -86,5 +86,35 @@ describe("the text for matching", () => {
 
   it("is one line, whatever the markup", () => {
     expect(convertContent("<h2>Title</h2><p>Body\n text</p><ul><li>Item</li></ul>", BASE).text).toBe("Title Body text Item");
+  });
+});
+
+describe("plainDescriptionHtml", () => {
+  it("makes paragraphs of blank lines, line breaks of the others, and links of HTTP and HTTPS addresses", () => {
+    expect(plainDescriptionHtml("First line.\r\nSee https://example.com/more.\n\n\nNew <paragraph> & more")).toBe(
+      '<p>First line.<br>See <a href="https://example.com/more">https://example.com/more</a>.</p><p>New &lt;paragraph&gt; &amp; more</p>',
+    );
+  });
+
+  it("links nothing but HTTP and HTTPS, and escapes what looks like markup", () => {
+    expect(plainDescriptionHtml("javascript:alert(1) ftp://example.com/x data:text/html,x")).toBe(
+      "<p>javascript:alert(1) ftp://example.com/x data:text/html,x</p>",
+    );
+    expect(plainDescriptionHtml('<a href="x">x</a>')).toBe("<p>&lt;a href=&quot;x&quot;&gt;x&lt;/a&gt;</p>");
+    expect(convertDescription({ text: 'javascript:alert(1) <script>alert("x")</script>', html: false }, BASE).markdown).toBe(
+      'javascript:alert(1) <script>alert("x")</script>',
+    );
+  });
+});
+
+describe("convertDescription", () => {
+  it("rewrites a plain description as Markdown with its line breaks and links", () => {
+    const { markdown, text } = convertDescription({ text: "Line one\nLine two https://example.com/a_b\n\nNext", html: false }, BASE);
+    expect(markdown).toBe("Line one\\\nLine two [https://example.com/a\\_b](https://example.com/a_b)\n\nNext");
+    expect(text).toBe("Line one Line two https://example.com/a_b Next");
+  });
+
+  it("converts a description of type html as delivered content", () => {
+    expect(convertDescription({ text: "<p>A <b>photo</b>.</p><script>x()</script>", html: true }, BASE).markdown).toBe("A **photo**.");
   });
 });

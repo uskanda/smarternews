@@ -1,9 +1,10 @@
 import type { Topic, TopicCreate, TopicUpdate } from "../api.ts";
-import type { Clock } from "../clock.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { notFound } from "../errors.ts";
 import { getCategory } from "./categories.ts";
-import type { Database } from "./database.ts";
+import { transaction, type Database } from "./database.ts";
 import { bool, json, num, str, strOrNull, type Row } from "./rows.ts";
+import { getTopicVersion, recordTopicVersion } from "./versions.ts";
 
 export interface Interpretation {
   queries: string[];
@@ -30,15 +31,21 @@ function toTopic(row: Row): Topic {
     sourcesSetByUser: bool(row.sources_set_by_user),
     search: language !== null && region !== null ? { language, region } : null,
     createdAt: str(row.created_at),
+    missesSinceInterpretation: num(row.misses_since_interpretation),
   };
 }
 
+/** A topic's columns, with how many of its misses were marked after its last interpretation, or all of them. */
+const TOPIC_COLUMNS = `t.*,
+  (SELECT count(*) FROM miss_topics mt JOIN misses m ON m.id = mt.miss_id
+    WHERE mt.topic_id = t.id AND (t.interpreted_at IS NULL OR m.marked_at > t.interpreted_at)) AS misses_since_interpretation`;
+
 export function listTopics(db: Database, categoryId: number): Topic[] {
-  return db.prepare("SELECT * FROM topics WHERE category_id = ? ORDER BY id").all(categoryId).map(toTopic);
+  return db.prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.category_id = ? ORDER BY t.id`).all(categoryId).map(toTopic);
 }
 
 export function getTopic(db: Database, id: number): Topic {
-  const row = db.prepare("SELECT * FROM topics WHERE id = ?").get(id);
+  const row = db.prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.id = ?`).get(id);
   if (!row) throw notFound("topic", id);
   return toTopic(row);
 }
@@ -83,10 +90,15 @@ export function createTopic(db: Database, categoryId: number, input: TopicCreate
     topic.criteria = input.interpretation.criteria;
   }
   save(db, topic);
+  recordTopicVersion(db, topic.id, "created", topic.createdAt);
   return topic;
 }
 
-export function updateTopic(db: Database, id: number, patch: TopicUpdate): Topic {
+/**
+ * Stores the changes. A change of a kept value makes a version, made by an edit, unless `record` is false: a
+ * settings file makes its own version once it applied everything for the topic.
+ */
+export function updateTopic(db: Database, id: number, patch: TopicUpdate, clock: Clock = systemClock, record = true): Topic {
   const topic = getTopic(db, id);
   if (patch.text !== undefined && patch.text !== topic.text) {
     topic.text = patch.text;
@@ -100,6 +112,7 @@ export function updateTopic(db: Database, id: number, patch: TopicUpdate): Topic
     topic.sourcesSetByUser = true;
   }
   save(db, topic);
+  if (record) recordTopicVersion(db, id, "edited", clock().toISOString());
   return topic;
 }
 
@@ -116,8 +129,19 @@ export function requestInterpretation(db: Database, id: number): Topic {
   return topic;
 }
 
-/** Stores what the interpret task produced. Source choices made by the user are never overwritten. */
-export function applyInterpretation(db: Database, id: number, interpretation: Interpretation): Topic {
+/**
+ * Stores what the interpret task produced. Source choices made by the user are never overwritten. `interpretedAt`
+ * is when the task ran, which the count of misses since the interpretation starts from; an interpretation brought
+ * from elsewhere, such as a settings file, leaves the time as it was. A change of a kept value makes a version, made
+ * by the interpretation at `interpretedAt` or now, unless `record` is false.
+ */
+export function applyInterpretation(
+  db: Database,
+  id: number,
+  interpretation: Interpretation,
+  interpretedAt?: string,
+  record = true,
+): Topic {
   const topic = getTopic(db, id);
   topic.interpreted = true;
   topic.queries = interpretation.queries;
@@ -126,5 +150,33 @@ export function applyInterpretation(db: Database, id: number, interpretation: In
     topic.sources = { ...topic.sources, ...interpretation.suggestedSources };
   }
   save(db, topic);
-  return topic;
+  if (interpretedAt !== undefined) db.prepare("UPDATE topics SET interpreted_at = ? WHERE id = ?").run(interpretedAt, id);
+  if (record) recordTopicVersion(db, id, "interpreted", interpretedAt ?? systemClock().toISOString());
+  return getTopic(db, id);
+}
+
+/**
+ * Makes the kept values of one of the topic's versions its current ones, and records that as a version of its own.
+ * The sources count as chosen by the user. An interpreted version stays interpreted, from now on, so the misses since
+ * the interpretation are counted again; one that was not is interpreted by the next run. Nothing asks a model.
+ */
+export function restoreTopicVersion(db: Database, id: number, versionId: number, clock: Clock): Topic {
+  return transaction(db, () => {
+    const topic = getTopic(db, id);
+    const version = getTopicVersion(db, id, versionId);
+    const now = clock().toISOString();
+    save(db, {
+      ...topic,
+      text: version.text,
+      interpreted: version.interpreted,
+      queries: version.queries,
+      criteria: version.criteria,
+      sources: version.sources,
+      sourcesSetByUser: true,
+      search: version.search,
+    });
+    if (version.interpreted) db.prepare("UPDATE topics SET interpreted_at = ? WHERE id = ?").run(now, id);
+    recordTopicVersion(db, id, "restored", now, versionId);
+    return getTopic(db, id);
+  });
 }

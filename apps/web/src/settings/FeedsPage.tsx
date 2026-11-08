@@ -1,27 +1,32 @@
-import type { Category, Feed, FeedStats, Settings } from "@smarternews/core/api";
+import { FEED_INTERVAL_MINUTES_MAX, FEED_INTERVAL_MINUTES_MIN, FEED_TITLE_MAX_CHARS, type Category, type Feed, type FeedStats, type Settings } from "@smarternews/core/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router";
-import { ApiError, conflictLabel, feedErrorLabel, fieldError, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useLocation } from "react-router";
+import { useFetchFeedNow } from "../lib/fetch-now.ts";
+import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { feedDeletionText } from "./feed-deletion.ts";
+import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
+import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const RANGE = "5分から1440分（24時間）の範囲で入力してください。";
+
+const INTERVAL = { label: "取得周期（分）", min: FEED_INTERVAL_MINUTES_MIN, max: FEED_INTERVAL_MINUTES_MAX };
 
 /** A whole number of minutes within the allowed range, or null. */
 function minutesOf(text: string): number | null {
   if (!/^\d+$/.test(text.trim())) return null;
   const value = Number(text.trim());
-  return value >= 5 && value <= 1440 ? value : null;
+  return value >= FEED_INTERVAL_MINUTES_MIN && value <= FEED_INTERVAL_MINUTES_MAX ? value : null;
 }
 
 function useRefresh() {
@@ -116,20 +121,28 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
+  const [titleProblem, setTitleProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-  // The form takes the place of the buttons that opened it, so the focus is carried into it.
-  const form = useRef<HTMLFormElement>(null);
-  useEffect(() => {
-    form.current?.querySelector("input")?.focus();
-  }, []);
+  useUnsaved(
+    `購読フィード『${feed.title}』の編集`,
+    title !== feed.title ||
+      category !== (feed.categoryId === null ? NO_CATEGORY : String(feed.categoryId)) ||
+      ownInterval !== (feed.intervalMinutes !== null) ||
+      (ownInterval && minutes.trim() !== String(feed.intervalMinutes)) ||
+      paused !== !feed.enabled ||
+      autoSummarize !== feed.autoSummarize ||
+      translate !== feed.translate ||
+      fetchFullContent !== feed.fetchFullContent ||
+      JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
+  );
 
   async function save(event: FormEvent) {
     event.preventDefault();
     const intervalMinutes = ownInterval ? minutesOf(minutes) : null;
-    if (ownInterval && intervalMinutes === null) {
-      setIntervalError(RANGE);
-      return;
-    }
+    const titleError = checkText(title, { label: "名前", max: FEED_TITLE_MAX_CHARS });
+    setTitleProblem(titleError);
+    if (ownInterval && intervalMinutes === null) setIntervalError(RANGE);
+    if (titleError !== null || (ownInterval && intervalMinutes === null)) return;
     const chosenSelectors = feed.format === "page" ? selectorsOf(selectors) : null;
     try {
       await api.updateFeed(feed.id, {
@@ -152,16 +165,26 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   }
 
   const id = `feed-${feed.id}`;
+  const categoryProblem = fieldMessage(error, "categoryId", "カテゴリ");
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
-    <form ref={form} noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
+    <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
       <FeedStatsSection feed={feed} />
-      <Field label="名前" value={title} onChange={(event) => setTitle(event.target.value)} error={fieldError(error, "title")} />
+      <Field
+        label="名前"
+        value={title}
+        onChange={(event) => {
+          setTitle(event.target.value);
+          setTitleProblem(null);
+        }}
+        error={titleProblem ?? fieldMessage(error, "title", "名前")}
+      />
       <div className="flex flex-col gap-xs">
         <label htmlFor={`${id}-category`} className="type-label-md">
           カテゴリ
         </label>
         <CategorySelect id={`${id}-category`} value={category} onChange={setCategory} categories={categories} />
+        {categoryProblem ? <p className="type-label-sm text-error">{categoryProblem}</p> : null}
       </div>
       <fieldset className="flex flex-col gap-xs type-body-md">
         <legend className="pb-xs type-label-md">取得周期</legend>
@@ -186,7 +209,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
             setMinutes(event.target.value);
             setIntervalError(null);
           }}
-          error={intervalError}
+          error={intervalError ?? fieldMessage(error, "intervalMinutes", INTERVAL)}
         />
       ) : null}
       <Checkbox label="取得を一時停止する" checked={paused} onChange={(event) => setPaused(event.target.checked)} />
@@ -265,7 +288,8 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.autoSummarize ? <Badge>自動で要約</Badge> : null}
       {feed.translate ? <Badge>翻訳</Badge> : null}
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
-      {feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
+      {/* A feed the site answers is gone is told apart from a failing one: unsubscribing is what fixes it. */}
+      {feed.goneAt ? <Badge tone="error">配信終了</Badge> : feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
       {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}
       <span className="tabular-nums">{feed.lastError && !feed.lastSucceededAt ? "まだ成功していません" : lastSuccess}</span>
       <span className="tabular-nums">直近30日に{feed.recentArticleCount}件</span>
@@ -279,61 +303,61 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
   );
 }
 
-function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categories: Category[]; settings: Settings | undefined; timeZone: string }) {
+/** The id of a feed's row, which an address such as /settings/feeds#feed-12 names. */
+const rowId = (feedId: number) => `feed-${feedId}`;
+
+/**
+ * The row an address names: /settings/feeds#feed-12 shows the row, and /settings/feeds#feed-12-edit, from the
+ * settings dialog above a feed's list, also opens its form.
+ */
+function parseFeedHash(hash: string): { feedId: number; edit: boolean } | null {
+  const match = /^#feed-(\d{1,15})(-edit)?$/.exec(hash);
+  return match ? { feedId: Number(match[1]), edit: match[2] !== undefined } : null;
+}
+
+function FeedRow({
+  feed,
+  categories,
+  settings,
+  timeZone,
+  initiallyEditing = false,
+}: {
+  feed: Feed;
+  categories: Category[];
+  settings: Settings | undefined;
+  timeZone: string;
+  initiallyEditing?: boolean;
+}) {
   const { api } = useApp();
-  const client = useQueryClient();
   const refresh = useRefresh();
   const toast = useToast();
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(initiallyEditing);
   const [confirming, setConfirming] = useState(false);
-  const [fetching, setFetching] = useState(false);
-  // When the form closes, the focus goes back to the button that opened it.
-  const editButton = useRef<HTMLButtonElement>(null);
-  const wasEditing = useRef(false);
-  useEffect(() => {
-    if (wasEditing.current && !editing) editButton.current?.focus();
-    wasEditing.current = editing;
-  }, [editing]);
+  const { fetching, fetchNow } = useFetchFeedNow(feed, "取得できませんでした。理由は一覧に表示しています。");
+  // The form takes the place of the buttons that opened it, so the focus is carried into it and back.
+  const focus = useInlineEditFocus(editing);
   const categoryName = categories.find((category) => category.id === feed.categoryId)?.name ?? UNCATEGORIZED_LABEL;
   const interval = feed.intervalMinutes === null ? `基本の取得周期（${settings?.feedIntervalMinutes ?? "…"}分）` : `${feed.intervalMinutes}分ごと`;
-
-  async function fetchNow() {
-    setFetching(true);
-    try {
-      const result = await api.fetchFeed(feed.id);
-      // The answer holds the feed as it is now, so the row changes without waiting for the next refresh.
-      client.setQueryData<Feed[]>(["feeds"], (list) => list?.map((entry) => (entry.id === feed.id ? result.feed : entry)));
-      refresh("counts", "articles", "feed-stats");
-      toast({
-        message:
-          result.status === "failed"
-            ? "取得できませんでした。理由は一覧に表示しています。"
-            : result.created > 0
-              ? `新しい記事を${result.created}件取得しました`
-              : "新しい記事はありませんでした",
-      });
-    } catch (error) {
-      toast({ message: messageFor(error) });
-    } finally {
-      setFetching(false);
-    }
-  }
 
   async function remove() {
     try {
       await api.deleteFeed(feed.id);
       refresh("feeds", "counts", "articles", "filters");
-      toast({ message: "購読フィードを削除しました" });
+      toast({ message: "購読フィードの登録を解除しました" });
     } catch {
-      toast({ message: "削除できませんでした。もう一度試してください。" });
+      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
     }
     setConfirming(false);
   }
 
   return (
-    <li className="flex flex-col gap-xs border-b border-outline py-md type-body-md">
+    // The list of a feed links here by this id, to put the row right that it reports on.
+    <li id={rowId(feed.id)} className="flex scroll-mt-md flex-col gap-xs border-b border-outline py-md type-body-md">
+
       <div className="flex flex-wrap items-baseline gap-x-lg gap-y-xs">
-        <span className="type-label-md">{feed.title}</span>
+        <span data-feed-heading tabIndex={-1} className="type-label-md">
+          {feed.title}
+        </span>
         <span className="text-on-surface-muted">{categoryName}</span>
         <span className="tabular-nums text-on-surface-muted">{interval}</span>
       </div>
@@ -342,28 +366,33 @@ function FeedRow({ feed, categories, settings, timeZone }: { feed: Feed; categor
         <FetchState feed={feed} timeZone={timeZone} />
       </div>
       {editing ? (
-        <EditFeed feed={feed} categories={categories} onDone={() => setEditing(false)} />
+        <div ref={focus.region}>
+          <EditFeed feed={feed} categories={categories} onDone={() => setEditing(false)} />
+        </div>
       ) : (
-        <div className="flex flex-wrap gap-sm pt-xs">
+        <div className="flex flex-wrap items-center gap-sm pt-xs">
+          <Link to={`/f/${feed.id}`} aria-label={`${feed.title}の記事の一覧`} className="tap text-primary underline underline-offset-4">
+            記事の一覧
+          </Link>
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>
-          <Button ref={editButton} aria-label={`${feed.title}を編集`} onClick={() => setEditing(true)}>
+          <Button ref={focus.opener} aria-label={`${feed.title}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
-          <Button aria-label={`${feed.title}を削除`} onClick={() => setConfirming(true)}>
-            削除
+          <Button aria-label={`${feed.title}の登録を解除`} onClick={() => setConfirming(true)}>
+            登録を解除
           </Button>
         </div>
       )}
       <ConfirmDialog
         open={confirming}
-        title="購読フィードを削除しますか"
+        title="購読フィードの登録を解除しますか"
         onDismiss={() => setConfirming(false)}
         actions={
           <>
             <Button variant="danger" onClick={() => void remove()}>
-              削除する
+              登録を解除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
           </>
@@ -386,6 +415,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [minutes, setMinutes] = useState(String(settings.feedIntervalMinutes));
   const [problem, setProblem] = useState<string | null>(null);
+  useUnsaved("基本の取得周期", minutes.trim() !== String(settings.feedIntervalMinutes));
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -424,7 +454,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
         />
         <div>
           <Button type="submit" variant="primary">
-            取得周期を保存
+            保存する
           </Button>
         </div>
       </form>
@@ -481,7 +511,7 @@ function Opml() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込むOPMLファイル
           <input type="file" accept=".opml,.xml,text/x-opml,text/xml,application/xml" className="type-body-md" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
@@ -541,6 +571,14 @@ const needsLook = (feed: Feed) => feed.stale || feed.lastError !== null;
 
 /** Subscribed feeds: adding, the list with what the last fetch did, the base interval, and OPML. */
 export function FeedsPage() {
+  return (
+    <UnsavedGuard>
+      <Feeds />
+    </UnsavedGuard>
+  );
+}
+
+function Feeds() {
   const feeds = useFeeds();
   // Kept on this screen only: opened again, the list is in the order of the left pane.
   const [problemsFirst, setProblemsFirst] = useState(false);
@@ -548,6 +586,23 @@ export function FeedsPage() {
   const categories = useCategories().data ?? [];
   const settings = useSettings().data;
   const timeZone = useTimeZone();
+  // Opened from the list of a feed as /settings/feeds#feed-<id>: once the rows are there, that row is brought
+  // into view and its name takes the focus, so that the reader starts where the problem is. The settings dialog
+  // above a feed's list links to /settings/feeds#feed-<id>-edit instead, and that row starts with its form open
+  // and the focus in its first field.
+  const { hash } = useLocation();
+  const target = parseFeedHash(hash);
+  const targetId = target?.feedId;
+  const targetEdit = target?.edit === true;
+  const loaded = feeds.data !== undefined;
+  useEffect(() => {
+    if (!loaded || targetId === undefined) return;
+    const row = document.getElementById(rowId(targetId));
+    if (!row) return;
+    row.scrollIntoView?.({ block: "start" });
+    const focused = targetEdit ? firstField(row.querySelector<HTMLElement>("form") ?? row) : row.querySelector<HTMLElement>("[data-feed-heading]");
+    focused?.focus({ preventScroll: true });
+  }, [targetId, targetEdit, loaded]);
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
@@ -556,7 +611,7 @@ export function FeedsPage() {
         </Link>
         <h1 className="type-headline-md">購読フィード</h1>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          登録したフィードを定期的に取得し、配信された記事をそのまま一覧に並べます。AIによる要約はしません。
+          登録したフィードを定期的に取得し、配信された記事をそのまま一覧に並べます。要約と翻訳は、選んだ購読フィードの記事だけに行います。
         </p>
       </header>
       <AddFeed categories={categories} />
@@ -568,7 +623,18 @@ export function FeedsPage() {
         {feeds.data && feeds.data.length > 0 ? (
           <Checkbox label="問題のある購読フィードを先頭に並べる" checked={problemsFirst} onChange={(event) => setProblemsFirst(event.target.checked)} />
         ) : null}
-        <ul>{listed?.map((feed) => <FeedRow key={feed.id} feed={feed} categories={categories} settings={settings} timeZone={timeZone} />)}</ul>
+        <ul>
+          {listed?.map((feed) => (
+            <FeedRow
+              key={feed.id}
+              feed={feed}
+              categories={categories}
+              settings={settings}
+              timeZone={timeZone}
+              initiallyEditing={target?.edit === true && target.feedId === feed.id}
+            />
+          ))}
+        </ul>
       </section>
       {settings ? <BaseInterval settings={settings} /> : null}
       <TranslationUsage />

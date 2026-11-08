@@ -18,7 +18,15 @@ export function fakeLlm(
   handlers: Partial<Record<TaskName, FakeHandler>>,
   options: {
     webSearch?: boolean;
-    limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number };
+    limits?: {
+      llmCallsPerRun: number;
+      llmCallsPerDay: number;
+      summariesPerDay?: number;
+      selectorProposalsPerDay?: number;
+      digestsPerDay?: number;
+      topicTrialsPerDay?: number;
+      topicRewritesPerDay?: number;
+    };
     timeZone?: string;
     timeoutMs?: number;
     /** Makes every provider one that costs money, at these prices. */

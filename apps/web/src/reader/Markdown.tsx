@@ -16,7 +16,7 @@ const relayed = (url: string): string => relayedImageUrl("", url) ?? "";
  * request carries no referrer. When it cannot be loaded, a word that it could not, with its description, takes
  * its place: a site that refuses the relay would otherwise leave no trace of the image.
  */
-function ArticleImage({ src, alt }: { src: string; alt: string }) {
+export function ArticleImage({ src, alt }: { src: string; alt: string }) {
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
   if (state === "failed")
     return (

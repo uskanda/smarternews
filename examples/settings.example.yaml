@@ -20,6 +20,8 @@ settings:
   # Show an article that several feeds deliver once in the lists over everything and over categories.
   # The copies stay in the list of their own feed.
   removeDuplicates: true
+  # The times of day a digest of what arrived is made. An empty list makes digests by hand only.
+  digestSchedule: ["07:00", "19:00"]
 categories:
   - slug: security
     name: Security

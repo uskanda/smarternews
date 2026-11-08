@@ -27,11 +27,50 @@ import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
 import { normalizeForMatch } from "./search/text.ts";
 import { createTopic, listTopics, updateTopic, applyInterpretation } from "./db/topics.ts";
-import { DomainError, type FieldError } from "./errors.ts";
+import { recordTopicVersion } from "./db/versions.ts";
+import { DomainError, FIELD_ERROR_CODES, type FieldError, type FieldErrorCode, type FieldErrorUnit } from "./errors.ts";
 import { conditionProblems } from "./filters/match.ts";
 
+const UNIT_OF_ORIGIN: Record<string, FieldErrorUnit> = { string: "chars", number: "number", int: "number", array: "items", set: "items" };
+
+/** The bound of `too_small` or `too_big` as a plain number, with what it counts. */
+function boundsOf(issue: { origin: string; minimum?: unknown; maximum?: unknown }): Pick<FieldError, "minimum" | "maximum" | "unit"> {
+  const unit = UNIT_OF_ORIGIN[issue.origin];
+  return {
+    ...(issue.minimum !== undefined ? { minimum: Number(issue.minimum) } : {}),
+    ...(issue.maximum !== undefined ? { maximum: Number(issue.maximum) } : {}),
+    ...(unit ? { unit } : {}),
+  };
+}
+
+/**
+ * The kind of a schema's refusal, for the apps to word. A refinement names its kind with `params.code`; one
+ * that names none is `custom`.
+ */
+function kindOf(issue: z.ZodError["issues"][number]): Pick<FieldError, "code" | "minimum" | "maximum" | "unit"> {
+  switch (issue.code) {
+    case "invalid_type":
+      // A number that is not whole is a value in the wrong form; anything else is missing or of another type.
+      return { code: (issue.expected as string) === "int" ? "format" : "required" };
+    case "too_small":
+      return { code: "too_small", ...boundsOf(issue) };
+    case "too_big":
+      return { code: "too_big", ...boundsOf(issue) };
+    case "invalid_format":
+      return { code: "format" };
+    case "invalid_value":
+      return { code: "invalid_value" };
+    case "custom": {
+      const named = (issue.params as { code?: unknown } | undefined)?.code;
+      return { code: FIELD_ERROR_CODES.find((code) => code === named) ?? "custom" };
+    }
+    default:
+      return {};
+  }
+}
+
 export function zodFieldErrors(error: z.ZodError): FieldError[] {
-  return error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }));
+  return error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message, ...kindOf(issue) }));
 }
 
 function toSubscription(feed: Feed): SettingsFileSubscription {
@@ -210,7 +249,9 @@ function importSubscriptions(
       result.feedsCreated += 1;
     } catch (error) {
       if (!(error instanceof DomainError)) throw error;
-      throw new DomainError("invalid", error.message, [{ path: `${path}.${index}`, message: error.message }]);
+      // The kind of the first refusal goes with it, so that the apps can say what went wrong with the entry.
+      const code = error.fields[0]?.code;
+      throw new DomainError("invalid", error.message, [{ path: `${path}.${index}`, message: error.message, ...(code ? { code } : {}) }]);
     }
   });
   if (listed.length > 0) orderFeeds(db, categoryId, listed);
@@ -222,8 +263,9 @@ function fromStopWord(word: SettingsFile["stopWords"][number]): SettingsFileFilt
   return { action: "hide", scope: "all", conditions: [{ fields, match: "contains", value: word.text }] };
 }
 
-function refuseAt(path: string, message: string): DomainError {
-  return new DomainError("invalid", `${path}: ${message}`, [{ path, message }]);
+/** A refusal of one entry of the file. By default, the entry names a category or a feed that is neither in the file nor on the server. */
+function refuseAt(path: string, message: string, code: FieldErrorCode = "no_such_item"): DomainError {
+  return new DomainError("invalid", `${path}: ${message}`, [{ path, message, code }]);
 }
 
 /**
@@ -299,7 +341,9 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
     } else if ("category" in entry.list) {
       const category = findCategoryBySlug(db, entry.list.category);
       if (!category) throw refuseAt(`${path}.category`, `no category "${entry.list.category}" in the file or on the server`);
-      if (category.kind === "event") throw refuseAt(`${path}.category`, `"${category.slug}" is an event category, which lists its events by start`);
+      if (category.kind === "event") {
+        throw refuseAt(`${path}.category`, `"${category.slug}" is an event category, which lists its events by start`, "not_allowed");
+      }
       target = { list: entry.list.generatedOnly ? "category_generated" : "category", categoryId: category.id };
     } else {
       const feed = findFeedByUrl(db, entry.list.feed);
@@ -307,7 +351,7 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
       target = { list: "feed", feedId: feed.id };
     }
     const key = listViewKey(target);
-    if (seen.has(key)) throw refuseAt(path, "the entry is named twice");
+    if (seen.has(key)) throw refuseAt(path, "the entry is named twice", "not_allowed");
     seen.add(key);
     checkListViewTarget(db, target);
     setListView(db, target, entry.sort === undefined ? {} : { sort: entry.sort });
@@ -342,11 +386,11 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
       const existing = findCategoryBySlug(db, slug);
       if (existing && existing.kind !== kind) {
         throw new DomainError("invalid", `the category "${slug}" already exists with another kind`, [
-          { path: `categories.${index}.kind`, message: `is "${existing.kind}" on this server` },
+          { path: `categories.${index}.kind`, message: `is "${existing.kind}" on this server`, code: "not_allowed" },
         ]);
       }
       const category = existing
-        ? updateCategory(db, existing.id, fields)
+        ? updateCategory(db, existing.id, fields, clock, "settings-file")
         : createCategory(db, { slug, kind, ...fields }, clock);
       if (existing) result.categoriesUpdated += 1;
       else result.categoriesCreated += 1;
@@ -360,14 +404,22 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
           result.topicsCreated += 1;
           continue;
         }
-        updateTopic(db, match.id, { enabled: topic.enabled, sources: topic.sources, search: topic.search });
+        // One version for all the file changed of the topic.
+        updateTopic(db, match.id, { enabled: topic.enabled, sources: topic.sources, search: topic.search }, clock, false);
         if (topic.interpretation) {
           const updated = listTopics(db, category.id).find((candidate) => candidate.id === match.id)!;
-          applyInterpretation(db, match.id, {
-            ...topic.interpretation,
-            suggestedSources: { newsSearch: updated.sources.newsSearch, llmSearch: updated.sources.llmSearch },
-          });
+          applyInterpretation(
+            db,
+            match.id,
+            {
+              ...topic.interpretation,
+              suggestedSources: { newsSearch: updated.sources.newsSearch, llmSearch: updated.sources.llmSearch },
+            },
+            undefined,
+            false,
+          );
         }
+        recordTopicVersion(db, match.id, "settings-file", clock().toISOString());
         result.topicsUpdated += 1;
       }
       importSubscriptions(db, subscriptions, category.id, `categories.${index}.subscriptions`, result, clock);

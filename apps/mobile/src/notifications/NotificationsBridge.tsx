@@ -13,6 +13,7 @@ Notifications.setNotificationHandler({
 interface NotificationData {
   articleId?: unknown;
   list?: unknown;
+  digestId?: unknown;
 }
 
 interface NotifyState {
@@ -33,8 +34,8 @@ export function useNotify(): NotifyState {
 
 /**
  * Connects notifications to the running app: keeps the periodic check registered as the stored choice says,
- * holds that choice for the settings screen, and goes to the article, or to the unread list, when the user
- * presses a notification. Rendered only while the app is connected.
+ * holds that choice for the settings screen, and goes to the article, the unread list, or the digest, when the
+ * user presses a notification. Rendered only while the app is connected.
  */
 export function NotificationsBridge({ children }: { children: ReactNode }) {
   const { api } = useApp();
@@ -69,6 +70,7 @@ export function NotificationsBridge({ children }: { children: ReactNode }) {
     const open = (response: Notifications.NotificationResponse | null) => {
       const data = (response?.notification.request.content.data ?? {}) as NotificationData;
       if (typeof data.articleId === "number") router.push({ pathname: "/article/[id]", params: { id: String(data.articleId), list: "unread" } });
+      else if (typeof data.digestId === "number") router.navigate({ pathname: "/digests", params: { digestId: String(data.digestId) } });
       else if (data.list === "unread") router.navigate({ pathname: "/list/[key]", params: { key: "unread" } });
     };
     // A press that started the app arrives here once; it is cleared so that it is not acted on again.

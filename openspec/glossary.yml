@@ -117,6 +117,18 @@ terms:
     definition: "実行ごとの契機、時刻、状態、件数、失敗を残した記録。"
     aliases: ["実行ログ"]
     en: "run history"
+  - term: "注意の項目"
+    definition: "実行の失敗や0件が続く検索のように、利用者に確かめてほしい実行の異常を、実行履歴から作った1件の知らせ。"
+    aliases: ["アラート", "警告の項目"]
+    en: "attention item"
+  - term: "検索の試行"
+    definition: "実行がニュース検索の検索先と検索語の組か、LLM検索のトピックで、1回検索したことの記録。"
+    aliases: []
+    en: "search attempt"
+  - term: "配信終了"
+    definition: "サイトが410を返し続けている購読フィードの状態で、取得の失敗より強い。"
+    aliases: []
+    en: "gone"
   # 一般語。terms-checkの一般語リストに無いので、この用語集で使う表記を決める。
   - term: "ニュース"
     definition: "最近公開または更新された出来事の報道や発表で、種別の1つでもある。"
@@ -146,6 +158,22 @@ terms:
     definition: "利用者が記事に付ける印で、付いた記事は保存期間を過ぎても残る。"
     aliases: ["お気に入り", "ブックマーク"]
     en: "star"
+  - term: "外れ"
+    definition: "利用者が生成記事に付ける、トピックに合わなかったことを示す否定の印。"
+    aliases: ["ハズレ", "不要の印"]
+    en: "miss"
+  - term: "外れの記録"
+    definition: "外れの印を付けた時点の記事の見出し、カテゴリ、トピック、時刻を写した記録で、記事が消えても残る。"
+    aliases: []
+    en: "miss record"
+  - term: "理由の種類"
+    definition: "プログラムが候補を除外したときの理由を表す決まった値で、判定による除外は持たない。"
+    aliases: ["理由コード"]
+    en: "reason code"
+  - term: "トピックの成績"
+    definition: "トピックごとに、直近30日に集めた候補と作った生成記事がどうなったかを数えたもの。"
+    aliases: ["トピックの統計"]
+    en: "topic stats"
   - term: "スケジュール"
     definition: "カテゴリごとに決めた、実行を始める時刻の一覧。"
     aliases: []
@@ -186,6 +214,14 @@ terms:
     definition: "押すと1つの操作が実行される画面上の部品。"
     aliases: []
     en: "button"
+  - term: "アクセス"
+    definition: "サイトへ要求を送ること。サイトが返す429の文言で使う。"
+    aliases: []
+    en: "access"
+  - term: "フォーム"
+    definition: "画面の中で、入力欄と、その値を送るボタンをまとめた区画。"
+    aliases: []
+    en: "form"
   - term: "スクロール"
     definition: "画面に入りきらない内容を上下に送って見ること。"
     aliases: []
@@ -378,6 +414,22 @@ terms:
     definition: "記事の内容を一覧で示すための小さな画像。"
     aliases: []
     en: "thumbnail"
+  - term: "添付"
+    definition: "購読フィードが項目に添えたファイルで、RSSのenclosureとMedia RSSのcontentとthumbnailから読むもの。"
+    aliases: ["添付ファイル", "エンクロージャー"]
+    en: "attachment"
+  - term: "パーサー"
+    definition: "XMLやHTMLの文書を読み、プログラムが扱える形に分ける処理。"
+    aliases: ["パーザー", "パーザ"]
+    en: "parser"
+  - term: "プレーンテキスト"
+    definition: "HTMLやMarkdownの記法を含まない、文字だけの文章。"
+    aliases: ["平文"]
+    en: "plain text"
+  - term: "エスケープ"
+    definition: "記法として働く文字を、文字そのものとして読まれる形に書き換えること。"
+    aliases: []
+    en: "escape"
   - term: "ディスク"
     definition: "サーバーがファイルを置く記憶装置。"
     aliases: []
@@ -390,6 +442,10 @@ terms:
     definition: "押すたびに選んだ状態と選んでいない状態が入れ替わる、画面の入力部品。"
     aliases: []
     en: "checkbox"
+  - term: "ラジオボタン"
+    definition: "まとまりの中から1つだけを選ぶ、画面の入力部品。"
+    aliases: []
+    en: "radio button"
   - term: "リファラー"
     definition: "ブラウザーが要求に付けて送る、遷移元のページのURL。"
     aliases: []
@@ -482,3 +538,19 @@ terms:
     definition: "予算の期間に使った金額が月の予算のこの割合に達すると、画面が警告を出す値。"
     aliases: ["警告しきい値"]
     en: "warning ratio"
+  - term: "ダイジェスト"
+    definition: "決まった時刻に、期間内の生成記事と配信記事のうち重要なものをLLMが1つの文章にまとめたもの。エグゼクティブサマリーとカテゴリの区画からなる。"
+    aliases: ["全文まとめ", "定期まとめ", "まとめ記事"]
+    en: "digest"
+  - term: "エグゼクティブサマリー"
+    definition: "ダイジェストの先頭に置く、すべての購読フィードと生成記事をまとめた800文字以内の文章。"
+    aliases: ["全体の要約", "総括"]
+    en: "executive summary"
+  - term: "カテゴリの区画"
+    definition: "ダイジェストのうち、1つのカテゴリの重要な記事を3行程度にまとめた部分。各行は根拠の記事を持つ。"
+    aliases: ["カテゴリのまとめ"]
+    en: "category section"
+  - term: "根拠の記事"
+    definition: "ダイジェストのカテゴリの区画の1行が、内容の出典にした記事。"
+    aliases: ["参照記事"]
+    en: "source article"

@@ -1,4 +1,4 @@
-import { insertFeed, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
+import { insertFeed, recordFetchFailure, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -54,7 +54,7 @@ describe("the entries of the navigation", () => {
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Blog/ });
     await waitFor(() =>
-      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
+      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "ダイジェスト", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
     );
   });
 
@@ -64,7 +64,7 @@ describe("the entries of the navigation", () => {
     server.article(tools.id);
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Tools/ });
-    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "注釈", "Tools1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "注釈", "ダイジェスト", "Tools1"]));
     expect(within(nav()).queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -346,7 +346,7 @@ describe("marking everything read", () => {
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
 
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
-    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "ダイジェスト", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
 
     await user.click(screen.getByRole("button", { name: "取り消す" }));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
@@ -557,5 +557,97 @@ describe("an article that other feeds delivered too", () => {
     // The copy was marked read with the kept article, so the list includes read articles to show it.
     await waitFor(() => expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]));
     expect(row(/Big news \(Releases\)/)).toHaveAttribute("data-read", "true");
+  });
+});
+
+describe("the state of a feed's fetches above its list", () => {
+  const banner = () => within(list()).queryByRole("status", { name: "購読フィードの取得の状態" });
+  const findBanner = async () =>
+    within(await screen.findByRole("region", { name: "記事の一覧" })).findByRole("status", { name: "購読フィードの取得の状態" });
+  const DAY = 86_400_000;
+  /** Makes the feed subscribed 400 days ago, with its last new item the given days ago. */
+  function age(server: TestServer, id: number, lastNewDays: number) {
+    const daysAgo = (days: number) => new Date(server.clock().getTime() - days * DAY).toISOString();
+    server.db.prepare("UPDATE feeds SET created_at = ?, last_new_item_at = ? WHERE id = ?").run(daysAgo(400), daysAgo(lastNewDays), id);
+  }
+
+  it("says that the last fetch failed and why, with いま取得 and a link to the feed's row of the settings", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    recordFetchFailure(server.db, blog.id, { now: server.clock().toISOString(), error: "HTTP status 503: https://blog.example.org/feed.xml" });
+    const { user } = renderApp({ server, route: `/f/${blog.id}` });
+
+    const line = await findBanner();
+    expect(line).toHaveTextContent("取得に失敗しました。理由: サイトがエラーを返しました（HTTP 503）");
+    expect(within(line).getByRole("button", { name: "いま取得" })).toBeInTheDocument();
+    // The list still says that it has nothing to show.
+    expect(await within(list()).findByText(/ここに出す記事はありません/)).toBeInTheDocument();
+
+    await user.click(within(line).getByRole("link", { name: "設定で直す" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "購読フィード" })).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toHaveTextContent("Blog"));
+    expect(document.activeElement!.closest("li")).toHaveAttribute("id", `feed-${blog.id}`);
+  });
+
+  it("says that the site answers the feed is gone and since when, and suggests unsubscribing in the settings", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    recordFetchFailure(server.db, blog.id, { now: "2026-02-27T09:00:00.000Z", error: "HTTP status 410: https://blog.example.org/feed.xml", gone: true });
+    recordFetchFailure(server.db, blog.id, { now: server.clock().toISOString(), error: "HTTP status 410: https://blog.example.org/feed.xml", gone: true });
+    renderApp({ server, route: `/f/${blog.id}` });
+
+    const line = await findBanner();
+    expect(line).toHaveTextContent("このフィードは配信を終えたと返しています（HTTP 410、2月27日から）。登録の解除をおすすめします。");
+    expect(line).toHaveClass("text-error");
+    expect(within(line).getByRole("link", { name: "設定で登録を解除する" })).toHaveAttribute("href", `/settings/feeds#feed-${blog.id}`);
+    expect(within(line).getByRole("button", { name: "いま取得" })).toBeInTheDocument();
+    expect(line).not.toHaveTextContent("取得に失敗しました");
+  });
+
+  it("goes once いま取得 succeeds", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    recordFetchFailure(server.db, blog.id, { now: server.clock().toISOString(), error: "timed out" });
+    server.site.set(
+      blog.url,
+      `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>Back</title><guid>back</guid><link>https://blog.example.org/back</link><pubDate>Sun, 01 Mar 2026 09:00:00 GMT</pubDate></item></channel></rss>`,
+    );
+    const { user } = renderApp({ server, route: `/f/${blog.id}` });
+
+    const line = await findBanner();
+    expect(line).toHaveTextContent("時間内に応答がありませんでした");
+    await user.click(within(line).getByRole("button", { name: "いま取得" }));
+
+    expect(await screen.findByText("新しい記事を1件取得しました")).toBeInTheDocument();
+    await waitFor(() => expect(banner()).not.toBeInTheDocument());
+    expect(await within(list()).findByText("Back")).toBeInTheDocument();
+  });
+
+  it("says that a feed is stale, with いま取得, and that a paused one is paused, without it", async () => {
+    const server = makeServer();
+    const old = feedOf(server, "Old");
+    age(server, old.id, 61);
+    const paused = feedOf(server, "Paused");
+    updateFeed(server.db, paused.id, { enabled: false });
+    const first = renderApp({ server, route: `/f/${old.id}` });
+
+    let line = await findBanner();
+    expect(line).toHaveTextContent("更新が止まっています。60日より長く、新しい記事が届いていません。");
+    expect(within(line).getByRole("button", { name: "いま取得" })).toBeInTheDocument();
+    expect(within(line).getByRole("link", { name: "設定を確かめる" })).toHaveAttribute("href", `/settings/feeds#feed-${old.id}`);
+    first.unmount();
+
+    renderApp({ server, route: `/f/${paused.id}` });
+    line = await findBanner();
+    expect(line).toHaveTextContent("取得を一時停止しています。");
+    expect(within(line).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(line).getByRole("link", { name: "設定で再開する" })).toHaveAttribute("href", `/settings/feeds#feed-${paused.id}`);
+  });
+
+  it("shows nothing for a healthy feed", async () => {
+    const { server, blog } = seeded();
+    renderApp({ server, route: `/f/${blog.id}` });
+    expect(await within(await screen.findByRole("region", { name: "記事の一覧" })).findByText("New post")).toBeInTheDocument();
+    expect(banner()).not.toBeInTheDocument();
   });
 });

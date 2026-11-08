@@ -27,10 +27,10 @@ export function charCount(text: string): number {
  */
 export function parseSearchTerms(query: string): string[] {
   const trimmed = query.trim();
-  if (trimmed.length === 0) throw new DomainError("invalid", "the query is empty", [{ path: "q", message: "is empty" }]);
+  if (trimmed.length === 0) throw new DomainError("invalid", "the query is empty", [{ path: "q", message: "is empty", code: "required" }]);
   if (charCount(trimmed) > MAX_QUERY_CHARS) {
     throw new DomainError("invalid", `the query is too long: at most ${MAX_QUERY_CHARS} characters`, [
-      { path: "q", message: `is too long: at most ${MAX_QUERY_CHARS} characters` },
+      { path: "q", message: `is too long: at most ${MAX_QUERY_CHARS} characters`, code: "too_big", maximum: MAX_QUERY_CHARS, unit: "chars" },
     ]);
   }
   const terms = normalizeForMatch(trimmed)

@@ -1,8 +1,17 @@
 // The only code in the web app and the Android app that talks to the server. Every answer is checked against
 // the shared schema, so a drift between an app and the API fails here and not somewhere in a component.
 import {
+  attentionListSchema,
+  type AttentionList,
   annotationListSchema,
   articleNoteSchema,
+  digestListSchema,
+  digestRequestResultSchema,
+  digestSchema,
+  type Digest,
+  type DigestList,
+  type DigestListQuery,
+  type DigestRequestResult,
   highlightSchema,
   type AnnotationList,
   type AnnotationListQuery,
@@ -40,7 +49,14 @@ import {
   filterUpdateResultSchema,
   termGroupSchema,
   topicSchema,
+  topicRewriteResultSchema,
+  topicStatsSchema,
+  topicVersionSchema,
+  categoryVersionSchema,
+  topicTrialSchema,
+  topicTrialStartSchema,
   translationStatusSchema,
+  usageSchema,
   type Article,
   type ArticleList,
   type ArticleListQuery,
@@ -76,6 +92,7 @@ import {
   type PageSelectors,
   type SelectorPreview,
   type ProviderStatus,
+  type Usage,
   type Run,
   type Settings,
   type SettingsUpdate,
@@ -93,19 +110,39 @@ import {
   type TermGroupUpdate,
   type Topic,
   type TopicCreate,
+  type TopicStats,
   type TopicUpdate,
+  type TopicVersion,
+  type CategoryVersion,
+  type TopicRewriteResult,
+  type TopicTrial,
+  type TopicTrialRequest,
+  type TopicTrialStart,
   type TranslationStatus,
 } from "@smarternews/core/api";
 import { z } from "zod";
 
 export type ApiErrorKind = "unauthorized" | "invalid" | "not_found" | "conflict" | "unavailable" | "network" | "server";
 
+/**
+ * One refused field of a 400 answer. `message` is the server's English; a screen words the refusal from `code`
+ * and the bounds with `fieldMessage`. A code is a string here: a newer server may send one this app does not know.
+ */
+export interface FieldProblem {
+  path: string;
+  message: string;
+  code?: string;
+  minimum?: number;
+  maximum?: number;
+  unit?: string;
+}
+
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status: number | null;
-  readonly fields: Array<{ path: string; message: string }>;
+  readonly fields: FieldProblem[];
 
-  constructor(kind: ApiErrorKind, status: number | null, message: string, fields: Array<{ path: string; message: string }> = []) {
+  constructor(kind: ApiErrorKind, status: number | null, message: string, fields: FieldProblem[] = []) {
     super(message);
     this.name = "ApiError";
     this.kind = kind;
@@ -218,12 +255,30 @@ export function createApi(options: ApiOptions) {
     moveCategory: (id: number, before: number | null): Promise<Category[]> =>
       json(z.array(categorySchema), `/categories/${id}/move`, body("POST", { before })),
     deleteCategory: async (id: number): Promise<void> => void (await request(`/categories/${id}`, { method: "DELETE" })),
+    /** The minimum importance and the limit of articles of the category each time they changed, newest first. */
+    categoryVersions: (id: number): Promise<CategoryVersion[]> => json(z.array(categoryVersionSchema), `/categories/${id}/versions`),
 
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
+    /** What each topic of the category brought in the last 30 days. */
+    topicStats: (categoryId: number): Promise<TopicStats> => json(topicStatsSchema, `/categories/${categoryId}/topic-stats`),
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
+    /** Has the topic interpreted again before the next run of its category. */
+    interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
+    /** The versions of the topic, newest first. */
+    topicVersions: (id: number): Promise<TopicVersion[]> => json(z.array(topicVersionSchema), `/topics/${id}/versions`),
+    /** Makes a version of the topic its current values. An interpreted version stays interpreted. */
+    restoreTopicVersion: (id: number, versionId: number): Promise<Topic> =>
+      json(topicSchema, `/topics/${id}/versions/${versionId}/restore`, { method: "POST" }),
+    /** Starts a trial of a text that is not saved. Answers at once; the result is asked for with `topicTrial`. */
+    startTopicTrial: (id: number, draft: TopicTrialRequest): Promise<TopicTrialStart> =>
+      json(topicTrialStartSchema, `/topics/${id}/trials`, body("POST", draft)),
+    topicTrial: (id: string): Promise<TopicTrial> => json(topicTrialSchema, `/topic-trials/${encodeURIComponent(id)}`),
+    /** Proposals of a new wording, from the saved text and relevance test. Waits for the model; stores nothing. */
+    proposeTopicRewrite: (id: number): Promise<TopicRewriteResult> =>
+      json(topicRewriteResultSchema, `/topics/${id}/rewrite-proposals`, { method: "POST" }),
 
     articles: (filter: ArticleListQuery = {}): Promise<ArticleList> =>
       json(articleListSchema, `/articles${query(filter as Record<string, string | number | undefined>)}`),
@@ -345,8 +400,19 @@ export function createApi(options: ApiOptions) {
     run: (id: number): Promise<Run> => json(runSchema, `/runs/${id}`),
     runCandidates: (id: number, status: Candidate["status"] | "all" = "rejected"): Promise<Candidate[]> =>
       json(z.array(candidateSchema), `/runs/${id}/candidates${query({ status })}`),
+    /** What the runs went through that the user should look at, leaving out what was dismissed. */
+    attention: (): Promise<AttentionList> => json(attentionListSchema, "/attention"),
+    /** Hides the item of this key until what set it off changes. */
+    dismissAttention: async (key: string): Promise<void> => void (await request("/attention/dismissals", body("POST", { key }))),
+
+    /** The digests, the latest first, and whether one is being made. */
+    digests: (filter: DigestListQuery = {}): Promise<DigestList> => json(digestListSchema, `/digests${query(filter)}`),
+    digest: (id: number): Promise<Digest> => json(digestSchema, `/digests/${id}`),
+    /** Asks for a digest now. Answers at once: a digest that was started shows in the list when it is made. */
+    requestDigest: (): Promise<DigestRequestResult> => json(digestRequestResultSchema, "/digests", { method: "POST" }),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
+    usage: (): Promise<Usage> => json(usageSchema, "/usage"),
     /** How much the translation API was used this month, and whether it has a key. */
     translation: (): Promise<TranslationStatus> => json(translationStatusSchema, "/translation"),
   };
