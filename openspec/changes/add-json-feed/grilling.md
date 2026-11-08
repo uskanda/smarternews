@@ -21,7 +21,7 @@ JSON Feedしか出さないサイトはWebページとしての購読になり�
 | 決定 | 選択 |
 |---|---|
 | JSON Feedの判定 | 本文の先頭の空白を除いた文字が `{` で、JSONとして読め、`version` が上の条件に合うとき |
-| 項目の読み方 | title は `title`。url は `url`、なければ `external_url`。公開日時は `date_published`、なければ `date_modified`。抜粋は `summary`、`content_text`、`content_html` を平文にしたものの順。識別子は `id` を文字列にしたもの。著者は `authors` の先頭の `name`、なければ1.0の `author` の `name`。本文は `content_html`、なければ `content_text` の特殊文字を文字参照に置き換え、段落に分けたHTML。サイトのURLは `home_page_url` がhttp(s)のときだけ |
+| 項目の読み方 | title は `title`。url は `url`、なければ `external_url`。公開日時は `date_published`、なければ `date_modified`。抜粋は `summary`、`content_text`、`content_html` をプレーンテキストにしたものの順。識別子は `id` を文字列にしたもの。著者は `authors` の先頭の `name`、なければ1.0の `author` の `name`。本文は `content_html`、なければ `content_text` の特殊文字を文字参照に置き換え、段落に分けたHTML。サイトのURLは `home_page_url` がhttp(s)のときだけ |
 | 読めない文書 | いまと同じ「the document is not a feed」のエラーにする |
 | Acceptの見出し | フィードの取得のAcceptの見出しに `application/feed+json` を足す |
 | どこにもないとき | 空を返す。画面はいまと同じく「Webページとして購読」の案内を出す |

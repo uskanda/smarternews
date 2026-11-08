@@ -4,8 +4,8 @@
 
 動機は `proposal.md` の「Why」を見よ。ここでは、設計を決める今の作りだけを書く。
 
-- トピックの追加は、`apps/web/src/settings/CategoryPage.tsx` の `Topics` が `api.createTopic(categoryId, { text })` で行う。
-- 追加のあとは `["topics", categoryId]` の問い合わせを読み直させ、知らせを出す。文言は「次の実行で解釈されます」で終わる。
+- トピックを追加するのは `apps/web/src/settings/CategoryPage.tsx` の `Topics` である。呼ぶ関数は `api.createTopic(categoryId, { text })` である。
+- 追加のあとは `["topics", categoryId]` の問い合わせを読み直させ、知らせを出す。文言は `次の実行で解釈されます` で終わる。
 - 解釈は次の実行で既存のタスクが行う。
 - トピックの文章は、APIで前後の空白を除いて1〜2000文字に限られる。サーバーは同じ文章のトピックを拒まない。
 - トピックの編集を開いたURLは `topicEditPath(categoryId, topicId)`（`/settings/categories/<id>#topic-<id>`）である。

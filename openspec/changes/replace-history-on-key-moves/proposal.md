@@ -2,9 +2,9 @@
 
 ## Why
 
-Web の画面では、`j` と `k` で記事を移るたびに、ブラウザーの履歴が1つ増える。
+Webの画面では、`j` と `k` で記事を移るたびに、ブラウザーの履歴が1つ増える。
 40件読むと、一覧から出るまでに戻る操作が40回要る。
-2026-11-06の Web UI の監査で見つけた項目である（issue #113、監査ID U-06）。
+2026-11-06のWeb UIの監査で見つけた項目である（issue #113、監査ID U-06）。
 
 ## What Changes
 
@@ -28,4 +28,4 @@ Web の画面では、`j` と `k` で記事を移るたびに、ブラウザー�
 - `apps/web/src/reader/ReaderPage.tsx`：キーでの記事の移動で、記事が開いていれば履歴を置き換える。
 - `apps/web/src/reader/AnnotationList.tsx`：注釈の一覧のキーでの移動で、同じように置き換える。
 - `apps/web/src/testing/harness.tsx`：ブラウザーの履歴を使って画面を描くオプションと、戻る操作を足す。
-- API と Android アプリに変更はない。
+- APIとAndroidアプリに変更はない。

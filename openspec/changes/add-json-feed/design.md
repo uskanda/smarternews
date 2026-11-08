@@ -35,7 +35,7 @@
 - title：`title` を `plainTitle` にかける。
 - url：`url`。ないときは `external_url`。
 - publishedAt：`date_published`。ないときは `date_modified`。
-- snippet：`summary`、`content_text`、`content_html` の順に、最初にある値を `plainText` にかける。`summary` と `content_text` は平文なので、先に特殊文字を文字参照に置き換え、中の `<` をタグとして消さないようにする。
+- snippet：`summary`、`content_text`、`content_html` の順に、最初にある値を `plainText` にかける。`summary` と `content_text` はプレーンテキストなので、先に特殊文字を文字参照に置き換え、中の `<` をタグとして消さないようにする。
 - key：`id`。数のときも文字列にする（1.0では数のことがある）。
 - author：`authors` の先頭の `name`。ないときは1.0の `author` の `name`。
 - contentHtml：`content_html`。ないときは `content_text` の `&`、`<`、`>`、`"` を文字参照に置き換え、空の行で段落に分け、段落の中の改行を `<br>` にしたもの。後の処理は `contentHtml` を信頼しないHTMLとして変換するので、ここで消毒はしない。
