@@ -484,8 +484,9 @@ describe("keyboard", () => {
     expect(within(dialog).getByText("次の記事")).toBeInTheDocument();
     expect(within(dialog).getByText("スターの切り替え")).toBeInTheDocument();
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "x", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
+    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "x", "z", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
     expect(within(dialog).getByText("生成記事の外れの印の切り替え。付けると既読にする")).toBeInTheDocument();
+    expect(within(dialog).getByText("知らせの操作（取り消す、もう一度試すなど）")).toBeInTheDocument();
     expect(within(dialog).getByText("「最近読んだ記事」へ移る")).toBeInTheDocument();
   });
 
@@ -526,6 +527,27 @@ describe("moving between the entries with keys", () => {
     await waitFor(() => expect(path()).toBe("/recently-read"));
     await user.keyboard("{Shift>}J{/Shift}");
     await waitFor(() => expect(path()).toBe("/annotations"));
+  });
+
+  it("takes only the keys that move between entries while the left pane is open over the article", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    const beta = server.category("Beta");
+    server.article(alpha.id, { title: "Older story" });
+    server.clock.advance(60_000);
+    const newer = server.article(alpha.id, { title: "Newer story" });
+    const { user, path } = renderApp({ server, route: `/c/${alpha.slug}/${newer}`, width: 900 });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+
+    await user.click(screen.getByRole("button", { name: "項目を開く" }));
+    within(nav()).getByRole("link", { name: /^未読/ }).focus();
+    await user.keyboard("s j ");
+
+    expect(path()).toBe(`/c/${alpha.slug}/${newer}`);
+    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toMatch(new RegExp(`^/c/${beta.slug}`)));
   });
 
   it("goes into the entries below a category, and past them once it is folded", async () => {

@@ -21,11 +21,14 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS;
 
-/** A line icon. It carries no meaning for screen readers: the button around it has the name. */
-export function Icon({ name, color, filled = false, size = 24 }: { name: IconName; color: string; filled?: boolean; size?: number }) {
+/**
+ * A line icon. It carries no meaning for screen readers: the button around it has the name. `fill` paints the
+ * inside in a colour of its own; `filled` paints it in the colour of the line.
+ */
+export function Icon({ name, color, filled = false, fill, size = 24, testID }: { name: IconName; color: string; filled?: boolean; fill?: string; size?: number; testID?: string }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      <Path d={PATHS[name]} stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" fill={filled ? color : "none"} />
+    <Svg testID={testID} width={size} height={size} viewBox="0 0 24 24" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <Path d={PATHS[name]} stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" fill={fill ?? (filled ? color : "none")} />
     </Svg>
   );
 }

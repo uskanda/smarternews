@@ -263,6 +263,43 @@ describe("narrowing and paging", () => {
     expect(new Set(rowTitles()).size).toBe(120);
     expect(screen.queryByRole("button", { name: "さらに読み込む" })).not.toBeInTheDocument();
   });
+
+  it("shows another list from its top, wherever the last one was scrolled to", async () => {
+    const server = makeServer();
+    const security = server.category("Security");
+    const tools = server.category("Tools");
+    articles(server, security.id, [{ title: "Security story" }]);
+    articles(server, tools.id, [{ title: "Tools story" }]);
+    const { user } = renderApp({ server, route: "/c/security" });
+    await screen.findByRole("link", { name: /Security story/ });
+    const pane = list().querySelector<HTMLElement>("[data-list-scroll]")!;
+    pane.scrollTop = 500;
+
+    await user.click(within(nav()).getByRole("link", { name: /^Tools/ }));
+
+    await screen.findByRole("link", { name: /Tools story/ });
+    expect(list().querySelector<HTMLElement>("[data-list-scroll]")!.scrollTop).toBe(0);
+  });
+
+  it("offers mark all as read while unread articles wait on pages not loaded yet", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const ids: number[] = [];
+    for (let index = 0; index < 120; index += 1) {
+      ids.push(server.article(category.id, { title: `Story ${index}` }));
+      server.clock.advance(MINUTE);
+    }
+    // The newest 50, the first page, are read already; the 70 older ones are not.
+    for (const id of ids.slice(70)) setArticleFlags(server.db, id, { isRead: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/c/security?read=1" });
+    await screen.findByRole("link", { name: /Story 119/ });
+    expect(rowTitles()).toHaveLength(50);
+    expect(screen.getByRole("button", { name: "すべて既読にする" })).toBeInTheDocument();
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await waitFor(() => expect(ids.slice(0, 70).every((id) => getArticle(server.db, id).isRead)).toBe(true));
+  });
 });
 
 describe("moving past the last article loaded", () => {
@@ -728,6 +765,25 @@ describe("read state", () => {
     await waitFor(() => expect(rowTitles()).toEqual(["Two", "One"]));
   });
 
+  it("says when the undo failed, and sends the same articles again on request", async () => {
+    const server = makeServer();
+    const ids = articles(server, server.category().id, [{ title: "One" }, { title: "Two" }]);
+    let offline = false;
+    const { user } = renderApp({ server, offline: () => offline });
+    await screen.findByRole("link", { name: /Two/ });
+    await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+    await waitFor(() => expect(getArticle(server.db, ids[0]!).isRead).toBe(true));
+
+    offline = true;
+    await user.click(within(await screen.findByRole("status")).getByRole("button", { name: "取り消す" }));
+    const failed = await screen.findByText("既読を取り消せませんでした");
+    expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true]);
+
+    offline = false;
+    await user.click(within(failed.closest("[role=status]")!).getByRole("button", { name: "もう一度試す" }));
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false]));
+  });
+
   it("offers no bulk action where it would hide what the user came to see", async () => {
     const server = makeServer();
     setArticleFlags(server.db, server.article(server.category().id, { title: "Kept" }), { starred: true }, server.clock().toISOString());
@@ -746,7 +802,10 @@ describe("stars", () => {
     await user.click(await screen.findByRole("button", { name: "スターを付ける" }));
 
     expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
-    await waitFor(() => expect(row(/Keep me/)).toHaveTextContent("スター"));
+    // The star is drawn as an icon, named for screen readers, in the row and above the article.
+    await waitFor(() => expect(within(row(/Keep me/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
+    expect(row(/Keep me/)).not.toHaveTextContent("スター");
+    expect(within(screen.getByRole("article")).getByRole("img", { name: "スター" })).toBeInTheDocument();
     await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
     await waitFor(() => expect(rowTitles()).toEqual(["Keep me"]));
@@ -886,13 +945,13 @@ describe("a star or a read state the server cannot store", () => {
     await user.keyboard("s");
 
     const status = await toastSays("スターを付けられませんでした");
-    expect(row(/Story/)).not.toHaveTextContent("スター");
+    expect(within(row(/Story/)).queryByRole("img", { name: "スター" })).toBeNull();
     expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
     offline = false;
     await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
 
     await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
-    await waitFor(() => expect(row(/Story/)).toHaveTextContent("スター"));
+    await waitFor(() => expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
   });
 
   it("puts the star back when s fails to take it off, and takes it off when asked to try again", async () => {
@@ -901,13 +960,13 @@ describe("a star or a read state the server cannot store", () => {
     setArticleFlags(server.db, id, { starred: true }, server.clock().toISOString());
     let offline = false;
     const { user } = await openUnread(server, id, () => offline);
-    await waitFor(() => expect(row(/Story/)).toHaveTextContent("スター"));
+    await waitFor(() => expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
 
     offline = true;
     await user.keyboard("s");
 
     const status = await toastSays("スターを外せませんでした");
-    expect(row(/Story/)).toHaveTextContent("スター");
+    expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     offline = false;
     await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
@@ -1431,6 +1490,33 @@ describe("Space through the article", () => {
     expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     expect(pane.scrollTop).toBe(0);
     expect(path()).toBe(`/all/${newer}`);
+  });
+
+  it("leaves Space to a checkbox above the list, which it ticks, and scrolls nothing", async () => {
+    const { server, newer } = seeded();
+    const { user, path } = renderApp({ server, route: `/unread/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut(2000);
+
+    screen.getByRole("checkbox", { name: "重要度4以上だけ" }).focus();
+    await user.keyboard(" ");
+
+    await waitFor(() => expect(path()).toBe(`/unread/${newer}?min=4`));
+    expect(pane.scrollTop).toBe(0);
+  });
+
+  it("moves with j after a click on a checkbox above the list", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const [older, newer] = articles(server, category.id, [{ title: "Older story" }, { title: "Newer story" }]);
+    const { user, path } = renderApp({ server, route: `/c/security/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+
+    await user.click(screen.getByRole("checkbox", { name: "既読も表示" }));
+    expect(screen.getByRole("checkbox", { name: "既読も表示" })).toHaveFocus();
+    await user.keyboard("j");
+
+    await waitFor(() => expect(path()).toMatch(new RegExp(`^/c/security/${older}`)));
   });
 });
 

@@ -193,6 +193,44 @@ describe("the API client", () => {
     ]);
   });
 
+  it("puts back to unread more articles than one request takes, in requests of 5000, and adds up what changed", async () => {
+    const server = testServer();
+    const sizes: number[] = [];
+    const api = createApi({
+      fetchImpl: (input, init) => {
+        if (String(input).endsWith("/articles/mark-unread")) sizes.push((JSON.parse(String(init?.body)) as { ids: number[] }).ids.length);
+        return server.app.request(String(input), init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+    const category = server.category();
+    const read = [server.article(category.id), server.article(category.id), server.article(category.id)];
+    await api.markRead({ categoryId: category.id, before: new Date(Date.now() + 60_000).toISOString() });
+    // Articles that do not exist change nothing, so they fill the rest of the 6000.
+    const ids = [...read, ...Array.from({ length: 6000 - read.length }, (_unused, index) => 1_000_000 + index)];
+
+    expect(await api.markUnread(ids)).toEqual({ updated: 3 });
+    expect(sizes).toEqual([5000, 1000]);
+  });
+
+  it("fails as a whole when one of the requests fails, so that the caller can send them all again", async () => {
+    const server = testServer();
+    let calls = 0;
+    const api = createApi({
+      fetchImpl: (input, init) => {
+        calls += 1;
+        if (calls === 2) return Promise.resolve(new Response("down", { status: 503 }));
+        return server.app.request(String(input), init);
+      },
+      getToken: () => API_TOKEN,
+      onUnauthorized: () => {},
+    });
+
+    await expect(api.markUnread(Array.from({ length: 5001 }, (_unused, index) => index + 1))).rejects.toBeInstanceOf(ApiError);
+    expect(calls).toBe(2);
+  });
+
   it("records that an article was opened with a POST to its path, and reads the time", async () => {
     const server = testServer();
     const sent: Array<{ url: string; method: string | undefined }> = [];

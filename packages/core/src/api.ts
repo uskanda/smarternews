@@ -779,7 +779,10 @@ export const markReadBodySchema = z.union([markSeenSchema, markReadSchema]);
 export const markReadResultSchema = z.object({ updated: z.number().int(), ids: z.array(z.number().int()) });
 export type MarkReadResult = z.infer<typeof markReadResultSchema>;
 
-export const markUnreadSchema = z.object({ ids: z.array(z.number().int()).max(5000) });
+/** The most articles one request puts back to unread. A screen sends more in several requests. */
+export const MAX_MARK_UNREAD = 5000;
+
+export const markUnreadSchema = z.object({ ids: z.array(z.number().int()).max(MAX_MARK_UNREAD) });
 export type MarkUnread = z.infer<typeof markUnreadSchema>;
 
 export const countsSchema = z.object({

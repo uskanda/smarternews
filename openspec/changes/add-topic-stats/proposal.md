@@ -2,7 +2,7 @@
 
 ## Why
 
-購読フィードには直近30日の統計があるが、トピックには実行1回分の除外のまとめしかない。どのトピックが外れを多く生み、どの段階で候補を除外しているかを、数字で確かめる手段がない。#137 で外れの印が残るようになったので、トピックの当たり外れを数えられるようになった。
+購読フィードには直近30日の統計があるが、トピックには実行1回分の除外のまとめしかない。どのトピックが外れを多く生み、どの段階で候補を除外しているかを、数字で確かめる手段がない。#137で外れの印が残るようになったので、トピックの当たり外れを数えられるようになった。
 
 ## What Changes
 
@@ -31,7 +31,7 @@
 - `packages/core` の移行：`028_candidate_reason_code.sql` を足す
 - `packages/core` の処理：`pipeline/reasons.ts`、`pipeline/run.ts`、`db/candidates.ts` を変え、`db/topicStats.ts` を足す
 - `packages/core` の型：`api.ts` に成績のスキーマと並べ方の関数を足す
-- `packages/core` の移行の番号：#164 の出典の理由の移行を `026_ref_reasons.sql` に移す（024番が重なっていた）
+- `packages/core` の移行の番号：#164の出典の理由の移行を `026_ref_reasons.sql` に移す（024番が重なっていた）
 - `apps/server`：経路を1つ足す
 - `packages/client`：`topicStats(categoryId)` を足す
 - `apps/web`：`settings/CategoryPage.tsx`、`settings/TopicStats.tsx`、`runs/RunPage.tsx`、`lib/paths.ts`

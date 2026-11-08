@@ -193,6 +193,11 @@ describe("stars", () => {
 
     await press("スターを付ける");
     await eventually(async () => expect((await server.core<{ starred: boolean }>("getArticle", id)).starred).toBe(true));
+    // Above the article the star is an icon, and the line of facts still says it.
+    const page = screen.getByLabelText("記事");
+    expect(await within(page).findByTestId("star-mark", { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(within(page).queryByText("スター")).toBeNull();
+    expect(within(page).getByLabelText(/スター/)).toBeOnTheScreen();
     await press("スターを外す");
 
     await eventually(async () => expect((await server.core<{ starred: boolean }>("getArticle", id)).starred).toBe(false));

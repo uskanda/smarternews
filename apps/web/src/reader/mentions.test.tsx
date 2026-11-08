@@ -287,7 +287,7 @@ describe("the names and the keyboard", () => {
     await user.keyboard("?");
     const dialog = await screen.findByRole("dialog", { name: "キー操作" });
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    expect(keys).toEqual(["j", "k", "s", "m", "x", "o", "w", "h", "Space", "Shift+Space", "Shift+A", "r", "u", "Shift+J", "Shift+K", "g a", "g s", "g e", "g r", "Shift+F10", "/", "?"]);
+    expect(keys).toEqual(["j", "k", "s", "m", "x", "o", "w", "h", "Space", "Shift+Space", "Shift+A", "z", "r", "u", "Shift+J", "Shift+K", "g a", "g s", "g e", "g r", "Shift+F10", "/", "?"]);
     expect(dialog.textContent).not.toContain("名前");
   });
 });

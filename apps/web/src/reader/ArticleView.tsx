@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDate, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
-import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { Badge, Button, ErrorNotice, Loading, StarMark } from "../ui/controls.tsx";
 import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
@@ -313,7 +313,7 @@ export function ArticleView({
             </>
           )}
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
-          {article.starred ? <span>スター</span> : null}
+          {article.starred ? <StarMark /> : null}
         </div>
         {!delivered && article.categoryId !== null && article.topics.length > 0 ? (
           // The topics that chose this article, each a way to the editor of that topic: where a miss is fixed.

@@ -45,6 +45,7 @@ const KEYS: Array<[string, string]> = [
   ["Space", "本文を1画面分送る。本文の末尾なら次の記事"],
   ["Shift+Space", "本文を1画面分戻す。本文の先頭なら前の記事"],
   ["Shift+A", "表示中の一覧をすべて既読にする"],
+  ["z", "知らせの操作（取り消す、もう一度試すなど）"],
   ["r", "一覧と件数を読み直す"],
   ["u", "既読も表示するかを切り替える"],
   ["Shift+J", "左のペインの次の項目"],
@@ -559,7 +560,8 @@ export function Shell() {
               </Dialog.Trigger>
               <Dialog.Portal>
                 <Dialog.Overlay className={OVERLAY} />
-                <Dialog.Content className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-nav))] border-r border-outline bg-background">
+                {/* Over the article, the pane takes only the keys that move between entries and screens. */}
+                <Dialog.Content data-hotkeys="nav" className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-nav))] border-r border-outline bg-background">
                   <Dialog.Title className="sr-only">項目</Dialog.Title>
                   <Dialog.Description className="sr-only">表示する一覧を選びます。</Dialog.Description>
                   <Nav onNavigate={() => setNavOpen(false)} />

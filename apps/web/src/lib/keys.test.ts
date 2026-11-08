@@ -204,3 +204,87 @@ describe("Space on a control", () => {
     link.remove();
   });
 });
+
+describe("controls that take no text", () => {
+  /** Puts an element into the page for one test, and returns it with a way to take it out. */
+  function place<T extends HTMLElement>(element: T): T {
+    document.body.append(element);
+    return element;
+  }
+  function input(type: string): HTMLInputElement {
+    const element = document.createElement("input");
+    element.type = type;
+    return element;
+  }
+
+  it("runs a one-letter key while a checkbox, a radio, a button or a select has the focus", () => {
+    const j = vi.fn();
+    renderHook(() => useHotkeys({ j }));
+    const controls = [input("checkbox"), input("radio"), input("button"), input("submit"), document.createElement("select")].map(place);
+
+    for (const control of controls) press("j", {}, control);
+
+    expect(j).toHaveBeenCalledTimes(controls.length);
+    for (const control of controls) control.remove();
+  });
+
+  it("keeps a one-letter key from a field the user types in", () => {
+    const j = vi.fn();
+    renderHook(() => useHotkeys({ j }));
+    const fields = [input("text"), input("search"), input("url"), input("number"), document.createElement("textarea")].map(place);
+
+    for (const field of fields) press("j", {}, field);
+
+    expect(j).not.toHaveBeenCalled();
+    for (const field of fields) field.remove();
+  });
+
+  it("leaves Space to a checkbox, a radio and a select", () => {
+    const down = vi.fn();
+    renderHook(() => useHotkeys({ Space: down }));
+    const controls = [input("checkbox"), input("radio"), document.createElement("select")].map(place);
+
+    for (const control of controls) expect(press(" ", {}, control)).toBe(true);
+
+    expect(down).not.toHaveBeenCalled();
+    for (const control of controls) control.remove();
+  });
+});
+
+describe("the left pane of a narrow screen", () => {
+  it("takes only the keys that move between entries and screens", () => {
+    const actions = {
+      "Shift+J": vi.fn(),
+      "Shift+K": vi.fn(),
+      "/": vi.fn(),
+      "?": vi.fn(),
+      "g a": vi.fn(),
+      j: vi.fn(),
+      s: vi.fn(),
+      Space: vi.fn(),
+      "Shift+A": vi.fn(),
+    };
+    renderHook(() => useHotkeys(actions));
+    const pane = document.createElement("div");
+    pane.dataset.hotkeys = "nav";
+    const entry = document.createElement("a");
+    entry.href = "/unread";
+    pane.append(entry);
+    document.body.append(pane);
+
+    press("J", { shiftKey: true }, entry);
+    press("K", { shiftKey: true }, entry);
+    press("/", {}, entry);
+    press("?", { shiftKey: true }, entry);
+    press("g", {}, entry);
+    press("a", {}, entry);
+    press("j", {}, entry);
+    press("s", {}, entry);
+    press(" ", {}, entry);
+    press("A", { shiftKey: true }, entry);
+
+    for (const name of ["Shift+J", "Shift+K", "/", "?", "g a"] as const) expect(actions[name]).toHaveBeenCalledTimes(1);
+    for (const name of ["j", "s", "Space", "Shift+A"] as const) expect(actions[name]).not.toHaveBeenCalled();
+    pane.remove();
+  });
+});

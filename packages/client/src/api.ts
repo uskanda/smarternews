@@ -38,6 +38,7 @@ import {
   listViewSchema,
   listViewsSchema,
   markReadResultSchema,
+  MAX_MARK_UNREAD,
   opmlImportResultSchema,
   providerStatusSchema,
   runSchema,
@@ -329,8 +330,18 @@ export function createApi(options: ApiOptions) {
         ...body("POST", { articles }),
         ...(options.keepalive ? { keepalive: true } : {}),
       }),
-    markUnread: (ids: number[]): Promise<{ updated: number }> =>
-      json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids })),
+    /**
+     * Puts the articles back to unread, as many as marking all as read returned, in requests the server takes.
+     * A failed request fails the whole call; sending every request again is harmless, as an unread article stays so.
+     */
+    markUnread: async (ids: number[]): Promise<{ updated: number }> => {
+      let updated = 0;
+      for (let start = 0; start === 0 || start < ids.length; start += MAX_MARK_UNREAD) {
+        const part = ids.slice(start, start + MAX_MARK_UNREAD);
+        updated += (await json(z.object({ updated: z.number() }), "/articles/mark-unread", body("POST", { ids: part }))).updated;
+      }
+      return { updated };
+    },
     counts: (): Promise<Counts> => json(countsSchema, "/counts"),
 
     feeds: (): Promise<Feed[]> => json(z.array(feedSchema), "/feeds"),

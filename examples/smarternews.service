@@ -14,7 +14,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/smarternews
-ExecStart=/usr/bin/env node apps/server/src/main.ts serve
+# The two flags cap the JavaScript heap. Without them, Node sizes the heap from the machine's memory and, on a
+# host with plenty of it, keeps several hundred MB it no longer uses. 256 MB leaves room for the largest page the
+# server accepts (2 MB); below about 160 MB such a page can end the process for want of memory.
+ExecStart=/usr/bin/env node --max-old-space-size=256 --max-semi-space-size=4 apps/server/src/main.ts serve
 # Come back after any exit, a clean one included: a signal from another program ends the server with
 # status 0, which "on-failure" would not restart. `systemctl --user stop` still stops it for good.
 Restart=always
