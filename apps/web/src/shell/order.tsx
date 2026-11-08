@@ -257,8 +257,8 @@ export function useNavDrag(options: {
   return { drag, onPointerDown };
 }
 
-const MENU = "z-50 min-w-40 rounded-md border border-outline-strong bg-surface p-xs type-body-md text-on-surface";
-const MENU_ITEM =
+export const MENU = "z-50 min-w-40 rounded-md border border-outline-strong bg-surface p-xs type-body-md text-on-surface";
+export const MENU_ITEM =
   "tap flex cursor-default items-center rounded-sm px-md py-xs outline-none data-[disabled]:text-on-surface-muted data-[highlighted]:bg-selected data-[highlighted]:outline-2 data-[highlighted]:-outline-offset-2 data-[highlighted]:outline-primary";
 
 /**

@@ -1,6 +1,7 @@
-import { insertFeed, resolvePricing, setArticleFlags, updateCategory, updateSettings } from "@smarternews/core";
+import { createTopic, insertFeed, recordFetchFailure, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
+import { seedFeedArticle } from "@smarternews/core/testing";
 import { API_TOKEN } from "@smarternews/server/testing";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -74,7 +75,7 @@ describe("the list of views and categories", () => {
     expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2");
   });
 
-  it("lists the views in order, with 最近読んだ記事 and 注釈 last and without a number", async () => {
+  it("lists the views in order, with 最近読んだ記事, 注釈 and ダイジェスト last and without a number", async () => {
     const server = makeServer();
     const a = server.category("Security");
     setArticleFlags(server.db, server.article(a.id), { isRead: true }, server.clock().toISOString());
@@ -83,20 +84,44 @@ describe("the list of views and categories", () => {
 
     const views = await within(nav()).findAllByRole("list");
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
-    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"]);
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈", "ダイジェスト"]);
     expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
     expect(within(nav()).getByRole("link", { name: "注釈" })).toHaveTextContent(/^注釈$/);
+    expect(within(nav()).getByRole("link", { name: "ダイジェスト" })).toHaveTextContent(/^ダイジェスト$/);
 
     await user.click(within(nav()).getByRole("link", { name: "最近読んだ記事" }));
     expect(path()).toBe("/recently-read");
     await user.click(within(nav()).getByRole("link", { name: "注釈" }));
     expect(path()).toBe("/annotations");
+    await user.click(within(nav()).getByRole("link", { name: "ダイジェスト" }));
+    expect(path()).toBe("/digests");
   });
 
   it("links to the settings and the run history", async () => {
     renderApp();
     expect(await within(nav()).findByRole("link", { name: "設定" })).toBeInTheDocument();
     expect(within(nav()).getByRole("link", { name: "実行履歴" })).toBeInTheDocument();
+  });
+
+  it("puts the number of attention items beside the run history, read out as such, and none when there are none", async () => {
+    const server = makeServer();
+    // Topics without an article for 14 days: one in each category.
+    for (const name of ["Security", "Tools"]) {
+      createTopic(server.db, server.category(name).id, { text: `${name} topic`, interpretation: { queries: ["q"], criteria: "c" } }, server.clock);
+    }
+    server.clock.advance(15 * 86_400_000);
+    renderApp({ server });
+
+    const marked = await within(nav()).findByRole("link", { name: "実行履歴、注意2件" });
+    expect(within(marked).getByText("2")).toHaveClass("text-warning");
+  });
+
+  it("puts no number beside the run history when there is nothing to look at", async () => {
+    const server = makeServer();
+    server.category("Security");
+    renderApp({ server });
+
+    expect(await within(nav()).findByRole("link", { name: "実行履歴" })).toHaveTextContent(/^実行履歴$/);
   });
 });
 
@@ -146,6 +171,156 @@ describe("panes by width", () => {
 
     expect(await screen.findByRole("region", { name: "記事の一覧" })).toBeInTheDocument();
     expect(screen.queryByRole("article", { name: "記事" })).not.toBeInTheDocument();
+  });
+});
+
+describe("going back to the list on a narrow screen", () => {
+  const ROW = 60;
+  const VIEW = 120;
+  const pane = () => list().querySelector<HTMLElement>("[data-list-scroll]")!;
+  const rowLink = (title: string) => within(list()).getByRole("link", { name: new RegExp(`${title}(?!\\d)`) });
+  const moves = () => screen.getByRole("navigation", { name: "記事の移動" });
+
+  /** jsdom lays nothing out: the list shows 120px, and every row of it is 60px tall. */
+  function layOut(): void {
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const item = this.closest("[data-list-scroll] li");
+      const index = item?.parentElement ? [...item.parentElement.children].indexOf(item) : -1;
+      const scrolled = item?.closest<HTMLElement>("[data-list-scroll]")?.scrollTop ?? 0;
+      const top = index === -1 ? 0 : index * ROW - scrolled;
+      const height = index === -1 ? VIEW : ROW;
+      return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) };
+    });
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!;
+    Object.defineProperty(Element.prototype, "clientHeight", {
+      configurable: true,
+      get(this: Element) {
+        return this.hasAttribute("data-list-scroll") ? VIEW : 0;
+      },
+    });
+    onTestFinished(() => {
+      rect.mockRestore();
+      Object.defineProperty(Element.prototype, "clientHeight", height);
+    });
+  }
+
+  /** Eight articles, listed newest first as "Story 8" down to "Story 1". `ids[n]` is the id of "Story n". */
+  function seeded() {
+    const server = makeServer();
+    const category = server.category();
+    const ids: Record<number, number> = {};
+    for (let index = 1; index <= 8; index += 1) {
+      ids[index] = server.article(category.id, { title: `Story ${index}` });
+      server.clock.advance(60_000);
+    }
+    return { server, ids };
+  }
+
+  /** Opens すべて on a narrow screen, scrolled down by three rows so that Story 5 and Story 4 show. */
+  async function openScrolled(server: TestServer) {
+    layOut();
+    const rendered = renderApp({ server, route: "/all", width: 390 });
+    await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+    pane().scrollTop = 3 * ROW;
+    fireEvent.scroll(pane());
+    return rendered;
+  }
+
+  it("shows the list where it was left, with the article read chosen and focused, after 一覧へ戻る", async () => {
+    const { server } = seeded();
+    const { user } = await openScrolled(server);
+
+    await user.click(rowLink("Story 4"));
+    await screen.findByRole("heading", { level: 2, name: "Story 4" });
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+
+    await screen.findByRole("region", { name: "記事の一覧" });
+    expect(pane().scrollTop).toBe(3 * ROW);
+    expect(rowLink("Story 4")).toHaveAttribute("aria-current", "true");
+    expect(rowLink("Story 4")).toHaveFocus();
+  });
+
+  it("does the same after the browser's back button", async () => {
+    const { server } = seeded();
+    const { user, back } = await openScrolled(server);
+
+    await user.click(rowLink("Story 5"));
+    await screen.findByRole("heading", { level: 2, name: "Story 5" });
+    await back();
+
+    await screen.findByRole("region", { name: "記事の一覧" });
+    expect(pane().scrollTop).toBe(3 * ROW);
+    expect(rowLink("Story 5")).toHaveAttribute("aria-current", "true");
+    expect(rowLink("Story 5")).toHaveFocus();
+  });
+
+  it("moves on with j from the article read", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = await openScrolled(server);
+
+    await user.click(rowLink("Story 4"));
+    await screen.findByRole("heading", { level: 2, name: "Story 4" });
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+    await screen.findByRole("region", { name: "記事の一覧" });
+    await user.keyboard("j");
+
+    await screen.findByRole("heading", { level: 2, name: "Story 3" });
+    expect(path()).toBe(`/all/${ids[3]}`);
+  });
+
+  it("offers the next and the previous article at the end of the body, by their headlines", async () => {
+    const { server, ids } = seeded();
+    const { user, path } = renderApp({ server, route: `/all/${ids[8]}`, width: 390 });
+    await screen.findByRole("heading", { level: 2, name: "Story 8" });
+
+    // The first article of the list has nothing before it.
+    const next = await within(await screen.findByRole("navigation", { name: "記事の移動" })).findByRole("link", { name: /次の記事/ });
+    expect(next).toHaveTextContent("Story 7");
+    expect(within(moves()).queryByRole("link", { name: /前の記事/ })).not.toBeInTheDocument();
+    await user.click(next);
+
+    await screen.findByRole("heading", { level: 2, name: "Story 7" });
+    expect(path()).toBe(`/all/${ids[7]}`);
+    expect(await within(moves()).findByRole("link", { name: /前の記事/ })).toHaveTextContent("Story 8");
+    await user.click(within(moves()).getByRole("link", { name: /前の記事/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 8" });
+  });
+
+  it("leaves out the next article at the end of the list", async () => {
+    const { server, ids } = seeded();
+    renderApp({ server, route: `/all/${ids[1]}`, width: 390 });
+    await screen.findByRole("heading", { level: 2, name: "Story 1" });
+
+    const links = await screen.findByRole("navigation", { name: "記事の移動" });
+    expect(within(links).getByRole("link", { name: /前の記事/ })).toHaveTextContent("Story 2");
+    expect(within(moves()).queryByRole("link", { name: /次の記事/ })).not.toBeInTheDocument();
+  });
+
+  it("brings the last article read into view when the reader went on past the rows in view", async () => {
+    const { server } = seeded();
+    const { user } = await openScrolled(server);
+
+    await user.click(rowLink("Story 5"));
+    await screen.findByRole("heading", { level: 2, name: "Story 5" });
+    await user.click(await within(moves()).findByRole("link", { name: /次の記事/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 4" });
+    await user.click(await within(moves()).findByRole("link", { name: /次の記事/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 3" });
+    await user.click(screen.getByRole("link", { name: "一覧へ戻る" }));
+
+    await screen.findByRole("region", { name: "記事の一覧" });
+    // Story 3 is the sixth row: from 300px to 360px. The list goes down just far enough to show all of it.
+    expect(pane().scrollTop).toBe(6 * ROW - VIEW);
+    expect(rowLink("Story 3")).toHaveAttribute("aria-current", "true");
+    expect(rowLink("Story 3")).toHaveFocus();
+  });
+
+  it("offers no next or previous article on a wide screen, where the list is beside the article", async () => {
+    const { server, ids } = seeded();
+    renderApp({ server, route: `/all/${ids[5]}`, width: 1280 });
+    await screen.findByRole("heading", { level: 2, name: "Story 5" });
+
+    expect(screen.queryByRole("navigation", { name: "記事の移動" })).not.toBeInTheDocument();
   });
 });
 
@@ -309,7 +484,8 @@ describe("keyboard", () => {
     expect(within(dialog).getByText("次の記事")).toBeInTheDocument();
     expect(within(dialog).getByText("スターの切り替え")).toBeInTheDocument();
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "g a", "g s", "g e", "g r", "z"]) expect(keys).toContain(key);
+    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "x", "z", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
+    expect(within(dialog).getByText("生成記事の外れの印の切り替え。付けると既読にする")).toBeInTheDocument();
     expect(within(dialog).getByText("知らせの操作（取り消す、もう一度試すなど）")).toBeInTheDocument();
     expect(within(dialog).getByText("「最近読んだ記事」へ移る")).toBeInTheDocument();
   });
@@ -534,7 +710,7 @@ describe("refreshing", () => {
 
     server.article(category.id, { title: "Just arrived" });
     expect(screen.queryByRole("link", { name: /Just arrived/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "更新" }));
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
 
     expect(await screen.findByRole("link", { name: /Just arrived/ })).toBeInTheDocument();
   });
@@ -616,5 +792,127 @@ describe("the warning of the monthly budget", () => {
     await vi.advanceTimersByTimeAsync(61_000);
 
     await waitFor(() => expect(warning()).not.toBeInTheDocument());
+  });
+});
+
+describe("the marks of a feed's state in the left pane", () => {
+  const feedOf = (server: TestServer, title: string, categoryId: number | null) =>
+    insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title, categoryId }, server.clock);
+  const link = (name: RegExp) => within(nav()).getByRole("link", { name });
+
+  it("marks a failed, a stale and a paused feed by a named shape, and a healthy one not", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const failed = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failed.id, { now: server.clock().toISOString(), error: "timed out" });
+    const stale = feedOf(server, "Quiet", tools.id);
+    server.db
+      .prepare("UPDATE feeds SET created_at = ?, last_new_item_at = ? WHERE id = ?")
+      .run("2025-01-01T00:00:00.000Z", "2025-06-01T00:00:00.000Z", stale.id);
+    updateFeed(server.db, feedOf(server, "Resting", tools.id).id, { enabled: false });
+    feedOf(server, "Healthy", tools.id);
+    renderApp({ server });
+
+    await within(nav()).findByRole("link", { name: /Healthy/ });
+    const mark = await within(link(/Failing/)).findByRole("img", { name: "取得に失敗" });
+    expect(mark).toHaveAttribute("title", "取得に失敗");
+    expect(within(link(/Quiet/)).getByRole("img", { name: "更新が止まっています" })).toBeInTheDocument();
+    expect(within(link(/Resting/)).getByRole("img", { name: "一時停止中" })).toBeInTheDocument();
+    expect(within(link(/Healthy/)).queryByRole("img")).not.toBeInTheDocument();
+    // The name of the entry still comes first, and the mark is read out with it.
+    expect(link(/Failing/)).toHaveAccessibleName(/^Failing、取得に失敗/);
+  });
+
+  it("marks a feed the site answers is gone by the shape of a failure, with its own name, and puts it first on a folded category", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const failed = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failed.id, { now: server.clock().toISOString(), error: "timed out" });
+    const gone = feedOf(server, "Ended", tools.id);
+    recordFetchFailure(server.db, gone.id, { now: server.clock().toISOString(), error: "HTTP status 410: x", gone: true });
+    const { user } = renderApp({ server });
+
+    const mark = await within(await within(nav()).findByRole("link", { name: /Ended/ })).findByRole("img", { name: "配信終了" });
+    expect(mark).toHaveClass("text-error");
+    expect(link(/Ended/)).toHaveAccessibleName(/^Ended、配信終了/);
+
+    await user.click(within(nav()).getByRole("button", { name: "Toolsの下の項目" }));
+    expect(within(link(/^Tools/)).getByRole("img", { name: "配信を終えた購読フィードがあります" })).toBeInTheDocument();
+  });
+
+  it("puts the strongest mark of the feeds below on a category only while it is folded", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    updateFeed(server.db, feedOf(server, "Resting", tools.id).id, { enabled: false });
+    const failed = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failed.id, { now: server.clock().toISOString(), error: "timed out" });
+    const { user } = renderApp({ server });
+
+    await within(nav()).findByRole("link", { name: /Failing/ });
+    expect(within(link(/^Tools/)).queryByRole("img")).not.toBeInTheDocument();
+
+    await user.click(within(nav()).getByRole("button", { name: "Toolsの下の項目" }));
+
+    expect(within(link(/^Tools/)).getByRole("img", { name: "取得に失敗した購読フィードがあります" })).toBeInTheDocument();
+  });
+});
+
+describe("hiding the entries without unread articles", () => {
+  const feedOf = (server: TestServer, title: string, categoryId: number | null) =>
+    insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title, categoryId }, server.clock);
+  const entry = (name: RegExp) => within(nav()).queryByRole("link", { name });
+
+  // Tools: Busy and Late with an unread article each, Empty without one, Failing without one after a failed fetch.
+  // Cars: nothing unread.
+  function seeded() {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const cars = server.category("Cars");
+    const busy = feedOf(server, "Busy", tools.id);
+    const empty = feedOf(server, "Empty", tools.id);
+    const late = feedOf(server, "Late", tools.id);
+    const failing = feedOf(server, "Failing", tools.id);
+    recordFetchFailure(server.db, failing.id, { now: server.clock().toISOString(), error: "timed out" });
+    seedFeedArticle(server.db, busy.id);
+    seedFeedArticle(server.db, late.id);
+    return { server, tools, cars, busy, empty, late };
+  }
+
+  it("shows every entry while the setting is off", async () => {
+    const { server } = seeded();
+    renderApp({ server });
+
+    expect(await within(nav()).findByRole("link", { name: /^Empty/ })).toBeInTheDocument();
+    expect(entry(/^Cars/)).toBeInTheDocument();
+  });
+
+  it("hides them once it is on, but keeps the views, a failed feed, and the entry that is open", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, empty, busy } = seeded();
+    const { user, path } = renderApp({ server, route: `/f/${empty.id}` });
+
+    await waitFor(() => expect(entry(/^Busy/)).toHaveTextContent("1"));
+    expect(entry(/^Empty/)).toBeInTheDocument();
+    expect(entry(/^Failing/)).toBeInTheDocument();
+    expect(entry(/^Cars/)).not.toBeInTheDocument();
+    expect(within(nav()).getAllByRole("link", { name: /^AI生成/ })).toHaveLength(1);
+    expect(entry(/^すべて/)).toBeInTheDocument();
+
+    await user.click(entry(/^Busy/)!);
+    await waitFor(() => expect(path()).toBe(`/f/${busy.id}`));
+    // Once another list is open, the feed that was open goes too.
+    await waitFor(() => expect(entry(/^Empty/)).not.toBeInTheDocument());
+  });
+
+  it("passes the hidden entries by with Shift+J and Shift+K", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, busy, late } = seeded();
+    const { user, path } = renderApp({ server, route: `/f/${busy.id}` });
+    await waitFor(() => expect(entry(/^Late/)).toHaveTextContent("1"));
+
+    await user.keyboard("{Shift>}J{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/f/${late.id}`));
+    await user.keyboard("{Shift>}K{/Shift}");
+    await waitFor(() => expect(path()).toBe(`/f/${busy.id}`));
   });
 });

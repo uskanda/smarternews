@@ -5,6 +5,7 @@ import { createApi, type Fetch } from "@smarternews/client";
 import { AppContext, type AppServices } from "./app/context.ts";
 import { applyStoredTheme } from "./lib/theme.ts";
 import { readToken, writeToken } from "./lib/token-store.ts";
+import { DigestPage } from "./digests/DigestPage.tsx";
 import { ReaderPage } from "./reader/ReaderPage.tsx";
 import { RunPage } from "./runs/RunPage.tsx";
 import { RunsPage } from "./runs/RunsPage.tsx";
@@ -25,6 +26,8 @@ export interface AppProps {
   now?: () => Date;
   /** Told the path and query after every navigation, for tests. */
   onLocation?: (path: string) => void;
+  /** Given a way to move through the history, as the browser's back button does, for tests. */
+  onHistory?: (go: (delta: number) => void) => void;
 }
 
 const routes: RouteObject[] = [
@@ -44,6 +47,7 @@ const routes: RouteObject[] = [
       { path: "f/:feedId/:articleId?", element: <ReaderPage view="feed" /> },
       { path: "search/:articleId?", element: <ReaderPage view="search" /> },
       { path: "mentions/:articleId?", element: <ReaderPage view="mention" /> },
+      { path: "digests/:digestId?", element: <DigestPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
       { path: "settings/feeds", element: <FeedsPage /> },
@@ -56,7 +60,7 @@ const routes: RouteObject[] = [
   },
 ];
 
-export function App({ fetchImpl, initialEntries, now, onLocation }: AppProps) {
+export function App({ fetchImpl, initialEntries, now, onLocation, onHistory }: AppProps) {
   const [token, setTokenState] = useState<string | null>(readToken);
   const tokenRef = useRef(token);
   const queryClient = useMemo(
@@ -89,6 +93,7 @@ export function App({ fetchImpl, initialEntries, now, onLocation }: AppProps) {
     if (!onLocation) return;
     return router.subscribe((state) => onLocation(`${state.location.pathname}${state.location.search}`));
   }, [router, onLocation]);
+  useEffect(() => onHistory?.((delta) => void router.navigate(delta)), [router, onHistory]);
 
   return (
     <AppContext value={services}>

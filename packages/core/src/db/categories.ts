@@ -1,10 +1,11 @@
-import type { Category, CategoryCreate, CategoryUpdate } from "../api.ts";
-import type { Clock } from "../clock.ts";
+import type { Category, CategoryCreate, CategoryUpdate, CategoryVersionTrigger } from "../api.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { transaction, type Database } from "./database.ts";
 import { releaseFeedsOfCategory } from "./feeds.ts";
 import { refreshFiltered } from "./filters.ts";
 import { bool, json, num, numOrNull, str, type Row } from "./rows.ts";
+import { recordCategoryVersion } from "./versions.ts";
 
 const DEFAULTS = {
   schedule: ["05:00"],
@@ -68,7 +69,7 @@ function freeSlug(db: Database, base: string): string {
 export function createCategory(db: Database, input: CategoryCreate, clock: Clock): Category {
   if (input.kind === "status") {
     throw new DomainError("invalid", 'the kind "status" is reserved and not available yet', [
-      { path: "kind", message: 'use "news" or "event"' },
+      { path: "kind", message: 'use "news" or "event"', code: "not_allowed" },
     ]);
   }
   if (input.slug !== undefined && findCategoryBySlug(db, input.slug)) {
@@ -96,10 +97,19 @@ export function createCategory(db: Database, input: CategoryCreate, clock: Clock
       (input.enabled ?? true) ? 1 : 0,
       clock().toISOString(),
     );
-  return getCategory(db, num(result.lastInsertRowid));
+  const category = getCategory(db, num(result.lastInsertRowid));
+  recordCategoryVersion(db, category.id, "created", category.createdAt);
+  return category;
 }
 
-export function updateCategory(db: Database, id: number, patch: CategoryUpdate): Category {
+/** Stores the changes. A change of the minimum importance or the limit of articles makes a version, made by `trigger`. */
+export function updateCategory(
+  db: Database,
+  id: number,
+  patch: CategoryUpdate,
+  clock: Clock = systemClock,
+  trigger: Exclude<CategoryVersionTrigger, "created"> = "edited",
+): Category {
   const current = getCategory(db, id);
   const isEvent = current.kind === "event";
   const next = {
@@ -122,6 +132,7 @@ export function updateCategory(db: Database, id: number, patch: CategoryUpdate):
     next.enabled ? 1 : 0,
     id,
   );
+  recordCategoryVersion(db, id, trigger, clock().toISOString());
   return getCategory(db, id);
 }
 
@@ -137,7 +148,7 @@ export function orderCategories(db: Database, ids: number[]): void {
 export function moveCategory(db: Database, id: number, before: number | null): Category[] {
   getCategory(db, id);
   if (before !== null && !findCategory(db, before)) {
-    throw new DomainError("invalid", `category ${before} does not exist`, [{ path: "before", message: "no such category" }]);
+    throw new DomainError("invalid", `category ${before} does not exist`, [{ path: "before", message: "no such category", code: "no_such_item" }]);
   }
   if (before !== id) {
     const others = listCategories(db)

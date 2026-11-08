@@ -149,11 +149,17 @@ describe("GET /api/v1/articles/:id", () => {
       snippetOnly: false,
       event: null,
       now: s.clock().toISOString(),
-      refs: [{ url: "https://example.org/second", siteName: "Example", title: "Second", publishedAt: null }],
+      refs: [{ url: "https://example.org/second", siteName: "Example", title: "Second", publishedAt: null, reason: "A patch for the flaw", importance: 4 }],
       topicIds: [],
     });
 
     const body = await (await s.get(`/api/v1/articles/${id}`)).json();
+
+    // Each reference carries why it was chosen; one stored without a reason gives null for both.
+    expect(body.refs).toMatchObject([
+      { url: "https://example.org/first", reason: null, importance: null },
+      { url: "https://example.org/second", reason: "A patch for the flaw", importance: 4 },
+    ]);
 
     expect(body).toMatchObject({
       id,
@@ -252,6 +258,52 @@ describe("read state and stars", () => {
     const id = s.article(s.category().id);
     const response = await s.patch(`/api/v1/articles/${id}`, { isRead: "yes" });
     expect(response.status).toBe(400);
+  });
+});
+
+describe("misses", () => {
+  it("marks a generated article as a miss and read, and counts it on its topic", async () => {
+    const s = testServer();
+    const category = s.category();
+    const topic = await (await s.post(`/api/v1/categories/${category.id}/topics`, { text: "Vulnerabilities" })).json();
+    const id = s.article(category.id, { topicIds: [topic.id] });
+
+    const response = await s.patch(`/api/v1/articles/${id}`, { missed: true });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id, missed: true, isRead: true });
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).missed).toBe(true);
+    const topics = await (await s.get(`/api/v1/categories/${category.id}/topics`)).json();
+    expect(topics).toEqual([expect.objectContaining({ id: topic.id, missesSinceInterpretation: 1 })]);
+  });
+
+  it("puts the read state back when an undo gives it with the mark taken away", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    await s.patch(`/api/v1/articles/${id}`, { missed: true });
+
+    const body = await (await s.patch(`/api/v1/articles/${id}`, { missed: false, isRead: false })).json();
+
+    expect(body).toMatchObject({ missed: false, isRead: false });
+  });
+
+  it("takes only the mark away when the read state is not given", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    await s.patch(`/api/v1/articles/${id}`, { missed: true });
+
+    expect(await (await s.patch(`/api/v1/articles/${id}`, { missed: false })).json()).toMatchObject({ missed: false, isRead: true });
+  });
+
+  it("refuses a feed article", async () => {
+    const s = testServer();
+    const post = seedFeedArticle(s.db, seedFeed(s.db));
+
+    const response = await s.patch(`/api/v1/articles/${post}`, { missed: true });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields[0]).toMatchObject({ path: "missed", code: "not_allowed" });
+    expect((await (await s.get(`/api/v1/articles/${post}`)).json()).isRead).toBe(false);
   });
 });
 
@@ -443,7 +495,9 @@ describe("POST /api/v1/articles/mark-read with the articles a screen showed", ()
     const response = await s.post("/api/v1/articles/mark-read", { articles });
 
     expect(response.status).toBe(400);
-    expect((await response.json()).error.fields).toEqual([{ path: "articles", message: "too many articles: at most 500" }]);
+    expect((await response.json()).error.fields).toEqual([
+      { path: "articles", message: "too many articles: at most 500", code: "too_big", maximum: 500, unit: "items" },
+    ]);
     expect((await (await s.get(`/api/v1/articles/${id}`)).json()).isRead).toBe(false);
   });
 

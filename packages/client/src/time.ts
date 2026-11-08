@@ -53,6 +53,12 @@ export function formatShort(iso: string, timeZone: string, now: Date): string {
   return formatDay(iso, timeZone).date;
 }
 
+/** The date with its year, without the time. */
+export function formatDate(iso: string, timeZone: string): string {
+  const p = parts(new Date(iso), timeZone);
+  return `${p.year}年${p.month}月${p.day}日`;
+}
+
 export function formatFull(iso: string, timeZone: string): string {
   const p = parts(new Date(iso), timeZone);
   return `${p.year}年${p.month}月${p.day}日 ${p.hour}:${p.minute}`;

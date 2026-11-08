@@ -1,5 +1,6 @@
 import type {
   Article,
+  ArticleAttachment,
   ArticleEvent,
   ArticleList,
   ArticleListQuery,
@@ -30,6 +31,7 @@ import { transaction, type Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { annotationsOf } from "./annotations.ts";
 import { mentionsOf } from "./mentions.ts";
+import { isMissed, markMissed, unmarkMissed } from "./misses.ts";
 import { deleteArticleTranslation, findArticleTranslation } from "./translations.ts";
 
 /**
@@ -126,6 +128,7 @@ function toSummary(row: Row): ArticleSummary {
     translatedTitle: strOrNull(row.translated_title),
     summary: str(row.summary),
     impact: strOrNull(row.impact),
+    updateNote: strOrNull(row.update_note),
     importance: numOrNull(row.importance),
     unconfirmed: bool(row.unconfirmed),
     firstPublishedAt: str(row.first_published_at),
@@ -141,16 +144,47 @@ function toSummary(row: Row): ArticleSummary {
   };
 }
 
+/**
+ * The sources of an article. A source is new when a follow-up added it after the time the reader last read the
+ * article before a rewrite; without either time it is not.
+ */
 function refsOf(db: Database, articleId: number): ArticleRef[] {
   return db
-    .prepare("SELECT url, site_name, title, published_at FROM article_refs WHERE article_id = ? ORDER BY position, id")
+    .prepare(
+      `SELECT r.url, r.site_name, r.title, r.published_at, r.reason, r.importance,
+              (a.origin = 'generated' AND r.added_at > a.read_before_update_at) AS is_new
+         FROM article_refs r JOIN articles a ON a.id = r.article_id
+        WHERE r.article_id = ? ORDER BY r.position, r.id`,
+    )
     .all(articleId)
     .map((row) => ({
       url: str(row.url),
       siteName: str(row.site_name),
       title: str(row.title),
       publishedAt: strOrNull(row.published_at),
+      reason: strOrNull(row.reason),
+      importance: numOrNull(row.importance),
+      isNew: row.is_new === 1,
     }));
+}
+
+/** How many earlier articles the chain of an article gives at most. */
+const PREVIOUS_ARTICLES_LIMIT = 20;
+
+/** The earlier articles on the story, newest first, followed one by one until one is gone or the chain comes back. */
+function previousArticlesOf(db: Database, row: Row): Article["previousArticles"] {
+  const statement = db.prepare("SELECT id, title, first_published_at, previous_article_id FROM articles WHERE id = ?");
+  const seen = new Set([num(row.id)]);
+  const chain: Article["previousArticles"] = [];
+  let next = numOrNull(row.previous_article_id);
+  while (next !== null && !seen.has(next) && chain.length < PREVIOUS_ARTICLES_LIMIT) {
+    const earlier = statement.get(next);
+    if (!earlier) break;
+    seen.add(next);
+    chain.push({ id: next, title: str(earlier.title), firstPublishedAt: str(earlier.first_published_at) });
+    next = numOrNull(earlier.previous_article_id);
+  }
+  return chain;
 }
 
 /** The duplicates recorded against an article, with their feed, in the order they were stored. */
@@ -181,6 +215,40 @@ function fullContentErrorOf(row: Row): FullContentError | null {
   return { reason: str(row.full_content_error) as FullContentErrorReason, detail: strOrNull(row.full_content_error_detail) };
 }
 
+const ATTACHMENT_KINDS = new Set(["image", "audio", "video", "other"]);
+
+/**
+ * The stored attachments of a feed article. A list that cannot be read, and an entry without an address or a
+ * known kind, count as none. The image address is left for the relay to fill in (`relayArticleImages`).
+ */
+function attachmentsOf(row: Row): ArticleAttachment[] {
+  const stored = strOrNull(row.attachments);
+  if (stored === null || str(row.origin) !== "feed") return [];
+  let entries: unknown;
+  try {
+    entries = JSON.parse(stored);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(entries)) return [];
+  const textOrNull = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : null);
+  const primaryUrl = strOrNull(row.primary_url);
+  return entries.flatMap((entry: Record<string, unknown> | null): ArticleAttachment[] => {
+    if (!entry || typeof entry.url !== "string" || !ATTACHMENT_KINDS.has(String(entry.kind))) return [];
+    return [
+      {
+        url: entry.url,
+        kind: entry.kind as ArticleAttachment["kind"],
+        mimeType: textOrNull(entry.mimeType),
+        size: typeof entry.size === "number" && Number.isSafeInteger(entry.size) ? entry.size : null,
+        title: textOrNull(entry.title),
+        thumbnailOf: entry.thumbnail === true ? primaryUrl : null,
+        imageUrl: null,
+      },
+    ];
+  });
+}
+
 function toArticle(db: Database, row: Row): Article {
   const id = num(row.id);
   const body = str(row.body);
@@ -203,6 +271,7 @@ function toArticle(db: Database, row: Row): Article {
     fullContentError: fullContentErrorOf(row),
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
+    previousArticles: previousArticlesOf(db, row),
     otherFeeds: otherFeedsOf(db, id),
     refs: refsOf(db, id),
     topics: db
@@ -211,6 +280,8 @@ function toArticle(db: Database, row: Row): Article {
       .map((topic) => ({ id: num(topic.id), text: str(topic.text) })),
     annotations: annotationsOf(db, id),
     mentions: mentionsOf(db, id),
+    attachments: attachmentsOf(row),
+    missed: isMissed(db, id),
   };
 }
 
@@ -249,15 +320,30 @@ export interface ArticleContent {
   event: EventFields | null;
 }
 
-export type NewRef = ArticleRef;
+/** A source to store. The reason and importance of its judgement may be left out, and are then stored as null. */
+export type NewRef = Omit<ArticleRef, "reason" | "importance" | "isNew"> & { reason?: string | null; importance?: number | null };
 
-function addRefs(db: Database, articleId: number, refs: NewRef[]): void {
+/**
+ * Adds sources after the ones an article has, each with the time it was added. A URL it already has is skipped, so
+ * its first reason and time stay.
+ */
+function addRefs(db: Database, articleId: number, refs: NewRef[], now: string): void {
   let position = num(db.prepare("SELECT coalesce(max(position), -1) + 1 AS next FROM article_refs WHERE article_id = ?").get(articleId)!.next);
   const statement = db.prepare(
-    "INSERT OR IGNORE INTO article_refs (article_id, url, site_name, title, published_at, position) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO article_refs (article_id, url, site_name, title, published_at, reason, importance, position, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (const ref of refs) {
-    const result = statement.run(articleId, ref.url, ref.siteName, ref.title, ref.publishedAt, position);
+    const result = statement.run(
+      articleId,
+      ref.url,
+      ref.siteName,
+      ref.title,
+      ref.publishedAt,
+      ref.reason || null,
+      ref.importance ?? null,
+      position,
+      now,
+    );
     if (num(result.changes) > 0) position += 1;
   }
 }
@@ -308,21 +394,27 @@ export function insertArticle(
       input.event?.registration ?? null,
     );
   const id = num(result.lastInsertRowid);
-  addRefs(db, id, input.refs);
+  addRefs(db, id, input.refs, input.now);
   addTopics(db, id, input.topicIds);
   return id;
 }
 
-/** Rewrites an article with a follow-up: new content, more references, unread again, one revision further. */
+/**
+ * Rewrites an article with a follow-up: new content, more references, unread again, one revision further. The
+ * note on what the rewrite adds replaces the earlier one, even when there is none: an earlier note is about another
+ * rewrite. The time the article was read is kept as the time it was read before the rewrite; an article still
+ * unread keeps the earlier such time, so that the sources of every rewrite since the reader last read it are new.
+ */
 export function reviseArticle(
   db: Database,
   id: number,
-  input: ArticleContent & { now: string; refs: NewRef[]; topicIds: number[] },
+  input: ArticleContent & { now: string; refs: NewRef[]; topicIds: number[]; updateNote?: string | null },
 ): void {
   db.prepare(
     `UPDATE articles
         SET title = ?, summary = ?, body = ?, impact = ?, importance = max(importance, ?), unconfirmed = ?,
-            snippet_only = ?, updated_at = ?, revision = revision + 1, is_read = 0, read_at = NULL,
+            snippet_only = ?, updated_at = ?, revision = revision + 1, update_note = ?,
+            read_before_update_at = coalesce(read_at, read_before_update_at), is_read = 0, read_at = NULL,
             event_key = coalesce(?, event_key), event_starts_at = coalesce(?, event_starts_at),
             event_ends_at = coalesce(?, event_ends_at), event_venue = coalesce(?, event_venue),
             event_fee = coalesce(?, event_fee),
@@ -337,6 +429,7 @@ export function reviseArticle(
     input.unconfirmed ? 1 : 0,
     input.snippetOnly ? 1 : 0,
     input.now,
+    input.updateNote ?? null,
     input.event?.key ?? null,
     input.event?.startsAt ?? null,
     input.event?.endsAt ?? null,
@@ -347,7 +440,7 @@ export function reviseArticle(
     input.event?.registration ?? null,
     id,
   );
-  addRefs(db, id, input.refs);
+  addRefs(db, id, input.refs, input.now);
   addTopics(db, id, input.topicIds);
 }
 
@@ -814,18 +907,27 @@ function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[
 
 /**
  * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
- * one that was read already keeps its time, and one put back to unread loses it.
+ * one that was read already keeps its time, and one put back to unread loses it. Marking a generated article as a
+ * miss marks it read too, unless the same patch says whether it is read; taking the mark away leaves that alone.
  */
 export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, now: string): Article {
-  getArticle(db, id);
+  const article = getArticle(db, id);
+  if (patch.missed !== undefined && article.origin !== "generated") {
+    throw new DomainError("invalid", `article ${id} is not a generated article`, [
+      { path: "missed", message: "only a generated article can be marked as a miss", code: "not_allowed" },
+    ]);
+  }
   transaction(db, () => {
-    if (patch.isRead !== undefined) {
+    if (patch.missed === true) markMissed(db, id, now);
+    if (patch.missed === false) unmarkMissed(db, id);
+    const isRead = patch.isRead ?? (patch.missed === true ? true : undefined);
+    if (isRead !== undefined) {
       const changed = num(
         db
           .prepare("UPDATE articles SET is_read = ?, read_at = ? WHERE id = ? AND is_read <> ?")
-          .run(patch.isRead ? 1 : 0, patch.isRead ? now : null, id, patch.isRead ? 1 : 0).changes,
+          .run(isRead ? 1 : 0, isRead ? now : null, id, isRead ? 1 : 0).changes,
       );
-      if (patch.isRead && changed > 0) readDuplicatesOf(db, [id], now);
+      if (isRead && changed > 0) readDuplicatesOf(db, [id], now);
     }
     if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
   });

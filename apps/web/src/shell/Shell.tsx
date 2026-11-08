@@ -1,11 +1,25 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { budgetWarningLabel, buildNav, listKey, nextEventCategory, stepTarget, type ListTarget, type NavEntry, type NavModel } from "@smarternews/client";
+import {
+  budgetWarningLabel,
+  buildNav,
+  FEED_STATE_LABEL,
+  hideEmptyEntries,
+  listKey,
+  nextEventCategory,
+  parseListKey,
+  stepTarget,
+  type FeedState,
+  type ListTarget,
+  type NavEntry,
+  type NavModel,
+} from "@smarternews/client";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { useArticle, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
+import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
+import { useHideRead } from "../lib/hide-read.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
 import { PANES, usePanes } from "../lib/panes.ts";
@@ -24,6 +38,7 @@ const KEYS: Array<[string, string]> = [
   ["k", "前の記事"],
   ["s", "スターの切り替え"],
   ["m", "既読と未読の切り替え"],
+  ["x", "生成記事の外れの印の切り替え。付けると既読にする"],
   ["o", "主な出典を新しいタブで開く"],
   ["w", "全文の取得と、配信された内容との切り替え"],
   ["h", "選んだ文字列をハイライトする"],
@@ -88,12 +103,70 @@ function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
 
 const ITEM = "tap flex min-w-0 flex-1 items-center justify-between gap-sm rounded-md px-sm py-xs type-body-md";
 
-function NavItem({ to, label, count, onNavigate }: { to: string; label: string; count?: number; onNavigate?: () => void }) {
+function NavItem({
+  to,
+  label,
+  count,
+  attention,
+  onNavigate,
+}: {
+  to: string;
+  label: string;
+  count?: number;
+  /** The attention items not yet dismissed, shown in the warning colour and read out as what they are. */
+  attention?: number;
+  onNavigate?: () => void;
+}) {
   return (
     <NavLink to={to} onClick={onNavigate} className={({ isActive }) => `${ITEM} ${isActive ? "bg-selected font-semibold" : ""}`}>
       <span className="min-w-0 truncate">{label}</span>
       {count ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
+      {attention ? (
+        <>
+          {/* Read out apart from the name, and as what the number counts. */}
+          <span className="sr-only">{`、注意${attention}件`}</span>
+          <span aria-hidden="true" className="tabular-nums text-warning">
+            {attention}
+          </span>
+        </>
+      ) : null}
     </NavLink>
+  );
+}
+
+const STATE_COLOR: Record<FeedState, string> = { gone: "text-error", failed: "text-error", stale: "text-warning", paused: "text-on-surface-muted" };
+/** What the mark on a folded category says: the state belongs to a feed below it, not to the category. */
+const HIDDEN_STATE_LABEL: Record<FeedState, string> = {
+  gone: "配信を終えた購読フィードがあります",
+  failed: "取得に失敗した購読フィードがあります",
+  stale: "更新が止まった購読フィードがあります",
+  paused: "一時停止中の購読フィードがあります",
+};
+
+/**
+ * The mark of a feed whose fetches went wrong, told by its shape as well as its colour: a triangle with "!" for a
+ * failed fetch and for a feed the site answers is gone, a clock for no new item for long, two bars for a pause. Its
+ * name, which tells a gone feed from a failing one, is read out and shown on hover.
+ */
+function FeedStateIcon({ state, label = FEED_STATE_LABEL[state] }: { state: FeedState; label?: string }) {
+  return (
+    <span role="img" aria-label={label} title={label} className={`feed-state-icon ${STATE_COLOR[state]}`}>
+      <svg aria-hidden="true" viewBox="0 0 16 16" width="100%" height="100%" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        {state === "failed" || state === "gone" ? (
+          <>
+            <path d="M8 1.75 14.5 13.5h-13z" />
+            <path d="M8 6v3.5M8 11.5v.25" />
+          </>
+        ) : state === "stale" ? (
+          <>
+            <circle cx="8" cy="8" r="6.25" />
+            <path d="M8 4.5V8l2.5 1.5" />
+          </>
+        ) : (
+          <path d="M5.75 3.5v9M10.25 3.5v9" strokeWidth="2" />
+        )}
+      </svg>
+    </span>
   );
 }
 
@@ -103,6 +176,8 @@ function ListItem({
   to,
   count = entry.unread,
   holdsCurrent = false,
+  state = entry.state,
+  stateLabel,
   onNavigate,
 }: {
   entry: NavEntry;
@@ -110,6 +185,9 @@ function ListItem({
   count?: number;
   /** True for a folded category whose hidden entry is the one that is open: the row shows where the reader is. */
   holdsCurrent?: boolean;
+  /** The mark beside the name: the feed's own state, or that of the feeds hidden below a folded category. */
+  state?: FeedState;
+  stateLabel?: string;
   onNavigate?: () => void;
 }) {
   const current = isOnList(to, useLocation().pathname);
@@ -122,7 +200,14 @@ function ListItem({
       draggable={false}
       className={`${ITEM} ${current || holdsCurrent ? "bg-selected font-semibold" : ""}`}
     >
-      <span className="min-w-0 truncate">{entry.label}</span>
+      <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+      {state ? (
+        <>
+          {/* Read out apart from the name: the two would otherwise run together as one word. */}
+          <span className="sr-only">、</span>
+          <FeedStateIcon state={state} label={stateLabel} />
+        </>
+      ) : null}
       {count > 0 ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
     </Link>
   );
@@ -133,14 +218,13 @@ function ListItem({
  * management pages. A category that has subscribed feeds can be folded.
  */
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
-  const counts = useCounts().data;
-  const categories = useCategories().data;
+  // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
+  const { shown: model, pathOf: pathOfTarget } = useNavModels();
   const feeds = useFeeds().data;
+  const attention = useAttention().data?.count ?? 0;
   const collapsed = useCollapsed();
   const { pathname } = useLocation();
-  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
-  const slugOf = (categoryId: number) => categories?.find((category) => category.id === categoryId)?.slug;
-  const pathOf = (entry: NavEntry) => listPathOf(entry.target, slugOf) ?? "/unread";
+  const pathOf = (entry: NavEntry) => pathOfTarget(entry.target) ?? "/unread";
   // The fold buttons take a column of their own. It exists only once something can be folded.
   const foldable = model.groups.some((group) => group.children.length > 0);
 
@@ -168,11 +252,11 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     try {
       await api.deleteFeed(feed.id);
       for (const key of ["feeds", "counts", "articles", "filters"]) void client.invalidateQueries({ queryKey: [key] });
-      toast({ message: "購読フィードを削除しました" });
+      toast({ message: "購読フィードの登録を解除しました" });
       // The list that was open is gone with the feed.
       if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
     } catch {
-      toast({ message: "削除できませんでした。もう一度試してください。" });
+      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
     }
     setRemoving(false);
     setLeaving(null);
@@ -199,6 +283,10 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             <ListItem entry={entry} to={pathOf(entry)} count={entry.target.type === "starred" ? model.starred : entry.unread} onNavigate={onNavigate} />
           </li>
         ))}
+        {/* Not a list of articles: it stays below 注釈, and Shift+J and Shift+K pass it by. */}
+        <li className="flex">
+          <NavItem to="/digests" label="ダイジェスト" onNavigate={onNavigate} />
+        </li>
       </ul>
       <div className="flex flex-col gap-px">
         <h2 className="px-sm pb-xs type-label-sm text-on-surface-muted">カテゴリ</h2>
@@ -231,7 +319,18 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
                   ) : foldable ? (
                     <span aria-hidden="true" className="nav-fold shrink-0" />
                   ) : null}
-                  {menu(group.entry, <ListItem entry={group.entry} to={pathOf(group.entry)} holdsCurrent={folded && childIsCurrent} onNavigate={onNavigate} />)}
+                  {menu(
+                    group.entry,
+                    <ListItem
+                      entry={group.entry}
+                      to={pathOf(group.entry)}
+                      holdsCurrent={folded && childIsCurrent}
+                      // Folded, the feeds below cannot show their marks: the row shows the strongest of them.
+                      state={folded ? group.childState : undefined}
+                      stateLabel={group.childState ? HIDDEN_STATE_LABEL[group.childState] : undefined}
+                      onNavigate={onNavigate}
+                    />,
+                  )}
                 </div>
                 {group.children.length > 0 ? (
                   <ul id={`nav-group-${key}`} hidden={folded} className={folded ? "" : "flex flex-col gap-px"}>
@@ -262,7 +361,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             <NavItem to="/settings" label="設定" onNavigate={onNavigate} />
           </li>
           <li className="flex">
-            <NavItem to="/runs" label="実行履歴" onNavigate={onNavigate} />
+            <NavItem to="/runs" label="実行履歴" attention={attention} onNavigate={onNavigate} />
           </li>
         </ul>
       </div>
@@ -275,7 +374,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       ) : null}
       <ConfirmDialog
         open={leavingFeed !== undefined}
-        title="購読フィードを削除しますか"
+        title="購読フィードの登録を解除しますか"
         onDismiss={() => setLeaving(null)}
         returnFocus={() =>
           element.current?.querySelector<HTMLElement>(`[data-nav-key="feed-${leavingRow.current}"] a`) ?? element.current?.querySelector<HTMLElement>("a")
@@ -283,7 +382,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         actions={
           <>
             <Button variant="danger" disabled={removing} onClick={() => leavingFeed && void unsubscribe(leavingFeed)}>
-              削除する
+              登録を解除する
             </Button>
             <Button onClick={() => setLeaving(null)}>やめる</Button>
           </>
@@ -310,6 +409,28 @@ function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTa
       return path !== null && isOnList(path, pathname);
     })?.target ?? null
   );
+}
+
+/**
+ * The entries of the left pane: `full` holds every one, `shown` those the pane shows — without the entries that
+ * have no unread article when this browser hides them. The open entry is found in `full`, so that it stays.
+ */
+function useNavModels(): { full: NavModel; shown: NavModel; current: ListTarget | null; pathOf: (target: ListTarget) => string | null } {
+  const counts = useCounts().data;
+  const categories = useCategories().data;
+  const feeds = useFeeds().data;
+  const hideRead = useHideRead();
+  const { pathname } = useLocation();
+  const full = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
+  const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
+  const current = currentEntry(full, pathname, pathOf);
+  const currentKey = current === null ? null : listKey(current);
+  const counted = counts !== undefined;
+  const shown = useMemo(
+    () => (hideRead ? hideEmptyEntries(full, { current: currentKey === null ? null : parseListKey(currentKey), counted }) : full),
+    [full, hideRead, currentKey, counted],
+  );
+  return { full, shown, current, pathOf };
 }
 
 const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";
@@ -374,14 +495,9 @@ export function Shell() {
   const [helpOpen, setHelpOpen] = useState(false);
   const { now } = useApp();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
   const counts = useCounts().data;
-  const categories = useCategories().data;
-  const feeds = useFeeds().data;
   const collapsed = useCollapsed();
-  const model = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
-  const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
-  const current = currentEntry(model, pathname, pathOf);
+  const { full: model, shown, current, pathOf } = useNavModels();
   const open = (target: ListTarget | null | undefined) => {
     const path = target ? pathOf(target) : null;
     if (path !== null) void navigate(path);
@@ -395,8 +511,9 @@ export function Shell() {
         if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
         else setNavOpen(true);
       },
-      "Shift+J": () => open(stepTarget(model, current, 1, collapsed.isCollapsed)),
-      "Shift+K": () => open(stepTarget(model, current, -1, collapsed.isCollapsed)),
+      // Through the entries the pane shows: the hidden ones are passed by.
+      "Shift+J": () => open(stepTarget(shown, current, 1, collapsed.isCollapsed)),
+      "Shift+K": () => open(stepTarget(shown, current, -1, collapsed.isCollapsed)),
       "g a": () => open(view("unread")),
       "g s": () => open(view("starred")),
       "g e": () => open(nextEventCategory(model, current)),

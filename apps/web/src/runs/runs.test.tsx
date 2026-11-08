@@ -61,7 +61,7 @@ describe("the run history", () => {
     expect(rows()[2]).toHaveTextContent("05:00");
     expect(rows()[2]).toHaveTextContent("成功");
     const cells = within(rows()[2]!).getAllByRole("cell").map((cell) => cell.textContent);
-    expect(cells.slice(4)).toEqual(["40", "32", "3", "1", "9"]);
+    expect(cells.slice(4)).toEqual(["40", "32", "3", "1", "9", "—"]);
   });
 
   it("narrows the list to one category", async () => {
@@ -123,6 +123,84 @@ describe("the run history", () => {
   });
 });
 
+describe("attention", () => {
+  const section = () => screen.getByRole("region", { name: "注意" });
+  /** A scheduled run of the category that failed with its retries used up. */
+  function failedSchedule(server: TestServer, categoryId: number, slot: string) {
+    const id = finished(server, categoryId, { status: "failed", failures: [{ stage: "run", target: null, message: "boom" }] }, slot);
+    setRetry(server.db, id, { skipped: "limit" });
+    return id;
+  }
+
+  it("lists what to look at above the runs, with a link to the failed run", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const run = failedSchedule(server, category.id, "2026-03-01T05:00");
+    const { user, path } = renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByRole("region", { name: "注意" })).toHaveTextContent("Securityの定時の実行が失敗しました。やり直しの予定はありません。");
+    await user.click(within(section()).getByRole("link", { name: "実行の詳細" }));
+
+    expect(path()).toBe(`/runs/${run}`);
+  });
+
+  it("leads from a topic without articles to its editor", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const topic = createTopic(server.db, category.id, { text: "Exploited bugs", interpretation: { queries: ["q"], criteria: "c" } }, server.clock);
+    server.clock.advance(15 * 24 * 60 * MINUTE);
+    const { user, path } = renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByRole("region", { name: "注意" })).toHaveTextContent("Securityのトピック「Exploited bugs」で、14日間、記事の作成も更新もありません。");
+    const link = within(section()).getByRole("link", { name: "トピックの設定" });
+    expect(link).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${topic.id}`);
+    await user.click(link);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("Exploited bugs");
+  });
+
+  it("is not shown when there is nothing to look at", async () => {
+    const server = makeServer();
+    finished(server, server.category("Security").id);
+    renderApp({ server, route: "/runs" });
+
+    await screen.findByRole("table", { name: "実行履歴" });
+    expect(screen.queryByRole("region", { name: "注意" })).not.toBeInTheDocument();
+  });
+
+  it("drops an item that is dismissed, and lowers the count in the left pane", async () => {
+    const server = makeServer();
+    failedSchedule(server, server.category("Security").id, "2026-03-01T05:00");
+    failedSchedule(server, server.category("Tools").id, "2026-03-01T05:00");
+    const { user } = renderApp({ server, route: "/runs" });
+    await screen.findByRole("region", { name: "注意" });
+    expect(await screen.findByRole("link", { name: "実行履歴、注意2件" })).toBeInTheDocument();
+
+    const [first] = within(section()).getAllByRole("listitem");
+    await user.click(within(first!).getByRole("button", { name: "確認した" }));
+
+    await waitFor(() => expect(within(section()).getAllByRole("listitem")).toHaveLength(1));
+    expect(section()).not.toHaveTextContent("Securityの定時の実行");
+    expect(screen.getByRole("link", { name: "実行履歴、注意1件" })).toBeInTheDocument();
+    expect(server.db.prepare("SELECT COUNT(*) AS n FROM attention_dismissals").get()).toEqual({ n: 1 });
+  });
+
+  it("keeps an item and says so when the dismissal cannot be stored", async () => {
+    const server = makeServer();
+    failedSchedule(server, server.category("Security").id, "2026-03-01T05:00");
+    let down = false;
+    const { user } = renderApp({ server, route: "/runs", offline: () => down });
+    await screen.findByRole("region", { name: "注意" });
+
+    down = true;
+    await user.click(within(section()).getByRole("button", { name: "確認した" }));
+
+    expect(await screen.findByText("確認したことを保存できませんでした。もう一度試してください。")).toBeInTheDocument();
+    expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
+  });
+});
+
 describe("one run", () => {
   it("names the step that failed, what it was working on, and why", async () => {
     const server = makeServer();
@@ -177,12 +255,13 @@ describe("one run", () => {
         sourceKind: "feed",
         status: "rejected",
         reason: index < 8 ? "advertising without new information" : "about another product",
+        reasonCode: null,
         importance: 1,
         topicIds: [index < 8 ? flaws.id : ransom.id],
         now: server.clock().toISOString(),
       });
     }
-    return { server, category, id };
+    return { server, category, id, flaws, ransom };
   }
 
   it("lists the rejected candidates with headline, site, topic and reason, and links to the pages", async () => {
@@ -200,8 +279,23 @@ describe("one run", () => {
     expect(item).toHaveTextContent("advertising without new information");
   });
 
-  it("groups the rejected candidates by topic and leads to the topic's settings", async () => {
-    const { server, category, id } = withRejections();
+  it("leads from the topic of each rejected candidate to the editor of that topic", async () => {
+    const { server, category, id, flaws } = withRejections();
+    const { user, path } = renderApp({ server, route: `/runs/${id}` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    const item = (await within(rejected).findByRole("link", { name: "Rejected 0" })).closest("li")!;
+
+    const topic = within(item).getByRole("link", { name: "exploited flaws" });
+    expect(topic).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${flaws.id}`);
+
+    await user.click(topic);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
+  });
+
+  it("groups the rejected candidates by topic and leads to the topic's editor", async () => {
+    const { server, category, id, flaws, ransom } = withRejections();
     const { user } = renderApp({ server, route: `/runs/${id}` });
     const rejected = await screen.findByRole("region", { name: "除外した候補" });
     await within(rejected).findByRole("link", { name: "Rejected 0" });
@@ -211,7 +305,38 @@ describe("one run", () => {
     const groups = within(rejected).getAllByRole("group");
     expect(groups.map((group) => group.getAttribute("aria-label"))).toEqual(["exploited flaws（8件）", "ransomware（3件）"]);
     expect(within(groups[0]!).getAllByRole("listitem")).toHaveLength(8);
-    expect(within(groups[0]!).getByRole("link", { name: "このトピックを直す" })).toHaveAttribute("href", `/settings/categories/${category.id}`);
+    const fix = within(groups[0]!).getByRole("link", { name: "exploited flaws を直す" });
+    expect(fix).toHaveTextContent("このトピックを直す");
+    expect(fix).toHaveAttribute("href", `/settings/categories/${category.id}#topic-${flaws.id}`);
+    expect(within(groups[1]!).getByRole("link", { name: "ransomware を直す" })).toHaveAttribute(
+      "href",
+      `/settings/categories/${category.id}#topic-${ransom.id}`,
+    );
+  });
+
+  it("leads from each topic of the grouped candidates to the topic's row in the topic stats", async () => {
+    const { server, category, id, flaws, ransom } = withRejections();
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { user, path } = renderApp({ server, route: `/runs/${id}` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    await within(rejected).findByRole("link", { name: "Rejected 0" });
+    await user.click(within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" }));
+
+    const groups = within(rejected).getAllByRole("group");
+    const stats = within(groups[0]!).getByRole("link", { name: "exploited flaws の成績" });
+    expect(stats).toHaveTextContent("このトピックの成績");
+    expect(stats).toHaveAttribute("href", `/settings/categories/${category.id}#topic-stats-${flaws.id}`);
+    expect(within(groups[1]!).getByRole("link", { name: "ransomware の成績" })).toHaveAttribute(
+      "href",
+      `/settings/categories/${category.id}#topic-stats-${ransom.id}`,
+    );
+
+    await user.click(stats);
+
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    const region = await screen.findByRole("region", { name: "トピックの成績" });
+    await waitFor(() => expect(scroll.mock.contexts).toContain(region.querySelector(`#topic-stats-${flaws.id}`)));
+    scroll.mockRestore();
   });
 
   it("says that a run does not exist", async () => {
@@ -409,5 +534,182 @@ describe("the monthly budget", () => {
 
     expect(await screen.findByText(/月の予算に達したため、途中で止まりました/)).toHaveTextContent("11月10日");
     expect(screen.getByText(/月の予算に達したため/)).toHaveTextContent("完成した記事は保存済み");
+  });
+});
+
+/** Records model calls: task, cost (undefined for a provider that costs nothing, null for an unknown cost), run and time. */
+function seedCalls(server: TestServer, calls: Array<[task: string, cost: number | null | undefined, runId: number | null, at?: string]>) {
+  const insert = server.db.prepare(
+    "INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (?, ?, 'p', 10, 1, ?, ?, ?)",
+  );
+  for (const [task, cost, runId, at] of calls) insert.run(runId, task, at ?? "2026-10-20T00:00:00.000Z", cost ?? null, cost === undefined ? 0 : 1);
+}
+
+describe("the money of runs", () => {
+  it("shows the money of each run in the list, and a dash for a run that called no provider that costs money", async () => {
+    const server = makeServer("2026-10-25T12:00:00.000Z");
+    const category = server.category("Security");
+    const free = finished(server, category.id, { llmCalls: 1 });
+    const paid = finished(server, category.id, { llmCalls: 2 });
+    seedCalls(server, [
+      ["judge", undefined, free],
+      ["judge", 0.1, paid],
+      ["write", 0.3, paid],
+    ]);
+    renderApp({ server, route: "/runs" });
+
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(screen.getByRole("columnheader", { name: "金額" })).toBeInTheDocument();
+    expect(within(rows()[0]!).getAllByRole("cell").at(-1)).toHaveTextContent("$0.40");
+    expect(within(rows()[1]!).getAllByRole("cell").at(-1)).toHaveTextContent("—");
+  });
+
+  it("shows the money of a run, its calls of unknown cost, and its calls and money by task", async () => {
+    const server = makeServer("2026-10-25T12:00:00.000Z");
+    const id = finished(server, server.category().id, { llmCalls: 5 });
+    seedCalls(server, [
+      ["judge", 0.04, id],
+      ["judge", 0.06, id],
+      ["judge", null, id],
+      ["write", 0.3, id],
+      ["translate", undefined, id],
+    ]);
+    renderApp({ server, route: `/runs/${id}` });
+
+    const result = await screen.findByRole("region", { name: "結果" });
+    await waitFor(() => expect(result).toHaveTextContent("金額$0.40"));
+    expect(result).toHaveTextContent("金額のわからない呼び出し1件");
+    const byTask = screen.getByRole("table", { name: "タスクごとの呼び出し" });
+    expect(within(byTask).getByRole("row", { name: /判定/ })).toHaveTextContent(/判定\s*3\s*\$0\.10/);
+    expect(within(byTask).getByRole("row", { name: /本文の生成/ })).toHaveTextContent(/本文の生成\s*1\s*\$0\.30/);
+    expect(within(byTask).getByRole("row", { name: /翻訳/ })).toHaveTextContent(/翻訳\s*1\s*—/);
+    expect(within(byTask).queryByRole("row", { name: /集約/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a dash for the money of a run without calls to providers that cost money, and no table without calls", async () => {
+    const server = makeServer();
+    const id = finished(server, server.category().id);
+    renderApp({ server, route: `/runs/${id}` });
+
+    const result = await screen.findByRole("region", { name: "結果" });
+    await waitFor(() => expect(result).toHaveTextContent("金額—"));
+    expect(result).not.toHaveTextContent("金額のわからない呼び出し");
+    expect(screen.queryByRole("table", { name: "タスクごとの呼び出し" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the usage section of the settings", () => {
+  /** A server in the budget period from 10 October to 9 November, on 14 October at noon. */
+  function usageServer(options: { billable?: boolean; budget?: number } = {}) {
+    return makeServer("2026-10-14T12:00:00.000Z", {
+      pricing: options.billable === false ? undefined : resolvePricing("claude-sonnet-5-5")!,
+      budget: { monthlyBudgetUsd: options.budget ?? 100, warnRatio: 0.8, resetDay: 10 },
+    });
+  }
+
+  /** Stores a generated article of the category, made on 12 October, and opened when `opened` is true. */
+  function article(server: TestServer, categoryId: number, opened: boolean) {
+    server.db
+      .prepare(
+        `INSERT INTO articles (category_id, origin, kind, title, summary, body, importance, first_published_at, updated_at, created_at, opened_at)
+         VALUES (?, 'generated', 'news', 'T', 'S', 'B', 3, ?, ?, ?, ?)`,
+      )
+      .run(categoryId, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:00.000Z", opened ? "2026-10-13T00:00:00.000Z" : null);
+  }
+
+  it("comes right after the providers, and the links at the top lead to it", async () => {
+    renderApp({ server: usageServer(), route: "/settings" });
+
+    const usage = await screen.findByRole("region", { name: "利用量" });
+    const regions = screen.getAllByRole("region").map((region) => region.getAttribute("aria-label"));
+    expect(regions[regions.indexOf("プロバイダー") + 1]).toBe("利用量");
+    expect(within(screen.getByRole("navigation", { name: "設定の区画" })).getByRole("link", { name: "利用量" })).toHaveAttribute("href", "/settings#usage");
+    expect(usage).toHaveAttribute("id", "usage");
+    expect(await within(usage).findByText(/10月10日から今日まで（UTC）/)).toBeInTheDocument();
+  });
+
+  it("shows the money, the articles made and opened, and the money per opened article of each category, and the calls outside runs last", async () => {
+    const server = usageServer();
+    const category = server.category("Security");
+    const run = finished(server, category.id, { llmCalls: 2 });
+    seedCalls(server, [
+      ["judge", 1.5, run, "2026-10-12T00:00:00.000Z"],
+      ["write", 0.5, run, "2026-10-12T00:00:00.000Z"],
+      ["summarize", 0.01, null, "2026-10-12T00:00:00.000Z"],
+      ["summarize", 0.01, null, "2026-10-13T00:00:00.000Z"],
+      ["translate", undefined, null, "2026-10-13T00:00:00.000Z"],
+    ]);
+    for (const opened of [true, true, false, false]) article(server, category.id, opened);
+    const other = server.category("Tools");
+    article(server, other.id, false);
+    renderApp({ server, route: "/settings" });
+
+    const usage = await screen.findByRole("region", { name: "利用量" });
+    const table = await within(usage).findByRole("table", { name: "カテゴリごとの利用量" });
+    const bodyRows = within(table).getAllByRole("row").slice(1);
+    expect(bodyRows.map((row) => within(row).getAllByRole("cell").map((cell) => cell.textContent))).toEqual([
+      ["2", "$2.00", "4", "2", "$1.00"],
+      ["0", "$0.00", "1", "0", "—"],
+      ["3", "$0.02", "", "", ""],
+    ]);
+    expect(within(bodyRows[0]!).getByRole("rowheader")).toHaveTextContent("Security");
+    expect(within(bodyRows[2]!).getByRole("rowheader")).toHaveTextContent("実行に属さない呼び出し");
+  });
+
+  it("shows every UTC day of the period up to today with its money and calls, and a bar that is not read out", async () => {
+    const server = usageServer();
+    seedCalls(server, [
+      ["summarize", 0.25, null, "2026-10-12T23:59:00.000Z"],
+      ["summarize", 0.5, null, "2026-10-13T00:01:00.000Z"],
+    ]);
+    renderApp({ server, route: "/settings" });
+
+    const usage = await screen.findByRole("region", { name: "利用量" });
+    const table = await within(usage).findByRole("table", { name: "日ごとの利用量" });
+    const bodyRows = within(table).getAllByRole("row").slice(1);
+    expect(bodyRows.map((row) => row.textContent)).toEqual([
+      "10月10日$0.000",
+      "10月11日$0.000",
+      "10月12日$0.251",
+      "10月13日$0.501",
+      "10月14日$0.000",
+    ]);
+    const bar = (index: number) => bodyRows[index]!.querySelector<HTMLElement>("[aria-hidden='true']");
+    expect(bar(3)).toHaveStyle({ width: "100%" });
+    expect(bar(2)).toHaveStyle({ width: "50%" });
+  });
+
+  it("projects the money at the end of the period, and says when it passes the budget", async () => {
+    const server = usageServer({ budget: 10 });
+    // 4.5 days of the 31 have passed.
+    seedCalls(server, [["summarize", 4.5, null, "2026-10-12T00:00:00.000Z"]]);
+    renderApp({ server, route: "/settings" });
+
+    const usage = await screen.findByRole("region", { name: "利用量" });
+    expect(await within(usage).findByText(/期末の11月9日までに\$31\.00になる見込みで、月の予算の\$10\.00を超えます/)).toBeInTheDocument();
+  });
+
+  it("does not say that a projection within the budget passes it", async () => {
+    const server = usageServer();
+    seedCalls(server, [["summarize", 4.5, null, "2026-10-12T00:00:00.000Z"]]);
+    renderApp({ server, route: "/settings" });
+
+    const usage = await screen.findByRole("region", { name: "利用量" });
+    expect(await within(usage).findByText(/\$31\.00になる見込みです/)).toBeInTheDocument();
+    expect(usage).not.toHaveTextContent("超えます");
+  });
+
+  it("says that the calls cost nothing, counts them, and projects nothing when no provider costs money", async () => {
+    const server = usageServer({ billable: false });
+    seedCalls(server, [["summarize", undefined, null, "2026-10-12T00:00:00.000Z"]]);
+    renderApp({ server, route: "/settings" });
+
+    const usage = await screen.findByRole("region", { name: "利用量" });
+    const table = await within(usage).findByRole("table", { name: "カテゴリごとの利用量" });
+    const outside = within(table).getByRole("row", { name: /実行に属さない呼び出し/ });
+    expect(within(outside).getAllByRole("cell").map((cell) => cell.textContent).slice(0, 2)).toEqual(["1", "かからない"]);
+    expect(usage).not.toHaveTextContent("見込み");
+    const days = within(usage).getByRole("table", { name: "日ごとの利用量" });
+    expect(within(days).getByRole("row", { name: /10月12日/ })).toHaveTextContent("かからない");
   });
 });

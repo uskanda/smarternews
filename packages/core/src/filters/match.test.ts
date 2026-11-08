@@ -97,6 +97,6 @@ describe("regexProblem", () => {
 
   it("names the condition whose value is wrong", () => {
     const problems = conditionProblems([contains(["title"], "(sale"), regex(["title"], "ok"), regex(["title"], "(sale")]);
-    expect(problems).toEqual([{ path: "conditions.2.value", message: expect.stringMatching(/not a valid regular expression/) }]);
+    expect(problems).toEqual([{ path: "conditions.2.value", message: expect.stringMatching(/not a valid regular expression/), code: "format" }]);
   });
 });

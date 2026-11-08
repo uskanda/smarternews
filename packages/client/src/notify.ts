@@ -64,3 +64,33 @@ export function planNotifications(input: {
     checkedAt,
   };
 }
+
+/** The title of the notification of a digest. */
+export const DIGEST_NOTIFICATION_TITLE = "ダイジェスト";
+/** How much of the executive summary the notification of a digest shows. */
+const DIGEST_BODY_CHARS = 100;
+
+export interface DigestNotifyPlan {
+  notification: { digestId: number; title: string; body: string } | null;
+  /** The id of the newest digest the device knows of. Stored, and passed to the next check. */
+  notifiedId: number | null;
+}
+
+/**
+ * Whether the latest digest is notified. It is notified once, when it is newer than the one the device knows of.
+ * A device that knows of none yet only records where it stands: the digests made before notifications were on
+ * are not notified. A digest is never folded into the notification that sums up many articles.
+ */
+export function planDigestNotification(input: {
+  setting: NotifySetting;
+  latest: { id: number; executiveSummary: string } | null;
+  notifiedId: number | null;
+}): DigestNotifyPlan {
+  const { setting, latest, notifiedId } = input;
+  if (setting === "off") return { notification: null, notifiedId };
+  if (notifiedId === null) return { notification: null, notifiedId: latest?.id ?? 0 };
+  if (latest === null || latest.id <= notifiedId) return { notification: null, notifiedId };
+  const chars = [...latest.executiveSummary];
+  const body = chars.length > DIGEST_BODY_CHARS ? `${chars.slice(0, DIGEST_BODY_CHARS - 1).join("")}…` : latest.executiveSummary;
+  return { notification: { digestId: latest.id, title: DIGEST_NOTIFICATION_TITLE, body }, notifiedId: latest.id };
+}

@@ -123,6 +123,22 @@ describe("the API client", () => {
     expect(list.items).toMatchObject([{ title: "Read", isRead: true, readAt: server.clock().toISOString() }]);
   });
 
+  it("asks for a digest, lists the digests and reads one, in the shared shape", async () => {
+    const { api, server, seen } = setup(API_TOKEN, {
+      digest: () => ({ executiveSummary: "What happened.", sections: [] }),
+    });
+    await expect(api.requestDigest()).resolves.toEqual({ status: "empty" });
+    server.article(server.category().id);
+
+    await expect(api.requestDigest()).resolves.toEqual({ status: "queued" });
+    await server.digests.idle();
+    const list = await api.digests({ limit: 1 });
+
+    expect(seen.at(-1)!.url).toContain("/digests?limit=1");
+    expect(list).toMatchObject({ building: false, items: [{ executiveSummary: "What happened.", trigger: "manual" }] });
+    await expect(api.digest(list.items[0]!.id)).resolves.toMatchObject({ sections: [], articles: [] });
+  });
+
   it("downloads the settings file as text and uploads it back", async () => {
     const { api, server } = setup();
     server.category("Security");
@@ -243,6 +259,36 @@ describe("the API client", () => {
 
     expect(await api.feedStats(feed.id)).toMatchObject({ received: 1, opened: 0, starred: 0, hiddenByFilters: 0, hiddenAsDuplicates: 0 });
     expect(seen.at(-1)!.url).toBe(`/api/v1/feeds/${feed.id}/stats`);
+  });
+
+  it("reads the stats of the topics of a category", async () => {
+    const { api, server, seen } = setup();
+    const category = server.category();
+    const topic = await api.createTopic(category.id, { text: "Exploited bugs" });
+
+    const stats = await api.topicStats(category.id);
+
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/topic-stats`);
+    expect(stats.topics).toMatchObject([{ topicId: topic.id, text: "Exploited bugs", collected: { total: 0 }, created: 0, topRejectedSites: [] }]);
+    await expect(api.topicStats(999)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("reads the versions of a topic and of a category, and goes back to a version of a topic", async () => {
+    const { api, server, seen } = setup();
+    const category = server.category();
+    const topic = await api.createTopic(category.id, { text: "Rust" });
+    await api.updateTopic(topic.id, { text: "Rust compiler" });
+
+    const versions = await api.topicVersions(topic.id);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/topics/${topic.id}/versions`);
+    expect(versions.map((version) => version.trigger)).toEqual(["edited", "created"]);
+
+    const restored = await api.restoreTopicVersion(topic.id, versions[1]!.id);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/topics/${topic.id}/versions/${versions[1]!.id}/restore`);
+    expect(restored.text).toBe("Rust");
+
+    expect(await api.categoryVersions(category.id)).toMatchObject([{ trigger: "created", minImportance: 3 }]);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/versions`);
   });
 
   it("asks for candidates and a preview of a page, and subscribes to it and changes its selectors, on the paths of web feeds", async () => {

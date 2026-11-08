@@ -1,8 +1,8 @@
-// The eight jobs given to a model. Each has an output schema and a function that builds its prompt.
+// The ten jobs given to a model. Each has an output schema and a function that builds its prompt.
 // Nothing else in the code base talks to a model.
 import { parseHTML } from "linkedom";
 import { z } from "zod";
-import { MAX_SELECTOR_CHARS, registrationSchema, type Kind, type SearchLocale, type TaskName } from "../api.ts";
+import { MAX_SELECTOR_CHARS, registrationSchema, TOPIC_TEXT_MAX_CHARS, type Kind, type SearchLocale, type TaskName } from "../api.ts";
 import { MAX_MENTIONS, mentionKindSchema, parseMentions } from "../mentions.ts";
 
 export interface TaskPrompt {
@@ -68,6 +68,11 @@ export interface InterpretInput {
   topicText: string;
   kind: Kind;
   search: SearchLocale;
+  /**
+   * The titles of articles made for the topic that the reader marked as misses, newest first. Empty, or left out,
+   * when there are none.
+   */
+  misses?: string[];
 }
 
 const interpretOutput = z.object({
@@ -79,20 +84,33 @@ export type InterpretOutput = z.infer<typeof interpretOutput>;
 
 const interpret: TaskDefinition<InterpretInput, InterpretOutput> = {
   output: interpretOutput,
-  build: (input) => ({
-    system: SYSTEM,
-    prompt: [
-      "Task: turn a topic that a reader wants to follow into search queries and a relevance test.",
-      `Category kind: ${input.kind} (${input.kind === "event" ? "upcoming events with a date and place" : "recent news"})`,
-      `Search language: ${input.search.language}. Search region: ${input.search.region}.`,
-      `Topic, as the reader wrote it:\n<topic>\n${input.topicText}\n</topic>`,
-      "Produce:",
-      "- queries: one to four short keyword queries for a news search engine, written in the search language. No search operators.",
-      "- criteria: two to four English sentences that say what counts as relevant to this topic and what to leave out.",
-      "- suggestedSources.newsSearch: true when news outlets cover this topic.",
-      "- suggestedSources.llmSearch: true when the topic needs a general web search, for example local events or pages that news outlets do not report.",
-    ].join("\n"),
-  }),
+  build: (input) => {
+    const misses = input.misses ?? [];
+    return {
+      system: SYSTEM,
+      prompt: [
+        "Task: turn a topic that a reader wants to follow into search queries and a relevance test.",
+        `Category kind: ${input.kind} (${input.kind === "event" ? "upcoming events with a date and place" : "recent news"})`,
+        `Search language: ${input.search.language}. Search region: ${input.search.region}.`,
+        `Topic, as the reader wrote it:\n<topic>\n${input.topicText}\n</topic>`,
+        ...(misses.length > 0
+          ? [
+              `Titles of articles made for this topic that the reader marked as not wanted, newest first:\n${material(misses.map((title) => `- ${title}`).join("\n"))}`,
+            ]
+          : []),
+        "Produce:",
+        "- queries: one to four short keyword queries for a news search engine, written in the search language. No search operators.",
+        "- criteria: two to four English sentences that say what counts as relevant to this topic and what to leave out.",
+        ...(misses.length > 0
+          ? [
+              "- In criteria, also say what to exclude so that articles like the ones the reader did not want are left out. Describe the kind of article, not the titles themselves.",
+            ]
+          : []),
+        "- suggestedSources.newsSearch: true when news outlets cover this topic.",
+        "- suggestedSources.llmSearch: true when the topic needs a general web search, for example local events or pages that news outlets do not report.",
+      ].join("\n"),
+    };
+  },
 };
 
 // ---- search ------------------------------------------------------------------------------------
@@ -272,12 +290,28 @@ const writeBody = z.object({
     })
     .nullable(),
 });
-const writeOutput = writeBody.extend({ mentions: mentionsOutput });
+/** The longest note on what a rewrite adds. */
+export const UPDATE_NOTE_MAX_CHARS = 300;
+
+/**
+ * What a rewrite adds. Like the mentions, any shape passes the check of the output, so that a mistake here never
+ * makes the task ask again: a string of one to 300 characters is kept, trimmed, and anything else becomes null.
+ */
+const updateNoteOutput = z
+  .unknown()
+  .optional()
+  .transform((value) => {
+    if (typeof value !== "string") return null;
+    const note = value.trim();
+    return note.length > 0 && note.length <= UPDATE_NOTE_MAX_CHARS ? note : null;
+  });
+
+const writeOutput = writeBody.extend({ mentions: mentionsOutput, updateNote: updateNoteOutput });
 export type WriteOutput = z.infer<typeof writeOutput>;
 
 const write: TaskDefinition<WriteInput, WriteOutput> = {
   output: writeOutput,
-  wire: writeBody.extend({ mentions: mentionsWire }),
+  wire: writeBody.extend({ mentions: mentionsWire, updateNote: z.string().nullable() }),
   build: (input) => ({
     system: SYSTEM,
     prompt: [
@@ -311,6 +345,9 @@ const write: TaskDefinition<WriteInput, WriteOutput> = {
       input.kind === "event"
         ? "- event: the event's name; startsAt and endsAt as local date-times in the reader's time zone, written YYYY-MM-DD or YYYY-MM-DDTHH:MM, null when the sources do not say; venue; fee; registration (required, not_required or unknown). Never guess a date."
         : "- event: null.",
+      input.existingArticle
+        ? "- updateNote: one or two sentences in the output language on what the new sources add that was not in the existing article, or null when they add nothing."
+        : "- updateNote: null.",
       ...mentionRules("the article you wrote: its title, summary and body"),
     ]
       .filter((line) => line.length > 0)
@@ -474,9 +511,180 @@ const proposeSelectors: TaskDefinition<ProposeSelectorsInput, ProposeSelectorsOu
   },
 };
 
+// ---- digest ------------------------------------------------------------------------------------
+
+export const EXECUTIVE_SUMMARY_MAX_CHARS = 800;
+/** The schema takes lines a little longer and more of them than the prompt asks for: a slightly long answer is no reason to ask again. */
+const DIGEST_LINE_MAX_CHARS = 200;
+const DIGEST_LINES_MAX = 5;
+
+export interface DigestInput {
+  outputLanguage: string;
+  readerInfo: string;
+  now: string;
+  timeZone: string;
+  periodStart: string;
+  periodEnd: string;
+  /** The categories a section may be written for, in their order. Each has articles among the input. */
+  categories: Array<{ id: number; name: string }>;
+  articles: Array<{
+    id: number;
+    /** Null for a feed article of a feed without a category: it feeds the executive summary only. */
+    categoryId: number | null;
+    origin: "generated" | "feed";
+    title: string;
+    /** Set for generated articles only. */
+    importance: number | null;
+    /** The summary of a generated article; the summary, or the start of the delivered content, of a feed article. */
+    text: string;
+  }>;
+}
+
+const digestOutput = z.object({
+  executiveSummary: z.string().trim().min(1).max(EXECUTIVE_SUMMARY_MAX_CHARS),
+  sections: z.array(
+    z.object({
+      categoryId: z.number().int(),
+      lines: z
+        .array(z.object({ text: z.string().trim().min(1).max(DIGEST_LINE_MAX_CHARS), articleIds: z.array(z.number().int()) }))
+        .min(1)
+        .max(DIGEST_LINES_MAX),
+    }),
+  ),
+});
+export type DigestOutput = z.infer<typeof digestOutput>;
+
+const digest: TaskDefinition<DigestInput, DigestOutput> = {
+  output: digestOutput,
+  build: (input) => ({
+    system: SYSTEM,
+    prompt: [
+      "Task: write a digest of the articles a reader received in a period, so that the reader learns what matters most without reading them all.",
+      `Output language: ${input.outputLanguage}. Write everything in this language, whatever language the articles use.`,
+      `Current time: ${input.now} (reader's time zone: ${input.timeZone})`,
+      `Period: ${input.periodStart} to ${input.periodEnd}`,
+      reader(input.readerInfo),
+      "Categories, one JSON object per line:",
+      material(input.categories.map((category) => JSON.stringify(category)).join("\n")),
+      "Articles, one JSON object per line. origin is generated for an article written from several sources, with an importance from 1 to 5; feed for an item a subscribed feed delivered, without an importance:",
+      material(input.articles.map((article) => JSON.stringify(article)).join("\n")),
+      IMPORTANCE,
+      "Rules:",
+      "- State only what the articles say. Add no background, no opinion and nothing you know from elsewhere.",
+      "- Use a neutral, plain register (in Japanese, the です・ます style). No greetings and no praise.",
+      "- Choose what matters most. Prefer generated articles of importance 4 and 5. Judge the importance of feed articles yourself, by the reader's interests and by how many articles report the same thing.",
+      `- executiveSummary: plain prose over every article, without Markdown, headings or lists, at most ${EXECUTIVE_SUMMARY_MAX_CHARS} characters.`,
+      "- sections: one section for each category that has something worth telling, in the order of the categories, using only the categoryId values listed above, each at most once. A category with nothing worth telling has no section.",
+      "- Each section has about three lines, each one sentence of about 100 characters, on the most important articles of that category.",
+      "- articleIds: the ids of the articles a line is drawn from, taken from the list above. Never invent an id.",
+      "- Articles whose categoryId is null belong to no category: use them in the executiveSummary only.",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  }),
+  check: (input, output) => {
+    const allowed = new Set(input.categories.map((category) => category.id));
+    const seen = new Set<number>();
+    for (const section of output.sections) {
+      if (!allowed.has(section.categoryId)) return `a section for category ${section.categoryId}, which is not in the list`;
+      if (seen.has(section.categoryId)) return `two sections for category ${section.categoryId}`;
+      seen.add(section.categoryId);
+    }
+    return null;
+  },
+};
+
+// ---- proposeTopicRewrite -----------------------------------------------------------------------
+
+export const TOPIC_REWRITE_EXPLANATION_MAX_CHARS = 1000;
+
+export interface ProposeTopicRewriteInput {
+  topicText: string;
+  /** The relevance test the last interpretation made from the text. */
+  criteria: string;
+  kind: Kind;
+  outputLanguage: string;
+  readerInfo: string;
+  /** Articles of the topic the reader opened, newest first. */
+  opened: Array<{ title: string; summary: string }>;
+  /** Articles of the topic the reader starred, newest first. */
+  starred: Array<{ title: string; summary: string }>;
+  /** The titles of the topic's articles the reader marked as misses, newest first. */
+  misses: string[];
+  /** Candidates of the topic the judge found not relevant, with its reason, newest first. */
+  rejected: Array<{ title: string; reason: string }>;
+}
+
+const proposeTopicRewriteOutput = z.object({
+  proposals: z
+    .array(
+      z.object({
+        text: z.string().trim().min(1).max(TOPIC_TEXT_MAX_CHARS),
+        explanation: z.string().trim().min(1).max(TOPIC_REWRITE_EXPLANATION_MAX_CHARS),
+      }),
+    )
+    .min(1)
+    .max(2),
+});
+export type ProposeTopicRewriteOutput = z.infer<typeof proposeTopicRewriteOutput>;
+
+function articleLines(articles: Array<{ title: string; summary: string }>): string {
+  return articles.map((article) => JSON.stringify({ title: article.title, summary: article.summary })).join("\n");
+}
+
+const proposeTopicRewrite: TaskDefinition<ProposeTopicRewriteInput, ProposeTopicRewriteOutput> = {
+  output: proposeTopicRewriteOutput,
+  build: (input) => ({
+    system: SYSTEM,
+    prompt: [
+      "Task: a reader follows a topic, written in their own words. Propose a better wording of the topic, so that the articles made for it match what the reader wants.",
+      `Category kind: ${input.kind} (${input.kind === "event" ? "upcoming events with a date and place" : "recent news"})`,
+      `Output language: ${input.outputLanguage}.`,
+      reader(input.readerInfo),
+      `Topic, as the reader wrote it:\n<topic>\n${input.topicText}\n</topic>`,
+      `Relevance test that the pipeline made from the topic, used to judge the pages found for it:\n<criteria>\n${input.criteria}\n</criteria>`,
+      ...(input.opened.length > 0
+        ? [`Articles made for this topic that the reader opened, newest first, one JSON object per line:\n${material(articleLines(input.opened))}`]
+        : []),
+      ...(input.starred.length > 0
+        ? [`Articles made for this topic that the reader starred, newest first, one JSON object per line:\n${material(articleLines(input.starred))}`]
+        : []),
+      ...(input.misses.length > 0
+        ? [
+            `Titles of articles made for this topic that the reader marked as not wanted, newest first:\n${material(input.misses.map((title) => `- ${title}`).join("\n"))}`,
+          ]
+        : []),
+      ...(input.rejected.length > 0
+        ? [
+            `Pages found for this topic that the judge left out as not relevant, with its reason, newest first, one JSON object per line:\n${material(input.rejected.map((page) => JSON.stringify(page)).join("\n"))}`,
+          ]
+        : []),
+      "Rules:",
+      "- Use what is listed above, when anything is: opened and starred articles show what the reader wants, unwanted articles show what the topic should leave out, and pages found not relevant show where the topic may be too narrow or too broad.",
+      "- Propose one or two new wordings of the topic, different from the current one and from each other. Write each as the reader would: plain sentences that say what to follow and what to leave out, in the language of the current topic.",
+      `- text: the new wording, at most ${TOPIC_TEXT_MAX_CHARS} characters. Keep what the current topic gets right.`,
+      `- explanation: written in the output language, what you changed and why, and how the relevance test is likely to change once the pipeline reads the new wording. At most ${TOPIC_REWRITE_EXPLANATION_MAX_CHARS} characters.`,
+      "- Describe kinds of articles, never single titles.",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  }),
+  check: (input, output) => {
+    const current = input.topicText.trim();
+    const seen = new Set<string>();
+    for (const [index, proposal] of output.proposals.entries()) {
+      const text = proposal.text.trim();
+      if (text === current) return `proposal ${index + 1} is the same as the current text`;
+      if (seen.has(text)) return `proposal ${index + 1} has the same text as another proposal`;
+      seen.add(text);
+    }
+    return null;
+  },
+};
+
 // ---- registry ----------------------------------------------------------------------------------
 
-export const tasks = { interpret, search, judge, cluster, write, summarize, translate, proposeSelectors };
+export const tasks = { interpret, search, judge, cluster, write, summarize, translate, proposeSelectors, digest, proposeTopicRewrite };
 
 export interface TaskIo {
   interpret: { input: InterpretInput; output: InterpretOutput };
@@ -487,6 +695,19 @@ export interface TaskIo {
   summarize: { input: SummarizeInput; output: SummarizeOutput };
   translate: { input: TranslateInput; output: TranslateOutput };
   proposeSelectors: { input: ProposeSelectorsInput; output: ProposeSelectorsOutput };
+  digest: { input: DigestInput; output: DigestOutput };
+  proposeTopicRewrite: { input: ProposeTopicRewriteInput; output: ProposeTopicRewriteOutput };
 }
 
-export const TASK_NAMES: TaskName[] = ["interpret", "search", "judge", "cluster", "write", "summarize", "translate", "proposeSelectors"];
+export const TASK_NAMES: TaskName[] = [
+  "interpret",
+  "search",
+  "judge",
+  "cluster",
+  "write",
+  "summarize",
+  "translate",
+  "proposeSelectors",
+  "digest",
+  "proposeTopicRewrite",
+];

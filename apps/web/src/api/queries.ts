@@ -6,6 +6,7 @@ import type {
   ArticleNote,
   ArticleSearchQuery,
   ArticleSummary,
+  AttentionList,
   Highlight,
   HighlightCreate,
   ListSort,
@@ -167,13 +168,16 @@ export function useArticle(id: number | null) {
 }
 
 /** Applies a change to one article wherever it is cached: in every list and in its own entry. */
-function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSummary>): void {
+/** Changes an article in every list and in its own entry. A miss is only on the article: the lists do not show it. */
+function patchArticle(client: QueryClient, id: number, { missed, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed">>): void {
   client.setQueriesData<InfiniteData<ArticleList>>({ queryKey: ["articles"] }, (data) =>
     data
       ? { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) })) }
       : data,
   );
-  client.setQueryData<Article>(["article", id], (article) => (article ? { ...article, ...patch } : article));
+  client.setQueryData<Article>(["article", id], (article) =>
+    article ? { ...article, ...patch, ...(missed !== undefined ? { missed } : {}) } : article,
+  );
 }
 
 /**
@@ -290,7 +294,6 @@ export function useSummaryRequest(article: Article | undefined): "none" | "waiti
   return late ? "late" : "waiting";
 }
 
-/** Sets the read state or the star of an article. The screen changes at once and is put back on failure. */
 /**
  * Shows articles read or unread in every list and in their detail, before or without a request: the rows the
  * list was scrolled past, and those rows again when the request failed.
@@ -327,21 +330,41 @@ export function useRecordOpened() {
   );
 }
 
-export function useArticleFlags() {
+/** A change of an article's read state, star or miss, as sent to the server. */
+export interface ArticleFlagChange {
+  id: number;
+  isRead?: boolean;
+  starred?: boolean;
+  missed?: boolean;
+}
+
+/**
+ * Sets the read state or the star of an article. The screen changes at once, in every list and in the article.
+ * When the server cannot store it, the change is undone everywhere it was made, also for an article whose own
+ * entry is not cached, and `onFailed` gets what was sent, to say so and to send it again.
+ */
+export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
   const { api } = useApp();
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: number; isRead?: boolean; starred?: boolean }) => api.updateArticle(id, patch),
+    mutationFn: ({ id, ...patch }: ArticleFlagChange) => api.updateArticle(id, patch),
     onMutate: ({ id, ...patch }) => {
-      const before = client.getQueryData<Article>(["article", id]);
       patchArticle(client, id, patch);
-      return { before };
     },
-    onError: (_error, { id }, context) => {
-      if (context?.before) patchArticle(client, id, { isRead: context.before.isRead, starred: context.before.starred });
+    onError: (_error, change) => {
+      patchArticle(client, change.id, {
+        ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
+        ...(change.starred !== undefined ? { starred: !change.starred } : {}),
+        ...(change.missed !== undefined ? { missed: !change.missed } : {}),
+      });
+      onFailed(change);
     },
     onSettled: (_data, _error, variables) => {
       void client.invalidateQueries({ queryKey: ["counts"] });
+      // A miss changes how many misses a topic has had since its interpretation.
+      if (variables.missed !== undefined) void client.invalidateQueries({ queryKey: ["topics"] });
+      // Misses and stars are counted in the stats of the topics.
+      if (variables.missed !== undefined || variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["topic-stats"] });
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
@@ -356,9 +379,33 @@ export function useTopics(categoryId: number | null) {
   return useQuery({ queryKey: ["topics", categoryId], queryFn: () => api.topics(categoryId!), enabled: categoryId !== null });
 }
 
+/** What each topic of the category brought in the last 30 days. Stale once a topic of it is added, changed or removed. */
+export function useTopicStats(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
+}
+
+/** The versions of a topic, newest first. Stale once the topic is saved or goes back to a version. */
+export function useTopicVersions(topicId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["topic-versions", topicId], queryFn: () => api.topicVersions(topicId) });
+}
+
+/** The minimum importance and limit of articles of a category each time they changed. Stale once the category is saved. */
+export function useCategoryVersions(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["category-versions", categoryId], queryFn: () => api.categoryVersions(categoryId) });
+}
+
 export function useProviders() {
   const { api } = useApp();
   return useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), refetchInterval: REFRESH_MS });
+}
+
+/** The model calls of the budget period, split by category and by day. Fetched as often as the providers. */
+export function useUsage() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
 }
 
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */
@@ -372,6 +419,37 @@ export function useRuns(category?: number) {
   });
 }
 
+/** What the runs went through that the user should look at. Fetched again like the counts. */
+export function useAttention() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["attention"], queryFn: () => api.attention(), refetchInterval: REFRESH_MS });
+}
+
+/**
+ * Dismisses an attention item. The item leaves the screen at once, and comes back when the server cannot store
+ * the dismissal; `onFailed` then says so.
+ */
+export function useDismissAttention(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => api.dismissAttention(key),
+    onMutate: async (key) => {
+      await client.cancelQueries({ queryKey: ["attention"] });
+      const before = client.getQueryData<AttentionList>(["attention"]);
+      if (before) {
+        const items = before.items.filter((item) => item.key !== key);
+        client.setQueryData<AttentionList>(["attention"], { items, count: items.length });
+      }
+      return { before };
+    },
+    onError: (_error, _key, context) => {
+      if (context?.before) client.setQueryData<AttentionList>(["attention"], context.before);
+      onFailed();
+    },
+  });
+}
+
 export function useRun(id: number | null) {
   const { api } = useApp();
   return useQuery({
@@ -381,6 +459,25 @@ export function useRun(id: number | null) {
     retry: false,
     refetchInterval: (query) => (query.state.data?.status === "queued" || query.state.data?.status === "running" ? 3000 : false),
   });
+}
+
+/** How often the digests are fetched again while one is being made. */
+export const DIGEST_BUILDING_MS = 5000;
+
+/** The digests, the latest first. Fetched every few seconds while one is being made, and every minute otherwise. */
+export function useDigests() {
+  const { api } = useApp();
+  return useQuery({
+    queryKey: ["digests"],
+    queryFn: () => api.digests({ limit: 200 }),
+    refetchInterval: (query) => (query.state.data?.building ? DIGEST_BUILDING_MS : REFRESH_MS),
+  });
+}
+
+/** One digest with its sections and the source articles that are still stored. */
+export function useDigest(id: number | null) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["digest", id], queryFn: () => api.digest(id!), enabled: id !== null });
 }
 
 /** The annotations of every article, the last made first, a page at a time. */

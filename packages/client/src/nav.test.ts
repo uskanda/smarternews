@@ -1,6 +1,12 @@
 import { parseListViewKey, type Category, type Counts, type Feed } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
-import { buildNav, hasListControls, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
+import {
+  buildNav,
+  HIDE_READ_ON,
+  HIDE_READ_STORAGE_KEY,
+  parseHideRead,
+  hasListControls,
+  hideEmptyEntries, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
 
 const category = (id: number, name: string, overrides: Partial<Category> = {}): Category => ({
   id,
@@ -34,6 +40,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   lastSucceededAt: null,
   lastError: null,
   failureCount: 0,
+  goneAt: null,
   nextFetchAt: null,
   articleCount: 0,
   starredCount: 0,
@@ -105,6 +112,29 @@ describe("buildNav", () => {
     expect(outline(model)).toEqual(["未読 0", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "注釈 0", "Tools 0", "  AI生成 0", "  Blog 0"]);
   });
 
+  it("gives a feed entry the state of its fetches, and a healthy one none", () => {
+    const failed = { ...feed(10, "Blog", 1), lastError: "HTTP status 503: x" };
+    const paused = { ...feed(11, "Releases", 1), enabled: false };
+    const model = buildNav({ categories: [category(1, "Tools")], feeds: [failed, paused, feed(12, "Loose", null)], counts });
+    const [tools, loose] = model.groups;
+    expect(tools!.children.map((child) => child.state)).toEqual([undefined, "failed", "paused"]);
+    expect(loose!.children[0]).not.toHaveProperty("state");
+    expect(model.views.every((view) => !("state" in view))).toBe(true);
+  });
+
+  it("gives a group the strongest state of the feeds below it", () => {
+    const stale = { ...feed(10, "Blog", 1), stale: true };
+    const paused = { ...feed(11, "Releases", 1), enabled: false };
+    const failedLoose = { ...feed(12, "Loose", null), lastError: "timed out" };
+    const model = buildNav({ categories: [category(1, "Tools"), category(2, "Cars")], feeds: [paused, stale, failedLoose], counts });
+    expect(model.groups.map((group) => [group.entry.label, group.childState])).toEqual([
+      ["Tools", "stale"],
+      ["Cars", undefined],
+      ["未分類", "failed"],
+    ]);
+    expect(model.groups[1]).not.toHaveProperty("childState");
+  });
+
   it("gives each entry the list it opens", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(10, "Blog", 1)], counts });
     expect(model.views.map((view) => view.target)).toEqual([
@@ -123,6 +153,74 @@ describe("buildNav", () => {
       { type: "category", categoryId: 1, generatedOnly: true },
       { type: "feed", feedId: 10 },
     ]);
+  });
+});
+
+describe("hideEmptyEntries", () => {
+  // Tools (Blog 5, Releases 0), Cars without feeds, Bikes (Hill 0, Road 0), and the loose feed Loose 0.
+  const sparse: Counts = {
+    unread: 5,
+    starred: 1,
+    generatedUnread: 0,
+    uncategorizedUnread: 0,
+    categories: [
+      { categoryId: 1, unread: 5, total: 20, generatedUnread: 0, generatedTotal: 8 },
+      { categoryId: 2, unread: 0, total: 5, generatedUnread: 0, generatedTotal: 5 },
+      { categoryId: 3, unread: 0, total: 5, generatedUnread: 0, generatedTotal: 0 },
+    ],
+    feeds: [
+      { feedId: 10, unread: 5 },
+      { feedId: 11, unread: 0 },
+      { feedId: 20, unread: 0 },
+      { feedId: 21, unread: 0 },
+      { feedId: 30, unread: 0 },
+    ],
+  };
+  const CATEGORIES = [category(1, "Tools"), category(2, "Cars"), category(3, "Bikes")];
+  const FEEDS = [feed(10, "Blog", 1), feed(11, "Releases", 1), feed(20, "Hill", 3), feed(21, "Road", 3), feed(30, "Loose", null)];
+  const VIEWS = ["未読 5", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "注釈 0"];
+  const build = (feeds: Feed[] = FEEDS, withCounts: Counts | undefined = sparse) => buildNav({ categories: CATEGORIES, feeds, counts: withCounts });
+  const hide = (model: ReturnType<typeof buildNav>, current: ListTarget | null = null, counted = true) => hideEmptyEntries(model, { current, counted });
+
+  it("hides the feeds, the generated articles, the categories and 未分類 without unread articles, and keeps the views", () => {
+    expect(outline(hide(build()))).toEqual([...VIEWS, "Tools 5", "  Blog 5"]);
+  });
+
+  it("keeps the views even when every one of them counts zero", () => {
+    const model = hide(build(FEEDS, { ...sparse, unread: 0, categories: [], feeds: [] }));
+    expect(model.views.map((view) => view.label)).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"]);
+    expect(model.groups).toEqual([]);
+  });
+
+  it("keeps a feed whose fetches failed or stopped, with its category, but not a paused one", () => {
+    const feeds = [feed(10, "Blog", 1), { ...feed(11, "Releases", 1), stale: true }, feed(20, "Hill", 3), { ...feed(21, "Road", 3), lastError: "timed out" }, { ...feed(30, "Loose", null), enabled: false }];
+    expect(outline(hide(build(feeds)))).toEqual([...VIEWS, "Tools 5", "  Blog 5", "  Releases 0", "Bikes 0", "  Road 0"]);
+  });
+
+  it("keeps the entry that is open, and the category above it", () => {
+    expect(outline(hide(build(), { type: "feed", feedId: 20 })).slice(6)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  Hill 0"]);
+    expect(outline(hide(build(), { type: "category", categoryId: 3, generatedOnly: true })).slice(6)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  AI生成 0"]);
+    expect(outline(hide(build(), { type: "category", categoryId: 2, generatedOnly: false })).slice(6)).toEqual(["Tools 5", "  Blog 5", "Cars 0"]);
+    expect(outline(hide(build(), { type: "uncategorized" })).slice(6)).toEqual(["Tools 5", "  Blog 5", "未分類 0"]);
+  });
+
+  it("hides nothing until the counts have arrived", () => {
+    const model = build(FEEDS, undefined);
+    expect(hide(model, null, false)).toEqual(model);
+  });
+
+  it("is kept under its own key, on for 'on' only", () => {
+    expect(HIDE_READ_STORAGE_KEY).toBe("smarternews.nav.hideRead");
+    expect(parseHideRead(HIDE_READ_ON)).toBe(true);
+    expect(parseHideRead(null)).toBe(false);
+    expect(parseHideRead("true")).toBe(false);
+  });
+
+  it("keeps the state of the feeds below a group, hidden ones too", () => {
+    const feeds = [feed(10, "Blog", 1), { ...feed(11, "Releases", 1), enabled: false }, ...FEEDS.slice(2)];
+    const [tools] = hide(build(feeds)).groups;
+    expect(tools!.children.map((child) => child.label)).toEqual(["Blog"]);
+    expect(tools!.childState).toBe("paused");
   });
 });
 

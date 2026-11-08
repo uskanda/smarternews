@@ -4,10 +4,11 @@ import { formatShort } from "@smarternews/client";
 import { useTermMatcher } from "../api/queries.ts";
 import { Badge, StarMark } from "../ui/controls.tsx";
 import { Highlighted } from "./highlight.tsx";
+import { SelectedMark } from "./SelectedMark.tsx";
 
 /**
  * One line of the list. Importance four gets a highlighter stroke in the margin and five has its headline
- * marked; both are also said in words for people who cannot see the mark.
+ * marked; both are also said in words for people who cannot see the mark, and so is an unread row.
  */
 export function ArticleRow({
   article,
@@ -40,7 +41,10 @@ export function ArticleRow({
   // A feed article has no importance, and so no mark.
   const marked = (article.importance ?? 0) >= 4;
   const headline = article.translatedTitle ?? article.title;
-  const line = excerpt ?? article.summary;
+  // What the last follow-up added stands in the place of the summary, read or not, so the row keeps its height.
+  // A search hit shows its excerpt instead: that is where the words were found.
+  const updateNote = excerpt === null ? article.updateNote : null;
+  const line = excerpt ?? updateNote ?? article.summary;
   // The term groups are judged by what the row shows: a group whose terms are only in the body gets no badge.
   const matcher = useTermMatcher();
   const groups = matcher.groupsIn([headline, line]);
@@ -56,8 +60,10 @@ export function ArticleRow({
           className={`absolute left-xs w-xs rounded-sm bg-mark ${article.importance === 5 ? "inset-y-md" : "top-md h-lg"}`}
         />
       ) : null}
+      {selected ? <SelectedMark /> : null}
       <Link to={to} aria-current={selected ? "true" : undefined} className="flex flex-col gap-px py-md pr-lg pl-lg">
         <span className={article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
+          {article.isRead ? null : <span className="sr-only">未読。</span>}
           {marked ? <span className="sr-only">重要度{article.importance}。</span> : null}
           <span data-title className={article.importance === 5 ? "headline-mark" : ""}>
             <Highlighted text={headline} terms={terms} groups={matcher} />
@@ -67,6 +73,11 @@ export function ArticleRow({
           <span data-excerpt className="line-clamp-2 type-body-md text-on-surface-muted">
             {excerptFromNote ? <span data-excerpt-note className="excerpt-note type-label-sm">メモ</span> : null}
             <Highlighted text={excerpt} terms={terms} groups={matcher} />
+          </span>
+        ) : updateNote !== null ? (
+          <span data-update-note className="line-clamp-1 type-body-md text-on-surface-muted">
+            更新：
+            <Highlighted text={updateNote} terms={terms} groups={matcher} />
           </span>
         ) : (
           <span className="line-clamp-1 type-body-md text-on-surface-muted">

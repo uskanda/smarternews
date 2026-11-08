@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Fetcher } from "../fetch/http.ts";
 import { fakeFetch, html, xml } from "../testing/http.ts";
-import { collectNews } from "./news-search.ts";
+import { collectNews, searchNews } from "./news-search.ts";
 
 const GOOGLE = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel><title>"rust release" - Google News</title>
@@ -123,6 +123,25 @@ describe("collectNews with Google News", () => {
     expect(urls().some((url) => url.includes("AAA111"))).toBe(false);
   });
 
+  it("counts the results in the window before the settled ones are left out, and the redirect links it tried to resolve", async () => {
+    const { fetcher } = setup(googleRoutes);
+    const result = await searchNews(
+      { fetcher, engine: "google-news", maxResultsPerQuery: 20, isSeen: (url) => url === "https://news.google.com/rss/articles/AAA111" },
+      "rust release",
+      locale,
+      window,
+    );
+    expect(result.returned).toBe(2);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.google).toEqual({ attempted: 1, unresolved: 1 });
+  });
+
+  it("counts each redirect link that could not be resolved", async () => {
+    const { fetcher } = setup(googleRoutes);
+    const result = await searchNews({ fetcher, engine: "google-news", maxResultsPerQuery: 20, isSeen: () => false }, "rust release", locale, window);
+    expect(result.google).toEqual({ attempted: 2, unresolved: 1 });
+  });
+
   it("fails when the search answers with an error status", async () => {
     const { fetcher } = setup({});
     await expect(
@@ -148,5 +167,11 @@ describe("collectNews with Bing News", () => {
       },
     ]);
     expect(Object.fromEntries(new URL(requests[0]!.url).searchParams)).toMatchObject({ q: "rust release", format: "rss", setlang: "en", cc: "US" });
+  });
+
+  it("resolves nothing, so it tells no count of redirect links", async () => {
+    const { fetcher } = setup({ "https://www.bing.com/news/search": () => xml(BING) });
+    const result = await searchNews({ fetcher, engine: "bing-news", maxResultsPerQuery: 20, isSeen: () => true }, "rust release", locale, window);
+    expect(result).toEqual({ candidates: [], returned: 1, google: { attempted: 0, unresolved: 0 } });
   });
 });

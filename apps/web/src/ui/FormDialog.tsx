@@ -15,13 +15,14 @@ export function FormDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  trigger: ReactNode;
+  /** Left out when what opens the dialog is elsewhere, as an entry of a menu. */
+  trigger?: ReactNode;
   title: string;
   children: ReactNode;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
+      {trigger ? <Dialog.Trigger asChild>{trigger}</Dialog.Trigger> : null}
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-on-surface/40" />
         <Dialog.Content

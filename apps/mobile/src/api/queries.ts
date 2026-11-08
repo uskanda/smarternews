@@ -313,3 +313,15 @@ export function useRuns() {
     refetchInterval: (query) => (query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 3000 : REFRESH_MS),
   });
 }
+
+/** The digests, the latest first. Fetched again every minute, so that one made while the screen is open shows. */
+export function useDigests() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["digests"], queryFn: () => api.digests({ limit: 30 }), refetchInterval: REFRESH_MS });
+}
+
+/** One digest, with its sections and the source articles still stored. */
+export function useDigest(id: number | null) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["digest", id], queryFn: () => api.digest(id!), enabled: id !== null });
+}

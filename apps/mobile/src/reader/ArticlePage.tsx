@@ -11,6 +11,7 @@ import { Badge, StarMark } from "./ArticleRow";
 import { AnnotatedBody, ArticleNote } from "./annotations";
 import { Highlighted, highlight } from "./highlight";
 import { Markdown, type AnnotationMarks } from "./Markdown";
+import { Attachments } from "./Attachments";
 import { Mentions } from "./Mentions";
 
 function EventDetails({ article, timeZone }: { article: Article; timeZone: string }) {
@@ -331,6 +332,7 @@ export const ArticlePage = memo(function ArticlePage({
         }
       />
       {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
+      <Attachments attachments={article.attachments} />
       <Mentions mentions={article.mentions} onOpen={onOpenMention} />
       {previous ? (
         <View style={{ gap: theme.spacing.xs }}>

@@ -13,15 +13,18 @@ describe("the runtime", () => {
     const runtime = createRuntime({ env: { SMARTERNEWS_CONFIG_DIR: join(root, "config"), SMARTERNEWS_DATA_DIR: join(root, "data") }, home: root });
     expect(runtime.summarizer.running).toBe(false);
     expect(runtime.fullContent.running).toBe(false);
+    expect(runtime.digests.running).toBe(false);
 
     runtime.start();
     expect(runtime.summarizer.running).toBe(true);
     expect(runtime.fullContent.running).toBe(true);
+    expect(runtime.digests.running).toBe(true);
     // Nothing is subscribed, so the first look of each part ends without a request.
-    await Promise.all([runtime.poller.idle(), runtime.summarizer.idle(), runtime.fullContent.idle()]);
+    await Promise.all([runtime.poller.idle(), runtime.summarizer.idle(), runtime.fullContent.idle(), runtime.digests.idle()]);
 
     runtime.close();
     expect(runtime.summarizer.running).toBe(false);
+    expect(runtime.digests.running).toBe(false);
     expect(runtime.fullContent.running).toBe(false);
   });
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../config.ts";
-import { getTopic, updateTopic } from "../db/topics.ts";
+import { setArticleFlags } from "../db/articles.ts";
+import { listSearchAttempts } from "../db/search-attempts.ts";
+import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
+import { listTopicVersions } from "../db/versions.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 
@@ -24,6 +27,21 @@ describe("interpretation before a run", () => {
     expect(h.requests.judge[0]!.prompt).toContain("official releases only");
   });
 
+  it("keeps the interpretation as a version of the topic, made at the time of the run", async () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Rust releases", { interpreted: false });
+    h.handlers.interpret = () => ({ queries: ["rust"], criteria: "official releases only", suggestedSources: { newsSearch: true, llmSearch: false } });
+
+    await h.run();
+
+    expect(listTopicVersions(h.db, topic.id)[0]).toMatchObject({
+      trigger: "interpreted",
+      createdAt: h.clock().toISOString(),
+      interpreted: true,
+      criteria: "official releases only",
+    });
+  });
+
   it("skips a topic whose interpretation fails and still processes the others", async () => {
     const h = pipelineHarness();
     const broken = h.addTopic("Broken topic", { interpreted: false });
@@ -39,6 +57,41 @@ describe("interpretation before a run", () => {
     expect(getTopic(h.db, broken.id).interpreted).toBe(false);
     expect(run.status).toBe("partial");
     expect(run.failures).toEqual([expect.objectContaining({ stage: "interpret", target: "Broken topic" })]);
+  });
+});
+
+describe("misses in the interpretation", () => {
+  async function missedTopic() {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Rust releases", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Rust conference tickets on sale", link: "https://example.org/tickets" }]);
+    await h.run();
+    const article = h.articles()[0]!;
+    setArticleFlags(h.db, article.id, { missed: true }, h.clock().toISOString());
+    return { h, topic, article };
+  }
+
+  it("passes the titles of the topic's misses to an interpretation the reader asked for", async () => {
+    const { h, topic, article } = await missedTopic();
+    expect(getTopic(h.db, topic.id).missesSinceInterpretation).toBe(1);
+    requestInterpretation(h.db, topic.id);
+
+    await h.run();
+
+    expect(h.requests.interpret).toHaveLength(1);
+    const prompt = h.requests.interpret[0]!.prompt;
+    expect(prompt).toContain(`<material>\n- ${article.title}\n</material>`);
+    expect(prompt).toMatch(/what to exclude/);
+    expect(getTopic(h.db, topic.id)).toMatchObject({ interpreted: true, missesSinceInterpretation: 0 });
+  });
+
+  it("does not interpret a topic again because of a miss", async () => {
+    const { h, topic } = await missedTopic();
+
+    await h.run();
+
+    expect(h.requests.interpret).toHaveLength(0);
+    expect(getTopic(h.db, topic.id).missesSinceInterpretation).toBe(1);
   });
 });
 
@@ -190,6 +243,47 @@ describe("collecting candidates", () => {
   });
 });
 
+describe("recording search attempts", () => {
+  it("records each query with the number of results before the settled ones are left out", async () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Rust", { newsSearch: true, queries: ["rust release", "rust compiler"] });
+    h.news({ "rust release": [{ title: "Rust 2.0 [skip]", link: "https://example.org/rust-2" }] });
+    await h.run();
+
+    const second = await h.run();
+
+    expect(second.collected).toBe(0);
+    expect(listSearchAttempts(h.db, second.id)).toEqual([
+      expect.objectContaining({ runId: second.id, topicId: topic.id, kind: "news-search", engine: "bing-news", query: "rust release", ok: true, returned: 1 }),
+      expect.objectContaining({ runId: second.id, topicId: topic.id, kind: "news-search", engine: "bing-news", query: "rust compiler", ok: true, returned: 0 }),
+    ]);
+  });
+
+  it("records a search that failed as not ok", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.routes["https://www.bing.com/news/search"] = () => new Response("oops", { status: 500 });
+
+    const run = await h.run();
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([expect.objectContaining({ query: "rust", ok: false, returned: 0 })]);
+  });
+
+  it("records the model's web search under the topic's text, and leaves the topic's feeds out", async () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Topic", { feeds: [FEED], llmSearch: true });
+    h.feed(FEED, [{ title: "From the feed", link: "https://example.org/a" }]);
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/found", title: "Found by search", snippet: "s" }] });
+    h.page("https://example.org/found", "The page text.", "2026-03-01T10:00:00Z");
+
+    const run = await h.run();
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([
+      expect.objectContaining({ topicId: topic.id, kind: "llm-search", engine: null, query: "Topic", ok: true, returned: 1 }),
+    ]);
+  });
+});
+
 describe("judging", () => {
   it("rejects a news item without a publication time before any model sees it", async () => {
     const h = pipelineHarness({ outputLanguage: "ja" });
@@ -202,6 +296,7 @@ describe("judging", () => {
     const run = await h.run();
 
     expect(h.candidates(run.id, "rejected")).toMatchObject([{ title: "Undated", reason: "公開日時が不明" }]);
+    expect(h.reasonCodes(run.id)).toContainEqual({ title: "Undated", reasonCode: "no-date" });
     expect(materialLines(h.requests.judge[0]!.prompt).map((candidate) => candidate.title)).toEqual(["Dated"]);
   });
 
@@ -245,6 +340,8 @@ describe("judging", () => {
     expect(h.candidates(run.id, "rejected")).toMatchObject([
       { title: "Buy now [skip]", url: "https://example.org/ad", reason: "advertising without new information", status: "rejected" },
     ]);
+    // The judge's rejection has no kind of the program's.
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Buy now [skip]", reasonCode: null }]);
     expect(h.articles()).toEqual([]);
   });
 
@@ -394,6 +491,21 @@ describe("news search with several engines", () => {
 
     expect(h.articles().map((article) => article.title)).toEqual(["From Bing"]);
     expect(run.status).toBe("partial");
+  });
+
+  it("records how many redirect links of Google News it tried to resolve and how many it could not", async () => {
+    const h = pipelineHarness({ newsSearch: BOTH });
+    const topic = h.addTopic("Rust", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "One [skip]", link: "https://example.org/one" }, { title: "Two [skip]", link: "https://example.org/two" }] });
+    h.routes["https://news.google.com/_/DotsSplashUi/data/batchexecute"] = () => new Response("gone", { status: 500 });
+    h.news({});
+
+    const run = await h.run();
+
+    expect(listSearchAttempts(h.db, run.id)).toEqual([
+      expect.objectContaining({ topicId: topic.id, engine: "google-news", ok: true, returned: 2, googleAttempted: 2, googleUnresolved: 2 }),
+      expect.objectContaining({ topicId: topic.id, engine: "bing-news", ok: true, returned: 0, googleAttempted: 0, googleUnresolved: 0 }),
+    ]);
   });
 
   it("records which engine failed with the query, and counts each engine as a source of its own", async () => {

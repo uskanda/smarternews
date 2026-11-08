@@ -33,20 +33,21 @@ export function getSettings(db: Database, defaultTimeZone: string = systemTimeZo
     advanceAfterMarkAll: bool(row.advance_after_mark_all),
     removeDuplicates: bool(row.remove_duplicates),
     staleFeedDays: num(row.stale_feed_days),
+    digestSchedule: JSON.parse(str(row.digest_schedule)) as string[],
   };
 }
 
 export function updateSettings(db: Database, patch: SettingsUpdate): Settings {
   if (patch.timeZone !== undefined && !isValidTimeZone(patch.timeZone)) {
     throw new DomainError("invalid", "unknown time zone", [
-      { path: "timeZone", message: `"${patch.timeZone}" is not an IANA time zone name` },
+      { path: "timeZone", message: `"${patch.timeZone}" is not an IANA time zone name`, code: "unknown_time_zone" },
     ]);
   }
   const next = { ...getSettings(db), ...patch };
   db.prepare(
     `UPDATE settings SET reader_info = ?, output_language = ?, time_zone = ?, search_language = ?, search_region = ?,
             feed_interval_minutes = ?, advance_after_mark_all = ?, remove_duplicates = ?,
-            stale_feed_days = ?
+            stale_feed_days = ?, digest_schedule = ?
       WHERE id = 1`,
   ).run(
     next.readerInfo,
@@ -58,6 +59,8 @@ export function updateSettings(db: Database, patch: SettingsUpdate): Settings {
     next.advanceAfterMarkAll ? 1 : 0,
     next.removeDuplicates ? 1 : 0,
     next.staleFeedDays,
+    // Kept in the order of the day, once each, as a category's schedule is shown.
+    JSON.stringify([...new Set(next.digestSchedule)].sort()),
   );
-  return next;
+  return getSettings(db);
 }

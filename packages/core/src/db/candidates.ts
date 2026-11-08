@@ -1,4 +1,5 @@
 import type { Candidate, SourceKind } from "../api.ts";
+import { reasonText, type ReasonCode } from "../pipeline/reasons.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
@@ -23,6 +24,8 @@ export interface NewCandidate {
   sourceKind: SourceKind;
   status: "rejected" | "pending";
   reason: string;
+  /** The kind of the program's reason for a candidate the program rejected; null for the judge's verdicts. */
+  reasonCode: ReasonCode | null;
   importance: number | null;
   topicIds: number[];
   now: string;
@@ -33,8 +36,8 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
     .prepare(
       `INSERT INTO candidates
          (category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-          importance, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reason_code, importance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       candidate.categoryId,
@@ -48,6 +51,7 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
       candidate.sourceKind,
       candidate.status,
       candidate.reason,
+      candidate.reasonCode,
       candidate.importance,
       candidate.now,
     );
@@ -66,7 +70,11 @@ export interface PendingCandidate {
   snippet: string;
   siteName: string;
   publishedAt: string | null;
+  /** The importance for choosing stories: the judgement's, or 1 when it gave none. */
   importance: number;
+  /** Why the judgement found the candidate relevant, and the importance as it gave it; kept on the article's source. */
+  reason: string;
+  judgedImportance: number | null;
   topicIds: number[];
 }
 
@@ -90,14 +98,19 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
       siteName: str(row.site_name),
       publishedAt: strOrNull(row.published_at),
       importance: numOrNull(row.importance) ?? 1,
+      reason: str(row.reason),
+      judgedImportance: numOrNull(row.importance),
       topicIds: topicIdsOf(db, num(row.id)),
     }));
 }
 
-/** Closes pending candidates as rejected, and files them under the run that decided it. */
-export function rejectCandidates(db: Database, ids: number[], reason: string, runId: number): void {
-  const statement = db.prepare("UPDATE candidates SET status = 'rejected', reason = ?, run_id = ? WHERE id = ?");
-  for (const id of ids) statement.run(reason, runId, id);
+/**
+ * Closes pending candidates as rejected for one of the program's reasons, written in the output language, and files
+ * them under the run that decided it.
+ */
+export function rejectCandidates(db: Database, ids: number[], code: ReasonCode, outputLanguage: string, runId: number): void {
+  const statement = db.prepare("UPDATE candidates SET status = 'rejected', reason = ?, reason_code = ?, run_id = ? WHERE id = ?");
+  for (const id of ids) statement.run(reasonText(code, outputLanguage), code, runId, id);
 }
 
 export function acceptCandidates(db: Database, ids: number[], articleId: number, groupKey: string, runId: number): void {
@@ -137,6 +150,67 @@ export function listRunCandidates(db: Database, runId: number, status?: Candidat
       ? db.prepare("SELECT * FROM candidates WHERE run_id = ? ORDER BY id").all(runId)
       : db.prepare("SELECT * FROM candidates WHERE run_id = ? AND status = ? ORDER BY id").all(runId, status);
   return rows.map((row) => toCandidate(db, row));
+}
+
+/** A stored candidate of a topic, as a topic trial judges it again. */
+export interface TrialCandidate {
+  id: number;
+  url: string;
+  title: string;
+  snippet: string;
+  siteName: string;
+  publishedAt: string | null;
+  createdAt: string;
+  status: Candidate["status"];
+  reason: string;
+  importance: number | null;
+  topicIds: number[];
+  /** What the judge concluded. A candidate the program rejected after the judge accepted it counts as accepted. */
+  verdict: "accepted" | "rejected";
+  /** The program's reason when the program rejected it, which replaced the judge's reason. */
+  programReason: Exclude<ReasonCode, "no-date"> | null;
+}
+
+/**
+ * Candidates of a topic for a trial: the newest `perSide` the judge accepted and the newest `perSide` it rejected,
+ * a short side filled with more of the other. Candidates rejected for an unknown publication time never reached
+ * the judge and are left out. Newest first.
+ */
+export function listTrialCandidates(db: Database, topicId: number, perSide: number): TrialCandidate[] {
+  const all: TrialCandidate[] = [];
+  const rows = db
+    .prepare(
+      `SELECT c.* FROM candidates c JOIN candidate_topics ct ON ct.candidate_id = c.id
+        WHERE ct.topic_id = ? ORDER BY c.created_at DESC, c.id DESC`,
+    )
+    .all(topicId);
+  for (const row of rows) {
+    const status = str(row.status) as Candidate["status"];
+    const reason = str(row.reason);
+    const code = status === "rejected" ? (strOrNull(row.reason_code) as ReasonCode | null) : null;
+    if (code === "no-date") continue;
+    all.push({
+      id: num(row.id),
+      url: str(row.url),
+      title: str(row.title),
+      snippet: str(row.snippet),
+      siteName: str(row.site_name),
+      publishedAt: strOrNull(row.published_at),
+      createdAt: str(row.created_at),
+      status,
+      reason,
+      importance: numOrNull(row.importance),
+      topicIds: topicIdsOf(db, num(row.id)),
+      verdict: status !== "rejected" || code !== null ? "accepted" : "rejected",
+      programReason: code,
+    });
+  }
+  const accepted = all.filter((candidate) => candidate.verdict === "accepted");
+  const rejected = all.filter((candidate) => candidate.verdict === "rejected");
+  const takeAccepted = Math.min(accepted.length, Math.max(perSide, 2 * perSide - rejected.length));
+  const takeRejected = Math.min(rejected.length, 2 * perSide - takeAccepted);
+  const chosen = new Set([...accepted.slice(0, takeAccepted), ...rejected.slice(0, takeRejected)]);
+  return all.filter((candidate) => chosen.has(candidate));
 }
 
 /** Removes candidates created before the given time, and with them the page text they hold. */

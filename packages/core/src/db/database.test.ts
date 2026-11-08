@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { migrate, openDatabase, transaction } from "./database.ts";
 import { deleteUnstarredFeedArticlesBefore } from "./articles.ts";
 import { buildPendingFilterMatches, listFilters } from "./filters.ts";
+import { REASON_CODES, reasonText } from "../pipeline/reasons.ts";
 import { searchText } from "../search/plain.ts";
 
 function tableNames(db: ReturnType<typeof openDatabase>): string[] {
@@ -39,6 +40,14 @@ describe("migrate", () => {
 
     expect(() => migrate(db, dir)).toThrow();
     expect(tableNames(db)).toEqual(["schema_migrations"]);
+  });
+
+  it("ships each migration under a number of its own", () => {
+    // Two files with one number: a database migrated past it runs neither again, a new one fails on the second.
+    const numbers = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(numbers.filter((number, index) => numbers.indexOf(number) !== index)).toEqual([]);
   });
 });
 
@@ -110,6 +119,15 @@ describe("a migration that rebuilds a table", () => {
     expect(copy.prepare("SELECT count(*) AS n FROM child").get()).toEqual({ n: 1 });
     copy.close();
     db.close();
+  });
+});
+
+describe("the shipped migrations", () => {
+  it("each have their own number, as the number is what the database records", () => {
+    const numbers = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(numbers.filter((n, i) => numbers.indexOf(n) !== i)).toEqual([]);
   });
 });
 
@@ -224,6 +242,13 @@ describe("the shipped schema", () => {
     const before = tableNames(db);
     migrate(db);
     expect(tableNames(db)).toEqual(before);
+  });
+
+  it("gives each shipped migration a version of its own", () => {
+    const versions = readdirSync(join(import.meta.dirname, "migrations"))
+      .filter((name) => /^\d+_.*\.sql$/.test(name))
+      .map((name) => Number.parseInt(name, 10));
+    expect(versions.filter((version, index) => versions.indexOf(version) !== index)).toEqual([]);
   });
 });
 
@@ -524,6 +549,88 @@ describe("the migration to duplicate removal", () => {
       { id: 2, dedup_url: null, dedup_title: null, duplicate_of: null },
     ]);
     expect(db.prepare("SELECT remove_duplicates FROM settings").get()).toEqual({ remove_duplicates: 1 });
+  });
+});
+
+describe("the migration to reasons on references", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("copies the reason and importance of the first accepted candidate, and leaves the rest empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "026")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (1, 1, 'news', 'first', 's', 'b', 4, ?, ?, ?)`,
+    ).run(now, now, now);
+    const ref = db.prepare("INSERT INTO article_refs (article_id, url, site_name, title, position) VALUES (1, ?, '', 't', ?)");
+    ref.run("https://example.org/judged", 0);
+    ref.run("https://example.org/twice", 1);
+    ref.run("https://example.org/unknown", 2);
+    ref.run("https://example.org/rejected", 3);
+    ref.run("https://example.org/blank", 4);
+    const candidate = db.prepare(
+      "INSERT INTO candidates (id, category_id, url, title, source_kind, status, reason, importance, article_id, created_at) VALUES (?, 1, ?, 't', 'feed', ?, ?, ?, ?, ?)",
+    );
+    candidate.run(1, "https://example.org/judged", "accepted", "A new flaw", 4, 1, now);
+    candidate.run(2, "https://example.org/twice", "accepted", "First look", 3, 1, now);
+    candidate.run(3, "https://example.org/twice", "accepted", "Second look", 5, 1, now);
+    candidate.run(4, "https://example.org/rejected", "rejected", "Off topic", 1, null, now);
+    candidate.run(5, "https://example.org/blank", "accepted", "", null, 1, now);
+
+    copyFileSync(join(SHIPPED, "026_ref_reasons.sql"), join(dir, "026_ref_reasons.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT url, reason, importance FROM article_refs ORDER BY position").all()).toEqual([
+      { url: "https://example.org/judged", reason: "A new flaw", importance: 4 },
+      { url: "https://example.org/twice", reason: "First look", importance: 3 },
+      { url: "https://example.org/unknown", reason: null, importance: null },
+      { url: "https://example.org/rejected", reason: null, importance: null },
+      { url: "https://example.org/blank", reason: null, importance: null },
+    ]);
+  });
+});
+
+describe("the migration to reason codes", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives the kinds of the program's reasons to the rejected candidates, in either language, and none to the judge's", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "028")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    const candidate = db.prepare(
+      "INSERT INTO candidates (category_id, url, title, source_kind, status, reason, created_at) VALUES (1, ?, 't', 'feed', ?, ?, ?)",
+    );
+    const expected: Array<{ url: string; reason_code: string | null }> = [];
+    for (const code of REASON_CODES) {
+      for (const language of ["ja", "en"]) {
+        const url = `https://example.org/${code}/${language}`;
+        candidate.run(url, "rejected", reasonText(code, language), now);
+        expected.push({ url, reason_code: code });
+      }
+    }
+    candidate.run("https://example.org/judge", "rejected", "advertising", now);
+    expected.push({ url: "https://example.org/judge", reason_code: null });
+    candidate.run("https://example.org/pending", "pending", "重要度が基準未満", now);
+    expected.push({ url: "https://example.org/pending", reason_code: null });
+
+    copyFileSync(join(SHIPPED, "028_candidate_reason_code.sql"), join(dir, "028_candidate_reason_code.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT url, reason_code FROM candidates ORDER BY id").all()).toEqual(expected);
+    expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 1").run()).toThrow();
   });
 });
 
@@ -1027,6 +1134,77 @@ describe("the migration to mentions", () => {
 
     db.prepare("DELETE FROM articles WHERE id = 1").run();
     expect(db.prepare("SELECT count(*) AS n FROM article_mentions").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("the migration to versions", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives every topic and category a first version with its current values, at the time it was made", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "030")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at)
+       VALUES (1, 'sec', 'Security', 'news', '[]', 4, 7, '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO topics (id, category_id, text, interpreted, queries, criteria, feeds, news_search, llm_search, search_language, search_region, created_at)
+       VALUES (3, 1, 'Rust', 1, '["rust"]', 'releases', '["https://example.org/feed"]', 1, 0, 'en', 'US', '2026-01-02T00:00:00.000Z'),
+              (4, 1, 'Go', 0, '[]', '', '[]', 0, 0, NULL, NULL, '2026-01-03T00:00:00.000Z')`,
+    ).run();
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("030"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(
+      db
+        .prepare(
+          `SELECT topic_id, created_at, trigger, restored_from, text, interpreted, queries, criteria, feeds, news_search, llm_search,
+                  search_language, search_region FROM topic_versions ORDER BY topic_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        topic_id: 3,
+        created_at: "2026-01-02T00:00:00.000Z",
+        trigger: "created",
+        restored_from: null,
+        text: "Rust",
+        interpreted: 1,
+        queries: '["rust"]',
+        criteria: "releases",
+        feeds: '["https://example.org/feed"]',
+        news_search: 1,
+        llm_search: 0,
+        search_language: "en",
+        search_region: "US",
+      },
+      {
+        topic_id: 4,
+        created_at: "2026-01-03T00:00:00.000Z",
+        trigger: "created",
+        restored_from: null,
+        text: "Go",
+        interpreted: 0,
+        queries: "[]",
+        criteria: "",
+        feeds: "[]",
+        news_search: 0,
+        llm_search: 0,
+        search_language: null,
+        search_region: null,
+      },
+    ]);
+    expect(db.prepare("SELECT category_id, created_at, trigger, min_importance, max_articles_per_run FROM category_versions").all()).toEqual([
+      { category_id: 1, created_at: "2026-01-01T00:00:00.000Z", trigger: "created", min_importance: 4, max_articles_per_run: 7 },
+    ]);
+
+    db.prepare("DELETE FROM categories WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM topic_versions").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM category_versions").get()).toEqual({ n: 0 });
   });
 });
 

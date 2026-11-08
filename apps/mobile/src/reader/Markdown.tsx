@@ -96,7 +96,7 @@ function words(text: string, theme: Drawing, key?: string): ReactNode {
  * proportions once it has loaded; when it cannot be loaded, a word that it could not, with its description,
  * takes its place: a site that refuses the relay would otherwise leave no trace of the image.
  */
-function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
+export function ArticleImage({ uri, alt, theme }: { uri: string; alt: string; theme: Theme }) {
   const [ratio, setRatio] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   if (failed) {

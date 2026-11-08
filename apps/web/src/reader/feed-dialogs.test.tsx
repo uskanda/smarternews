@@ -37,32 +37,32 @@ function seeded() {
 /** Opens the list of a news category and the dialog for adding a feed from it. */
 async function openAddDialog(route: string, server: TestServer) {
   const view = renderApp({ server, route });
-  await view.user.click(await within(list()).findByRole("button", { name: "フィードを追加" }));
-  return { ...view, dialog: await screen.findByRole("dialog", { name: "フィードを追加" }) };
+  await view.user.click(await within(list()).findByRole("button", { name: "購読フィードを追加" }));
+  return { ...view, dialog: await screen.findByRole("dialog", { name: "購読フィードを追加" }) };
 }
 
 describe("the button for adding a feed", () => {
   it("is above the list of a news category", async () => {
     const { server, tools } = seeded();
     renderApp({ server, route: `/c/${tools.slug}` });
-    expect(await within(list()).findByRole("button", { name: "フィードを追加" })).toBeInTheDocument();
+    expect(await within(list()).findByRole("button", { name: "購読フィードを追加" })).toBeInTheDocument();
   });
 
   it("is not above the lists of an event category, of a category's generated articles, or of the unread articles", async () => {
     const { server, tools, events } = seeded();
     const view = renderApp({ server, route: `/c/${tools.slug}/generated` });
     await within(list()).findByRole("link", { name: /Generated/ });
-    expect(within(header()).queryByRole("button", { name: "フィードを追加" })).not.toBeInTheDocument();
+    expect(within(header()).queryByRole("button", { name: "購読フィードを追加" })).not.toBeInTheDocument();
     view.unmount();
 
     const unread = renderApp({ server, route: "/unread" });
     await within(list()).findByRole("link", { name: /Old post/ });
-    expect(within(header()).queryByRole("button", { name: "フィードを追加" })).not.toBeInTheDocument();
+    expect(within(header()).queryByRole("button", { name: "購読フィードを追加" })).not.toBeInTheDocument();
     unread.unmount();
 
     renderApp({ server, route: `/c/${events.slug}` });
     await screen.findByRole("heading", { level: 1, name: "Events" });
-    expect(screen.queryByRole("button", { name: "フィードを追加" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "購読フィードを追加" })).not.toBeInTheDocument();
   });
 });
 
@@ -82,14 +82,14 @@ describe("adding a feed from the list of a category", () => {
     server.site.set(FEED, rss("Example Blog", ["a"]));
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
-    await view.user.click(within(view.dialog).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "購読フィードを追加" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByRole("status")).toHaveTextContent("「Example Blog」を追加しました");
     expect(listFeeds(server.db).find((feed) => feed.url === FEED)).toMatchObject({ categoryId: tools.id });
     await within(nav()).findByRole("link", { name: /Example Blog/ });
     expect(view.path()).toBe(`/c/${tools.slug}`);
-    await waitFor(() => expect(within(list()).getByRole("button", { name: "フィードを追加" })).toHaveFocus());
+    await waitFor(() => expect(within(list()).getByRole("button", { name: "購読フィードを追加" })).toHaveFocus());
   });
 
   it("subscribes in another category when one is chosen, and keeps the list it was opened from", async () => {
@@ -98,7 +98,7 @@ describe("adding a feed from the list of a category", () => {
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
     await view.user.selectOptions(within(view.dialog).getByLabelText("カテゴリ"), "Cars");
-    await view.user.click(within(view.dialog).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "購読フィードを追加" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(listFeeds(server.db).find((feed) => feed.url === FEED)).toMatchObject({ categoryId: cars.id });
@@ -114,7 +114,7 @@ describe("adding a feed from the list of a category", () => {
     server.site.set("https://blog.example.org/comments.xml", rss("Comments Feed", ["c"]));
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await view.user.click(within(view.dialog).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "購読フィードを追加" }));
 
     const choices = await within(view.dialog).findByRole("group", { name: /フィードが2つ見つかりました/ });
     expect(choices).toHaveTextContent("https://blog.example.org/feed.xml");
@@ -131,7 +131,7 @@ describe("adding a feed from the list of a category", () => {
     server.site.set("https://blog.example.org/", page("<title>Blog</title>"));
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), "https://blog.example.org/");
-    await view.user.click(within(view.dialog).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(await within(view.dialog).findByText(/このページにフィードは見つかりませんでした。/)).toBeInTheDocument();
     expect(within(view.dialog).getByRole("button", { name: "このページを購読する" })).toBeInTheDocument();
@@ -143,10 +143,10 @@ describe("adding a feed from the list of a category", () => {
     insertFeed(server.db, { url: FEED, title: "Example Blog" }, server.clock);
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
-    await view.user.click(within(view.dialog).getByRole("button", { name: "フィードを追加" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "購読フィードを追加" }));
 
     expect(await within(view.dialog).findByText(`このフィードはすでに購読しています（${FEED}）。`)).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "フィードを追加" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "購読フィードを追加" })).toBeInTheDocument();
     expect(within(view.dialog).getByLabelText("フィードまたはサイトのURL")).toHaveValue(FEED);
   });
 
@@ -160,10 +160,10 @@ describe("adding a feed from the list of a category", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(listFeeds(server.db)).toHaveLength(before);
-    await waitFor(() => expect(within(list()).getByRole("button", { name: "フィードを追加" })).toHaveFocus());
+    await waitFor(() => expect(within(list()).getByRole("button", { name: "購読フィードを追加" })).toHaveFocus());
 
-    await view.user.click(within(list()).getByRole("button", { name: "フィードを追加" }));
-    const again = await screen.findByRole("dialog", { name: "フィードを追加" });
+    await view.user.click(within(list()).getByRole("button", { name: "購読フィードを追加" }));
+    const again = await screen.findByRole("dialog", { name: "購読フィードを追加" });
     expect(within(again).getByLabelText("フィードまたはサイトのURL")).toHaveValue("");
     expect(within(again).getByLabelText("カテゴリ")).toHaveDisplayValue("Tools");
   });
@@ -173,13 +173,13 @@ describe("the button for the settings of a feed", () => {
   it("is above the list of a feed only", async () => {
     const { server, tools, blog } = seeded();
     const view = renderApp({ server, route: `/f/${blog.id}` });
-    expect(await within(list()).findByRole("button", { name: "フィードの設定" })).toBeInTheDocument();
+    expect(await within(list()).findByRole("button", { name: "購読フィードの設定" })).toBeInTheDocument();
     view.unmount();
 
     for (const route of [`/c/${tools.slug}`, "/unread"]) {
       const other = renderApp({ server, route });
       await within(list()).findByRole("link", { name: /Old post/ });
-      expect(within(header()).queryByRole("button", { name: "フィードの設定" })).not.toBeInTheDocument();
+      expect(within(header()).queryByRole("button", { name: "購読フィードの設定" })).not.toBeInTheDocument();
       other.unmount();
     }
   });
@@ -188,8 +188,8 @@ describe("the button for the settings of a feed", () => {
 describe("the settings of a feed from its list", () => {
   async function openOptions(server: TestServer, feedId: number) {
     const view = renderApp({ server, route: `/f/${feedId}` });
-    await view.user.click(await within(list()).findByRole("button", { name: "フィードの設定" }));
-    return { ...view, dialog: await screen.findByRole("dialog", { name: "フィードの設定" }) };
+    await view.user.click(await within(list()).findByRole("button", { name: "購読フィードの設定" }));
+    return { ...view, dialog: await screen.findByRole("dialog", { name: "購読フィードの設定" }) };
   }
 
   it("shows the three switches with the feed's values and what each means", async () => {
@@ -236,7 +236,7 @@ describe("the settings of a feed from its list", () => {
       categoryId: tools.id,
       enabled: true,
     });
-    await waitFor(() => expect(within(list()).getByRole("button", { name: "フィードの設定" })).toHaveFocus());
+    await waitFor(() => expect(within(list()).getByRole("button", { name: "購読フィードの設定" })).toHaveFocus());
   });
 
   it("changes nothing when closed without saving", async () => {
@@ -248,8 +248,8 @@ describe("the settings of a feed from its list", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(getFeed(server.db, blog.id).translate).toBe(false);
 
-    await view.user.click(within(list()).getByRole("button", { name: "フィードの設定" }));
-    expect(within(await screen.findByRole("dialog", { name: "フィードの設定" })).getByRole("checkbox", { name: "翻訳する" })).not.toBeChecked();
+    await view.user.click(within(list()).getByRole("button", { name: "購読フィードの設定" }));
+    expect(within(await screen.findByRole("dialog", { name: "購読フィードの設定" })).getByRole("checkbox", { name: "翻訳する" })).not.toBeChecked();
   });
 
   it("stays open with the reason when the feed is gone", async () => {
@@ -260,8 +260,24 @@ describe("the settings of a feed from its list", () => {
     await view.user.click(within(view.dialog).getByRole("button", { name: "保存する" }));
 
     expect(await within(view.dialog).findByRole("alert")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "フィードの設定" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "購読フィードの設定" })).toBeInTheDocument();
     expect(within(view.dialog).getByRole("checkbox", { name: "翻訳する" })).toBeChecked();
+  });
+
+  it("goes to the feed's form among the settings of feeds, dropping the switches it did not save", async () => {
+    const { server, blog } = seeded();
+    const view = await openOptions(server, blog.id);
+    await view.user.click(within(view.dialog).getByRole("checkbox", { name: "翻訳する" }));
+    await view.user.click(within(view.dialog).getByRole("link", { name: "ほかの設定" }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "購読フィード" })).toBeInTheDocument();
+    expect(view.path()).toBe("/settings/feeds");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const row = (await within(screen.getByRole("region", { name: "購読フィードの一覧" })).findByText("Blog")).closest("li")!;
+    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    expect(within(row).getByRole("checkbox", { name: "翻訳する" })).not.toBeChecked();
+    expect(getFeed(server.db, blog.id).translate).toBe(false);
+    expect(view.requests.filter((request) => request.startsWith("PATCH"))).toEqual([]);
   });
 });
 
@@ -273,7 +289,7 @@ describe("keys while a dialog is open", () => {
     await view.user.keyboard("j");
 
     expect(view.path()).toBe(`/c/${tools.slug}`);
-    expect(screen.getByRole("dialog", { name: "フィードを追加" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "購読フィードを追加" })).toBeInTheDocument();
   });
 
   it("does not star the article behind the question before unsubscribing", async () => {

@@ -55,7 +55,15 @@ function provider(name: string, adapter: LlmAdapter, pricing: ModelPricing | nul
 function setup(options: {
   providers: Provider[];
   assignment?: Partial<Record<TaskName, string>>;
-  limits?: { llmCallsPerRun: number; llmCallsPerDay: number; summariesPerDay?: number; selectorProposalsPerDay?: number };
+  limits?: {
+    llmCallsPerRun: number;
+    llmCallsPerDay: number;
+    summariesPerDay?: number;
+    selectorProposalsPerDay?: number;
+    digestsPerDay?: number;
+    topicTrialsPerDay?: number;
+    topicRewritesPerDay?: number;
+  };
   timeoutMs?: number;
   timeZone?: string;
   budget?: { monthlyBudgetUsd: number; warnRatio: number; resetDay: number };
@@ -76,6 +84,8 @@ function setup(options: {
       summarize: first,
       translate: first,
       proposeSelectors: first,
+      digest: first,
+      proposeTopicRewrite: first,
       ...options.assignment,
     },
     limits: options.limits ?? { llmCallsPerRun: 40, llmCallsPerDay: 300 },
@@ -294,14 +304,14 @@ describe("mentions in the outputs of the write and summarize tasks", () => {
     const { adapter } = scripted([{ ...article, mentions }]);
     const { runner } = setup({ providers: [provider("a", adapter)] });
 
-    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions });
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions, updateNote: null });
   });
 
   it("does not ask again when only a name lacks its kind, and gives null for the names", async () => {
     const { adapter, requests } = scripted([{ ...article, mentions: [{ name: "日本銀行" }] }, { ...article, mentions: [] }]);
     const { runner, calls } = setup({ providers: [provider("a", adapter)] });
 
-    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions: null });
+    await expect(runner.run("write", writeInput, fresh())).resolves.toEqual({ ...article, mentions: null, updateNote: null });
     expect(requests).toHaveLength(1);
     expect(calls()).toEqual([{ task: "write", provider: "a", ok: 1, error: null }]);
   });
@@ -396,6 +406,130 @@ describe("the allowance of selector proposals", () => {
   });
 });
 
+describe("the allowance of topic trials", () => {
+  const trial = () => ({ runId: null, calls: 0, purpose: "trial" as const });
+  const run = () => ({ runId: null, calls: 0 });
+
+  it("records a trial's calls as such, and counts them towards both the trials and the calls of the day", async () => {
+    const { adapter } = scripted([validInterpretation, validInterpretation]);
+    const { runner, db } = setup({ providers: [provider("a", adapter)] });
+    expect(runner.limits).toMatchObject({ topicTrialsPerDay: 30 });
+
+    await runner.run("interpret", interpretInput, trial());
+    await runner.run("interpret", interpretInput, run());
+    expect(db.prepare("SELECT purpose FROM llm_calls ORDER BY id").all()).toEqual([{ purpose: "trial" }, { purpose: null }]);
+    expect(runner.topicTrialsToday()).toBe(1);
+    expect(runner.callsToday()).toBe(2);
+  });
+
+  it("stops a trial at its allowance of the day, and leaves runs calling the model", async () => {
+    const { adapter, requests } = scripted([validInterpretation, validInterpretation, validInterpretation]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicTrialsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, trial());
+    await expect(runner.run("interpret", interpretInput, trial())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+    await expect(runner.run("interpret", interpretInput, run())).resolves.toEqual(validInterpretation);
+  });
+
+  it("says before a trial whether its calls fit in what the day and the budget leave", async () => {
+    const { adapter } = scripted([validInterpretation, validInterpretation]);
+    const limited = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicTrialsPerDay: 4 } });
+    expect(limited.runner.trialBlocked(3)).toBeNull();
+    await limited.runner.run("interpret", interpretInput, trial());
+    await limited.runner.run("interpret", interpretInput, trial());
+    expect(limited.runner.trialBlocked(3)).toBe("limit");
+    expect(limited.runner.trialBlocked(2)).toBeNull();
+
+    const off = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicTrialsPerDay: 0 } });
+    expect(off.runner.trialBlocked(3)).toBe("limit");
+
+    const day = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 2 } });
+    expect(day.runner.trialBlocked(3)).toBe("day");
+
+    const billed = setup({ providers: [provider("a", adapter, SONNET)], budget: { monthlyBudgetUsd: 0, warnRatio: 0.8, resetDay: 1 } });
+    expect(billed.runner.trialBlocked(3)).toBe("budget");
+  });
+});
+
+describe("the allowance of topic rewrite proposals", () => {
+  const rewriteInput = {
+    topicText: "Rust releases",
+    criteria: "official releases",
+    kind: "news" as const,
+    outputLanguage: "ja",
+    readerInfo: "",
+    opened: [],
+    starred: [],
+    misses: [],
+    rejected: [],
+  };
+  const answer = { proposals: [{ text: "Rust releases and security advisories", explanation: "Adds advisories." }] };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("allows 20 a day when no limit is given, and counts each call towards the calls of the day", async () => {
+    const { adapter } = scripted([answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+    expect(runner.limits).toMatchObject({ topicRewritesPerDay: 20 });
+    expect(runner.rewriteBlocked()).toBeNull();
+
+    await runner.run("proposeTopicRewrite", rewriteInput, fresh());
+    expect(runner.topicRewritesToday()).toBe(1);
+    expect(runner.callsToday()).toBe(1);
+  });
+
+  it("stops at its allowance of the day, and leaves runs calling the model", async () => {
+    const { adapter, requests } = scripted([answer, validInterpretation]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicRewritesPerDay: 1 } });
+
+    await runner.run("proposeTopicRewrite", rewriteInput, fresh());
+    expect(runner.rewriteBlocked()).toBe("limit");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(1);
+    await expect(runner.run("interpret", interpretInput, fresh())).resolves.toEqual(validInterpretation);
+  });
+
+  it("is used up by none when its allowance is 0", async () => {
+    const { adapter, requests } = scripted([answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, topicRewritesPerDay: 0 } });
+    expect(runner.rewriteBlocked()).toBe("limit");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toBeInstanceOf(LlmLimitError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("does not propose once the calls of the day reach their allowance", async () => {
+    const { adapter, requests } = scripted([validInterpretation, answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    expect(runner.rewriteBlocked()).toBe("day");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toMatchObject({ scope: "day" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("does not call a provider that costs money once the budget is used up", async () => {
+    const { adapter, requests } = scripted([answer]);
+    const { runner, db } = setup({ providers: [provider("smart", adapter, SONNET)], budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 1 } });
+    db.prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (NULL, 'write', 'smart', 1, 1, ?, 100, 1)").run(
+      "2026-03-01T01:00:00.000Z",
+    );
+
+    expect(runner.rewriteBlocked()).toBe("budget");
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).rejects.toMatchObject({ scope: "budget" });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("counts the second attempt after a proposal that keeps the text", async () => {
+    const same = { proposals: [{ text: "Rust releases", explanation: "No change." }] };
+    const { adapter } = scripted([same, answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("proposeTopicRewrite", rewriteInput, fresh())).resolves.toEqual(answer);
+    expect(runner.topicRewritesToday()).toBe(2);
+    expect(runner.callsToday()).toBe(2);
+  });
+});
+
 describe("TaskRunner and the money the calls cost", () => {
   const costs = (db: ReturnType<typeof createTestDb>) =>
     db
@@ -434,6 +568,76 @@ describe("TaskRunner and the money the calls cost", () => {
 
     expect(costs(paid.db)).toMatchObject([{ provider: "smart", input_tokens: null, cost_usd: null, billable: 1 }]);
     expect(costs(cli.db)).toMatchObject([{ provider: "cli", input_tokens: null, cost_usd: null, billable: 0 }]);
+  });
+});
+
+describe("the allowance of digests", () => {
+  const digestInput = {
+    outputLanguage: "ja",
+    readerInfo: "",
+    now: "2026-03-01T12:00:00.000Z",
+    timeZone: "UTC",
+    periodStart: "2026-03-01T00:00:00.000Z",
+    periodEnd: "2026-03-01T12:00:00.000Z",
+    categories: [{ id: 1, name: "Tech" }],
+    articles: [{ id: 10, categoryId: 1, origin: "generated" as const, title: "T", importance: 4, text: "S" }],
+  };
+  const answer = { executiveSummary: "Summary.", sections: [{ categoryId: 1, lines: [{ text: "Line.", articleIds: [10] }] }] };
+  const fresh = () => ({ runId: null, calls: 0 });
+
+  it("does not count digests towards the day of the runs, nor the runs towards the digests", async () => {
+    const { adapter } = scripted([validInterpretation, answer, answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1, digestsPerDay: 2 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    expect(runner.digestsToday()).toBe(0);
+    await runner.run("digest", digestInput, fresh());
+    await runner.run("digest", digestInput, fresh());
+    expect(runner.callsToday()).toBe(1);
+    expect(runner.digestsToday()).toBe(2);
+    expect(runner.digestBlocked()).toBe("limit");
+    await expect(runner.run("digest", digestInput, fresh())).rejects.toMatchObject({ scope: "day" });
+  });
+
+  it("makes digests when the runs used up the day", async () => {
+    const { adapter } = scripted([validInterpretation, answer]);
+    const { runner } = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 1 } });
+
+    await runner.run("interpret", interpretInput, fresh());
+    await expect(runner.run("interpret", interpretInput, fresh())).rejects.toMatchObject({ scope: "day" });
+    expect(runner.digestBlocked()).toBeNull();
+    await expect(runner.run("digest", digestInput, fresh())).resolves.toEqual(answer);
+  });
+
+  it("allows 4 digests a day when no limit is given, and none at 0", () => {
+    const { adapter } = scripted([]);
+    expect(setup({ providers: [provider("a", adapter)] }).runner.limits.digestsPerDay).toBe(4);
+    const off = setup({ providers: [provider("a", adapter)], limits: { llmCallsPerRun: 40, llmCallsPerDay: 300, digestsPerDay: 0 } }).runner;
+    expect(off.digestBlocked()).toBe("limit");
+  });
+
+  it("refuses a digest on a provider that costs money once the budget is used up", async () => {
+    const { adapter, requests } = scripted([answer]);
+    const { runner, db } = setup({ providers: [provider("smart", adapter, SONNET)], budget: { monthlyBudgetUsd: 100, warnRatio: 0.8, resetDay: 1 } });
+    db.prepare("INSERT INTO llm_calls (run_id, task, provider, duration_ms, ok, created_at, cost_usd, billable) VALUES (NULL, 'write', 'smart', 1, 1, ?, 100, 1)").run(
+      "2026-03-01T01:00:00.000Z",
+    );
+
+    expect(runner.digestBlocked()).toBe("budget");
+    await expect(runner.run("digest", digestInput, fresh())).rejects.toMatchObject({ scope: "budget" });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("asks again when a section names a category that is not in the list, and records both calls", async () => {
+    const wrong = { ...answer, sections: [{ categoryId: 2, lines: [{ text: "Line.", articleIds: [10] }] }] };
+    const { adapter } = scripted([wrong, answer]);
+    const { runner, calls } = setup({ providers: [provider("a", adapter)] });
+
+    await expect(runner.run("digest", digestInput, fresh())).resolves.toEqual(answer);
+    expect(calls()).toEqual([
+      { task: "digest", provider: "a", ok: 0, error: expect.stringContaining("category 2") },
+      { task: "digest", provider: "a", ok: 1, error: null },
+    ]);
   });
 });
 
@@ -501,7 +705,7 @@ describe("TaskRunner and the monthly budget", () => {
 
     expect(status).toMatchObject({ periodStart: "2026-10-10", periodEnd: "2026-11-09", monthlyBudgetUsd: 100, warnRatio: 0.8, unknownCostCalls: 1 });
     expect(status.spentUsd).toBeCloseTo(4.6, 8);
-    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0, proposeSelectors: 0 });
+    expect(status.byTask).toEqual({ interpret: 0, search: 0, judge: 1.2, cluster: 0, write: 3.4, summarize: 0, translate: 0, proposeSelectors: 0, digest: 0, proposeTopicRewrite: 0 });
     expect(status.byProvider).toEqual({ fast: 1.2, smart: 3.4, cli: 0 });
   });
 });

@@ -5,7 +5,7 @@ import { FormDialog } from "./FormDialog.tsx";
 describe("the dialog that holds a form", () => {
   it("is named by its title, puts the focus in the first field and keeps the one-letter keys off", async () => {
     render(
-      <FormDialog open onOpenChange={() => {}} trigger={<button>開く</button>} title="フィードを追加">
+      <FormDialog open onOpenChange={() => {}} trigger={<button>開く</button>} title="購読フィードを追加">
         <form>
           <label>
             URL
@@ -16,7 +16,7 @@ describe("the dialog that holds a form", () => {
       </FormDialog>,
     );
 
-    const dialog = screen.getByRole("dialog", { name: "フィードを追加" });
+    const dialog = screen.getByRole("dialog", { name: "購読フィードを追加" });
     await waitFor(() => expect(screen.getByLabelText("URL")).toHaveFocus());
     expect(dialog).toHaveAttribute("data-hotkeys", "off");
   });

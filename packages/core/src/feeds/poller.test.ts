@@ -150,6 +150,33 @@ describe("FeedPoller", () => {
     expect(s.urls()).toHaveLength(5);
   });
 
+  it("does not fetch before the time Retry-After gives, but fetches at once on request", async () => {
+    let busy = true;
+    const s = setup({
+      "https://a.example.org/feed.xml": () => (busy ? new Response("busy", { status: 429, headers: { "retry-after": "18000" } }) : xml(rss("A", ["a1"]))),
+    });
+    const feed = s.add("a");
+    await s.round(); // 429: the doubled interval says 60 minutes, Retry-After five hours
+    s.clock.advance(299 * MINUTE);
+    await s.round();
+    expect(s.urls()).toHaveLength(1);
+
+    busy = false;
+    expect(await s.poller.fetchNow(feed.id)).toMatchObject({ status: "updated", created: 1 });
+    expect(s.urls()).toHaveLength(2);
+
+    busy = true;
+    s.clock.advance(30 * MINUTE);
+    await s.round();
+    expect(s.urls()).toHaveLength(3);
+    s.clock.advance(299 * MINUTE);
+    await s.round();
+    expect(s.urls()).toHaveLength(3);
+    s.clock.advance(MINUTE);
+    await s.round();
+    expect(s.urls()).toHaveLength(4);
+  });
+
   it("fetches a feed at once on request, whatever its interval", async () => {
     let keys = ["a1"];
     const s = setup({ "https://a.example.org/feed.xml": () => xml(rss("A", keys)) });
