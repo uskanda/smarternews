@@ -7,9 +7,7 @@ import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, forma
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
-import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
-import { feedDeletionText } from "./feed-deletion.ts";
+import { FeedDeletionDialog } from "./FeedDeletionDialog.tsx";
 import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
@@ -328,9 +326,6 @@ function FeedRow({
   timeZone: string;
   initiallyEditing?: boolean;
 }) {
-  const { api } = useApp();
-  const refresh = useRefresh();
-  const toast = useToast();
   const [editing, setEditing] = useState(initiallyEditing);
   const [confirming, setConfirming] = useState(false);
   const { fetching, fetchNow } = useFetchFeedNow(feed, "取得できませんでした。理由は一覧に表示しています。");
@@ -338,17 +333,6 @@ function FeedRow({
   const focus = useInlineEditFocus(editing);
   const categoryName = categories.find((category) => category.id === feed.categoryId)?.name ?? UNCATEGORIZED_LABEL;
   const interval = feed.intervalMinutes === null ? `基本の取得周期（${settings?.feedIntervalMinutes ?? "…"}分）` : `${feed.intervalMinutes}分ごと`;
-
-  async function remove() {
-    try {
-      await api.deleteFeed(feed.id);
-      refresh("feeds", "counts", "articles", "filters");
-      toast({ message: "購読フィードの登録を解除しました" });
-    } catch {
-      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
-    }
-    setConfirming(false);
-  }
 
   return (
     // The list of a feed links here by this id, to put the row right that it reports on.
@@ -385,23 +369,7 @@ function FeedRow({
           </Button>
         </div>
       )}
-      <ConfirmDialog
-        open={confirming}
-        title="購読フィードの登録を解除しますか"
-        onDismiss={() => setConfirming(false)}
-        actions={
-          <>
-            <Button variant="danger" onClick={() => void remove()}>
-              登録を解除する
-            </Button>
-            <Button onClick={() => setConfirming(false)}>やめる</Button>
-          </>
-        }
-      >
-        <p>{feedDeletionText(feed)}</p>
-        <ScopedFiltersNote target={{ feedId: feed.id }} />
-        <p>記事を残したまま取得だけを止めるには、編集で一時停止にしてください。</p>
-      </ConfirmDialog>
+      <FeedDeletionDialog feed={confirming ? feed : null} pauseWhere="編集" onDone={() => setConfirming(false)} />
     </li>
   );
 }
