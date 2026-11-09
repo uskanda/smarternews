@@ -15,7 +15,6 @@ import {
 } from "@smarternews/client";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
 import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
@@ -25,13 +24,10 @@ import { useLayout } from "../lib/layout.ts";
 import { PANES, usePanes } from "../lib/panes.ts";
 import { usePageTitle } from "../lib/title.ts";
 import { isOnList, listPathOf } from "../lib/paths.ts";
-import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-import { feedDeletionText } from "../settings/feed-deletion.ts";
-import { ScopedFiltersNote } from "../settings/ScopedFiltersNote.tsx";
+import { FeedDeletionDialog } from "../settings/FeedDeletionDialog.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
 import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
-import { useToast } from "./toast.tsx";
 
 const KEYS: Array<[string, string]> = [
   ["j", "次の記事"],
@@ -228,9 +224,6 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   // The fold buttons take a column of their own. It exists only once something can be folded.
   const foldable = model.groups.some((group) => group.children.length > 0);
 
-  const { api } = useApp();
-  const client = useQueryClient();
-  const toast = useToast();
   const navigate = useNavigate();
   const element = useRef<HTMLElement>(null);
   const move = useNavMoves();
@@ -241,26 +234,10 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     unfold,
   });
   const [leaving, setLeaving] = useState<number | null>(null);
-  const [removing, setRemoving] = useState(false);
   // The row the dialog was opened from, or the first entry once that row is gone.
   const leavingRow = useRef<number | null>(null);
   if (leaving !== null) leavingRow.current = leaving;
   const leavingFeed = feeds?.find((feed) => feed.id === leaving);
-  async function unsubscribe(feed: { id: number }) {
-    if (removing) return;
-    setRemoving(true);
-    try {
-      await api.deleteFeed(feed.id);
-      for (const key of ["feeds", "counts", "articles", "filters"]) void client.invalidateQueries({ queryKey: [key] });
-      toast({ message: "購読フィードの登録を解除しました" });
-      // The list that was open is gone with the feed.
-      if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
-    } catch {
-      toast({ message: "登録を解除できませんでした。もう一度試してください。" });
-    }
-    setRemoving(false);
-    setLeaving(null);
-  }
   const menu = (entry: NavEntry, link: ReactElement) => (
     <EntryMenu entry={entry} model={model} onMove={move} onUnsubscribe={setLeaving}>
       {link}
@@ -372,30 +349,18 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
           {drag.label}
         </div>
       ) : null}
-      <ConfirmDialog
-        open={leavingFeed !== undefined}
-        title="購読フィードの登録を解除しますか"
-        onDismiss={() => setLeaving(null)}
+      <FeedDeletionDialog
+        feed={leavingFeed}
+        pauseWhere="設定の購読フィード"
+        onDone={() => setLeaving(null)}
+        // The list that was open is gone with the feed.
+        onDeleted={(feed) => {
+          if (isOnList(`/f/${feed.id}`, pathname)) void navigate("/unread");
+        }}
         returnFocus={() =>
           element.current?.querySelector<HTMLElement>(`[data-nav-key="feed-${leavingRow.current}"] a`) ?? element.current?.querySelector<HTMLElement>("a")
         }
-        actions={
-          <>
-            <Button variant="danger" disabled={removing} onClick={() => leavingFeed && void unsubscribe(leavingFeed)}>
-              登録を解除する
-            </Button>
-            <Button onClick={() => setLeaving(null)}>やめる</Button>
-          </>
-        }
-      >
-        {leavingFeed ? (
-          <>
-            <p>{feedDeletionText(leavingFeed)}</p>
-            <ScopedFiltersNote target={{ feedId: leavingFeed.id }} />
-            <p>記事を残したまま取得だけを止めるには、設定の購読フィードで一時停止にしてください。</p>
-          </>
-        ) : null}
-      </ConfirmDialog>
+      />
     </nav>
   );
 }

@@ -281,6 +281,60 @@ describe("the settings of a feed from its list", () => {
   });
 });
 
+describe("unsubscribing from the settings of a feed", () => {
+  async function openUnsubscribe(server: TestServer, feedId: number) {
+    const view = renderApp({ server, route: `/f/${feedId}` });
+    await view.user.click(await within(list()).findByRole("button", { name: "購読フィードの設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "購読フィードの設定" });
+    await view.user.click(within(dialog).getByRole("button", { name: "Blogの登録を解除" }));
+    return { ...view, question: await screen.findByRole("alertdialog", { name: "購読フィードの登録を解除しますか" }) };
+  }
+
+  it("closes the settings and asks with what goes with the feed", async () => {
+    const { server, blog } = seeded();
+    const { question } = await openUnsubscribe(server, blog.id);
+
+    expect(screen.queryByRole("dialog", { name: "購読フィードの設定" })).not.toBeInTheDocument();
+    expect(question).toHaveTextContent("「Blog」と、その配信記事1件が消えます。");
+    expect(question).toHaveTextContent("元に戻せません。");
+    expect(question).toHaveTextContent("記事を残したまま取得だけを止めるには、設定の購読フィードで一時停止にしてください。");
+    await waitFor(() => expect(within(question).getByRole("button", { name: "やめる" })).toHaveFocus());
+  });
+
+  it("unsubscribes, drops the feed from the left pane and opens the unread articles", async () => {
+    const { server, blog } = seeded();
+    const view = await openUnsubscribe(server, blog.id);
+    await view.user.click(within(view.question).getByRole("button", { name: "登録を解除する" }));
+
+    await waitFor(() => expect(view.path()).toBe("/unread"));
+    expect(await screen.findByRole("status")).toHaveTextContent("購読フィードの登録を解除しました");
+    expect(listFeeds(server.db).map((feed) => feed.id)).not.toContain(blog.id);
+    await waitFor(() => expect(within(nav()).queryByRole("link", { name: /Blog/ })).not.toBeInTheDocument());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps the feed and gives the focus back when the question is declined", async () => {
+    const { server, blog } = seeded();
+    const view = await openUnsubscribe(server, blog.id);
+    await view.user.click(within(view.question).getByRole("button", { name: "やめる" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(getFeed(server.db, blog.id)).toBeDefined();
+    expect(view.path()).toBe(`/f/${blog.id}`);
+    await waitFor(() => expect(within(list()).getByRole("button", { name: "購読フィードの設定" })).toHaveFocus());
+  });
+
+  it("says so and keeps the list when the feed cannot be unsubscribed", async () => {
+    const { server, blog } = seeded();
+    const view = await openUnsubscribe(server, blog.id);
+    deleteFeed(server.db, blog.id);
+    await view.user.click(within(view.question).getByRole("button", { name: "登録を解除する" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("登録を解除できませんでした。もう一度試してください。");
+    expect(view.path()).toBe(`/f/${blog.id}`);
+  });
+});
+
 describe("keys while a dialog is open", () => {
   it("does not move through the list behind the dialog for adding a feed", async () => {
     const { server, tools } = seeded();
