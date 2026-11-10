@@ -6,6 +6,8 @@ import { feedState, strongestFeedState, type FeedState } from "./feed-state.ts";
 /** A list of articles a reader can open. */
 export type ListTarget =
   | { type: "unread" | "all" | "starred" | "generated" | "uncategorized" }
+  /** The feed articles of every subscribed feed, in a category or in none. One feed is `feed`. */
+  | { type: "feeds" }
   /** The articles read in the last seven days, last read first. */
   | { type: "recentlyRead" }
   /** The reader's highlights and notes on every article, the last made first. The web app has it; the Android app does not. */
@@ -45,6 +47,7 @@ export interface NavModel {
 }
 
 export const GENERATED_LABEL = "AI生成";
+export const FEEDS_LABEL = "購読フィード";
 export const UNCATEGORIZED_LABEL = "未分類";
 export const RECENTLY_READ_LABEL = "最近読んだ記事";
 export const ANNOTATIONS_LABEL = "注釈";
@@ -95,6 +98,8 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
       { target: { type: "all" }, label: "すべて", unread: 0 },
       { target: { type: "starred" }, label: "スター", unread: 0 },
       { target: { type: "generated" }, label: GENERATED_LABEL, unread: counts?.generatedUnread ?? 0 },
+      // An article is generated or a feed article, so what is unread and not generated came from a feed.
+      { target: { type: "feeds" }, label: FEEDS_LABEL, unread: counts ? Math.max(0, counts.unread - counts.generatedUnread) : 0 },
       { target: { type: "recentlyRead" }, label: RECENTLY_READ_LABEL, unread: 0 },
       { target: { type: "annotations" }, label: ANNOTATIONS_LABEL, unread: 0 },
     ],
@@ -145,7 +150,7 @@ export function listKey(target: ListTarget): string {
 }
 
 export function parseListKey(key: string): ListTarget | null {
-  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { type: key };
+  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "feeds" || key === "uncategorized") return { type: key };
   if (key === "recently-read") return { type: "recentlyRead" };
   if (key === "annotations") return { type: "annotations" };
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
@@ -172,6 +177,8 @@ function filterOf(target: ListTarget): ArticleListQuery {
       return { starred: "true" };
     case "generated":
       return { origin: "generated" };
+    case "feeds":
+      return { origin: "feed" };
     case "uncategorized":
       return { uncategorized: "true" };
     case "category":
@@ -191,6 +198,8 @@ export function targetScope(target: ListTarget): Omit<MarkRead, "before" | "minI
   switch (target.type) {
     case "generated":
       return { origin: "generated" };
+    case "feeds":
+      return { origin: "feed" };
     case "uncategorized":
       return { uncategorized: true };
     case "category":
@@ -237,4 +246,12 @@ export function hasReadToggle(target: ListTarget): boolean {
  */
 export function hasListControls(target: ListTarget): boolean {
   return target.type !== "recentlyRead" && target.type !== "annotations";
+}
+
+/**
+ * Whether the list may offer the toggle for importance 4 and above. Feed articles have no importance, so it
+ * is offered only where generated articles can be listed: not in the lists that hold feed articles alone.
+ */
+export function hasImportanceFilter(target: ListTarget): boolean {
+  return hasListControls(target) && target.type !== "feed" && target.type !== "feeds" && target.type !== "uncategorized";
 }

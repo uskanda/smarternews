@@ -1,5 +1,7 @@
 import {
+  FEEDS_LABEL,
   GENERATED_LABEL,
+  hasImportanceFilter,
   hasListControls,
   hasReadToggle,
   hasSortMenu,
@@ -80,6 +82,7 @@ const TITLES: Record<Exclude<View, "category" | "feed">, string> = {
   all: "すべて",
   starred: "スター",
   generated: GENERATED_LABEL,
+  feeds: FEEDS_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
   // Not in the drawer: the app shows annotations in the article only.
@@ -124,7 +127,7 @@ export function useReaderList(ref: ListRef) {
   // Found articles never offer marking everything read: they are not a list to finish.
   const listControls = !found && hasListControls(target);
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
-  const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
+  const importanceFilter = listControls && hasImportanceFilter(target);
   const importantOnly = importanceFilter && ref.importantOnly;
   // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
   const toast = useToast();

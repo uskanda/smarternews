@@ -28,6 +28,12 @@ describe("list views", () => {
     expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [] });
   });
 
+  it("keep the feed articles of every feed under the key feeds", async () => {
+    const s = testServer();
+    expect(await (await s.patch("/api/v1/list-views/feeds", { sort: "oldest" })).json()).toEqual({ key: "feeds", sort: "oldest" });
+    expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [{ key: "feeds", sort: "oldest" }] });
+  });
+
   it("take a body without settings and change nothing", async () => {
     const s = testServer();
     await s.patch("/api/v1/list-views/unread", { sort: "oldest" });

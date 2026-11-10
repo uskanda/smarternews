@@ -28,7 +28,9 @@ import { useScrollRead } from "../lib/scroll-read.ts";
 import {
   ANNOTATIONS_LABEL,
   buildNav,
+  FEEDS_LABEL,
   GENERATED_LABEL,
+  hasImportanceFilter,
   hasListControls,
   hasReadToggle,
   hasSortMenu,
@@ -65,6 +67,8 @@ export type View =
   | "all"
   | "starred"
   | "generated"
+  /** The feed articles of every subscribed feed. One feed is `feed`. */
+  | "feeds"
   | "uncategorized"
   | "recentlyRead"
   /** The reader's annotations: a list of annotations, not of articles. */
@@ -82,6 +86,7 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   all: "すべて",
   starred: "スター",
   generated: GENERATED_LABEL,
+  feeds: FEEDS_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
   annotations: ANNOTATIONS_LABEL,
@@ -205,7 +210,8 @@ export function ReaderPage({ view }: { view: View }) {
   // a list to finish.
   const listControls = !isSearch && !isMention && (target === null || hasListControls(target));
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
-  const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
+  // A feed is none of those even before the feeds have arrived and its target is known.
+  const importanceFilter = listControls && view !== "feed" && (target === null || hasImportanceFilter(target));
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
   // The annotation chosen in the list of annotations, which the article is brought to.
   const annotationParam = isAnnotations ? search.get("annotation") : null;

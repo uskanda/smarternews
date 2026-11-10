@@ -109,6 +109,16 @@ describe("moving on after marking all as read", () => {
     expect(path()).toBe("/unread");
   });
 
+  it("stays on 購読フィード at the top, though categories below hold unread articles", async () => {
+    const { server } = seeded();
+    const { user, path } = renderApp({ server, route: "/feeds" });
+    await markAll(user, "購読フィード");
+    expect(await screen.findByRole("status")).toHaveTextContent("3件を既読にしました");
+    expect(path()).toBe("/feeds");
+    // The generated articles of A and C are still unread.
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("未読2"));
+  });
+
   it("stays when the setting is off", async () => {
     const { server, a } = seeded(false);
     const { user, path } = renderApp({ server, route: `/c/${a.slug}` });

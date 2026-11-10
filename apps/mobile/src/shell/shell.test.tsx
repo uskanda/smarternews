@@ -40,7 +40,7 @@ describe("the drawer", () => {
     expect(screen.getByRole("button", { name: "未読、未読2件" })).toBeOnTheScreen();
   });
 
-  it("lists 未読, すべて, スター, AI生成, 最近読んだ記事 and ダイジェスト on top, the last two without a number", async () => {
+  it("lists 未読, すべて, スター, AI生成, 購読フィード, 最近読んだ記事 and ダイジェスト on top, the last two without a number", async () => {
     const server = await makeServer();
     const a = await server.category("Security");
     await server.core("setArticleFlags", await server.article(a.id), { isRead: true }, "$now");
@@ -51,7 +51,8 @@ describe("the drawer", () => {
 
     await screen.findByRole("button", { name: "未読、未読1件" });
     const names = screen.getAllByRole("button").map((node) => String(node.props.accessibilityLabel));
-    const top = ["未読、未読1件", "すべて", "スター", "AI生成、未読1件", "最近読んだ記事", "ダイジェスト"];
+    // No feed is subscribed: 購読フィード is there all the same, and counts nothing.
+    const top = ["未読、未読1件", "すべて", "スター", "AI生成、未読1件", "購読フィード", "最近読んだ記事", "ダイジェスト"];
     expect(names.filter((name) => top.includes(name))).toEqual(top);
     expect(names.indexOf("ダイジェスト")).toBeLessThan(names.indexOf("Security、未読1件"));
   });

@@ -150,12 +150,13 @@ describe("the shape of a search", () => {
 
 describe("the key of a list view", () => {
   it("reads every entry that keeps a view, and gives back the same key", () => {
-    const keys = ["unread", "all", "starred", "generated", "uncategorized", "category-3", "category-3-generated", "feed-12"];
+    const keys = ["unread", "all", "starred", "generated", "feeds", "uncategorized", "category-3", "category-3-generated", "feed-12"];
     expect(keys.map(parseListViewKey)).toEqual([
       { list: "unread" },
       { list: "all" },
       { list: "starred" },
       { list: "generated" },
+      { list: "feeds" },
       { list: "uncategorized" },
       { list: "category", categoryId: 3 },
       { list: "category_generated", categoryId: 3 },
@@ -165,7 +166,7 @@ describe("the key of a list view", () => {
   });
 
   it("refuses the recently read articles, which keep no view, and any other text", () => {
-    for (const key of ["recently-read", "", "category-", "category-x", "feed-3-generated", "feed--1", "Unread", "category-3-generated-"]) {
+    for (const key of ["recently-read", "", "category-", "category-x", "feed-3-generated", "feed--1", "Unread", "category-3-generated-", "feed", "feeds-3"]) {
       expect(parseListViewKey(key)).toBeNull();
     }
   });
