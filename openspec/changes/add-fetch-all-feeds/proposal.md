@@ -29,7 +29,7 @@
 
 ## Impact
 
-- `packages/core`：移行 `031`（`feeds` の `fetch_requested_at`）、`db/feeds.ts`、`feeds/poller.ts`、`api.ts`。次の取得の時刻の計算、求めの記録と消去、取得の途中の求めの扱い、応答の型を変える
+- `packages/core`：移行 `032`（`feeds` の `fetch_requested_at`）、`db/feeds.ts`、`feeds/poller.ts`、`api.ts`。次の取得の時刻の計算、求めの記録と消去、取得の途中の求めの扱い、応答の型を変える
 - `apps/server/src/app.ts`：`POST /api/v1/feeds/fetch`
 - `packages/client`：`fetchAllFeeds`
 - `apps/web`：`lib/fetch-now.ts`、`api/queries.ts`、`settings/FeedsPage.tsx`、`shell/Shell.tsx`
