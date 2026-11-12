@@ -39,6 +39,7 @@ const routes: RouteObject[] = [
       { path: "all/:articleId?", element: <ReaderPage view="all" /> },
       { path: "starred/:articleId?", element: <ReaderPage view="starred" /> },
       { path: "generated/:articleId?", element: <ReaderPage view="generated" /> },
+      { path: "feeds/:articleId?", element: <ReaderPage view="feeds" /> },
       { path: "uncategorized/:articleId?", element: <ReaderPage view="uncategorized" /> },
       { path: "recently-read/:articleId?", element: <ReaderPage view="recentlyRead" /> },
       { path: "annotations/:articleId?", element: <ReaderPage view="annotations" /> },

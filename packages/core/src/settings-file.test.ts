@@ -854,6 +854,18 @@ describe("list views in the settings file", () => {
     ]);
   });
 
+  it("carry the feed articles of every feed by the name feeds, apart from one feed", () => {
+    const { db, feed } = changed();
+    updateListView(db, "feeds", { sort: "oldest" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([{ list: "feeds", sort: "oldest" }]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(1);
+    expect(views(other)).toEqual([{ key: "feeds", sort: "oldest" }]);
+    expect(getListView(db, `feed-${feed.id}`).sort).toBe("newest");
+  });
+
   it("are not written by a server where nothing was changed", () => {
     expect(parse(exportSettings(changed().db))).not.toHaveProperty("listViews");
   });

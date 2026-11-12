@@ -1,4 +1,4 @@
-import { insertFeed, recordFetchFailure, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
+import { insertFeed, listListViews, recordFetchFailure, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -54,7 +54,7 @@ describe("the entries of the navigation", () => {
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Blog/ });
     await waitFor(() =>
-      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "ダイジェスト", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
+      expect(navLines()).toEqual(["未読6", "すべて", "スター", "AI生成2", "購読フィード4", "最近読んだ記事", "注釈", "ダイジェスト", "Tools4", "AI生成1", "Blog2", "Releases1", "Cars1", "未分類1", "Loose1"]),
     );
   });
 
@@ -64,7 +64,7 @@ describe("the entries of the navigation", () => {
     server.article(tools.id);
     renderApp({ server });
     await within(nav()).findByRole("link", { name: /Tools/ });
-    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "最近読んだ記事", "注釈", "ダイジェスト", "Tools1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読1", "すべて", "スター", "AI生成1", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト", "Tools1"]));
     expect(within(nav()).queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -159,6 +159,46 @@ describe("the list an entry opens", () => {
     await user.click((await within(nav()).findAllByRole("link", { name: /^AI生成/ }))[0]!);
     await screen.findByRole("heading", { level: 1, name: "AI生成" });
     await waitFor(() => expect(rowTitles()).toEqual(["Car news", "Generated"]));
+  });
+
+  it("shows only the feed articles of every feed, in a category or in none, under the top 購読フィード", async () => {
+    const { server, oldPost } = seeded();
+    setArticleFlags(server.db, oldPost, { isRead: true }, server.clock().toISOString());
+    const { user, path } = renderApp({ server });
+    await user.click(await within(nav()).findByRole("link", { name: /^購読フィード/ }));
+    await screen.findByRole("heading", { level: 1, name: "購読フィード" });
+    expect(path()).toBe("/feeds");
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Release 2", "Stray"]));
+    expect(within(nav()).getByRole("link", { name: /^購読フィード/ })).toHaveAttribute("aria-current", "page");
+
+    await user.click(screen.getByRole("checkbox", { name: "既読も表示" }));
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Release 2", "Stray", "Old post"]));
+  });
+
+  it("offers the order of 購読フィード and keeps it, but no importance toggle: feed articles have no importance", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/feeds" });
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Release 2", "Stray", "Old post"]));
+    expect(screen.queryByRole("checkbox", { name: "重要度4以上だけ" })).not.toBeInTheDocument();
+
+    await user.click(within(list()).getByRole("button", { name: /^並び順/ }));
+    await user.click(within(screen.getByRole("menu", { name: "並び順" })).getByRole("menuitemradio", { name: "古い順" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Old post", "Stray", "Release 2", "New post"]));
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "feeds", sort: "oldest" }]));
+  });
+
+  it("shows 購読フィード at the top without a number when no feed is subscribed", async () => {
+    const server = makeServer();
+    server.article(server.category("Tools").id);
+    const { user } = renderApp({ server });
+    const entry = await within(nav()).findByRole("link", { name: /^購読フィード/ });
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("未読1"));
+    expect(entry).toHaveTextContent(/^購読フィード$/);
+
+    await user.click(entry);
+    await screen.findByRole("heading", { level: 1, name: "購読フィード" });
+    expect(await within(list()).findByText("ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。")).toBeInTheDocument();
   });
 
   it("shows only the generated articles of the category under its AI生成", async () => {
@@ -346,7 +386,7 @@ describe("marking everything read", () => {
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
 
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
-    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "最近読んだ記事", "注釈", "ダイジェスト", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
+    await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "購読フィード2", "最近読んだ記事", "注釈", "ダイジェスト", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
 
     await user.click(screen.getByRole("button", { name: "取り消す" }));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
@@ -359,6 +399,19 @@ describe("marking everything read", () => {
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
+  });
+
+  it("marks only feed articles under the top 購読フィード", async () => {
+    const { server } = seeded();
+    const { user, path } = renderApp({ server, route: "/feeds" });
+    await screen.findByRole("link", { name: /New post/ });
+    await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+    expect(await screen.findByText("4件を既読にしました")).toBeInTheDocument();
+    // The two generated articles stay unread.
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("未読2"));
+    expect(within(nav()).getAllByRole("link", { name: /^AI生成/ })[0]).toHaveTextContent("AI生成2");
+    expect(within(nav()).getByRole("link", { name: /^購読フィード/ })).toHaveTextContent(/^購読フィード$/);
+    expect(path()).toBe("/feeds");
   });
 
   it("marks only the articles of feeds without a category under 未分類", async () => {

@@ -84,7 +84,7 @@ describe("the list of views and categories", () => {
 
     const views = await within(nav()).findAllByRole("list");
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
-    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈", "ダイジェスト"]);
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト"]);
     expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
     expect(within(nav()).getByRole("link", { name: "注釈" })).toHaveTextContent(/^注釈$/);
     expect(within(nav()).getByRole("link", { name: "ダイジェスト" })).toHaveTextContent(/^ダイジェスト$/);

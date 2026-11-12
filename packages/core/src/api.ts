@@ -811,17 +811,17 @@ export type Counts = z.infer<typeof countsSchema>;
  * generated articles of a category, or a subscribed feed. The recently read articles keep none.
  */
 export type ListViewTarget =
-  | { list: "unread" | "all" | "starred" | "generated" | "uncategorized" }
+  | { list: "unread" | "all" | "starred" | "generated" | "feeds" | "uncategorized" }
   | { list: "category" | "category_generated"; categoryId: number }
   | { list: "feed"; feedId: number };
 
 /**
  * The entry a key names, in the form the apps make for a route: `unread`, `all`, `starred`, `generated`,
- * `uncategorized`, `category-3`, `category-3-generated`, `feed-12`. Null for `recently-read`, which keeps no
- * list view, and for anything else.
+ * `feeds` (the feed articles of every feed), `uncategorized`, `category-3`, `category-3-generated`, `feed-12`.
+ * Null for `recently-read`, which keeps no list view, and for anything else.
  */
 export function parseListViewKey(key: string): ListViewTarget | null {
-  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { list: key };
+  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "feeds" || key === "uncategorized") return { list: key };
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
   if (category) return { list: category[2] === undefined ? "category" : "category_generated", categoryId: Number(category[1]) };
   const feed = /^feed-(\d{1,15})$/.exec(key);
@@ -1654,7 +1654,7 @@ export type SettingsFileTermGroup = z.infer<typeof settingsFileTermGroupSchema>;
  * articles of a category with `generatedOnly`, a feed by its URL.
  */
 const settingsFileListViewTargetSchema = z.union([
-  z.enum(["unread", "all", "starred", "generated", "uncategorized"]),
+  z.enum(["unread", "all", "starred", "generated", "feeds", "uncategorized"]),
   z.object({ category: slugSchema, generatedOnly: z.boolean().optional() }).strict(),
   z.object({ feed: feedUrlSchema }).strict(),
 ]);

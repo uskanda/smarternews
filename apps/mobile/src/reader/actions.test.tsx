@@ -317,6 +317,19 @@ describe("moving on after marking all as read", () => {
     expect(await screen.findByText("4件を既読にしました")).toBeOnTheScreen();
     expect(screen.getByRole("header", { name: "未読" })).toBeOnTheScreen();
   });
+
+  it("stays on 購読フィード at the top, and marks the feed articles only", async () => {
+    const { server } = await seeded(true);
+    await renderApp({ server, url: "/list/feeds" });
+    await screen.findByText("From X");
+
+    await press("すべて既読にする");
+
+    expect(await screen.findByText("2件を既読にしました")).toBeOnTheScreen();
+    expect(screen.getByRole("header", { name: "購読フィード" })).toBeOnTheScreen();
+    // The generated articles of A and C are still unread.
+    await eventually(async () => expect((await server.core<{ unread: number }>("getCounts", server.now().toISOString())).unread).toBe(2));
+  });
 });
 
 describe("putting back to unread in the recently read articles", () => {
