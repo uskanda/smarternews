@@ -71,6 +71,7 @@ import {
   markArticlesRead,
   moveCategory,
   moveFeed,
+  requestFetchAll,
   categoryMoveSchema,
   feedMoveSchema,
   pageCandidatesRequestSchema,
@@ -420,6 +421,13 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
+  // Every enabled feed, now. It answers before anything is fetched: the poller takes the feeds one at a time,
+  // as on its timer, and `fetchRequestedAt` of the feeds says which still wait.
+  api.post("/feeds/fetch", (c) => {
+    const result = requestFetchAll(db, clock());
+    poller.tick();
+    return c.json(result);
+  });
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
