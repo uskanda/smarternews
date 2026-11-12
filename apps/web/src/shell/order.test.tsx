@@ -348,10 +348,18 @@ describe("dragging an entry", () => {
     const { path } = await ready({ server, route: "/all" });
     layOut();
     const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/\d+$/, ""));
-    const ORDER = ["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈", "ダイジェスト"];
+    const ORDER = ["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト"];
 
     const recent = within(nav()).getByRole("link", { name: "最近読んだ記事" });
     fireEvent.pointerDown(recent, mouse(40));
+    await dragTo(mid("B"));
+    expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
+    expect(nav().querySelector("[data-drop-line]")).not.toBeInTheDocument();
+    await release(mid("B"));
+    expect(views()).toEqual(ORDER);
+
+    const allFeeds = link("購読フィード");
+    fireEvent.pointerDown(allFeeds, mouse(40));
     await dragTo(mid("B"));
     expect(document.querySelector("[data-drag-ghost]")).not.toBeInTheDocument();
     expect(nav().querySelector("[data-drop-line]")).not.toBeInTheDocument();

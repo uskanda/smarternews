@@ -18,7 +18,7 @@ describe("reading list views", () => {
   it("gives newest first for every entry that was never changed, and answers none of them", () => {
     const { db, tools, feed } = setup();
     expect(listListViews(db)).toEqual({ items: [] });
-    for (const key of ["unread", "all", "starred", "generated", "uncategorized", `category-${tools.id}`, `category-${tools.id}-generated`, `feed-${feed}`]) {
+    for (const key of ["unread", "all", "starred", "generated", "feeds", "uncategorized", `category-${tools.id}`, `category-${tools.id}-generated`, `feed-${feed}`]) {
       expect(getListView(db, key)).toEqual({ key, sort: "newest" });
     }
   });
@@ -29,6 +29,16 @@ describe("reading list views", () => {
 
     expect(listListViews(db)).toEqual({ items: [{ key: `category-${tools.id}`, sort: "oldest" }] });
     for (const key of ["unread", "all", `category-${tools.id}-generated`, `feed-${feed}`]) expect(getListView(db, key).sort).toBe("newest");
+  });
+
+  it("keeps the feed articles of every feed apart from one feed", () => {
+    const { db, feed } = setup();
+    expect(updateListView(db, "feeds", { sort: "oldest" })).toEqual({ key: "feeds", sort: "oldest" });
+
+    expect(listListViews(db)).toEqual({ items: [{ key: "feeds", sort: "oldest" }] });
+    for (const key of ["generated", "uncategorized", `feed-${feed}`]) expect(getListView(db, key).sort).toBe("newest");
+    expect(updateListView(db, "feeds", { sort: "newest" })).toEqual({ key: "feeds", sort: "newest" });
+    expect(listListViews(db).items).toEqual([]);
   });
 });
 

@@ -171,6 +171,7 @@ describe("dragging in the drawer after a long press", () => {
 
     expect(() => getByGestureTestId("drag-uncategorized")).toThrow();
     expect(() => getByGestureTestId("drag-recently-read")).toThrow();
+    expect(() => getByGestureTestId("drag-feeds")).toThrow();
     expect(() => getByGestureTestId(`drag-category-${a.id}-generated`)).toThrow();
     expect(getByGestureTestId(`drag-category-${a.id}`)).toBeTruthy();
   });
