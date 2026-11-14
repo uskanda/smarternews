@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from "react-router";
-import { useAttention, useCategories, useDismissAttention, useRuns, useTimeZone } from "../api/queries.ts";
+import { useAttention, useCategories, useDismissAttention, useRuns, useTimeZone, RUNS_LIMIT } from "../api/queries.ts";
 import { attentionLink, attentionText, formatFull, retryLabel, runCostLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
 import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
@@ -124,6 +124,13 @@ export function RunsPage() {
               ))}
             </tbody>
           </table>
+          {runs.data.length >= RUNS_LIMIT ? (
+            <p className="pt-md type-body-md text-on-surface-muted">
+              {categoryId === undefined
+                ? `新しい${RUNS_LIMIT}件だけを表示しています。カテゴリで絞り込むと、それより古い実行が出ます。`
+                : `このカテゴリの新しい${RUNS_LIMIT}件だけを表示しています。`}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </div>
