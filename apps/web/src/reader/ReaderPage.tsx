@@ -264,9 +264,12 @@ export function ReaderPage({ view }: { view: View }) {
   const recentlyRead = filter.recentlyRead === "true";
   const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
   const active = isSearch ? results : isMention ? mentionList : list;
+  // No list of articles: the annotations, and a feed or a category not known, or not yet. Their filter is empty,
+  // the filter of すべて, whose rows are in the cache: they are no rows of this page, for the keys or the list.
+  const noArticles = isAnnotations || (!isSearch && !isMention && target === null);
   const fetched = useMemo<ArticleSummary[]>(
-    () => (isSearch ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items) ?? EMPTY,
-    [isSearch, isMention, results.data, mentionList.data, list.data],
+    () => (noArticles ? undefined : (isSearch ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items)) ?? EMPTY,
+    [noArticles, isSearch, isMention, results.data, mentionList.data, list.data],
   );
   const excerpts = useMemo(
     () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
@@ -275,11 +278,16 @@ export function ReaderPage({ view }: { view: View }) {
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
   // change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
+  const listKey = JSON.stringify(
+    isSearch ? searchQuery : isMention ? { mention: mentionName } : isAnnotations ? { annotations: true } : { ...filter, order: undefined },
+  );
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const sortKey = target ? sortKeyFor(target) : undefined;
-  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
+  const items = useMemo(
+    () => (noArticles ? EMPTY : mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort)),
+    [noArticles, fetched, kept, listKey, sortKey, sort],
+  );
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
   // not in the recently read articles, which is where a mistake is put right, nor in search results, the
@@ -682,18 +690,22 @@ export function ReaderPage({ view }: { view: View }) {
   }, [nearEnd, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
   // The article pane starts every article at its top.
   const articlePane = useRef<HTMLDivElement>(null);
+  /** The move through the list of annotations, which that list puts here while it is shown. */
+  const annotationMove = useRef<((step: 1 | -1) => void) | null>(null);
   useLayoutEffect(() => {
     if (articlePane.current) articlePane.current.scrollTop = 0;
   }, [articleId]);
   /**
    * Space: the body down by a screen less a line, so the last line read stays in view, or on to the next
-   * article at its end. Shift+Space the other way. Without a body, the article j or k would choose.
+   * article at its end. Shift+Space the other way. Without a body, the article j or k would choose. On the
+   * list of annotations, the annotation j or k would choose there.
    */
   const page = (step: 1 | -1) => {
     const pane = articlePane.current;
-    if (articleId === null || !pane) return move(step);
+    const onward = () => (isAnnotations ? annotationMove.current?.(step) : move(step));
+    if (articleId === null || !pane) return onward();
     const end = step === 1 ? pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 : pane.scrollTop <= 0;
-    if (end) return move(step);
+    if (end) return onward();
     const by = Math.max(pane.clientHeight - lineHeights["body-lg"], lineHeights["body-lg"]);
     pane.scrollTop = Math.max(0, pane.scrollTop + step * by);
   };
@@ -770,7 +782,7 @@ export function ReaderPage({ view }: { view: View }) {
   const listMinute = Math.floor(now().getTime() / 60_000) * 60_000;
 
   const listPane = isAnnotations ? (
-    <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
+    <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} moveRef={annotationMove} />
   ) : isEvents ? (
     <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
   ) : (

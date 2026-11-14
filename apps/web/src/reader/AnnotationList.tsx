@@ -1,6 +1,6 @@
 import { formatShort } from "@smarternews/client";
 import type { AnnotationListItem } from "@smarternews/core/api";
-import { useLayoutEffect, useRef } from "react";
+import { type RefObject, useLayoutEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router";
 import { useAnnotationList } from "../api/queries.ts";
 import { focusWithin, followScroll } from "../lib/follow.ts";
@@ -42,9 +42,20 @@ function AnnotationRow({ item, selected, timeZone, now }: { item: AnnotationList
 
 /**
  * The list of the reader's annotations, the last made first, one row per annotation: an article with several
- * has several rows. It offers none of the controls of an article list. `j` and `k` move through the rows.
+ * has several rows. It offers none of the controls of an article list. `j` and `k` move through the rows, and
+ * `moveRef` is given the same move, for Space at the end of the body.
  */
-export function AnnotationList({ selected, timeZone, now }: { selected: number | null; timeZone: string; now: Date }) {
+export function AnnotationList({
+  selected,
+  timeZone,
+  now,
+  moveRef,
+}: {
+  selected: number | null;
+  timeZone: string;
+  now: Date;
+  moveRef?: RefObject<((step: 1 | -1) => void) | null>;
+}) {
   const list = useAnnotationList();
   const navigate = useNavigate();
   const items = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -61,6 +72,13 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
     void navigate(annotationPath(target), { replace: selected !== null });
   };
   useHotkeys({ j: () => move(1), k: () => move(-1) });
+  useLayoutEffect(() => {
+    if (!moveRef) return;
+    moveRef.current = move;
+    return () => {
+      moveRef.current = null;
+    };
+  });
   // A move with a key takes the list along, as in the article list, and the focus too when it was in the list.
   useLayoutEffect(() => {
     const step = keyStep.current;

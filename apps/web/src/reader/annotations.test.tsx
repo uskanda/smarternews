@@ -3,7 +3,7 @@ import { seedFeedArticle } from "@smarternews/core/testing";
 import { createTermMatcher } from "@smarternews/client";
 import { ANNOTATION_SAMPLE_MARKDOWN, ANNOTATION_SAMPLE_TEXT, withoutSpaces } from "@smarternews/client/testing";
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { useBodyAnnotations } from "./Annotations.tsx";
 import { SKIP_ATTRIBUTE } from "./highlight.tsx";
@@ -583,6 +583,74 @@ describe("the list of annotations", () => {
 
     await waitFor(() => expect(within(list).queryByText("消えるメモ")).toBeNull());
     expect(within(list).getByText("残るメモ")).toBeInTheDocument();
+  });
+});
+
+describe("the keys of an article on the list of annotations", () => {
+  /** jsdom lays nothing out: the article pane is 400px tall and holds `height` pixels. */
+  function layOut(height: number): HTMLElement {
+    const pane = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: height });
+    return pane;
+  }
+
+  it("do nothing to the article last opened in すべて while no article is open", async () => {
+    const server = makeServer();
+    const read = generated(server);
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { user, requests } = renderApp({ server, route: `/all/${read}` });
+    await opened();
+    await waitFor(() => expect(getArticle(server.db, read)?.isRead).toBe(true));
+
+    await user.click(screen.getByRole("link", { name: "注釈" }));
+    await screen.findByRole("region", { name: "注釈の一覧" });
+    const before = requests.length;
+    await user.keyboard("s");
+    await user.keyboard("m");
+    await user.keyboard("o");
+
+    expect(requests.slice(before).filter((request) => request.includes(`/articles/${read}`))).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+    expect(getArticle(server.db, read)).toMatchObject({ starred: false, isRead: true });
+    open.mockRestore();
+  });
+
+  it("move through the annotations with Space and Shift+Space, and never to an article of すべて", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const other = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    const older = saveArticleNote(server.db, a, "古いメモ", at(20));
+    const newer = saveArticleNote(server.db, b, "新しいメモ", at(10));
+    const { user, path, requests } = renderApp({ server, route: `/all/${other}` });
+    await opened();
+    await waitFor(() => expect(getArticle(server.db, other)?.isRead).toBe(true));
+    await user.click(screen.getByRole("link", { name: "注釈" }));
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("古いメモ");
+    const before = requests.length;
+
+    await user.keyboard(" ");
+    await waitFor(() => expect(path()).toBe(`/annotations/${b}?annotation=${newer.id}`));
+    await within(await opened()).findByText("新しいメモ");
+    // In the middle of a long body, Space scrolls it.
+    const pane = layOut(2000);
+    await user.keyboard(" ");
+    expect(pane.scrollTop).toBe(400 - 33);
+    expect(path()).toBe(`/annotations/${b}?annotation=${newer.id}`);
+    // At its end, Space moves to the next annotation.
+    pane.scrollTop = 1600;
+    await user.keyboard(" ");
+    await waitFor(() => expect(path()).toBe(`/annotations/${a}?annotation=${older.id}`));
+    await within(await opened()).findByText("古いメモ");
+    // At the top of the body, Shift+Space moves to the one before.
+    layOut(2000).scrollTop = 0;
+    await user.keyboard("{Shift>} {/Shift}");
+    await waitFor(() => expect(path()).toBe(`/annotations/${b}?annotation=${newer.id}`));
+
+    expect(requests.slice(before).filter((request) => request.includes(`/articles/${other}`))).toEqual([]);
   });
 });
 

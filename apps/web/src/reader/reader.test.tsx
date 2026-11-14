@@ -1752,6 +1752,27 @@ describe("Space through the article", () => {
     expect(pane.scrollTop).toBe(0);
   });
 
+  it("does nothing, nor do s and m, on the path of a feed that does not exist after すべて was read", async () => {
+    const { server, newer } = seeded();
+    const { user, requests } = renderApp({ server, route: `/all/${newer}`, browserHistory: true });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    await waitFor(() => expect(getArticle(server.db, newer).isRead).toBe(true));
+    await act(async () => {
+      window.history.pushState(null, "", "/f/999");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(await screen.findByText("この購読フィードはありません。")).toBeInTheDocument();
+    const before = requests.length;
+
+    await user.keyboard("s");
+    await user.keyboard("m");
+    await user.keyboard(" ");
+
+    expect(window.location.pathname).toBe("/f/999");
+    expect(requests.slice(before).filter((request) => request.includes("/articles/"))).toEqual([]);
+    expect(getArticle(server.db, newer)).toMatchObject({ starred: false, isRead: true });
+  });
+
   it("moves with j after a click on a checkbox above the list", async () => {
     const server = makeServer();
     const category = server.category("Security");
