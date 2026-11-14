@@ -598,17 +598,32 @@ export function ReaderPage({ view }: { view: View }) {
     // Only the first article opened adds to the history; a run of keys after it would make back slow to leave.
     void navigate(articlePath(id), { replace: articleId !== null });
   };
-  /** Past the last article loaded, the next page is loaded first, and its first article opened. */
+  // The list and the article on screen now, read after an await to see whether the reader has gone elsewhere.
+  const place = useRef({ listKey, articleId });
+  place.current = { listKey, articleId };
+  /**
+   * Past the last article loaded, the next page is loaded first, and its first article opened. A page that did
+   * not load leaves the article open and says so; a reader who went elsewhere meanwhile is left there.
+   */
   const moveOn = async () => {
     if (loadingMore.current) return;
     loadingMore.current = true;
+    const from = { listKey, articleId };
+    const loaded = active.data?.pages.length ?? 0;
     try {
-      const loaded = active.data?.pages.length ?? 0;
-      const result = await active.fetchNextPage();
-      const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
-      // A page that could not be loaded leaves the last page the one the reader is on.
-      const first = pages.length > loaded ? pages.at(-1)?.items[0] : undefined;
+      let failed = false;
+      let first: { id: number } | undefined;
+      try {
+        const result = await active.fetchNextPage();
+        const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
+        failed = result.isError;
+        if (pages.length > loaded) first = pages[loaded]?.items[0];
+      } catch {
+        failed = true;
+      }
+      if (place.current.listKey !== from.listKey || place.current.articleId !== from.articleId) return;
       if (first) go(first.id, 1);
+      else if (failed) toast({ message: "続きを読み込めませんでした。もう一度試してください。" });
     } finally {
       loadingMore.current = false;
     }

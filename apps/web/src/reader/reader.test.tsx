@@ -425,6 +425,97 @@ describe("moving past the last article loaded", () => {
     expect(path()).toBe(`/all/${ids[0]}`);
     expect(screen.getByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
   });
+
+  const failed = "続きを読み込めませんでした。もう一度試してください。";
+
+  it("stays on the article and says so when the next page fails to load with j", async () => {
+    const { server, ids } = seeded();
+    let offline = false;
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}`, offline: () => offline });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    offline = true;
+    await user.keyboard("j");
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[1]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 2" })).toBeInTheDocument();
+
+    offline = false;
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+  });
+
+  it("stays on the article and says so when the next page fails to load with Space", async () => {
+    const { server, ids } = seeded();
+    let offline = false;
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}`, offline: () => offline });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    offline = true;
+    await user.keyboard(" ");
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[1]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 2" })).toBeInTheDocument();
+  });
+
+  it("does not open the first article of the second page when the third fails to load", async () => {
+    const server = makeServer();
+    const ids = articles(
+      server,
+      server.category().id,
+      Array.from({ length: 101 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    let offline = false;
+    const { user, path } = renderApp({ server, route: `/all/${ids[52]}`, offline: () => offline });
+    await screen.findByRole("heading", { level: 2, name: "Story 53" });
+    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+    await user.click(within(list()).getByRole("link", { name: /Story 2(?!\d)/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+
+    offline = true;
+    await user.keyboard("j");
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[1]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 2" })).toBeInTheDocument();
+  });
+
+  it("does not take the reader back to the list left while the next page was loading", async () => {
+    const server = makeServer();
+    const ids = articles(
+      server,
+      server.category("News").id,
+      Array.from({ length: 51 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const request = server.app.request.bind(server.app);
+    vi.spyOn(server.app, "request").mockImplementation((input, ...rest) =>
+      String(input).includes("cursor=") ? held.then(() => request(input, ...rest)) : request(input, ...rest),
+    );
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    await user.keyboard("j");
+    await user.click(within(nav()).getByRole("link", { name: /News/ }));
+    await waitFor(() => expect(path()).toBe("/c/news"));
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+
+    expect(path()).toBe("/c/news");
+    expect(screen.queryByText(failed)).not.toBeInTheDocument();
+  });
 });
 
 describe("moving through a long list", () => {
