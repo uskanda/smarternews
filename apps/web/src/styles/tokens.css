@@ -52,6 +52,7 @@
   --spacing-measure-article: 52em;
   --spacing-touch: 44px;
   --spacing-touch-android: 48px;
+  --spacing-drawer: 12.5rem;
 }
 
 /* Until the user chooses a colour scheme, the dark blue values replace the light ones on a device that asks for a dark one. */
@@ -163,42 +164,42 @@
 
 @utility type-headline-lg {
   font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
-  font-size: 25px;
+  font-size: 1.5625rem;
   font-weight: 700;
   line-height: 1.5;
 }
 
 @utility type-headline-md {
   font-family: 'IBM Plex Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   line-height: 1.5;
 }
 
 @utility type-body-lg {
   font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 500;
   line-height: 1.95;
 }
 
 @utility type-body-md {
   font-family: 'IBM Plex Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 400;
   line-height: 1.6;
 }
 
 @utility type-label-md {
   font-family: 'IBM Plex Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   line-height: 1.45;
 }
 
 @utility type-label-sm {
   font-family: 'IBM Plex Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 400;
   line-height: 1.5;
 }

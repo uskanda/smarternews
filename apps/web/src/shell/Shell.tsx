@@ -558,7 +558,7 @@ export function Shell() {
               <Dialog.Portal>
                 <Dialog.Overlay className={OVERLAY} />
                 {/* Over the article, the pane takes only the keys that move between entries and screens. */}
-                <Dialog.Content data-hotkeys="nav" className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-nav))] border-r border-outline bg-background">
+                <Dialog.Content data-hotkeys="nav" className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-drawer))] border-r border-outline bg-background">
                   <Dialog.Title className="sr-only">項目</Dialog.Title>
                   <Dialog.Description className="sr-only">表示する一覧を選びます。</Dialog.Description>
                   <Nav onNavigate={() => setNavOpen(false)} />
