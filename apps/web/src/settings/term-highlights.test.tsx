@@ -174,6 +174,51 @@ describe("the term highlights page", () => {
     await waitFor(async () => expect(await shown()).toEqual(["A 緑", "B 紫"]));
   });
 
+  it("keeps the focus on the moved group when it moves the same way twice", async () => {
+    const server = makeServer();
+    for (const name of ["A", "B", "C", "D"]) group(server, name, "green");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+
+    (await waitFor(() => groupItem("A"))).querySelector<HTMLElement>("[aria-label='Aを下へ']")!.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(async () => expect(await shown()).toEqual(["B 緑", "A 緑", "C 緑", "D 緑"]));
+    await waitFor(async () => expect(within(await groupItem("A")).getByRole("button", { name: "Aを下へ" })).toHaveFocus());
+
+    await user.keyboard("{Enter}");
+    await waitFor(async () => expect(await shown()).toEqual(["B 緑", "C 緑", "A 緑", "D 緑"]));
+    await waitFor(async () => expect(within(await groupItem("A")).getByRole("button", { name: "Aを下へ" })).toHaveFocus());
+  });
+
+  it("leaves the focus where it is when a group is added after a move", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    group(server, "B", "purple");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    await user.click(within(await waitFor(() => groupItem("A"))).getByRole("button", { name: "Aを下へ" }));
+    await waitFor(async () => expect(await shown()).toEqual(["B 紫", "A 緑"]));
+
+    const name = within(await section("語のまとまりの追加")).getByLabelText("まとまりの名前");
+    await user.type(name, "C{Enter}");
+    await waitFor(async () => expect(await shown()).toEqual(["B 紫", "A 緑", "C 緑"]));
+
+    expect(within(await groupItem("A")).getByRole("button", { name: "Aを下へ" })).not.toHaveFocus();
+    expect(name).toHaveFocus();
+  });
+
+  it("leaves the focus alone when a group deleted after a move makes the moved one first", async () => {
+    const server = makeServer();
+    for (const name of ["A", "B", "C"]) group(server, name, "green");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    await user.click(within(await waitFor(() => groupItem("C"))).getByRole("button", { name: "Cを上へ" }));
+    await waitFor(async () => expect(await shown()).toEqual(["A 緑", "C 緑", "B 緑"]));
+
+    await user.click(within(await groupItem("A")).getByRole("button", { name: "Aを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await waitFor(async () => expect(await shown()).toEqual(["C 緑", "B 緑"]));
+
+    expect(within(await groupItem("C")).getByRole("button", { name: "Cを下へ" })).not.toHaveFocus();
+  });
+
   it("says near the order that the upper group colours a place two groups match", async () => {
     renderApp({ route: "/settings/term-highlights" });
     expect(await section("語のまとまりの一覧")).toHaveTextContent("上にあるまとまりの色");
