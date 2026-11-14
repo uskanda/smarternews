@@ -1,6 +1,6 @@
 import type { Article, ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   type ArticleFlagChange,
@@ -158,17 +158,16 @@ function SearchEmpty({ words, narrowed, onWiden }: { words: string; narrowed: bo
 
 const SELECT = "rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 
-/** The height of the list's visible area, followed as it changes while `active`. */
-function useListHeight(ref: RefObject<HTMLElement | null>, active: boolean): number {
+/** The height of the list's visible area, followed as it changes while `active`, and measured again when the element comes. */
+function useListHeight(element: HTMLElement | null, active: boolean): number {
   const [height, setHeight] = useState(0);
   useEffect(() => {
-    const element = ref.current;
     if (!active || !element) return;
     setHeight(element.clientHeight);
     const observer = new ResizeObserver(() => setHeight(element.clientHeight));
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref, active]);
+  }, [element, active]);
   return height;
 }
 
@@ -285,7 +284,13 @@ export function ReaderPage({ view }: { view: View }) {
   // not in the recently read articles, which is where a mistake is put right, nor in search results, the
   // articles of a name, or events. None of these but events has a target.
   const [refreshes, setRefreshes] = useState(0);
-  const listScroll = useRef<HTMLDivElement>(null);
+  const listScroll = useRef<HTMLDivElement | null>(null);
+  // The same element as a value: the annotations have none, so what listens to it starts again when it comes.
+  const [listScrollElement, setListScrollElement] = useState<HTMLDivElement | null>(null);
+  const setListScroll = useCallback((element: HTMLDivElement | null) => {
+    listScroll.current = element;
+    setListScrollElement(element);
+  }, []);
   const listRows = useRef<HTMLUListElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
@@ -326,10 +331,12 @@ export function ReaderPage({ view }: { view: View }) {
 
   const readPatch = useReadPatch();
   const scrollReadChosen = useScrollRead();
-  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && listShown;
+  // The annotations are no list of articles: nothing there is marked read by scrolling.
+  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && !isAnnotations && listShown;
   const scrollRead = useScrollToRead({
     enabled: scrollReadOn,
     scrollRef: listScroll,
+    scrollElement: listScrollElement,
     rowsRef: listRows,
     items,
     resetKey: `${listKey}#${refreshes}`,
@@ -349,7 +356,7 @@ export function ReaderPage({ view }: { view: View }) {
     onFailed: (retry) =>
       toast({ message: "スクロールした記事を既読にできませんでした", durationMs: 10_000, action: { label: "もう一度試す", run: retry } }),
   });
-  const listHeight = useListHeight(listScroll, scrollReadOn);
+  const listHeight = useListHeight(listScrollElement, scrollReadOn);
 
   const basePath = isMention ? "/mentions" : ((target && listPathOf(target, () => category?.slug)) ?? `/${view}`);
   const query = search.toString() ? `?${search.toString()}` : "";
@@ -833,7 +840,7 @@ export function ReaderPage({ view }: { view: View }) {
       {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
       {view === "feed" && feed ? <FeedStatusBanner feed={feed} /> : null}
       <div
-        ref={listScroll}
+        ref={setListScroll}
         data-list-scroll
         onScroll={(event) => positions.current.set(listKey, event.currentTarget.scrollTop)}
         className="min-h-0 flex-1 overflow-y-auto"
