@@ -28,6 +28,7 @@ import { isOnList, listPathOf } from "../lib/paths.ts";
 import { FeedDeletionDialog } from "../settings/FeedDeletionDialog.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
+import { JumpDialog } from "./JumpDialog.tsx";
 import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
 
 const KEYS: Array<[string, string]> = [
@@ -51,6 +52,7 @@ const KEYS: Array<[string, string]> = [
   ["g s", "「スター」へ移る"],
   ["g e", "次のイベントのカテゴリへ移る"],
   ["g r", "「最近読んだ記事」へ移る"],
+  ["g u", "名前を打って、カテゴリか購読フィードへ移る"],
   ["Shift+F10", "フォーカスのあるカテゴリと購読フィードで、項目のメニューを開く（並べ替え、登録の解除）"],
   ["/", "検索欄へ移る"],
   ["?", "この一覧を開く"],
@@ -481,6 +483,18 @@ export function Shell() {
   const panes = usePanes(layout);
   const [navOpen, setNavOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
+  // Set once an entry is picked in the jump dialog: the dialogs that close then leave the focus on the content.
+  const jumped = useRef(false);
+  const toContent = (event: Event) => {
+    if (!jumped.current) return;
+    event.preventDefault();
+    document.getElementById("content")?.focus();
+  };
+  // A pane opened afterwards gives the focus back as usual when it closes.
+  useEffect(() => {
+    if (navOpen) jumped.current = false;
+  }, [navOpen]);
   const { now } = useApp();
   const navigate = useNavigate();
   const counts = useCounts().data;
@@ -515,6 +529,10 @@ export function Shell() {
       "g s": () => open(view("starred")),
       "g e": () => open(nextEventCategory(model, current)),
       "g r": () => open(view("recentlyRead")),
+      "g u": () => {
+        jumped.current = false;
+        setJumpOpen(true);
+      },
     },
     { now },
   );
@@ -558,7 +576,7 @@ export function Shell() {
               <Dialog.Portal>
                 <Dialog.Overlay className={OVERLAY} />
                 {/* Over the article, the pane takes only the keys that move between entries and screens. */}
-                <Dialog.Content data-hotkeys="nav" className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-nav))] border-r border-outline bg-background">
+                <Dialog.Content data-hotkeys="nav" onCloseAutoFocus={toContent} className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-nav))] border-r border-outline bg-background">
                   <Dialog.Title className="sr-only">項目</Dialog.Title>
                   <Dialog.Description className="sr-only">表示する一覧を選びます。</Dialog.Description>
                   <Nav onNavigate={() => setNavOpen(false)} />
@@ -574,6 +592,20 @@ export function Shell() {
         </main>
       </div>
       <KeyHelp open={helpOpen} onOpenChange={setHelpOpen} />
+      <JumpDialog
+        open={jumpOpen}
+        onOpenChange={setJumpOpen}
+        model={model}
+        onCloseAutoFocus={toContent}
+        onPick={(target) => {
+          jumped.current = true;
+          setJumpOpen(false);
+          setNavOpen(false);
+          open(target);
+          // The list is where the keyboard goes on: j and k move through it.
+          document.getElementById("content")?.focus();
+        }}
+      />
     </div>
   );
 }

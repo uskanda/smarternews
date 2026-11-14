@@ -484,7 +484,7 @@ describe("keyboard", () => {
     expect(within(dialog).getByText("次の記事")).toBeInTheDocument();
     expect(within(dialog).getByText("スターの切り替え")).toBeInTheDocument();
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "x", "z", "g a", "g s", "g e", "g r"]) expect(keys).toContain(key);
+    for (const key of ["Shift+A", "Shift+J", "Shift+K", "Space", "Shift+Space", "r", "u", "x", "z", "g a", "g s", "g e", "g r", "g u"]) expect(keys).toContain(key);
     expect(within(dialog).getByText("生成記事の外れの印の切り替え。付けると既読にする")).toBeInTheDocument();
     expect(within(dialog).getByText("知らせの操作（取り消す、もう一度試すなど）")).toBeInTheDocument();
     expect(within(dialog).getByText("「最近読んだ記事」へ移る")).toBeInTheDocument();
@@ -993,5 +993,181 @@ describe("hiding the entries without unread articles", () => {
     await waitFor(() => expect(path()).toBe(`/f/${late.id}`));
     await user.keyboard("{Shift>}K{/Shift}");
     await waitFor(() => expect(path()).toBe(`/f/${busy.id}`));
+  });
+});
+
+describe("going to an entry by its name with g u", () => {
+  const feedOf = (server: TestServer, title: string, categoryId: number | null) =>
+    insertFeed(server.db, { url: `https://${title.toLowerCase().replace(/\W/g, "")}.example.org/feed.xml`, title, categoryId }, server.clock);
+  const dialog = () => screen.findByRole("dialog", { name: "項目へ移る" });
+  const box = () => screen.getByRole("combobox", { name: "項目の名前" });
+  const options = () => within(screen.getByRole("listbox", { name: "候補" })).queryAllByRole("option");
+  const names = () => options().map((option) => option.firstChild!.textContent);
+
+  function seeded() {
+    const server = makeServer();
+    const tech = server.category("テック");
+    const world = server.category("World");
+    const blog = feedOf(server, "Example Blog", tech.id);
+    const news = feedOf(server, "Tech News", tech.id);
+    const daily = feedOf(server, "Daily News", world.id);
+    seedFeedArticle(server.db, blog.id);
+    seedFeedArticle(server.db, news.id);
+    return { server, tech, world, blog, news, daily };
+  }
+
+  it("opens a dialog with the focus in its field, listing the categories and the feeds in the order of the left pane", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/unread" });
+    await within(nav()).findByRole("link", { name: /^Daily News/ });
+
+    await user.keyboard("gu");
+
+    await dialog();
+    expect(box()).toHaveFocus();
+    expect(names()).toEqual(["テック", "Example Blog", "Tech News", "World", "Daily News"]);
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+    expect(box()).toHaveAttribute("aria-activedescendant", options()[0]!.id);
+    expect(options()[1]).toHaveTextContent("テック");
+    await waitFor(() => expect(options()[1]).toHaveTextContent("1"));
+  });
+
+  it("narrows the candidates as the user types, with any width and case, and opens the chosen one with ↓ and Enter", async () => {
+    const { server, news, daily } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await within(nav()).findByRole("link", { name: /^Daily News/ });
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("ＮＥＷＳ");
+    expect(names()).toEqual(["Tech News", "Daily News"]);
+    // Stops at either end.
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowUp}");
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{ArrowUp}{ArrowDown}{Enter}");
+    await waitFor(() => expect(path()).toBe(`/f/${daily.id}`));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "項目へ移る" })).not.toBeInTheDocument());
+    await waitFor(() => expect(document.getElementById("content")).toHaveFocus());
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("news tech{Enter}");
+    await waitFor(() => expect(path()).toBe(`/f/${news.id}`));
+  });
+
+  it("opens a feed with the first article chosen by j once the dialog is gone", async () => {
+    const { server, blog } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await within(nav()).findByRole("link", { name: /^Example Blog/ });
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("blog{Enter}");
+    await waitFor(() => expect(path()).toBe(`/f/${blog.id}`));
+    await waitFor(() => expect(document.getElementById("content")).toHaveFocus());
+    await user.keyboard("j");
+    await waitFor(() => expect(path()).toMatch(new RegExp(`^/f/${blog.id}/\\d+$`)));
+  });
+
+  it("reaches a feed below a folded category and one the pane hides", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, tech, daily } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^Example Blog/ })).toHaveTextContent("1"));
+    expect(within(nav()).queryByRole("link", { name: /^Daily News/ })).not.toBeInTheDocument();
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("daily{Enter}");
+    await waitFor(() => expect(path()).toBe(`/f/${daily.id}`));
+
+    await user.click(within(nav()).getByRole("button", { name: "テックの下の項目" }));
+    expect(within(nav()).queryByRole("link", { name: /^Tech News/ })).not.toBeInTheDocument();
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("tech n{Enter}");
+    await waitFor(() => expect(path()).toMatch(/^\/f\/\d+$/));
+    expect(path()).not.toBe(`/f/${daily.id}`);
+    expect(path()).not.toBe(`/c/${tech.slug}`);
+  });
+
+  it("says so when nothing matches, and opens nothing on Enter", async () => {
+    const { server } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await within(nav()).findByRole("link", { name: /^Daily News/ });
+
+    await user.keyboard("gu");
+    const shown = await dialog();
+    await user.keyboard("nothing like it{Enter}");
+
+    expect(within(shown).getByText("当てはまる項目はありません。")).toBeInTheDocument();
+    expect(options()).toHaveLength(0);
+    expect(path()).toBe("/unread");
+    expect(screen.getByRole("dialog", { name: "項目へ移る" })).toBeInTheDocument();
+  });
+
+  it("opens nothing on the Enter that settles a conversion", async () => {
+    const { server } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await within(nav()).findByRole("link", { name: /^Daily News/ });
+
+    await user.keyboard("gu");
+    await dialog();
+    fireEvent.keyDown(box(), { key: "Enter", isComposing: true });
+    fireEvent.keyDown(box(), { key: "Enter", keyCode: 229 });
+
+    expect(path()).toBe("/unread");
+    expect(screen.getByRole("dialog", { name: "項目へ移る" })).toBeInTheDocument();
+  });
+
+  it("closes on Esc and opens a candidate on a click", async () => {
+    const { server, world } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread" });
+    await within(nav()).findByRole("link", { name: /^Daily News/ });
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "項目へ移る" })).not.toBeInTheDocument());
+    expect(path()).toBe("/unread");
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.click(options().find((option) => option.firstChild!.textContent === "World")!);
+    await waitFor(() => expect(path()).toBe(`/c/${world.slug}`));
+  });
+
+  it("keeps the letters typed in the dialog away from the article behind", async () => {
+    const server = makeServer();
+    const alpha = server.category("Alpha");
+    server.article(alpha.id, { title: "Older story" });
+    server.clock.advance(60_000);
+    const newer = server.article(alpha.id, { title: "Newer story" });
+    const { user, path } = renderApp({ server, route: `/c/${alpha.slug}/${newer}` });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("sjk");
+
+    expect(box()).toHaveValue("sjk");
+    expect(path()).toBe(`/c/${alpha.slug}/${newer}`);
+    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+  });
+
+  it("closes the left pane of a narrow screen as well", async () => {
+    const { server, blog } = seeded();
+    const { user, path } = renderApp({ server, route: "/unread", width: 900 });
+
+    await user.click(await screen.findByRole("button", { name: "項目を開く" }));
+    (await within(nav()).findByRole("link", { name: /^未読/ })).focus();
+    await user.keyboard("gu");
+    await dialog();
+    await user.keyboard("blog{Enter}");
+
+    await waitFor(() => expect(path()).toBe(`/f/${blog.id}`));
+    await waitFor(() => expect(screen.queryByRole("navigation", { name: "項目" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("dialog", { name: "項目へ移る" })).not.toBeInTheDocument();
+    await waitFor(() => expect(document.getElementById("content")).toHaveFocus());
   });
 });
