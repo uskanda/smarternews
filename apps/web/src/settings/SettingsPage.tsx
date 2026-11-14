@@ -30,6 +30,7 @@ import {
 } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics, useUsage } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { saveBlob } from "../lib/download.ts";
 import { chooseHideRead, useHideRead } from "../lib/hide-read.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
@@ -416,12 +417,7 @@ function SettingsFile() {
 
   async function download() {
     try {
-      const url = URL.createObjectURL(new Blob([await api.exportSettings()], { type: "application/yaml" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "smarternews-settings.yaml";
-      link.click();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([await api.exportSettings()], { type: "application/yaml" }), "smarternews-settings.yaml");
       setError(null);
     } catch (caught) {
       setError(caught);

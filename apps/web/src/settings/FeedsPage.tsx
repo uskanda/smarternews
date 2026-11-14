@@ -2,6 +2,7 @@ import { FEED_INTERVAL_MINUTES_MAX, FEED_INTERVAL_MINUTES_MIN, FEED_TITLE_MAX_CH
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
+import { saveBlob } from "../lib/download.ts";
 import { useFetchFeedNow } from "../lib/fetch-now.ts";
 import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
@@ -441,12 +442,7 @@ function Opml() {
 
   async function download() {
     try {
-      const url = URL.createObjectURL(new Blob([await api.exportOpml()], { type: "text/x-opml" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "smarternews-feeds.opml";
-      link.click();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([await api.exportOpml()], { type: "text/x-opml" }), "smarternews-feeds.opml");
       setError(null);
     } catch (caught) {
       setError(caught);
