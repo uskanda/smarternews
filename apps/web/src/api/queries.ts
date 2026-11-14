@@ -7,6 +7,7 @@ import type {
   ArticleSearchQuery,
   ArticleSummary,
   AttentionList,
+  Feed,
   Highlight,
   HighlightCreate,
   ListSort,
@@ -36,10 +37,23 @@ export function useCategories() {
   return useQuery({ queryKey: ["categories"], queryFn: () => api.categories() });
 }
 
-/** The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles. */
+/** How often the feeds are fetched again while some wait for a fetch of all: its end shows within this time. */
+export const FETCH_ALL_REFRESH_MS = 3_000;
+
+/** Whether the feed still waits for its turn in a fetch of all. */
+export const awaitsFetch = (feed: Pick<Feed, "fetchRequestedAt">): boolean => feed.fetchRequestedAt !== null;
+
+/**
+ * The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles.
+ * While some wait for a fetch of all they are fetched again every few seconds, which is how its end is noticed.
+ */
 export function useFeeds() {
   const { api } = useApp();
-  return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
+  return useQuery({
+    queryKey: ["feeds"],
+    queryFn: () => api.feeds(),
+    refetchInterval: (query) => (query.state.data?.some(awaitsFetch) ? FETCH_ALL_REFRESH_MS : REFRESH_MS),
+  });
 }
 
 /** The filters with what each hides now. Asked for again whenever a filter, a feed or a category changes. */

@@ -867,6 +867,89 @@ describe("stale feeds and the numbers of a feed", () => {
   });
 });
 
+describe("fetching every feed now", () => {
+  const allButton = async () => within(await section("購読フィードの一覧")).findByRole("button", { name: /^(すべていま取得|取得中…)$/ });
+  const navButton = () => within(screen.getByRole("navigation", { name: "項目" })).getByRole("button", { name: "すべての購読フィードをいま取得" });
+  const timers = () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => void vi.useRealTimers());
+  };
+
+  it("shows 取得中… on both buttons while a feed waits, then says that all were fetched and shows the new state", async () => {
+    timers();
+    const server = makeServer();
+    let release: () => void = () => {};
+    server.site.set("https://blog.example.org/feed.xml", async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return new Response(rss("Blog", ["a", "b"]), { headers: { "content-type": "application/xml" } });
+    });
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds", advanceTimers: (ms) => void vi.advanceTimersByTime(ms) });
+
+    const all = await allButton();
+    expect(all).toHaveTextContent("すべていま取得");
+    await user.click(all);
+
+    await waitFor(() => expect(all).toHaveTextContent("取得中…"));
+    expect(all).toBeDisabled();
+    expect(navButton()).toHaveTextContent("取得中…");
+    expect(navButton()).toBeDisabled();
+    expect(screen.queryByText("すべての購読フィードを取得しました")).not.toBeInTheDocument();
+
+    release();
+    await server.poller.idle();
+    // The feeds are read again every three seconds while one waits, not every minute.
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(await screen.findByText("すべての購読フィードを取得しました")).toBeInTheDocument();
+    expect(await rowOf("Blog")).toHaveTextContent("最後の成功 3月1日 12:00");
+    expect(all).toHaveTextContent("すべていま取得");
+    expect(all).toBeEnabled();
+    expect(navButton()).toHaveTextContent("いま取得");
+    expect(navButton()).toBeEnabled();
+  });
+
+  it("says how many fetches failed, and how many feeds it passed by because their site asked to wait", async () => {
+    timers();
+    const server = makeServer();
+    server.site.set("https://blog.example.org/feed.xml", rss("Blog", ["a"]));
+    feedOf(server, "Blog");
+    feedOf(server, "Down");
+    const busy = feedOf(server, "Busy");
+    recordFetchFailure(server.db, busy.id, { now: "2026-03-01T11:00:00.000Z", error: "HTTP status 429: https://busy.example.org/feed.xml", retryAfterUntil: "2026-03-01T16:00:00.000Z" });
+    const { user } = renderApp({ server, route: "/settings/feeds", advanceTimers: (ms) => void vi.advanceTimersByTime(ms) });
+    const before = server.site.requests.length;
+
+    await user.click(await allButton());
+    await server.poller.idle();
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(await screen.findByText("1件の取得に失敗しました。サイトの指定で待っている1件は飛ばしました。")).toBeInTheDocument();
+    expect(await rowOf("Down")).toHaveTextContent("取得に失敗");
+    expect(server.site.requests.slice(before).map((request) => request.url).sort()).toEqual(["https://blog.example.org/feed.xml", "https://down.example.org/feed.xml"]);
+  });
+
+  it("starts nothing and says so when every feed is paused", async () => {
+    const server = makeServer();
+    updateFeed(server.db, feedOf(server, "Blog").id, { enabled: false });
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const all = await allButton();
+    await user.click(all);
+
+    expect(await screen.findByText("取得する購読フィードはありません")).toBeInTheDocument();
+    expect(all).toHaveTextContent("すべていま取得");
+    expect(all).toBeEnabled();
+    expect(server.site.requests).toHaveLength(0);
+  });
+
+  it("has no button while there is no feed", async () => {
+    renderApp({ route: "/settings/feeds" });
+    expect(await screen.findByText("購読フィードはまだありません。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "すべていま取得" })).not.toBeInTheDocument();
+  });
+});
+
 describe("subscribing to a page without a feed", () => {
   const PAGE = "https://town.example.org/news";
   const listing = (keys: string[], extra = "") =>
