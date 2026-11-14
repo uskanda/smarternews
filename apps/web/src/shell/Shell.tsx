@@ -92,7 +92,7 @@ function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
         enterKeyHint="search"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface"
+        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface placeholder:text-on-surface-muted"
       />
     </form>
   );
@@ -496,10 +496,17 @@ export function Shell() {
   useHotkeys(
     {
       "?": () => setHelpOpen(true),
-      // On a narrower screen the box is in the pane behind the button: opening it puts the focus in the box, its first field.
+      // The words left from an earlier search are selected, so that what is typed replaces them. On a narrower
+      // screen the box is in the pane behind the button: opening it focuses the box, its first field, and selects
+      // its words. A pane open already has the box at hand.
       "/": () => {
-        if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
-        else setNavOpen(true);
+        if (layout === "wide" || navOpen) {
+          const box = document.getElementById(SEARCH_BOX);
+          if (box instanceof HTMLInputElement) {
+            box.focus();
+            box.select();
+          }
+        } else setNavOpen(true);
       },
       // Through the entries the pane shows: the hidden ones are passed by.
       "Shift+J": () => open(stepTarget(shown, current, 1, collapsed.isCollapsed)),
