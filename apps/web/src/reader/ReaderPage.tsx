@@ -763,6 +763,9 @@ export function ReaderPage({ view }: { view: View }) {
                 ? `「${mentionName}」を含む記事`
                 : "名前を含む記事"
               : TITLES[view];
+  // One time for every row, to the minute: the rows are memoized, and a new time on each render would draw them
+  // all again. A row shows the time of day, 昨日, or a date, none of which changes within the minute.
+  const listMinute = Math.floor(now().getTime() / 60_000) * 60_000;
 
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
@@ -852,7 +855,7 @@ export function ReaderPage({ view }: { view: View }) {
               selected={item.id === current}
               sourceName={sourceName(item)}
               timeZone={timeZone}
-              now={now()}
+              now={listMinute}
               time={recentlyRead ? "read" : "updated"}
               excerpt={excerpts.get(item.id)?.excerpt ?? null}
               excerptFromNote={excerpts.get(item.id)?.excerptFromNote ?? false}

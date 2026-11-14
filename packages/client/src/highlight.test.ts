@@ -1,6 +1,13 @@
-import { normalizeForMatch, type TermColor, type TermGroup } from "@smarternews/core/api";
-import { describe, expect, it } from "vitest";
+import type * as coreApi from "@smarternews/core/api";
+import { normalizeForMatch, normalizeWithMap, type TermColor, type TermGroup } from "@smarternews/core/api";
+import { describe, expect, it, vi } from "vitest";
 import { createTermMatcher, splitHighlights } from "./highlight.ts";
+
+// The normalization is counted, to see that a text judged once is not normalized again.
+vi.mock("@smarternews/core/api", async (original) => {
+  const actual = await original<typeof coreApi>();
+  return { ...actual, normalizeWithMap: vi.fn(actual.normalizeWithMap) };
+});
 
 let serial = 0;
 function group(name: string, color: TermColor, ...terms: string[]): TermGroup {
@@ -120,6 +127,29 @@ describe("the groups that texts match", () => {
   it("are none when no text matches, and texts that are missing are skipped", () => {
     const matcher = createTermMatcher([group("A", "green", "規制")]);
     expect(matcher.groupsIn(["新製品", null, undefined])).toEqual([]);
+  });
+
+  it("are judged once for a text: the same text again is not normalized again", () => {
+    const matcher = createTermMatcher([group("A", "green", "規制"), group("B", "orange", "関税")]);
+    const normalize = vi.mocked(normalizeWithMap);
+    normalize.mockClear();
+    expect(matcher.groupsIn(["新しい規制案", "関税の話"]).map((found) => found.name)).toEqual(["A", "B"]);
+    expect(normalize).toHaveBeenCalledTimes(2);
+    expect(matcher.groupsIn(["新しい規制案", "関税の話"]).map((found) => found.name)).toEqual(["A", "B"]);
+    expect(normalize).toHaveBeenCalledTimes(2);
+  });
+
+  it("keep their order, each once, and skip what is missing, from texts judged before", () => {
+    const a = group("半導体", "green", "半導体", "TSMC");
+    const b = group("通商", "orange", "関税");
+    const c = group("その他", "pink", "天気");
+    const matcher = createTermMatcher([a, b, c]);
+    matcher.groupsIn(["関税と半導体"]);
+    matcher.groupsIn(["TSMCの関税"]);
+    matcher.groupsIn(["新製品"]);
+    expect(matcher.groupsIn(["TSMCの関税", null, "関税と半導体", undefined]).map((found) => found.name)).toEqual(["半導体", "通商"]);
+    expect(matcher.groupsIn(["新製品", null])).toEqual([]);
+    expect(matcher.groupsIn(["天気と関税", "関税と半導体"]).map((found) => found.name)).toEqual(["半導体", "通商", "その他"]);
   });
 });
 

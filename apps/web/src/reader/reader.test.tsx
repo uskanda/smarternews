@@ -427,6 +427,40 @@ describe("moving past the last article loaded", () => {
   });
 });
 
+describe("moving through a long list", () => {
+  it("draws again only the rows whose selection changed, not every row", async () => {
+    const server = makeServer();
+    const ids = articles(
+      server,
+      server.category().id,
+      Array.from({ length: 40 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    const { user, path } = renderApp({ server, route: "/all" });
+    await waitFor(() => expect(rowTitles()).toHaveLength(40));
+    await user.keyboard("j");
+    await screen.findByRole("heading", { level: 2, name: "Story 40" });
+    await waitFor(() => expect(row(/Story 40(?!\d)/)).toHaveAttribute("data-read", "true"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const formatted = vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts");
+    onTestFinished(() => formatted.mockRestore());
+
+    await user.keyboard("j");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 39" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[38]}`);
+    await waitFor(() => expect(row(/Story 39(?!\d)/)).toHaveAttribute("data-read", "true"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Each row that is drawn formats its time, so drawing every row would format at least 40 times.
+    expect(formatted.mock.calls.length).toBeLessThan(40);
+    expect(within(row(/Story 39(?!\d)/)).getByRole("link")).toHaveAttribute("aria-current", "true");
+    expect(row(/Story 39(?!\d)/).querySelector("[data-selected-mark]")).not.toBeNull();
+    expect(within(row(/Story 40(?!\d)/)).getByRole("link")).not.toHaveAttribute("aria-current");
+    expect(row(/Story 40(?!\d)/).querySelector("[data-selected-mark]")).toBeNull();
+    expect(row(/Story 40(?!\d)/)).toHaveAttribute("data-read", "true");
+    expect(row(/Story 38(?!\d)/)).toHaveAttribute("data-read", "false");
+  }, 30_000);
+});
+
 describe("the end of the list", () => {
   const END = "一覧の最後です";
   const end = () => list().querySelector<HTMLElement>("[data-list-end]");
