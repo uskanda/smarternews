@@ -732,6 +732,7 @@ export function ReaderPage({ view }: { view: View }) {
           {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
+          {(view === "feeds" || view === "uncategorized") && categories.data ? <AddFeedDialog categories={categories.data} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
           {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
           {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}
