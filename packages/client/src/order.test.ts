@@ -36,6 +36,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   failureCount: 0,
   goneAt: null,
   nextFetchAt: null,
+  fetchRequestedAt: null,
   articleCount: 0,
   starredCount: 0,
   annotatedCount: 0,
@@ -93,7 +94,7 @@ describe("nextTarget", () => {
 
   it("stays put on the views at the top", () => {
     const nav = model({ "category-1": 3, "feed-11": 3 });
-    for (const type of ["unread", "all", "starred", "generated"] as const) expect(nextTarget(nav, { type })).toBeNull();
+    for (const type of ["unread", "all", "starred", "generated", "feeds"] as const) expect(nextTarget(nav, { type })).toBeNull();
   });
 });
 
@@ -268,6 +269,8 @@ describe("stepTarget", () => {
   it("goes down and up through the views at the top", () => {
     expect(stepTarget(model(), views("unread"), 1, open)).toEqual(views("all"));
     expect(stepTarget(model(), views("starred"), -1, open)).toEqual(views("all"));
+    expect(stepTarget(model(), views("generated"), 1, open)).toEqual({ type: "feeds" });
+    expect(stepTarget(model(), { type: "feeds" }, 1, open)).toEqual({ type: "recentlyRead" });
     expect(stepTarget(model(), { type: "recentlyRead" }, 1, open)).toEqual({ type: "annotations" });
     expect(stepTarget(model(), { type: "annotations" }, 1, open)).toEqual(cat(1));
     expect(stepTarget(model(), cat(1), -1, open)).toEqual({ type: "annotations" });

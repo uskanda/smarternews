@@ -48,6 +48,7 @@ describe("the drawer with subscribed feeds", () => {
       "すべて",
       "スター",
       "AI生成、未読2件",
+      "購読フィード、未読4件",
       "最近読んだ記事",
       "ダイジェスト",
       "Tools、未読4件",
@@ -69,6 +70,8 @@ describe("the drawer with subscribed feeds", () => {
 
     expect(await screen.findByRole("button", { name: "Tools、未読1件" })).toBeOnTheScreen();
     expect(screen.getByRole("button", { name: "AI生成、未読1件" })).toBeOnTheScreen();
+    // The entry for the feed articles of every feed stays, without a number, when no feed is subscribed.
+    expect(screen.getByRole("button", { name: "購読フィード" })).toBeOnTheScreen();
     expect(screen.queryByRole("button", { name: /未分類/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /の下の項目/ })).toBeNull();
   });
@@ -129,6 +132,22 @@ describe("the list an entry of the drawer opens", () => {
     await press("AI生成、未読2件");
     await screen.findByRole("header", { name: "AI生成" });
     await waitFor(() => expect(rowTitles()).toEqual(["Car news", "Generated"]));
+  });
+
+  it("shows only the feed articles of every feed, in a category or in none, under the top 購読フィード", async () => {
+    const { server, oldPost } = await seeded();
+    await server.core("setArticleFlags", oldPost, { isRead: true }, "$now");
+    await renderApp({ server });
+    await openDrawer();
+    await press("購読フィード、未読3件");
+
+    await screen.findByRole("header", { name: "購読フィード" });
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Release 2", "Stray"]));
+
+    await userEvent.setup().press(screen.getByRole("switch", { name: "既読も表示" }));
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Release 2", "Stray", "Old post"]));
+    // Feed articles have no importance to filter by.
+    expect(screen.queryByRole("switch", { name: "重要度4以上だけ" })).toBeNull();
   });
 
   it("shows only the generated articles of a category under its AI生成", async () => {

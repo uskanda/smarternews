@@ -9,11 +9,12 @@ import {
   insertFeed,
   listCategories,
   listTopics,
+  saveArticleNote,
   setArticleFlags,
   updateCategory,
 } from "@smarternews/core";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -284,6 +285,27 @@ describe("deleting a category", () => {
 
     await waitFor(() => expect(listCategories(server.db)).toEqual([]));
     await waitFor(() => expect(path()).toBe("/settings"));
+  });
+
+  it("takes the annotations of its generated articles out of the list of annotations", async () => {
+    const { server, category } = seeded();
+    const other = server.category("Other");
+    saveArticleNote(server.db, server.article(category.id), "消えるメモ", server.clock().toISOString());
+    saveArticleNote(server.db, server.article(other.id), "残るメモ", server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: "/annotations" });
+    expect(await screen.findByText("消えるメモ")).toBeInTheDocument();
+
+    const nav = () => screen.getByRole("navigation", { name: "項目" });
+    await user.click(within(nav()).getByRole("link", { name: "設定" }));
+    await user.click(await screen.findByRole("link", { name: "Security" }));
+    await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await waitFor(() => expect(path()).toBe("/settings"));
+
+    await user.click(within(nav()).getByRole("link", { name: /^注釈/ }));
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    expect(await within(list).findByText("残るメモ")).toBeInTheDocument();
+    expect(within(list).queryByText("消えるメモ")).toBeNull();
   });
 
   it("disables instead when the user chooses that", async () => {
@@ -832,6 +854,26 @@ describe("connecting the Android app", () => {
     const expected = qrPath(buildConnectLink(window.location.origin, API_TOKEN));
     expect(code.querySelector("path")?.getAttribute("d")).toBe(expected.d);
     expect(expected.d.length).toBeGreaterThan(100);
+  });
+
+  it("shows a code with the entered token where the browser keeps no site data", async () => {
+    const denied = () => {
+      throw new DOMException("The site data is blocked.", "SecurityError");
+    };
+    const spies = [
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "removeItem").mockImplementation(denied),
+    ];
+    onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+    const { user } = renderApp({ route: "/settings", token: null });
+
+    await user.type(await screen.findByLabelText("APIのトークン"), API_TOKEN);
+    await user.click(screen.getByRole("button", { name: "接続する" }));
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    expect(code.querySelector("path")?.getAttribute("d")).toBe(qrPath(buildConnectLink(window.location.origin, API_TOKEN)).d);
   });
 
   it("draws the code black on white in the dark scheme too", async () => {

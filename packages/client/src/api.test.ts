@@ -161,6 +161,8 @@ describe("the API client", () => {
     expect(await api.feeds()).toHaveLength(1);
     expect((await api.updateFeed(feed.id, { title: "Mine", enabled: false })).title).toBe("Mine");
     expect(await api.fetchFeed(feed.id)).toMatchObject({ status: "updated", created: 0, feed: { id: feed.id } });
+    // The feed is paused, so a fetch of all asks for nothing.
+    expect(await api.fetchAllFeeds()).toEqual({ requested: 0, skipped: 0, requestedAt: server.clock().toISOString() });
     expect((await api.articles({ feed: feed.id, origin: "feed" })).items.map((item) => item.title)).toEqual(["One"]);
     expect((await api.counts()).feeds).toEqual([{ feedId: feed.id, unread: 1 }]);
     expect(await api.markRead({ feedId: feed.id, before: "2099-01-01T00:00:00.000Z" })).toMatchObject({ updated: 1 });

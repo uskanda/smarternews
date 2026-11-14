@@ -5,6 +5,8 @@ export interface AppServices {
   api: Api;
   /** The current time. Injected so that tests can move it. */
   now: () => Date;
+  /** The token the app is using, the one its API calls send. Kept for this page even where storage is blocked. */
+  getToken: () => string | null;
   /** Forgets the stored token and returns to the token screen. */
   clearToken: () => void;
 }

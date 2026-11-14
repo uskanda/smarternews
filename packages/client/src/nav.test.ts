@@ -5,6 +5,7 @@ import {
   HIDE_READ_ON,
   HIDE_READ_STORAGE_KEY,
   parseHideRead,
+  hasImportanceFilter,
   hasListControls,
   hideEmptyEntries, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
 
@@ -42,6 +43,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   failureCount: 0,
   goneAt: null,
   nextFetchAt: null,
+  fetchRequestedAt: null,
   articleCount: 0,
   starredCount: 0,
   annotatedCount: 0,
@@ -76,14 +78,27 @@ function outline(model: ReturnType<typeof buildNav>): string[] {
 }
 
 describe("buildNav", () => {
-  it("lists the six views, then each category with the generated articles and its feeds below it", () => {
+  it("lists the seven views, then each category with the generated articles and its feeds below it", () => {
     const model = buildNav({
       categories: [category(1, "Tools"), category(2, "Cars")],
       feeds: [feed(10, "Blog", 1), feed(11, "Releases", 1)],
       counts,
     });
     expect(model.starred).toBe(2);
-    expect(outline(model)).toEqual(["未読 12", "すべて 0", "スター 0", "AI生成 3", "最近読んだ記事 0", "注釈 0", "Tools 6", "  AI生成 1", "  Blog 5", "  Releases 0", "Cars 2"]);
+    expect(outline(model)).toEqual(["未読 12", "すべて 0", "スター 0", "AI生成 3", "購読フィード 9", "最近読んだ記事 0", "注釈 0", "Tools 6", "  AI生成 1", "  Blog 5", "  Releases 0", "Cars 2"]);
+  });
+
+  it("counts beside 購読フィード the unread articles that are not generated, and never less than zero", () => {
+    const unreadOf = (given: Counts) => buildNav({ categories: [], feeds: [], counts: given }).views.find((view) => view.target.type === "feeds")!.unread;
+    expect(unreadOf(counts)).toBe(9);
+    expect(unreadOf({ ...counts, unread: 3, generatedUnread: 3 })).toBe(0);
+    // The two numbers are read at one time; should they ever disagree, the entry shows no negative count.
+    expect(unreadOf({ ...counts, unread: 2, generatedUnread: 3 })).toBe(0);
+  });
+
+  it("shows 購読フィード below AI生成 even without a subscribed feed", () => {
+    const model = buildNav({ categories: [category(2, "Cars")], feeds: [], counts });
+    expect(model.views.map((view) => view.label).slice(3, 5)).toEqual(["AI生成", "購読フィード"]);
   });
 
   it("puts nothing below a category without feeds", () => {
@@ -93,7 +108,7 @@ describe("buildNav", () => {
 
   it("gathers feeds without a category under 未分類, last, without an entry for generated articles", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(12, "Loose", null)], counts });
-    expect(outline(model).slice(6)).toEqual(["Tools 6", "未分類 4", "  Loose 4"]);
+    expect(outline(model).slice(7)).toEqual(["Tools 6", "未分類 4", "  Loose 4"]);
     expect(model.groups.at(-1)!.entry.target).toEqual({ type: "uncategorized" });
   });
 
@@ -109,7 +124,7 @@ describe("buildNav", () => {
 
   it("shows zeros until the counts have arrived", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(10, "Blog", 1)], counts: undefined });
-    expect(outline(model)).toEqual(["未読 0", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "注釈 0", "Tools 0", "  AI生成 0", "  Blog 0"]);
+    expect(outline(model)).toEqual(["未読 0", "すべて 0", "スター 0", "AI生成 0", "購読フィード 0", "最近読んだ記事 0", "注釈 0", "Tools 0", "  AI生成 0", "  Blog 0"]);
   });
 
   it("gives a feed entry the state of its fetches, and a healthy one none", () => {
@@ -142,6 +157,7 @@ describe("buildNav", () => {
       { type: "all" },
       { type: "starred" },
       { type: "generated" },
+      { type: "feeds" },
       { type: "recentlyRead" },
       { type: "annotations" },
     ]);
@@ -178,7 +194,7 @@ describe("hideEmptyEntries", () => {
   };
   const CATEGORIES = [category(1, "Tools"), category(2, "Cars"), category(3, "Bikes")];
   const FEEDS = [feed(10, "Blog", 1), feed(11, "Releases", 1), feed(20, "Hill", 3), feed(21, "Road", 3), feed(30, "Loose", null)];
-  const VIEWS = ["未読 5", "すべて 0", "スター 0", "AI生成 0", "最近読んだ記事 0", "注釈 0"];
+  const VIEWS = ["未読 5", "すべて 0", "スター 0", "AI生成 0", "購読フィード 5", "最近読んだ記事 0", "注釈 0"];
   const build = (feeds: Feed[] = FEEDS, withCounts: Counts | undefined = sparse) => buildNav({ categories: CATEGORIES, feeds, counts: withCounts });
   const hide = (model: ReturnType<typeof buildNav>, current: ListTarget | null = null, counted = true) => hideEmptyEntries(model, { current, counted });
 
@@ -188,7 +204,7 @@ describe("hideEmptyEntries", () => {
 
   it("keeps the views even when every one of them counts zero", () => {
     const model = hide(build(FEEDS, { ...sparse, unread: 0, categories: [], feeds: [] }));
-    expect(model.views.map((view) => view.label)).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈"]);
+    expect(model.views.map((view) => view.label)).toEqual(["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈"]);
     expect(model.groups).toEqual([]);
   });
 
@@ -198,10 +214,10 @@ describe("hideEmptyEntries", () => {
   });
 
   it("keeps the entry that is open, and the category above it", () => {
-    expect(outline(hide(build(), { type: "feed", feedId: 20 })).slice(6)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  Hill 0"]);
-    expect(outline(hide(build(), { type: "category", categoryId: 3, generatedOnly: true })).slice(6)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  AI生成 0"]);
-    expect(outline(hide(build(), { type: "category", categoryId: 2, generatedOnly: false })).slice(6)).toEqual(["Tools 5", "  Blog 5", "Cars 0"]);
-    expect(outline(hide(build(), { type: "uncategorized" })).slice(6)).toEqual(["Tools 5", "  Blog 5", "未分類 0"]);
+    expect(outline(hide(build(), { type: "feed", feedId: 20 })).slice(7)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  Hill 0"]);
+    expect(outline(hide(build(), { type: "category", categoryId: 3, generatedOnly: true })).slice(7)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  AI生成 0"]);
+    expect(outline(hide(build(), { type: "category", categoryId: 2, generatedOnly: false })).slice(7)).toEqual(["Tools 5", "  Blog 5", "Cars 0"]);
+    expect(outline(hide(build(), { type: "uncategorized" })).slice(7)).toEqual(["Tools 5", "  Blog 5", "未分類 0"]);
   });
 
   it("hides nothing until the counts have arrived", () => {
@@ -230,6 +246,7 @@ describe("the key of a list", () => {
     [{ type: "all" }, "all"],
     [{ type: "starred" }, "starred"],
     [{ type: "generated" }, "generated"],
+    [{ type: "feeds" }, "feeds"],
     [{ type: "uncategorized" }, "uncategorized"],
     [{ type: "recentlyRead" }, "recently-read"],
     [{ type: "annotations" }, "annotations"],
@@ -244,7 +261,7 @@ describe("the key of a list", () => {
   });
 
   it("reads anything else as nothing", () => {
-    for (const key of ["", "category-", "category-x", "feed-1-generated", "settings", "category-7-other", "recentlyRead"]) expect(parseListKey(key)).toBeNull();
+    for (const key of ["", "category-", "category-x", "feed-1-generated", "settings", "category-7-other", "recentlyRead", "feed", "feeds-1"]) expect(parseListKey(key)).toBeNull();
   });
 });
 
@@ -254,6 +271,7 @@ describe("what a list asks the server for", () => {
     expect(targetFilter({ type: "all" })).toEqual({});
     expect(targetFilter({ type: "starred" })).toEqual({ starred: "true" });
     expect(targetFilter({ type: "generated" })).toEqual({ origin: "generated" });
+    expect(targetFilter({ type: "feeds" })).toEqual({ origin: "feed" });
     expect(targetFilter({ type: "uncategorized" })).toEqual({ uncategorized: "true" });
     expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: false })).toEqual({ category: 7 });
     expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: true })).toEqual({ category: 7, origin: "generated" });
@@ -264,6 +282,7 @@ describe("what a list asks the server for", () => {
   it("narrows a mark-all-read the same way", () => {
     expect(targetScope({ type: "unread" })).toEqual({});
     expect(targetScope({ type: "generated" })).toEqual({ origin: "generated" });
+    expect(targetScope({ type: "feeds" })).toEqual({ origin: "feed" });
     expect(targetScope({ type: "uncategorized" })).toEqual({ uncategorized: true });
     expect(targetScope({ type: "category", categoryId: 7, generatedOnly: true })).toEqual({ categoryId: 7, origin: "generated" });
     expect(targetScope({ type: "feed", feedId: 31 })).toEqual({ feedId: 31 });
@@ -274,6 +293,7 @@ describe("what a list asks the server for", () => {
     expect(hasReadToggle({ type: "all" })).toBe(false);
     expect(hasReadToggle({ type: "starred" })).toBe(false);
     expect(hasReadToggle({ type: "generated" })).toBe(true);
+    expect(hasReadToggle({ type: "feeds" })).toBe(true);
     expect(hasReadToggle({ type: "feed", feedId: 1 })).toBe(true);
     expect(hasReadToggle({ type: "recentlyRead" })).toBe(false);
     expect(hasReadToggle({ type: "annotations" })).toBe(false);
@@ -282,10 +302,22 @@ describe("what a list asks the server for", () => {
   it("offers mark all as read and the importance toggle everywhere but in the recently read articles", () => {
     expect(hasListControls({ type: "unread" })).toBe(true);
     expect(hasListControls({ type: "starred" })).toBe(true);
+    expect(hasListControls({ type: "feeds" })).toBe(true);
     expect(hasListControls({ type: "category", categoryId: 7, generatedOnly: false })).toBe(true);
     expect(hasListControls({ type: "feed", feedId: 1 })).toBe(true);
     expect(hasListControls({ type: "recentlyRead" })).toBe(false);
     expect(hasListControls({ type: "annotations" })).toBe(false);
+  });
+
+  it("offers the importance toggle only where generated articles can be listed", () => {
+    expect(hasImportanceFilter({ type: "unread" })).toBe(true);
+    expect(hasImportanceFilter({ type: "generated" })).toBe(true);
+    expect(hasImportanceFilter({ type: "category", categoryId: 7, generatedOnly: false })).toBe(true);
+    expect(hasImportanceFilter({ type: "feeds" })).toBe(false);
+    expect(hasImportanceFilter({ type: "feed", feedId: 1 })).toBe(false);
+    expect(hasImportanceFilter({ type: "uncategorized" })).toBe(false);
+    expect(hasImportanceFilter({ type: "recentlyRead" })).toBe(false);
+    expect(hasImportanceFilter({ type: "annotations" })).toBe(false);
   });
 });
 
@@ -312,7 +344,7 @@ describe("the order of a list", () => {
     expect(listSortOf({ type: "recentlyRead" }, views, categories)).toBe("newest");
     expect(hasSortMenu({ type: "category", categoryId: 2, generatedOnly: false }, categories)).toBe(false);
     expect(hasSortMenu({ type: "recentlyRead" }, categories)).toBe(false);
-    for (const target of [{ type: "unread" }, { type: "all" }, { type: "starred" }, { type: "generated" }, { type: "uncategorized" }, { type: "feed", feedId: 12 }, { type: "category", categoryId: 1, generatedOnly: false }, { type: "category", categoryId: 1, generatedOnly: true }] as ListTarget[]) {
+    for (const target of [{ type: "unread" }, { type: "all" }, { type: "starred" }, { type: "generated" }, { type: "feeds" }, { type: "uncategorized" }, { type: "feed", feedId: 12 }, { type: "category", categoryId: 1, generatedOnly: false }, { type: "category", categoryId: 1, generatedOnly: true }] as ListTarget[]) {
       expect(hasSortMenu(target, categories)).toBe(true);
     }
   });
@@ -326,7 +358,7 @@ describe("the order of a list", () => {
   it("is kept under a key the server reads for every entry of the list but the recently read articles", () => {
     const model = buildNav({ categories: [category(1, "Tools")], feeds: [feed(12, "A", 1), feed(13, "B", null)], counts });
     const keys = [...model.views, ...model.groups.flatMap((group) => [group.entry, ...group.children])].map((entry) => listKey(entry.target));
-    expect(keys).toEqual(["unread", "all", "starred", "generated", "recently-read", "annotations", "category-1", "category-1-generated", "feed-12", "uncategorized", "feed-13"]);
+    expect(keys).toEqual(["unread", "all", "starred", "generated", "feeds", "recently-read", "annotations", "category-1", "category-1-generated", "feed-12", "uncategorized", "feed-13"]);
     for (const key of keys) {
       if (key === "recently-read" || key === "annotations") expect(parseListViewKey(key)).toBeNull();
       else expect(parseListViewKey(key), key).not.toBeNull();

@@ -10,6 +10,7 @@ import {
   useArticleList,
   useArticleSearch,
   useCategories,
+  useCounts,
   useFeeds,
   useFullContentFetch,
   useListSortChange,
@@ -28,7 +29,9 @@ import { useScrollRead } from "../lib/scroll-read.ts";
 import {
   ANNOTATIONS_LABEL,
   buildNav,
+  FEEDS_LABEL,
   GENERATED_LABEL,
+  hasImportanceFilter,
   hasListControls,
   hasReadToggle,
   hasSortMenu,
@@ -65,6 +68,8 @@ export type View =
   | "all"
   | "starred"
   | "generated"
+  /** The feed articles of every subscribed feed. One feed is `feed`. */
+  | "feeds"
   | "uncategorized"
   | "recentlyRead"
   /** The reader's annotations: a list of annotations, not of articles. */
@@ -82,6 +87,7 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   all: "すべて",
   starred: "スター",
   generated: GENERATED_LABEL,
+  feeds: FEEDS_LABEL,
   uncategorized: UNCATEGORIZED_LABEL,
   recentlyRead: RECENTLY_READ_LABEL,
   annotations: ANNOTATIONS_LABEL,
@@ -205,7 +211,8 @@ export function ReaderPage({ view }: { view: View }) {
   // a list to finish.
   const listControls = !isSearch && !isMention && (target === null || hasListControls(target));
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
-  const importanceFilter = view !== "feed" && view !== "uncategorized" && listControls;
+  // A feed is none of those even before the feeds have arrived and its target is known.
+  const importanceFilter = listControls && view !== "feed" && (target === null || hasImportanceFilter(target));
   const articleId = params.articleId && /^\d+$/.test(params.articleId) ? Number(params.articleId) : null;
   // The annotation chosen in the list of annotations, which the article is brought to.
   const annotationParam = isAnnotations ? search.get("annotation") : null;
@@ -469,6 +476,8 @@ export function ReaderPage({ view }: { view: View }) {
     setRefreshes((count) => count + 1);
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["counts"] });
+    // The list of annotations is not a list of articles, so it is fetched again on its own.
+    if (isAnnotations) void client.invalidateQueries({ queryKey: ["annotations"] });
   }
 
   /**
@@ -493,6 +502,17 @@ export function ReaderPage({ view }: { view: View }) {
     const parent = next.type === "category" && next.generatedOnly ? categories.data?.find((category) => category.id === next.categoryId)?.name : undefined;
     return entry ? (parent ? `${parent}の${entry.label}` : entry.label) : null;
   }
+  // The end of the list offers the same move, while the counts at hand name a list to move to. Pressed with
+  // counts grown old, it opens nothing, and the counts fetched for it take the offer away.
+  const counts = useCounts().data;
+  const hasNext = useMemo(
+    () => target !== null && nextTarget(buildNav({ categories: categories.data ?? [], feeds: feeds.data ?? [], counts }), target) !== null,
+    [target, categories.data, feeds.data, counts],
+  );
+  const openNextFromEnd =
+    target !== null && hasNext
+      ? () => void openNext(target).catch(() => toast({ message: "次の項目を開けませんでした。もう一度試してください。" }))
+      : null;
 
   /**
    * Puts back to unread what marking all as read marked. The rows kept in the list that is open now stay: the
@@ -583,17 +603,38 @@ export function ReaderPage({ view }: { view: View }) {
     if (loadingMore.current) return;
     loadingMore.current = true;
     try {
+      const loaded = active.data?.pages.length ?? 0;
       const result = await active.fetchNextPage();
       const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
-      const first = pages.at(-1)?.items[0];
+      // A page that could not be loaded leaves the last page the one the reader is on.
+      const first = pages.length > loaded ? pages.at(-1)?.items[0] : undefined;
       if (first) go(first.id, 1);
     } finally {
       loadingMore.current = false;
     }
   };
+  // Past the last article of all, the choice stays, and the reader is shown and told that the list ends here.
+  // Each press counts, so that a screen reader says it again.
+  const [endSaid, setEndSaid] = useState(0);
+  useEffect(() => setEndSaid(0), [articleId, listKey]);
+  const reachEnd = () => {
+    setEndSaid((count) => count + 1);
+    // On a narrow screen the body hides the list, and the end of the body says the same.
+    const pane = listShown ? scrollingList() : articlePane.current;
+    const end = pane?.querySelector<HTMLElement>("[data-list-end]");
+    if (!pane || !end) return;
+    const view = pane.getBoundingClientRect();
+    const box = end.getBoundingClientRect();
+    const top = box.top - view.top + pane.scrollTop;
+    const to = followScroll({ top: pane.scrollTop, height: pane.clientHeight || view.height, rowTop: top, rowBottom: top + box.height, step: -1 });
+    if (to !== null) pane.scrollTop = to;
+  };
   const move = (step: number) => {
     if (loadingMore.current) return;
-    if (step > 0 && index !== -1 && index + step >= items.length && active.hasNextPage) return void moveOn();
+    if (step > 0 && index !== -1 && index + step >= items.length) {
+      if (active.hasNextPage) return void moveOn();
+      return reachEnd();
+    }
     const target = items[index === -1 ? (step > 0 ? 0 : items.length - 1) : index + step];
     if (!target) return;
     go(target.id, step);
@@ -614,6 +655,31 @@ export function ReaderPage({ view }: { view: View }) {
     const to = followScroll({ top: pane.scrollTop, height: pane.clientHeight || view.height, rowTop, rowBottom: rowTop + box.height, step });
     if (to !== null) pane.scrollTop = to;
   }, [articleId]);
+  // The next page is loaded when the end of the rows loaded comes into view, and again while it stays there: a
+  // page may be shorter than the view. A page that could not be loaded is not asked for again by itself, or
+  // every scroll would ask; the button below the rows asks again.
+  const moreMark = useRef<HTMLDivElement>(null);
+  const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = active;
+  // Every page that arrives moves the mark, and so does another list. What was in view before says nothing of
+  // now, and would load one page more than the reader scrolled to: the mark is looked at anew, and counts as
+  // in view only for the rows it was seen under.
+  const rowsLoaded = `${listKey}#${active.data?.pages.length ?? 0}`;
+  const [seenUnder, setSeenUnder] = useState<string | null>(null);
+  const nearEnd = seenUnder === rowsLoaded;
+  useEffect(() => {
+    const mark = moreMark.current;
+    if (!mark) return;
+    const observer = new IntersectionObserver((entries) => setSeenUnder(entries.at(-1)?.isIntersecting ? rowsLoaded : null), {
+      root: listScroll.current,
+      rootMargin: "0px 0px 200px 0px",
+    });
+    observer.observe(mark);
+    return () => observer.disconnect();
+    // The mark is there while the list is shown and has more.
+  }, [listShown, hasNextPage, rowsLoaded]);
+  useEffect(() => {
+    if (nearEnd && hasNextPage && !isFetching && !isFetchNextPageError) void fetchNextPage();
+  }, [nearEnd, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
   // The article pane starts every article at its top.
   const articlePane = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -681,6 +747,7 @@ export function ReaderPage({ view }: { view: View }) {
           previous: previousItem ? { title: headline(previousItem), to: articlePath(previousItem.id) } : null,
           next: nextItem ? { title: headline(nextItem), to: articlePath(nextItem.id) } : null,
           more: !nextItem && active.hasNextPage ? () => move(1) : null,
+          end: !nextItem && !active.hasNextPage ? { openNext: openNextFromEnd } : null,
         }
       : null;
   const title =
@@ -701,6 +768,9 @@ export function ReaderPage({ view }: { view: View }) {
                 ? `「${mentionName}」を含む記事`
                 : "名前を含む記事"
               : TITLES[view];
+  // One time for every row, to the minute: the rows are memoized, and a new time on each render would draw them
+  // all again. A row shows the time of day, 昨日, or a date, none of which changes within the minute.
+  const listMinute = Math.floor(now().getTime() / 60_000) * 60_000;
 
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
@@ -773,7 +843,8 @@ export function ReaderPage({ view }: { view: View }) {
         onScroll={(event) => positions.current.set(listKey, event.currentTarget.scrollTop)}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
+        {/* A next page that could not be loaded is said below the rows, where the reader is. */}
+        {active.isError && !active.isFetchNextPageError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
@@ -791,7 +862,7 @@ export function ReaderPage({ view }: { view: View }) {
               selected={item.id === current}
               sourceName={sourceName(item)}
               timeZone={timeZone}
-              now={now()}
+              now={listMinute}
               time={recentlyRead ? "read" : "updated"}
               excerpt={excerpts.get(item.id)?.excerpt ?? null}
               excerptFromNote={excerpts.get(item.id)?.excerptFromNote ?? false}
@@ -800,10 +871,21 @@ export function ReaderPage({ view }: { view: View }) {
           ))}
         </ul>
         {active.hasNextPage ? (
-          <div className="flex justify-center p-lg">
+          <div ref={moreMark} data-list-more className="flex flex-col items-center gap-sm p-lg">
+            {active.isFetchNextPageError ? (
+              <p role="alert" className="type-body-md text-error">
+                続きを読み込めませんでした。
+              </p>
+            ) : null}
             <Button onClick={() => void active.fetchNextPage()} disabled={active.isFetchingNextPage}>
-              さらに読み込む
+              {active.isFetchingNextPage ? "読み込んでいます" : "さらに読み込む"}
             </Button>
+          </div>
+        ) : null}
+        {items.length > 0 && active.isSuccess && !active.hasNextPage ? (
+          <div data-list-end className="flex flex-col items-center gap-sm p-lg type-body-md">
+            <p className="text-on-surface-muted">一覧の最後です</p>
+            {openNextFromEnd ? <Button onClick={openNextFromEnd}>未読のある次の項目を開く</Button> : null}
           </div>
         ) : null}
         {/* Room below the last row, so that it too can go past the top. */}
@@ -814,6 +896,10 @@ export function ReaderPage({ view }: { view: View }) {
 
   return (
     <div ref={root} className="flex h-full min-h-0">
+      {/* Read out when a key meets the end of the list. The focus stays where it is. */}
+      <div aria-live="polite" data-list-end-said className="sr-only">
+        {endSaid > 0 ? <span key={endSaid}>一覧の最後です</span> : null}
+      </div>
       {showList ? (
         layout === "narrow" ? (
           <div className="min-w-0 flex-1">{listPane}</div>

@@ -1,4 +1,4 @@
-import { createTopic, insertFeed, recordFetchFailure, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
+import { createTopic, insertFeed, recordFetchFailure, requestFetchAll, resolvePricing, setArticleFlags, updateCategory, updateFeed, updateSettings } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -84,7 +84,7 @@ describe("the list of views and categories", () => {
 
     const views = await within(nav()).findAllByRole("list");
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
-    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "最近読んだ記事", "注釈", "ダイジェスト"]);
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト"]);
     expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
     expect(within(nav()).getByRole("link", { name: "注釈" })).toHaveTextContent(/^注釈$/);
     expect(within(nav()).getByRole("link", { name: "ダイジェスト" })).toHaveTextContent(/^ダイジェスト$/);
@@ -863,6 +863,85 @@ describe("the marks of a feed's state in the left pane", () => {
     await user.click(within(nav()).getByRole("button", { name: "Toolsの下の項目" }));
 
     expect(within(link(/^Tools/)).getByRole("img", { name: "取得に失敗した購読フィードがあります" })).toBeInTheDocument();
+  });
+});
+
+describe("fetching every feed from the list of entries", () => {
+  const rss = (title: string, keys: string[]) =>
+    `<?xml version="1.0"?><rss version="2.0"><channel><title>${title}</title>${keys
+      .map((key) => `<item><title>${key}</title><guid>${key}</guid><link>https://blog.example.org/${key}</link><pubDate>Sun, 01 Mar 2026 11:00:00 GMT</pubDate></item>`)
+      .join("")}</channel></rss>`;
+  const feedOf = (server: TestServer, title: string) => insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title }, server.clock);
+  const button = () => within(nav()).findByRole("button", { name: "すべての購読フィードをいま取得" });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fetches the feeds, says so, and shows the new counts and articles without waiting for the minute", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server = makeServer();
+    server.site.set("https://blog.example.org/feed.xml", rss("Blog", ["First post", "Second post"]));
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, advanceTimers: (ms) => void vi.advanceTimersByTime(ms) });
+
+    const all = await button();
+    expect(all).toHaveTextContent("いま取得");
+    await user.click(all);
+    await server.poller.idle();
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(await screen.findByText("すべての購読フィードを取得しました")).toBeInTheDocument();
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2"));
+    expect(await within(list()).findByRole("link", { name: /First post/ })).toBeInTheDocument();
+    expect(all).toHaveTextContent("いま取得");
+    expect(all).toBeEnabled();
+  });
+
+  it("shows 取得中… when the page opens while feeds still wait for a fetch of all", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    requestFetchAll(server.db, server.clock());
+    renderApp({ server });
+
+    const all = await button();
+    await waitFor(() => expect(all).toHaveTextContent("取得中…"));
+    expect(all).toBeDisabled();
+  });
+
+  it("says how many fetches failed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server = makeServer();
+    server.site.set("https://blog.example.org/feed.xml", rss("Blog", ["a"]));
+    feedOf(server, "Blog");
+    feedOf(server, "Down");
+    const { user } = renderApp({ server, advanceTimers: (ms) => void vi.advanceTimersByTime(ms) });
+
+    await user.click(await button());
+    await server.poller.idle();
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(await screen.findByText("1件の取得に失敗しました")).toBeInTheDocument();
+  });
+
+  it("starts nothing and says so when every feed is paused", async () => {
+    const server = makeServer();
+    updateFeed(server.db, feedOf(server, "Blog").id, { enabled: false });
+    const { user } = renderApp({ server });
+
+    await user.click(await button());
+
+    expect(await screen.findByText("取得する購読フィードはありません")).toBeInTheDocument();
+    expect(server.site.requests).toHaveLength(0);
+  });
+
+  it("has no button while there is no feed", async () => {
+    const server = makeServer();
+    server.category("Tools");
+    renderApp({ server });
+
+    expect(await within(nav()).findByRole("link", { name: /^Tools/ })).toBeInTheDocument();
+    expect(within(nav()).queryByRole("button", { name: "すべての購読フィードをいま取得" })).not.toBeInTheDocument();
   });
 });
 

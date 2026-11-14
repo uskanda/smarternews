@@ -811,17 +811,17 @@ export type Counts = z.infer<typeof countsSchema>;
  * generated articles of a category, or a subscribed feed. The recently read articles keep none.
  */
 export type ListViewTarget =
-  | { list: "unread" | "all" | "starred" | "generated" | "uncategorized" }
+  | { list: "unread" | "all" | "starred" | "generated" | "feeds" | "uncategorized" }
   | { list: "category" | "category_generated"; categoryId: number }
   | { list: "feed"; feedId: number };
 
 /**
  * The entry a key names, in the form the apps make for a route: `unread`, `all`, `starred`, `generated`,
- * `uncategorized`, `category-3`, `category-3-generated`, `feed-12`. Null for `recently-read`, which keeps no
- * list view, and for anything else.
+ * `feeds` (the feed articles of every feed), `uncategorized`, `category-3`, `category-3-generated`, `feed-12`.
+ * Null for `recently-read`, which keeps no list view, and for anything else.
  */
 export function parseListViewKey(key: string): ListViewTarget | null {
-  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "uncategorized") return { list: key };
+  if (key === "unread" || key === "all" || key === "starred" || key === "generated" || key === "feeds" || key === "uncategorized") return { list: key };
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
   if (category) return { list: category[2] === undefined ? "category" : "category_generated", categoryId: Number(category[1]) };
   const feed = /^feed-(\d{1,15})$/.exec(key);
@@ -920,6 +920,11 @@ export const feedSchema = z.object({
   goneAt: z.string().nullable(),
   /** When the feed is fetched next, no earlier than a Retry-After of the last failure asked. Null while it is disabled. */
   nextFetchAt: z.string().nullable(),
+  /**
+   * When a fetch of every feed was asked for, while this feed still waits for its turn. Null once it was
+   * fetched, and for a feed nothing asked for.
+   */
+  fetchRequestedAt: z.string().nullable(),
   articleCount: z.number().int(),
   starredCount: z.number().int(),
   /** The articles of this feed with an annotation, each counted once: they go with the feed when it is deleted. */
@@ -1039,6 +1044,19 @@ export const feedFetchResultSchema = z.object({
   feed: feedSchema,
 });
 export type FeedFetchResult = z.infer<typeof feedFetchResultSchema>;
+
+/**
+ * What a request to fetch every feed asked for. It answers before anything is fetched: `fetchRequestedAt` of the
+ * feeds says which still wait.
+ */
+export const feedFetchAllResultSchema = z.object({
+  /** The enabled feeds that are fetched now. */
+  requested: z.number().int(),
+  /** The enabled feeds left out because they wait for the time a Retry-After gave. */
+  skipped: z.number().int(),
+  requestedAt: z.string(),
+});
+export type FeedFetchAllResult = z.infer<typeof feedFetchAllResultSchema>;
 
 export const opmlImportResultSchema = z.object({
   feedsCreated: z.number().int(),
@@ -1636,7 +1654,7 @@ export type SettingsFileTermGroup = z.infer<typeof settingsFileTermGroupSchema>;
  * articles of a category with `generatedOnly`, a feed by its URL.
  */
 const settingsFileListViewTargetSchema = z.union([
-  z.enum(["unread", "all", "starred", "generated", "uncategorized"]),
+  z.enum(["unread", "all", "starred", "generated", "feeds", "uncategorized"]),
   z.object({ category: slugSchema, generatedOnly: z.boolean().optional() }).strict(),
   z.object({ feed: feedUrlSchema }).strict(),
 ]);

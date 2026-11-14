@@ -39,6 +39,7 @@ const routes: RouteObject[] = [
       { path: "all/:articleId?", element: <ReaderPage view="all" /> },
       { path: "starred/:articleId?", element: <ReaderPage view="starred" /> },
       { path: "generated/:articleId?", element: <ReaderPage view="generated" /> },
+      { path: "feeds/:articleId?", element: <ReaderPage view="feeds" /> },
       { path: "uncategorized/:articleId?", element: <ReaderPage view="uncategorized" /> },
       { path: "recently-read/:articleId?", element: <ReaderPage view="recentlyRead" /> },
       { path: "annotations/:articleId?", element: <ReaderPage view="annotations" /> },
@@ -75,9 +76,11 @@ export function App({ fetchImpl, initialEntries, now, onLocation, onHistory }: A
       if (next === null) queryClient.clear();
       setTokenState(next);
     };
+    const getToken = () => tokenRef.current;
     return {
-      api: createApi({ fetchImpl, getToken: () => tokenRef.current, onUnauthorized: () => setToken(null) }),
+      api: createApi({ fetchImpl, getToken, onUnauthorized: () => setToken(null) }),
       now: now ?? (() => new Date()),
+      getToken,
       clearToken: () => setToken(null),
       setToken,
     };

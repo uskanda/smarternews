@@ -117,6 +117,40 @@ describe("the run history", () => {
     expect(within(rows()[0]!).getAllByRole("cell")[6]).toHaveTextContent("3");
   });
 
+  const ALL_LIMIT = "新しい100件だけを表示しています。カテゴリで絞り込むと、それより古い実行が出ます。";
+  const CATEGORY_LIMIT = "このカテゴリの新しい100件だけを表示しています。";
+
+  it("says that only the newest 100 runs are shown when the list reaches 100", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 100; i++) finished(server, category.id);
+    renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByText(ALL_LIMIT)).toBeInTheDocument();
+    expect(rows()).toHaveLength(100);
+  });
+
+  it("says nothing about the limit when the list has fewer than 100 runs", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 99; i++) finished(server, category.id);
+    renderApp({ server, route: "/runs" });
+
+    await waitFor(() => expect(rows()).toHaveLength(99));
+    expect(screen.queryByText(ALL_LIMIT)).not.toBeInTheDocument();
+    expect(screen.queryByText(CATEGORY_LIMIT)).not.toBeInTheDocument();
+  });
+
+  it("does not suggest narrowing when the list is already narrowed to a category", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 100; i++) finished(server, category.id);
+    renderApp({ server, route: `/runs?category=${category.id}` });
+
+    expect(await screen.findByText(CATEGORY_LIMIT)).toBeInTheDocument();
+    expect(screen.queryByText(ALL_LIMIT)).not.toBeInTheDocument();
+  });
+
   it("says that there are no runs yet", async () => {
     renderApp({ route: "/runs" });
     expect(await screen.findByText("実行の記録はまだありません。")).toBeInTheDocument();

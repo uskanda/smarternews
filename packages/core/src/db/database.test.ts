@@ -906,6 +906,48 @@ describe("the migration to list views", () => {
   });
 });
 
+describe("the migration that lets the feed articles of every feed keep a list view", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("allows the entry, and leaves the rows that exist as they were", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "031")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    const insert = (list: string, categoryId: number | null, feedId: number | null, sort = "oldest") =>
+      db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, ?, ?, ?)").run(list, categoryId, feedId, sort);
+    insert("feed", null, 5);
+    insert("unread", null, null);
+    insert("category", 3, null);
+    insert("category_generated", 3, null);
+    expect(() => insert("feeds", null, null)).toThrow();
+    const rows = () => db.prepare("SELECT * FROM list_views ORDER BY id").all();
+    const before = rows();
+    expect(before).toHaveLength(4);
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("031_"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(before);
+    insert("feeds", null, null);
+    expect(db.prepare("SELECT sort FROM list_views WHERE list = 'feeds'").get()).toEqual({ sort: "oldest" });
+    // What the table held to before, it still holds to: one row per entry, sensible pairs, and the cascades.
+    expect(() => insert("feeds", null, null)).toThrow();
+    expect(() => insert("unread", null, null)).toThrow();
+    expect(() => insert("feeds", 3, null)).toThrow();
+    expect(() => insert("feeds", null, 5)).toThrow();
+    expect(() => insert("recently_read", null, null)).toThrow();
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name IN ('list_views', 'list_views_target', 'list_views_new')").get()).toEqual({ n: 2 });
+    db.prepare("DELETE FROM feeds WHERE id = 5").run();
+    db.prepare("DELETE FROM categories WHERE id = 3").run();
+    expect(db.prepare("SELECT list FROM list_views ORDER BY id").all()).toEqual([{ list: "unread" }, { list: "feeds" }]);
+  });
+});
+
 describe("the migration to feed stats", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 
