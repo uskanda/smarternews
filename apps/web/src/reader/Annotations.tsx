@@ -582,7 +582,11 @@ export function AnnotatedBody({
           <span ref={trigger} aria-hidden className="pointer-events-none fixed top-0 left-0 size-0" />
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
-          <ContextMenu.Content className={MENU} aria-label="選んだ文字列の操作" onCloseAutoFocus={(event) => event.preventDefault()}>
+          <ContextMenu.Content
+            className={MENU}
+            aria-label="選んだ文字列の操作"
+            data-hotkeys="off"
+            onCloseAutoFocus={(event) => event.preventDefault()}>
             {menuFor
               ? [
                   ...choices(menuFor).map((choice) => (
