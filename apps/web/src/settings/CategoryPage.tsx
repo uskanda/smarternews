@@ -670,6 +670,8 @@ function DeleteCategory({ category }: { category: Category }) {
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["feeds"] });
     void client.invalidateQueries({ queryKey: ["filters"] });
+    // The annotations of the generated articles go with them.
+    void client.invalidateQueries({ queryKey: ["annotations"] });
   }
   async function remove() {
     try {

@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { buildConnectLink } from "@smarternews/client";
 import { useState } from "react";
 import { encode } from "uqr";
-import { readToken } from "../lib/token-store.ts";
+import { useApp } from "../app/context.ts";
 import { Button } from "../ui/controls.tsx";
 
 const BORDER = 4;
@@ -29,11 +29,13 @@ export function qrPath(text: string): { size: number; d: string } {
  * drawn only while the dialog is open, because whoever can see it can read everything.
  */
 export function ConnectCode() {
+  const { getToken } = useApp();
   const [link, setLink] = useState<string | null>(null);
   const code = link === null ? null : qrPath(link);
 
   function show() {
-    const token = readToken();
+    // The token in use, not the stored one: where the browser keeps no site data, nothing is stored.
+    const token = getToken();
     if (token) setLink(buildConnectLink(window.location.origin, token));
   }
 
