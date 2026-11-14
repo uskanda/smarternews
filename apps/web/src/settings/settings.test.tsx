@@ -14,7 +14,7 @@ import {
   updateCategory,
 } from "@smarternews/core";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -854,6 +854,26 @@ describe("connecting the Android app", () => {
     const expected = qrPath(buildConnectLink(window.location.origin, API_TOKEN));
     expect(code.querySelector("path")?.getAttribute("d")).toBe(expected.d);
     expect(expected.d.length).toBeGreaterThan(100);
+  });
+
+  it("shows a code with the entered token where the browser keeps no site data", async () => {
+    const denied = () => {
+      throw new DOMException("The site data is blocked.", "SecurityError");
+    };
+    const spies = [
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "removeItem").mockImplementation(denied),
+    ];
+    onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+    const { user } = renderApp({ route: "/settings", token: null });
+
+    await user.type(await screen.findByLabelText("APIのトークン"), API_TOKEN);
+    await user.click(screen.getByRole("button", { name: "接続する" }));
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    expect(code.querySelector("path")?.getAttribute("d")).toBe(qrPath(buildConnectLink(window.location.origin, API_TOKEN)).d);
   });
 
   it("draws the code black on white in the dark scheme too", async () => {
