@@ -396,11 +396,14 @@ export function ReaderPage({ view }: { view: View }) {
     if (!wasRead) showRead(id, false);
     flags.mutate({ id, missed: false, ...(wasRead ? {} : { isRead: false }) });
   }
+  /** Changes the star: a row unstarred in the starred list is kept there, like a read one in an unread list. */
   function setStar(id: number, starred: boolean) {
-    setKept((current) => ({
-      key: current.key,
-      items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)),
-    }));
+    const summary = items.find((item) => item.id === id);
+    setKept((current) =>
+      !starred && target?.type === "starred" && summary
+        ? { key: listKey, items: [...current.items.filter((item) => item.id !== id), { ...summary, starred }] }
+        : { key: current.key, items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)) },
+    );
     flags.mutate({ id, starred });
   }
   function toggleStar(target: { id: number; starred: boolean }) {
