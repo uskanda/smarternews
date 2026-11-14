@@ -546,6 +546,147 @@ describe("drawing a body again for its highlights", () => {
     expect(renders).toBe(2);
     expect(withOne.result.current.marksFor(0)!.ranges).toEqual([{ start: 0, end: 2, id: 1, note: false, first: true, last: true }]);
   });
+
+  it("starts again from the text of the new body when the body shown changes", () => {
+    const hook = renderHook(({ count, bodyKey }) => useBodyAnnotations([highlight], count, true, bodyKey), {
+      initialProps: { count: 1, bodyKey: "original" },
+    });
+    act(() => hook.result.current.marksFor(0)!.onText!("電池の話"));
+    expect(hook.result.current.marksFor(0)!.ranges).toEqual([{ start: 0, end: 2, id: 1, note: false, first: true, last: true }]);
+
+    // The translation has two parts: until both are drawn, the text of the original is not used for them.
+    hook.rerender({ count: 2, bodyKey: "translated" });
+    expect(hook.result.current.located).toBeNull();
+    act(() => hook.result.current.marksFor(1)!.onText!("次の段落"));
+    expect(hook.result.current.located).toBeNull();
+    act(() => hook.result.current.marksFor(0)!.onText!("新しい電池の話"));
+    expect(hook.result.current.marksFor(0)!.ranges).toEqual([{ start: 3, end: 5, id: 1, note: false, first: true, last: true }]);
+    expect(hook.result.current.marksFor(1)!.ranges).toEqual([]);
+  });
+});
+
+describe("a dialog of an annotation when the body shown changes", () => {
+  const ORIGINAL = "The plant opens soon.\n\nIt is new.";
+
+  /** A feed that translates, in a news category, with an article whose translation waits for the test. */
+  function translating() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const server = makeServer(undefined, {
+      google: {
+        calls: [],
+        async translate(items: { text: string }[]) {
+          await gate;
+          return { texts: items.map((item) => `訳:${item.text}`), sourceLanguage: "en" };
+        },
+      },
+    });
+    const category = server.category("Alpha");
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", translate: true, categoryId: category.id }, server.clock);
+    const id = seedFeedArticle(server.db, feed.id, { title: "Battery plant", body: ORIGINAL });
+    return { server, id, route: `/f/${feed.id}/${id}`, release };
+  }
+
+  // While a dialog is open, the rest of the page is hidden from the accessibility tree: the article is found by its text.
+  const article = () => document.querySelector<HTMLElement>("article")!;
+
+  async function arrives(release: () => void) {
+    release();
+    await within(article()).findByText("訳:The plant opens soon.");
+  }
+
+  async function choose(user: ReturnType<typeof renderApp>["user"], text: string, choice: string) {
+    const opening = await opened();
+    await within(opening).findByText(/The plant opens/);
+    selectText(opening.querySelector(".article-body")!, text);
+    await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: choice }));
+  }
+
+  it("keeps the note being written for a selection when the translation arrives, and saves it", async () => {
+    const { server, route, release } = translating();
+    const { user } = renderApp({ server, route });
+    await choose(user, "The plant opens", "メモを書く");
+    const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
+    await user.type(within(dialog).getByLabelText("メモ"), "規模を確かめる");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("規模を確かめる");
+    await user.click(within(dialog).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(stored(server)).toMatchObject([{ quote: "The plant opens", note: "規模を確かめる" }]));
+    await waitFor(() => expect(within(pane()).getByRole("button", { name: "ハイライト、メモあり" })).toHaveTextContent("The plant opens"));
+  });
+
+  it("keeps the note of a highlight being rewritten when the translation arrives", async () => {
+    const { server, id, route, release } = translating();
+    addHighlight(server.db, id, anchor("The plant opens", "前のメモ"), server.clock().toISOString());
+    const { user } = renderApp({ server, route });
+    await user.click(await within(await opened()).findByRole("button", { name: "ハイライト、メモあり" }));
+    const dialog = await screen.findByRole("dialog", { name: "ハイライト" });
+    await user.click(within(dialog).getByRole("button", { name: "メモを書き直す" }));
+    await user.type(within(dialog).getByLabelText("メモ"), "に足す");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "ハイライト" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("前のメモに足す");
+  });
+
+  it("keeps the dialog of a hide filter when the translation arrives", async () => {
+    const { server, route, release } = translating();
+    const { user } = renderApp({ server, route });
+    await choose(user, "plant", "隠すフィルターを作る…");
+    const dialog = await screen.findByRole("dialog", { name: "隠すフィルターを作る" });
+    const value = within(dialog).getByLabelText("条件1の値");
+    await user.clear(value);
+    await user.type(value, "plants");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "隠すフィルターを作る" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("条件1の値")).toHaveValue("plants");
+  });
+
+  it("keeps the dialog of a topic when the translation arrives", async () => {
+    const { server, route, release } = translating();
+    const { user } = renderApp({ server, route });
+    await choose(user, "The plant opens", "トピックを足す…");
+    const dialog = await screen.findByRole("dialog", { name: "トピックを足す" });
+    await user.type(within(dialog).getByLabelText("文章"), " in Ohio");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "トピックを足す" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("文章")).toHaveValue("The plant opens in Ohio");
+  });
+
+  it("keeps the note being written for a selection when the full content arrives", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
+    const id = seedFeedArticle(server.db, feed.id, { title: "Battery plant", body: ORIGINAL, url: "https://blog.example.org/story" });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const sentence = "A sentence of the page that the full content is taken from. ".repeat(8);
+    server.site.set("https://blog.example.org/story", (async () => {
+      await gate;
+      return new Response(`<html><head><title>a</title></head><body><article><h1>a</h1><p>${sentence}</p><p>${sentence}</p></article></body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as () => Response);
+    const { user } = renderApp({ server, route: `/f/${feed.id}/${id}` });
+    await user.click(await within(await opened()).findByRole("button", { name: "全文を取得" }));
+    await within(pane()).findByText("全文を取得しています。");
+    await choose(user, "The plant opens", "メモを書く");
+    const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
+    await user.type(within(dialog).getByLabelText("メモ"), "規模を確かめる");
+
+    release();
+    expect(await within(article()).findAllByText(/A sentence of the page/)).not.toHaveLength(0);
+
+    expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("規模を確かめる");
+  });
 });
 
 describe("an annotation on a feed article that filters hide", () => {
