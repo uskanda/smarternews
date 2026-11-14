@@ -3,6 +3,7 @@ import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { setFontSize } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -49,6 +50,20 @@ describe("the list that opens first", () => {
     renderApp();
     expect(await screen.findByText("カテゴリがまだありません。")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "設定でカテゴリを追加する" })).toHaveAttribute("href", "/settings");
+  });
+
+  it("sends the buttons below the list's name when the name would keep less than six characters beside them", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "One" }]);
+    renderApp({ server, width: 390 });
+
+    // jsdom lays nothing out: the classes are what lets the row and the buttons wrap.
+    const heading = await screen.findByRole("heading", { level: 1, name: "未読" });
+    expect(heading).toHaveClass("min-w-0", "grow", "basis-[6em]", "truncate");
+    expect(heading.parentElement).toHaveClass("flex-wrap");
+    const buttons = screen.getByRole("button", { name: "読み直す" }).parentElement;
+    expect(buttons).toHaveClass("flex-wrap");
+    expect(buttons).not.toHaveClass("shrink-0");
   });
 });
 
@@ -1416,6 +1431,17 @@ describe("Space through the article", () => {
     await user.keyboard("{Shift>} {/Shift}");
     expect(pane.scrollTop).toBe(400 - 33);
     expect(path()).toBe(`/all/${newer}`);
+  });
+
+  it("keeps a line of the larger text in view when the browser's font size is doubled", async () => {
+    setFontSize(32);
+    const { server, newer } = seeded();
+    const { user } = renderApp({ server, route: `/all/${newer}`, width: 2400 });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    const pane = layOut(2000);
+
+    await user.keyboard(" ");
+    expect(pane.scrollTop).toBe(400 - 66);
   });
 
   it("moves to the next article at the end of the body, and shows it from the top", async () => {

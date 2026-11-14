@@ -628,7 +628,10 @@ export function ReaderPage({ view }: { view: View }) {
     if (articleId === null || !pane) return move(step);
     const end = step === 1 ? pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 : pane.scrollTop <= 0;
     if (end) return move(step);
-    const by = Math.max(pane.clientHeight - lineHeights["body-lg"], lineHeights["body-lg"]);
+    // The line height is in pixels at the browser's default 16px; the text grows with the font size it is set to.
+    const rootSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const line = lineHeights["body-lg"] * (rootSize > 0 ? rootSize / 16 : 1);
+    const by = Math.max(pane.clientHeight - line, line);
     pane.scrollTop = Math.max(0, pane.scrollTop + step * by);
   };
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = opened ?? items[index];
@@ -706,11 +709,13 @@ export function ReaderPage({ view }: { view: View }) {
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
-        <div className="flex items-center justify-between gap-sm">
-          <h1 className="min-w-0 truncate type-headline-md" title={title}>
+        {/* The buttons go below the name only when it would keep less than six characters beside them, as on a
+            narrow screen with larger text; they wrap among themselves when even one row cannot hold both. */}
+        <div className="flex flex-wrap items-center justify-between gap-sm">
+          <h1 className="min-w-0 grow basis-[6em] truncate type-headline-md" title={title}>
             {title}
           </h1>
-          <div className="flex shrink-0 gap-sm">
+          <div className="flex flex-wrap gap-sm">
             {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
             <Button onClick={refresh}>読み直す</Button>
           </div>
