@@ -1022,6 +1022,142 @@ describe("a star or a read state the server cannot store", () => {
   });
 });
 
+describe("a star or a read state changed while the list or the change before is still under way", () => {
+  const listFetch = (request: string) => /^GET \S*\/articles\?/.test(request);
+  const patchOf = (id: number) => (request: string) => new RegExp(`^PATCH \\S*/articles/${id}$`).test(request);
+  const patches = (requests: string[]) => requests.filter((request) => request.startsWith("PATCH"));
+
+  /** Opens the article in the full list, which reads it, and waits until the server has it read. */
+  async function openInAll(server: TestServer, id: number) {
+    const rendered = renderApp({ server, route: "/all" });
+    await rendered.user.click(await screen.findByRole("link", { name: /Story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+    return rendered;
+  }
+
+  it("shows an article opened with the list read, when the first load of the list answers after it was read", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    const { hold, requests } = renderApp({ server, route: `/all/${id}` });
+    // The list waits for the list views, so it is not asked for yet.
+    expect(requests.some(listFetch)).toBe(false);
+    const late = hold(listFetch);
+    await screen.findByRole("heading", { level: 2, name: "Story" });
+    await waitFor(() => expect(late.held()).toBe(1));
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+
+    await late.release();
+
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+  });
+
+  it("keeps an article read in the unread list when its first load answers after it was read", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    const { hold } = renderApp({ server, route: `/unread/${id}` });
+    const late = hold(listFetch);
+    await screen.findByRole("heading", { level: 2, name: "Story" });
+    await waitFor(() => expect(late.held()).toBe(1));
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+
+    await late.release();
+
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+  });
+
+  it("shows the next page, and m's state, when m is pressed while the next page loads", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const ids = articles(server, category.id, [{ title: "Last of all" }, ...Array.from({ length: 50 }, (_, index) => ({ title: `Filler ${index}` })), { title: "Story" }]);
+    const id = ids.at(-1)!;
+    const { user, hold } = await openInAll(server, id);
+    const late = hold(listFetch);
+    await user.click(screen.getByRole("button", { name: "さらに読み込む" }));
+    await waitFor(() => expect(late.held()).toBe(1));
+
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+    await late.release();
+
+    expect(await within(list()).findByRole("link", { name: /Last of all/ })).toBeInTheDocument();
+    expect(row(/Story/)).toHaveAttribute("data-read", "false");
+  });
+
+  it("keeps m's state when the list fetched again after s answers late", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    const { user, hold } = await openInAll(server, id);
+    const late = hold(listFetch);
+    await user.keyboard("s");
+    await waitFor(() => expect(late.held()).toBeGreaterThan(0));
+
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+    await late.release();
+
+    await waitFor(() => expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
+    expect(row(/Story/)).toHaveAttribute("data-read", "false");
+    expect(screen.getByRole("button", { name: "既読にする" })).toBeInTheDocument();
+  });
+
+  it("fetches the list it stopped again once the change is stored", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    const { user, hold, requests } = await openInAll(server, id);
+    const late = hold(listFetch);
+    await user.keyboard("s");
+    await waitFor(() => expect(late.held()).toBe(1));
+
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+
+    await waitFor(() => expect(late.held()).toBe(2));
+    expect(requests.findLastIndex(listFetch)).toBeGreaterThan(requests.findLastIndex(patchOf(id)));
+    await late.release();
+
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "false"));
+    expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument();
+  });
+
+  it("sends a second change of the same article only after the first is answered", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    const { user, hold, requests } = await openInAll(server, id);
+    const slow = hold(patchOf(id));
+    expect(patches(requests)).toHaveLength(1);
+
+    await user.keyboard("m");
+    await waitFor(() => expect(slow.held()).toBe(1));
+    await user.keyboard("m");
+
+    expect(row(/Story/)).toHaveAttribute("data-read", "true");
+    expect(patches(requests)).toHaveLength(2);
+    await slow.release();
+    await waitFor(() => expect(patches(requests)).toHaveLength(3));
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    expect(row(/Story/)).toHaveAttribute("data-read", "true");
+  });
+
+  it("sends a change of another article without waiting for one under way", async () => {
+    const server = makeServer();
+    const [first, second] = articles(server, server.category().id, [{ title: "Story" }, { title: "Other" }]);
+    const { user, hold, requests } = await openInAll(server, first!);
+    const slow = hold(patchOf(first!));
+
+    await user.keyboard("m");
+    await waitFor(() => expect(slow.held()).toBe(1));
+    await user.keyboard("k");
+    await screen.findByRole("heading", { level: 2, name: "Other" });
+
+    await waitFor(() => expect(requests.some(patchOf(second!))).toBe(true));
+    await waitFor(() => expect(getArticle(server.db, second!).isRead).toBe(true));
+    await slow.release();
+    await waitFor(() => expect(getArticle(server.db, first!).isRead).toBe(false));
+  });
+});
+
 describe("events", () => {
   function seeded() {
     const server = makeServer("2026-03-10T12:00:00.000Z");
