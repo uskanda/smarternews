@@ -12,6 +12,7 @@ import {
   WINDOW_HOURS_MAX,
   type Category,
   type CategoryUpdate,
+  type Run,
   type SearchLocale,
   type Topic,
   type TopicUpdate,
@@ -19,8 +20,20 @@ import {
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { ApiError, checkText, checkTimes, checkWholeNumber, describeProblem, fieldMessage, linesOf } from "@smarternews/client";
-import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTopics } from "../api/queries.ts";
+import {
+  ApiError,
+  checkText,
+  checkTimes,
+  checkWholeNumber,
+  describeProblem,
+  fieldMessage,
+  formatFull,
+  linesOf,
+  STATUS_LABEL,
+  TRIGGER_LABEL,
+} from "@smarternews/client";
+import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTimeZone, useTopics, useTopicStats } from "../api/queries.ts";
+import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
@@ -585,7 +598,7 @@ function Topics({ category }: { category: Category }) {
   }
 
   return (
-    <section aria-label="トピック" className={SECTION}>
+    <section id="topics" aria-label="トピック" className={SECTION}>
       <h2 className="type-headline-md">トピック</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         追いたい話題を、キーワードか文章で書きます。何を拾い、何を除くかを文章で書くほど、外れが減ります。
@@ -637,7 +650,7 @@ function RunNow({ category }: { category: Category }) {
   }
 
   return (
-    <section aria-label="実行" className={SECTION}>
+    <section id="run" aria-label="実行" className={SECTION}>
       <h2 className="type-headline-md">実行</h2>
       <div className="flex flex-wrap items-center gap-md">
         <Button onClick={() => void run()} disabled={active}>
@@ -648,7 +661,29 @@ function RunNow({ category }: { category: Category }) {
           このカテゴリの実行履歴
         </Link>
       </div>
+      {runs.isError ? <ErrorNotice error={runs.error} onRetry={() => void runs.refetch()} /> : null}
+      {runs.data ? <LatestRun run={runs.data[0]} /> : null}
     </section>
+  );
+}
+
+/** The latest run of the category, whatever started it, as the run history writes it, with a link to its details. */
+function LatestRun({ run }: { run: Run | undefined }) {
+  const timeZone = useTimeZone();
+  if (!run) return <p className="type-body-md text-on-surface-muted">まだ実行していません。</p>;
+  const tone = run.status === "failed" ? "text-error" : run.status === "partial" || run.status === "stopped_by_limit" ? "text-warning" : "";
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-md gap-y-xs type-body-md">
+      <span className="text-on-surface-muted">直近の実行</span>
+      <Link to={`/runs/${run.id}`} className="tap tabular-nums text-primary underline underline-offset-4">
+        {formatFull(run.startedAt ?? run.queuedAt, timeZone)}
+      </Link>
+      <span>{TRIGGER_LABEL[run.trigger]}</span>
+      <span className={tone}>{STATUS_LABEL[run.status]}</span>
+      <span className="tabular-nums">
+        作成 {run.articlesCreated}件・更新 {run.articlesUpdated}件
+      </span>
+    </p>
   );
 }
 
@@ -696,7 +731,7 @@ function DeleteCategory({ category }: { category: Category }) {
   }
 
   return (
-    <section aria-label="削除" className={SECTION}>
+    <section id="delete" aria-label="削除" className={SECTION}>
       <h2 className="type-headline-md">削除</h2>
       <div>
         <Button onClick={() => setOpen(true)}>カテゴリを削除</Button>
@@ -728,6 +763,43 @@ function DeleteCategory({ category }: { category: Category }) {
 
 // ---- page --------------------------------------------------------------------------------------
 
+/** The sections of the page, in their order, as the links under the heading name them. */
+const SECTIONS = [
+  { id: "settings", name: "カテゴリの設定" },
+  { id: "topics", name: "トピック" },
+  { id: "topic-stats", name: "トピックの成績" },
+  { id: "run", name: "実行" },
+  { id: "delete", name: "削除" },
+] as const;
+
+/** Links to every section, like those of the settings page: they wrap when the width runs out and scroll away. */
+function SectionLinks({ categoryId }: { categoryId: number }) {
+  return (
+    <nav aria-label="カテゴリの区画">
+      <ul className="flex flex-wrap gap-x-lg gap-y-xs type-body-md">
+        {SECTIONS.map((section) => (
+          <li key={section.id}>
+            <Link to={`/settings/categories/${categoryId}#${section.id}`} className="tap text-primary underline underline-offset-4">
+              {section.name}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+/**
+ * Scrolls to the section the address names. The topics and their stats grow the page when they are in, which moves
+ * the sections below them, so it waits for both, a failure counting as being in.
+ */
+function ScrollToSection({ categoryId }: { categoryId: number }) {
+  const topics = useTopics(categoryId);
+  const stats = useTopicStats(categoryId);
+  useScrollToHash(!topics.isPending && !stats.isPending);
+  return null;
+}
+
 /** One category: its settings, its topics and their stats, running it now, and deleting it. */
 export function CategoryPage() {
   const params = useParams();
@@ -755,8 +827,10 @@ export function CategoryPage() {
             設定へ戻る
           </Link>
           <h1 className="type-headline-md">{category.name}</h1>
+          <SectionLinks categoryId={category.id} />
         </header>
-        <section aria-label="カテゴリの設定" className={SECTION}>
+        <ScrollToSection categoryId={category.id} />
+        <section id="settings" aria-label="カテゴリの設定" className={SECTION}>
           <CategoryForm key={`${category.id}:${JSON.stringify(category)}`} category={category} />
           <CategoryHistory categoryId={category.id} />
         </section>

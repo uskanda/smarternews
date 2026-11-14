@@ -124,7 +124,7 @@ export function TopicStatsSection({ category }: { category: Category }) {
   const [ranked, setRanked] = useState(false);
   const entries = stats.data ? (ranked ? rankTopicStats(stats.data.topics) : stats.data.topics) : [];
   return (
-    <section aria-label="トピックの成績" className="flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl">
+    <section id="topic-stats" aria-label="トピックの成績" className="flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl">
       <div className="flex flex-wrap items-center justify-between gap-md">
         <h2 className="type-headline-md">トピックの成績</h2>
         <Checkbox label="問題のあるトピックを先頭へ" checked={ranked} onChange={(event) => setRanked(event.target.checked)} />

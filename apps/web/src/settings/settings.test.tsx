@@ -91,6 +91,51 @@ describe("the links to the sections", () => {
   });
 });
 
+describe("the links to the sections of a category", () => {
+  const SECTIONS = ["カテゴリの設定", "トピック", "トピックの成績", "実行", "削除"];
+  const nav = () => screen.getByRole("navigation", { name: "カテゴリの区画" });
+
+  it("lists the five sections under the heading, each pointing at its section", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+    await section("実行");
+
+    const links = within(nav()).getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(SECTIONS);
+    for (const [index, link] of links.entries()) {
+      const [path, id] = link.getAttribute("href")!.split("#");
+      expect(path).toBe(`/settings/categories/${category.id}`);
+      expect(document.getElementById(id!)).toHaveAccessibleName(SECTIONS[index]);
+    }
+  });
+
+  it("scrolls to the section the address names once the topics and their stats are in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws");
+    renderApp({ server, route: `/settings/categories/${category.id}#run` });
+
+    const run = await section("実行");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(run));
+    scroll.mockRestore();
+  });
+
+  it("moves to the section a link names", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const remove = await section("削除");
+
+    await user.click(within(nav()).getByRole("link", { name: "削除" }));
+
+    await waitFor(() => expect(scroll.mock.contexts).toContain(remove));
+    scroll.mockRestore();
+  });
+});
+
 describe("the main action of the settings", () => {
   it("is none: no button stands out over the others", async () => {
     renderApp({ route: "/settings" });
