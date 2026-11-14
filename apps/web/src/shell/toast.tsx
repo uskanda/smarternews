@@ -64,7 +64,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toast ? (
           <div
             role="status"
-            className="pointer-events-auto flex items-center gap-md rounded-md border border-outline bg-surface px-lg py-sm type-body-md text-on-surface"
+            className="pointer-events-auto flex items-center gap-md rounded-md border border-outline-strong bg-surface px-lg py-sm type-body-md text-on-surface"
             onMouseEnter={() => hold("pointer", true)}
             onMouseLeave={() => hold("pointer", false)}
             onFocus={() => hold("focus", true)}

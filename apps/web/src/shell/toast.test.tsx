@@ -26,6 +26,10 @@ afterEach(() => vi.useRealTimers());
 describe("a toast with an action", () => {
   const undo = () => ({ message: "3件を既読にしました", durationMs: 10_000, action: { label: "取り消す", run: vi.fn() } });
 
+  it("is drawn with the strong outline, so that it stands out on the white list and article", () => {
+    expect(shown(undo())).toHaveClass("border-outline-strong");
+  });
+
   it("goes away once its time is up", () => {
     shown(undo());
     wait(10_000);
