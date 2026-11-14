@@ -597,6 +597,56 @@ describe("the stats of the topics", () => {
     expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
   });
 
+  it("opens the editor again when the same topic is followed a second time", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    await screen.findByLabelText("トピックの文章");
+    await user.click(within(item).getByRole("button", { name: "閉じる" }));
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+    scroll.mockClear();
+
+    await user.click(link);
+
+    const text = await screen.findByLabelText("トピックの文章");
+    expect(text).toHaveValue("exploited flaws");
+    expect(text).toHaveFocus();
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
+  });
+
+  it("keeps what is typed in an open editor when its topic is followed again, and moves the focus to its text", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const text = await screen.findByLabelText("トピックの文章");
+    await user.clear(text);
+    await user.type(text, "zero-days");
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    scroll.mockClear();
+
+    await user.click(link);
+
+    expect(screen.getByLabelText("トピックの文章")).toBe(text);
+    expect(text).toHaveValue("zero-days");
+    await waitFor(() => expect(text).toHaveFocus());
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
+  });
+
   it("counts a topic added on the page", async () => {
     const server = makeServer();
     const category = server.category("Security");

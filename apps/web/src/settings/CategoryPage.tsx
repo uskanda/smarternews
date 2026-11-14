@@ -437,18 +437,20 @@ function TopicEditor({
 
 /**
  * One topic. A link to `#topic-<id>` opens its editor with the focus in its text, both when the page opens with
- * that hash and when the hash changes to it later. The editor opened with the button takes the focus to its first
- * field too, and when the editor closes, the focus goes back to the button.
+ * that hash and on every later move to it, the same hash followed again included. A move to it while the editor is
+ * open keeps what was typed and takes the focus to the text. The editor opened with the button takes the focus to
+ * its first field too, and when the editor closes, the focus goes back to the button.
  */
 function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
-  const { hash } = useLocation();
+  // Following the same link again keeps the hash but gives the move a new key.
+  const { hash, key } = useLocation();
   const anchor = `topic-${topic.id}`;
   const targeted = hash === `#${anchor}`;
   const [editing, setEditing] = useState(targeted);
   const [focusText, setFocusText] = useState(targeted);
-  const [seenHash, setSeenHash] = useState(hash);
-  if (hash !== seenHash) {
-    setSeenHash(hash);
+  const [seenKey, setSeenKey] = useState(key);
+  if (key !== seenKey) {
+    setSeenKey(key);
     if (targeted) {
       setEditing(true);
       setFocusText(true);
@@ -456,8 +458,12 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
   }
   const item = useRef<HTMLLIElement>(null);
   useEffect(() => {
-    if (targeted) item.current?.scrollIntoView?.({ block: "start" });
-  }, [targeted]);
+    if (!targeted) return;
+    item.current?.scrollIntoView?.({ block: "start" });
+    // An editor that was already open does not take the focus again by itself. The topic's text is its first
+    // multiline field.
+    item.current?.querySelector("textarea")?.focus();
+  }, [targeted, key]);
   // Going back to a version gives the topic new values; the editor starts again from them. The list of topics
   // catches up a moment later, so the editor takes them from the server's answer until it closes.
   const [restored, setRestored] = useState<Topic | null>(null);
