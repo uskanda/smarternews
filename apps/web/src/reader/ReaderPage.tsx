@@ -476,6 +476,8 @@ export function ReaderPage({ view }: { view: View }) {
     setRefreshes((count) => count + 1);
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["counts"] });
+    // The list of annotations is not a list of articles, so it is fetched again on its own.
+    if (isAnnotations) void client.invalidateQueries({ queryKey: ["annotations"] });
   }
 
   /**

@@ -9,6 +9,7 @@ import {
   insertFeed,
   listCategories,
   listTopics,
+  saveArticleNote,
   setArticleFlags,
   updateCategory,
 } from "@smarternews/core";
@@ -284,6 +285,27 @@ describe("deleting a category", () => {
 
     await waitFor(() => expect(listCategories(server.db)).toEqual([]));
     await waitFor(() => expect(path()).toBe("/settings"));
+  });
+
+  it("takes the annotations of its generated articles out of the list of annotations", async () => {
+    const { server, category } = seeded();
+    const other = server.category("Other");
+    saveArticleNote(server.db, server.article(category.id), "消えるメモ", server.clock().toISOString());
+    saveArticleNote(server.db, server.article(other.id), "残るメモ", server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: "/annotations" });
+    expect(await screen.findByText("消えるメモ")).toBeInTheDocument();
+
+    const nav = () => screen.getByRole("navigation", { name: "項目" });
+    await user.click(within(nav()).getByRole("link", { name: "設定" }));
+    await user.click(await screen.findByRole("link", { name: "Security" }));
+    await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await waitFor(() => expect(path()).toBe("/settings"));
+
+    await user.click(within(nav()).getByRole("link", { name: /^注釈/ }));
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    expect(await within(list).findByText("残るメモ")).toBeInTheDocument();
+    expect(within(list).queryByText("消えるメモ")).toBeNull();
   });
 
   it("disables instead when the user chooses that", async () => {
