@@ -1023,6 +1023,72 @@ describe("stars", () => {
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
     await waitFor(() => expect(rowTitles()).toEqual(["Keep me"]));
   });
+
+  /** Three starred articles, listed newest first as Star 3, Star 2, Star 1. */
+  function starredThree() {
+    const server = makeServer();
+    const ids = articles(server, server.category().id, [{ title: "Star 1" }, { title: "Star 2" }, { title: "Star 3" }]);
+    for (const id of ids) setArticleFlags(server.db, id!, { starred: true }, server.clock().toISOString());
+    return { server, ids };
+  }
+  const starIcon = (title: RegExp) => within(row(title)).queryByRole("img", { name: "スター" });
+
+  /** Opens Star 2 in the starred list and takes its star away with s. */
+  async function unstarSecond(server: TestServer, id: number) {
+    const rendered = renderApp({ server, route: "/starred" });
+    await rendered.user.click(await within(list()).findByRole("link", { name: /Star 2/ }));
+    await screen.findByRole("heading", { level: 2, name: "Star 2" });
+    await rendered.user.keyboard("s");
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(false));
+    return rendered;
+  }
+
+  it("keeps a row unstarred in the starred list, without the star, and moves on from it with j", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+    expect(rowTitles()).toEqual(["Star 3", "Star 2", "Star 1"]);
+    expect(within(list()).getByRole("link", { name: /Star 2/ })).toHaveAttribute("aria-current", "true");
+
+    await user.keyboard("j");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Star 1" })).toBeInTheDocument();
+  });
+
+  it("drops the unstarred row once the starred list is refreshed", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Star 3", "Star 1"]));
+  });
+
+  it("drops the unstarred row once another list is chosen and the starred list opened again", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+
+    await user.click(within(nav()).getByRole("link", { name: "最近読んだ記事" }));
+    await screen.findByRole("heading", { level: 1, name: "最近読んだ記事" });
+    await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Star 3", "Star 1"]));
+  });
+
+  it("stars the kept row again with s, and shows it once", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+
+    await user.keyboard("s");
+
+    await waitFor(() => expect(getArticle(server.db, ids[1]!).starred).toBe(true));
+    await waitFor(() => expect(starIcon(/Star 2/)).toBeInTheDocument());
+    expect(rowTitles()).toEqual(["Star 3", "Star 2", "Star 1"]);
+  });
 });
 
 describe("misses", () => {
