@@ -564,13 +564,17 @@ export function useAnnotationActions() {
       stale();
     },
     async saveNote(articleId: number, text: string): Promise<ArticleNote> {
+      const before = client.getQueryData<Article>(["article", articleId])?.annotations.note ?? null;
       const note = await api.saveArticleNote(articleId, text);
       patchArticle(articleId, (annotations) => ({ ...annotations, note }));
-      const listed = client
-        .getQueryData<AnnotationPages>(["annotations"])
-        ?.pages.some((page) => page.items.some((item) => item.id === note.id));
+      const list = client.getQueryData<AnnotationPages>(["annotations"]);
+      const listed = list?.pages.some((page) => page.items.some((item) => item.id === note.id));
       if (listed) patchList((items) => items.map((item) => (item.id === note.id ? { ...item, note: note.text } : item)));
-      else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
+      else if (before?.id === note.id) {
+        // A note written before keeps the place of when it was made, on a page not loaded yet, where the next page
+        // brings it with the new text. When no page is left to load, the list is older than the note and is read again.
+        if (list && list.pages.at(-1)?.nextCursor == null) void client.invalidateQueries({ queryKey: ["annotations"] });
+      } else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
       stale();
       return note;
     },

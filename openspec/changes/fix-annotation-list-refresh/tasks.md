@@ -1,9 +1,9 @@
 # Tasks
 
-## 1. 記事メモの書き直し
+## 1. 記事全体へのメモの書き直し
 
-- [x] 1.1 `annotations.test.tsx` に、2ページ目にある記事メモを書き直すテストと、新しい記事メモが先頭に入るテストを先に書き、前者が失敗することを確かめる
-- [x] 1.2 `queries.ts` の `saveNote` で、保存の前からあるメモを先頭に入れないようにし、1.1のテストが通ることを確かめる
+- [x] 1.1 `annotations.test.tsx` に、2ページ目にある記事全体へのメモを書き直すテストと、新しい記事全体へのメモが先頭に入るテストを先に書き、前者が失敗することを確かめる
+- [x] 1.2 `queries.ts` の `saveNote` で、保存の前からあるメモを先頭へ入れないようにし、1.1のテストが通ることを確かめる
 
 ## 2. `r` での注釈の取り直し
 
@@ -17,4 +17,4 @@
 
 ## 4. 全体の確認
 
-- [ ] 4.1 `make verify` と `openspec validate fix-annotation-list-refresh --strict` が通ることを確かめる
+- [x] 4.1 `make verify` と `openspec validate fix-annotation-list-refresh --strict` が通ることを確かめる。lint、型、テスト、ビルドは通った。textlintと用語の検査で残る指摘は、mainにある `add-feed-articles-list` のものだけである。`check:private` は、サンドボックスの置く `.bash_profile` を読めずに止まった

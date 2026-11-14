@@ -502,6 +502,88 @@ describe("the list of annotations", () => {
     expect(second!.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
     expect(first!.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
   });
+
+  it("keeps a rewritten note on a page not loaded yet in its place, and brings it once with the new text", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    saveArticleNote(server.db, b, "古いメモ", at(1000));
+    for (let index = 1; index <= 50; index += 1) addHighlight(server.db, a, anchor(QUOTE), at(index));
+    const { user } = renderApp({ server, route: `/annotations/${b}` });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(50));
+    const article = await opened();
+
+    await user.click(await within(article).findByRole("button", { name: "メモを書き直す" }));
+    const field = within(article).getByLabelText("記事へのメモ");
+    await user.clear(field);
+    await user.type(field, "新しいメモ");
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
+    await within(article).findByText("新しいメモ");
+
+    expect(within(list).getAllByRole("listitem")).toHaveLength(50);
+    expect(within(list).queryByText("新しいメモ")).toBeNull();
+    await user.click(within(list).getByRole("button", { name: "さらに読み込む" }));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(51));
+    const notes = within(list)
+      .getAllByRole("listitem")
+      .filter((row) => row.querySelector("[data-article-note]"));
+    expect(notes.map((row) => row.querySelector("[data-note]")!.textContent)).toEqual(["新しいメモ"]);
+    expect(within(list).getAllByRole("listitem").at(-1)).toBe(notes[0]);
+  });
+
+  it("puts a new note on an article at the top of the list", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    addHighlight(server.db, a, anchor(QUOTE), new Date(server.clock().getTime() - 60_000).toISOString());
+    const { user } = renderApp({ server, route: `/annotations/${b}` });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText(QUOTE);
+    const article = await opened();
+
+    await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
+    await user.type(within(article).getByLabelText("記事へのメモ"), "新しいメモ");
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+    expect(within(list).getAllByRole("listitem")[0]!.querySelector("[data-note]")).toHaveTextContent("新しいメモ");
+  });
+
+  it("is fetched again with r", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    saveArticleNote(server.db, a, "前からあるメモ", server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/annotations" });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("前からあるメモ");
+
+    saveArticleNote(server.db, b, "あとから足したメモ", server.clock().toISOString());
+    await user.keyboard("r");
+    expect(await within(list).findByText("あとから足したメモ")).toBeInTheDocument();
+  });
+
+  it("drops the rows of a feed unsubscribed from the menu of the left pane", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
+    const b = seedFeedArticle(server.db, feed.id, { title: "Post", body: "本文。" });
+    saveArticleNote(server.db, a, "残るメモ", server.clock().toISOString());
+    saveArticleNote(server.db, b, "消えるメモ", server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/annotations" });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("消えるメモ");
+
+    const nav = screen.getByRole("navigation", { name: "項目" });
+    fireEvent.contextMenu(await within(nav).findByRole("link", { name: /^Blog/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "登録を解除する" }));
+
+    await waitFor(() => expect(within(list).queryByText("消えるメモ")).toBeNull());
+    expect(within(list).getByText("残るメモ")).toBeInTheDocument();
+  });
 });
 
 describe("an excerpt from a note in the search results", () => {
