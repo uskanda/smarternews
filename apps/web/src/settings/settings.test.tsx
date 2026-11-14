@@ -1128,6 +1128,20 @@ describe("changes not saved yet", () => {
     expect(path()).toBe(`/settings/categories/${category.id}`);
   });
 
+  it("asks before an entry picked by its name with g u leaves an edited topic", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard("gu");
+    await user.type(await screen.findByRole("combobox", { name: "項目の名前" }), "secu{Enter}");
+
+    expect(await question()).toHaveTextContent("トピック『ransomware』の編集");
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+  });
+
   it("names every part with changes", async () => {
     const { server, category } = withTopic();
     const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
