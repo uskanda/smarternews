@@ -408,12 +408,15 @@ export function useUsage() {
   return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
 }
 
+/** How many runs the run history asks for, newest first. The list has no way to load older ones. */
+export const RUNS_LIMIT = 100;
+
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */
 export function useRuns(category?: number) {
   const { api } = useApp();
   return useQuery({
     queryKey: ["runs", category ?? null],
-    queryFn: () => api.runs({ category, limit: 100 }),
+    queryFn: () => api.runs({ category, limit: RUNS_LIMIT }),
     refetchInterval: (query) =>
       query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 3000 : REFRESH_MS,
   });
