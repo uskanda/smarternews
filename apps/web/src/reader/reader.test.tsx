@@ -675,7 +675,7 @@ describe("read state", () => {
     const { user } = renderApp({ server });
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("2"));
 
-    await user.click(screen.getByRole("link", { name: /First/ }));
+    await user.click(await screen.findByRole("link", { name: /First/ }));
 
     await waitFor(() => expect(getArticle(server.db, first!).isRead).toBe(true));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
@@ -1920,6 +1920,68 @@ describe("marking read what the list is scrolled past", () => {
     await scrollTo(5 * ROW);
 
     await waitFor(() => expect(rows.map((id) => isRead(server, id))).toEqual([true, true, true, true, true]), SENT);
+  });
+
+  describe("after the annotations were open", () => {
+    /** Opens Security, goes to the annotations, and comes back to Security. */
+    async function viaAnnotations(server: TestServer) {
+      const { user } = await open(server);
+      await user.click(within(nav()).getByRole("link", { name: /^注釈/ }));
+      await screen.findByRole("region", { name: "注釈の一覧" });
+      expect(document.querySelector("[data-scroll-read-room]")).toBeNull();
+      await user.click(within(nav()).getByRole("link", { name: /^Security/ }));
+      await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+      await scrollTo(0);
+      return user;
+    }
+
+    it("marks read nothing while the annotations are shown", async () => {
+      turnOn();
+      const { server, rows } = seeded();
+      const { user } = await open(server);
+
+      await user.click(within(nav()).getByRole("link", { name: /^注釈/ }));
+      const annotations = await screen.findByRole("region", { name: "注釈の一覧" });
+      fireEvent.scroll(annotations);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      expect(document.querySelector("[data-scroll-read-room]")).toBeNull();
+      expect(rows.map((id) => isRead(server, id))).toEqual(rows.map(() => false));
+    });
+
+    it("marks read again the rows scrolled past in the list come back to", async () => {
+      turnOn();
+      const { server, rows } = seeded();
+      await viaAnnotations(server);
+
+      await scrollTo(3 * ROW);
+
+      await waitFor(() => expect(rows.slice(0, 3).map((id) => isRead(server, id))).toEqual([true, true, true]), SENT);
+      expect(isRead(server, rows[3]!)).toBe(false);
+    });
+
+    it("puts room as tall as the list below a list opened from the annotations", async () => {
+      turnOn();
+      const { server, rows } = seeded();
+      layOut();
+      const { user } = renderApp({ server, route: "/annotations" });
+      await screen.findByRole("region", { name: "注釈の一覧" });
+      await user.click(await within(nav()).findByRole("link", { name: /^Security/ }));
+      await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
+      await scrollTo(0);
+
+      await waitFor(() => expect(pane().querySelector("[data-scroll-read-room]")).toHaveStyle({ height: `${VIEW}px` }));
+      await scrollTo(ROW);
+      await waitFor(() => expect(isRead(server, rows[0]!)).toBe(true), SENT);
+    });
+
+    it("keeps room as tall as the list below the list come back to", async () => {
+      turnOn();
+      const { server } = seeded();
+      await viaAnnotations(server);
+
+      await waitFor(() => expect(pane().querySelector("[data-scroll-read-room]")).toHaveStyle({ height: `${VIEW}px` }));
+    });
   });
 
   describe("an article put back to unread", () => {
