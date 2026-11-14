@@ -920,6 +920,11 @@ export const feedSchema = z.object({
   goneAt: z.string().nullable(),
   /** When the feed is fetched next, no earlier than a Retry-After of the last failure asked. Null while it is disabled. */
   nextFetchAt: z.string().nullable(),
+  /**
+   * When a fetch of every feed was asked for, while this feed still waits for its turn. Null once it was
+   * fetched, and for a feed nothing asked for.
+   */
+  fetchRequestedAt: z.string().nullable(),
   articleCount: z.number().int(),
   starredCount: z.number().int(),
   /** The articles of this feed with an annotation, each counted once: they go with the feed when it is deleted. */
@@ -1039,6 +1044,19 @@ export const feedFetchResultSchema = z.object({
   feed: feedSchema,
 });
 export type FeedFetchResult = z.infer<typeof feedFetchResultSchema>;
+
+/**
+ * What a request to fetch every feed asked for. It answers before anything is fetched: `fetchRequestedAt` of the
+ * feeds says which still wait.
+ */
+export const feedFetchAllResultSchema = z.object({
+  /** The enabled feeds that are fetched now. */
+  requested: z.number().int(),
+  /** The enabled feeds left out because they wait for the time a Retry-After gave. */
+  skipped: z.number().int(),
+  requestedAt: z.string(),
+});
+export type FeedFetchAllResult = z.infer<typeof feedFetchAllResultSchema>;
 
 export const opmlImportResultSchema = z.object({
   feedsCreated: z.number().int(),

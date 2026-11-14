@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getFeed, insertFeed, updateFeed } from "../db/feeds.ts";
+import { getFeed, insertFeed, recordFetchSuccess, requestFetchAll, updateFeed } from "../db/feeds.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { fakeFetch, html, xml } from "../testing/http.ts";
@@ -26,7 +26,7 @@ function setup(routes: Parameters<typeof fakeFetch>[0]) {
     poller.tick();
     await poller.idle();
   };
-  return { db, clock, poller, add, round, requests: fake.requests, urls: fake.urls };
+  return { db, clock, fetcher, poller, add, round, requests: fake.requests, urls: fake.urls };
 }
 
 describe("FeedPoller", () => {
@@ -175,6 +175,106 @@ describe("FeedPoller", () => {
     s.clock.advance(MINUTE);
     await s.round();
     expect(s.urls()).toHaveLength(4);
+  });
+
+  it("fetches every enabled feed after a request for all, one at a time, and then goes back to the interval", async () => {
+    let active = 0;
+    let most = 0;
+    const slow = async () => {
+      active += 1;
+      most = Math.max(most, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return xml(rss("F", ["x"]));
+    };
+    const s = setup({ "https://a.example.org/feed.xml": slow, "https://b.example.org/feed.xml": slow, "https://c.example.org/feed.xml": slow });
+    s.add("a");
+    s.add("b", { intervalMinutes: 120 });
+    const paused = s.add("c", { enabled: false });
+    await s.round();
+    s.clock.advance(MINUTE);
+    await s.round();
+    expect(s.urls()).toHaveLength(2);
+
+    expect(requestFetchAll(s.db, s.clock())).toMatchObject({ requested: 2, skipped: 0 });
+    await s.round();
+
+    expect(most).toBe(1);
+    expect(s.urls().slice(2).sort()).toEqual(["https://a.example.org/feed.xml", "https://b.example.org/feed.xml"]);
+    expect(getFeed(s.db, paused.id).lastFetchedAt).toBeNull();
+
+    // The request is spent: the next fetch comes after the interval, counted from this one.
+    s.clock.advance(29 * MINUTE);
+    await s.round();
+    expect(s.urls()).toHaveLength(4);
+    s.clock.advance(MINUTE);
+    await s.round();
+    expect(s.urls().slice(4)).toEqual(["https://a.example.org/feed.xml"]);
+  });
+
+  it("sends no request to a feed that waits for a Retry-After when all are requested", async () => {
+    let busy = true;
+    const s = setup({
+      "https://a.example.org/feed.xml": () => (busy ? new Response("busy", { status: 429, headers: { "retry-after": "18000" } }) : xml(rss("A", ["a1"]))),
+      "https://b.example.org/feed.xml": () => new Response("oops", { status: 500 }),
+    });
+    s.add("a");
+    s.add("b");
+    await s.round(); // a: 429 with five hours; b: its first failure, next try in 60 minutes
+    busy = false;
+    s.clock.advance(MINUTE);
+
+    expect(requestFetchAll(s.db, s.clock())).toMatchObject({ requested: 1, skipped: 1 });
+    await s.round();
+
+    expect(s.urls().slice(2)).toEqual(["https://b.example.org/feed.xml"]);
+  });
+
+  it("fetches what a request for all asks for right after the round under way, without overlapping it", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const s = setup({
+      "https://a.example.org/feed.xml": async () => {
+        order.push("a starts");
+        await new Promise<void>((resolve) => (release = resolve));
+        order.push("a ends");
+        return xml(rss("A", ["a1"]));
+      },
+      "https://b.example.org/feed.xml": () => {
+        order.push("b");
+        return xml(rss("B", ["b1"]));
+      },
+    });
+    const b = s.add("b");
+    recordFetchSuccess(s.db, b.id, { now: START });
+    s.add("a");
+    s.poller.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(order).toEqual(["a starts"]);
+
+    // What the API does: it records the request and wakes the poller, which is in the middle of a round.
+    requestFetchAll(s.db, s.clock());
+    s.poller.tick();
+    release();
+    await s.poller.idle();
+
+    // `a` was being fetched when the request came, which spends its request; `b` follows without the timer.
+    expect(order).toEqual(["a starts", "a ends", "b"]);
+  });
+
+  it("fetches what was requested before a restart", async () => {
+    const s = setup({ "https://a.example.org/feed.xml": () => xml(rss("A", ["a1"])) });
+    s.add("a");
+    await s.round();
+    s.clock.advance(MINUTE);
+    requestFetchAll(s.db, s.clock());
+
+    // A poller that starts over the same database finds the request.
+    const restarted = new FeedPoller({ db: s.db, clock: s.clock, fetcher: s.fetcher });
+    restarted.tick();
+    await restarted.idle();
+
+    expect(s.urls()).toHaveLength(2);
   });
 
   it("fetches a feed at once on request, whatever its interval", async () => {

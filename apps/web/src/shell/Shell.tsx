@@ -18,6 +18,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchPa
 import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
+import { useFetchAllCompletion, useFetchAllFeedsNow } from "../lib/fetch-now.ts";
 import { useHideRead } from "../lib/hide-read.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
@@ -213,6 +214,25 @@ function ListItem({
  * The views, the enabled categories with what is below them, the feeds without a category, and the two
  * management pages. A category that has subscribed feeds can be folded.
  */
+/**
+ * Fetches every subscribed feed now, from where the feeds are listed: the one control of a heading's row in the
+ * pane (see DESIGN.md). It says "取得中…" for as long as a feed waits, whichever screen asked.
+ */
+function FetchAllButton() {
+  const { fetching, fetchAll } = useFetchAllFeedsNow();
+  return (
+    <button
+      type="button"
+      aria-label="すべての購読フィードをいま取得"
+      onClick={() => void fetchAll()}
+      disabled={fetching}
+      className="shrink-0 cursor-pointer rounded-sm border border-outline-strong bg-surface px-sm type-label-sm text-on-surface hover:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {fetching ? "取得中…" : "いま取得"}
+    </button>
+  );
+}
+
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
   const { shown: model, pathOf: pathOfTarget } = useNavModels();
@@ -266,7 +286,10 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         </li>
       </ul>
       <div className="flex flex-col gap-px">
-        <h2 className="px-sm pb-xs type-label-sm text-on-surface-muted">カテゴリ</h2>
+        <div className="flex items-center justify-between gap-sm px-sm pb-xs">
+          <h2 className="type-label-sm text-on-surface-muted">カテゴリ</h2>
+          {feeds && feeds.length > 0 ? <FetchAllButton /> : null}
+        </div>
         <ul className="flex flex-col gap-px">
           {model.groups.map((group) => {
             const key = listKey(group.entry.target);
@@ -463,7 +486,9 @@ export function Shell() {
   const counts = useCounts().data;
   const collapsed = useCollapsed();
   const { full: model, shown, current, pathOf } = useNavModels();
-  const open = (target: ListTarget | null | undefined) => {
+  // Here, because the shell stays while the screens change: a fetch of all asked for on one is announced on any.
+  useFetchAllCompletion();
+  const open =(target: ListTarget | null | undefined) => {
     const path = target ? pathOf(target) : null;
     if (path !== null) void navigate(path);
   };

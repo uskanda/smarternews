@@ -159,6 +159,11 @@ export interface ArticleNeighbors {
   next: ArticleNeighbor | null;
   /** Past the last article loaded while the list has more: loads the next page and opens its first article. */
   more: (() => void) | null;
+  /**
+   * The last article of a list with nothing more to load: the end of the body says so. `openNext` opens the
+   * next list that has unread articles, and is null when there is none.
+   */
+  end: { openNext: (() => void) | null } | null;
 }
 
 /**
@@ -175,8 +180,8 @@ const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline 
 
 /** The way to the article before and after this one, each with its headline on one line. */
 function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
-  const { previous, next, more } = neighbors;
-  if (!previous && !next && !more) return null;
+  const { previous, next, more, end } = neighbors;
+  if (!previous && !next && !more && !end) return null;
   const line = (title: string) => (
     <span className="truncate type-body-md text-primary" title={title}>
       {title}
@@ -200,6 +205,11 @@ function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
           <span className="type-label-sm text-on-surface-muted">次の記事</span>
           <span className="type-body-md text-primary">続きを読み込んで開きます</span>
         </button>
+      ) : end ? (
+        <div data-list-end className="flex flex-col items-start gap-sm rounded-md border border-outline px-lg py-sm">
+          <p className="type-body-md text-on-surface-muted">一覧の最後です</p>
+          {end.openNext ? <Button onClick={end.openNext}>未読のある次の項目を開く</Button> : null}
+        </div>
       ) : null}
     </nav>
   );
