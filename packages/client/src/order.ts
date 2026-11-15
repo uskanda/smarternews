@@ -37,13 +37,14 @@ function shownCurrent(model: NavModel, current: ListTarget | null, isCollapsed: 
 }
 
 /**
- * The entry above (-1) or below (1) the current one among those the left pane shows: the views, then each
- * category with the entries below it unless it is folded. Null at either end. When the current list is no
+ * The entry above (-1) or below (1) the current one among those the left pane shows: the views, the saved
+ * searches, then each category with the entries below it unless it is folded. Null at either end. When the current list is no
  * entry that is shown, going down opens the first entry and going up the last.
  */
 export function stepTarget(model: NavModel, current: ListTarget | null, step: -1 | 1, isCollapsed: (key: string) => boolean): ListTarget | null {
   const shown = [
     ...model.views,
+    ...model.savedSearches,
     ...model.groups.flatMap((group) => (isCollapsed(listKey(group.entry.target)) ? [group.entry] : [group.entry, ...group.children])),
   ].map((entry) => entry.target);
   const key = shownCurrent(model, current, isCollapsed);

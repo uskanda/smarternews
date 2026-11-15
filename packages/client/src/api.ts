@@ -105,6 +105,10 @@ import {
   type FilterUpdate,
   type FilterUpdateResult,
   type HighlightTermCreate,
+  savedSearchSchema,
+  type SavedSearch,
+  type SavedSearchCreate,
+  type SavedSearchUpdate,
   type TermGroup,
   type TermGroupCreate,
   type TermGroupUpdate,
@@ -394,6 +398,16 @@ export function createApi(options: ApiOptions) {
       json(termGroupSchema, `/term-groups/${groupId}/terms`, body("POST", input)),
     deleteHighlightTerm: async (groupId: number, termId: number): Promise<void> =>
       void (await request(`/term-groups/${groupId}/terms/${termId}`, { method: "DELETE" })),
+
+    /** The saved searches in their order. Their unread counts come with `counts`. */
+    savedSearches: (): Promise<SavedSearch[]> => json(z.array(savedSearchSchema), "/saved-searches"),
+    createSavedSearch: (input: SavedSearchCreate): Promise<SavedSearch> => json(savedSearchSchema, "/saved-searches", body("POST", input)),
+    updateSavedSearch: (id: number, patch: SavedSearchUpdate): Promise<SavedSearch> =>
+      json(savedSearchSchema, `/saved-searches/${id}`, body("PATCH", patch)),
+    deleteSavedSearch: async (id: number): Promise<void> => void (await request(`/saved-searches/${id}`, { method: "DELETE" })),
+    /** Puts the saved search before another one, or last. Answers with all saved searches in their order. */
+    moveSavedSearch: (id: number, before: number | null): Promise<SavedSearch[]> =>
+      json(z.array(savedSearchSchema), `/saved-searches/${id}/move`, body("POST", { before })),
 
     runCategory: (categoryId: number): Promise<Run> => json(runSchema, `/categories/${categoryId}/runs`, { method: "POST" }),
     runs: (filter: { category?: number; limit?: number } = {}): Promise<Run[]> => json(z.array(runSchema), `/runs${query(filter)}`),

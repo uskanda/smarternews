@@ -11,6 +11,7 @@ import {
   parseListKey,
   RECENTLY_READ_LABEL,
   ANNOTATIONS_LABEL,
+  SAVED_SEARCHES_LABEL,
   sortKeyFor,
   targetFilter,
   targetScope,
@@ -87,6 +88,8 @@ const TITLES: Record<Exclude<View, "category" | "feed">, string> = {
   recentlyRead: RECENTLY_READ_LABEL,
   // Not in the drawer: the app shows annotations in the article only.
   annotations: ANNOTATIONS_LABEL,
+  // Not in the drawer either: the app does not list saved searches yet.
+  savedSearch: SAVED_SEARCHES_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
 
