@@ -542,6 +542,12 @@ export const articleSummarySchema = z.object({
   unconfirmed: z.boolean(),
   firstPublishedAt: z.string(),
   updatedAt: z.string(),
+  /**
+   * What the relevance order sorts by: `updatedAt` moved later by 48 hours times the article's relevance, from 0
+   * to 1. A generated article's relevance comes from its importance; a feed article's from how often the reader
+   * opens or stars its feed's articles and whether its titles or summary have a highlight term. Not for showing.
+   */
+  rankAt: z.string(),
   revision: z.number().int(),
   isRead: z.boolean(),
   /** When the article was last marked read. Null for an unread article, and for one read before read times were kept. */
@@ -634,8 +640,11 @@ export const articleSchema = articleSummarySchema.extend({
 });
 export type Article = z.infer<typeof articleSchema>;
 
-/** The order of an article list: by the time lists sort by, newest first or oldest first. */
-export const listSortSchema = z.enum(["newest", "oldest"]);
+/**
+ * The order of an article list: by the time lists sort by, newest first or oldest first; or by relevance, which
+ * is by that time moved later by up to 48 hours for the articles nearest the reader's interests (`rankAt`).
+ */
+export const listSortSchema = z.enum(["newest", "oldest", "relevance"]);
 export type ListSort = z.infer<typeof listSortSchema>;
 
 export const articleListQuerySchema = z.object({
@@ -656,7 +665,7 @@ export const articleListQuerySchema = z.object({
   recentlyRead: z.enum(["true"]).optional(),
   /**
    * Newest first when left out. Refused with `kind=event` and `recentlyRead=true`, whose order is fixed, even
-   * as `newest`.
+   * as `newest`. `relevance` sorts by `rankAt`, highest first.
    */
   order: listSortSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),

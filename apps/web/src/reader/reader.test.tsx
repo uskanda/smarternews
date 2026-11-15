@@ -2249,6 +2249,7 @@ describe("the order of a list", () => {
     expect(within(menu).getAllByRole("menuitemradio").map((item) => [item.textContent, item.getAttribute("aria-checked")])).toEqual([
       ["✓新しい順", "true"],
       ["古い順", "false"],
+      ["関連度順", "false"],
     ]);
     await user.click(within(menu).getByRole("menuitemradio", { name: "古い順" }));
 
@@ -2257,6 +2258,25 @@ describe("the order of a list", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Second" })).toBeInTheDocument();
     await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "oldest" }]));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("lists the entry by relevance once that is chosen, without showing the relevance, and stores the choice", async () => {
+    const { server, tools, ids } = seeded();
+    // First is the most important; Blog old has a feed often opened and a highlight term.
+    server.db.prepare("UPDATE articles SET importance = 5 WHERE id = ?").run(ids[0]!);
+    server.db.prepare("UPDATE articles SET feed_score = 1, term_match = 1 WHERE title = 'Blog old'").run();
+    const { user } = renderApp({ server, route: "/c/tools" });
+    await screen.findByRole("link", { name: /Third/ });
+    const rowsBefore = within(list()).getAllByRole("link").map((row) => row.textContent);
+
+    await user.click(sortButton());
+    await user.click(within(screen.getByRole("menu", { name: "並び順" })).getByRole("menuitemradio", { name: "関連度順" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Third", "Second", "Blog old", "Blog new"]));
+    expect(sortButton()).toHaveAccessibleName("並び順：関連度順");
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "relevance" }]));
+    // The rows read as they did: the same texts, in another order.
+    expect(within(list()).getAllByRole("link").map((row) => row.textContent).sort()).toEqual([...rowsBefore].sort());
   });
 
   it("is chosen with the keyboard alone", async () => {

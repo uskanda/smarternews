@@ -94,7 +94,7 @@ Settings fields:
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
-`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest` or `oldest`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
 ## Categories
 
@@ -231,15 +231,17 @@ Query parameters of the list:
 | `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
 | `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred`, `minImportance` or `order` |
-| `order` | `newest` (the default) or `oldest`, by the same time either way. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
+| `order` | `newest` (the default), `oldest` or `relevance`. See below. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
 Unless `origin` or `feed` narrows it, a list holds generated articles and feed articles together. Articles come ordered by last update, newest first, or oldest first with `order=oldest`. A feed article sorts by the time its item was published. When the item has no date, or one in the future, the time it was fetched is used. A generated article that a follow-up rewrites moves to the newest end, in either order. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given.
 
+`order=relevance` puts the articles nearest the reader's interests first without letting old ones stay on top. Each article has a relevance from 0 to 1, and the list is ordered by `rankAt`, highest first: the same time as above, moved later by 48 hours times the relevance. An article of relevance 1 from yesterday thus comes before an article of relevance 0 from today. The relevance of a generated article comes from its importance: 1 is 0, 5 is 1. The relevance of a feed article is half the behaviour score of its feed and half whether its title, translated title or summary has a [highlight term](#term-highlights), matched as the apps colour terms (1 or 0). The behaviour score compares how many of the articles each feed delivered in the last 30 days were opened or starred, the feed with the highest share being 1; a feed with fewer than ten such articles, a new one too, takes the average of the others. The server works the scores out when it starts and once a day after that, and matches the terms again when an article is stored, a translated title is saved and the terms change, so `rankAt` does not move while a list is read. No model is called for any of this.
+
 `recentlyRead=true` lists the articles whose `readAt` falls within the last seven days (168 hours, not calendar days), ordered by `readAt`, newest first. It includes events that have ended and ignores `includeEnded`. Articles read before the server started to record read times have no `readAt`, so they never appear here. Combined with any other narrowing, the request gets 400.
 
-Each response has three fields: `items`, the articles of this page; `nextCursor`, which is `null` on the last page; and `asOf`, the time by the server's clock at which it read the list. A cursor belongs to the order it was issued for: the cursor of a list oldest first sent without `order=oldest`, or the other way round, gets 400.
+Each response has three fields: `items`, the articles of this page; `nextCursor`, which is `null` on the last page; and `asOf`, the time by the server's clock at which it read the list. A cursor belongs to the order it was issued for: the cursor of a list oldest first sent without `order=oldest`, or the other way round, gets 400, and so does a cursor of one order sent with another.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true&limit=20"
@@ -299,6 +301,7 @@ Fields of an article in the list:
 | `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
 | `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
+| `rankAt` | What `order=relevance` sorts by: `updatedAt` moved later by 48 hours times the article's relevance. For ordering, not for showing |
 | `event` | For events: `startsAt`, `endsAt`, `venue`, `fee`, `registration` |
 
 The detail adds these:
@@ -698,7 +701,7 @@ Status 400 answers a wrong regular expression, a keep filter over everything, an
 
 ## List views
 
-Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest` or `oldest`. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
+Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)). An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
 
 | Operation | Purpose |
 |---|---|
@@ -712,11 +715,11 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application
 
 A key names an entry: `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed), `uncategorized`, `category-3` (a category), `category-3-generated` (the generated articles of a category) or `feed-12` (a subscribed feed). An entry set back to all its defaults is no longer listed. Deleting a category deletes the views of the category and of its generated articles; its feeds keep theirs when they move to no category. Deleting a feed deletes its view.
 
-Status 404 answers a category or feed that does not exist. Status 400 answers an event category, whose list is ordered by start; `recently-read`, which is ordered by read time; a key it cannot read; and a `sort` other than the two.
+Status 404 answers a category or feed that does not exist. Status 400 answers an event category, whose list is ordered by start; `recently-read`, which is ordered by read time; a key it cannot read; and a `sort` other than the three.
 
 ## Term highlights
 
-Term groups colour their terms in the lists and the texts of articles, generated and delivered alike. Nothing is hidden, and no article changes: the server only stores the groups and answers them, and the web app and the Android app match the terms against the text they show. A term matches as a filter's `contains` does: anywhere in the text, upper and lower case alike, full-width and half-width alike. Where terms of two groups match one place, the group that comes first colours it.
+Term groups colour their terms in the lists and the texts of articles, generated and delivered alike. Nothing is hidden, and no article changes: the server stores the groups and answers them, and the web app and the Android app match the terms against the text they show. The server matches the terms itself only to know which feed articles have one, which moves them up in the [relevance order](#articles); adding or removing a term or a group matches every feed article again. A term matches as a filter's `contains` does: anywhere in the text, upper and lower case alike, full-width and half-width alike. Where terms of two groups match one place, the group that comes first colours it.
 
 | Operation | Purpose |
 |---|---|

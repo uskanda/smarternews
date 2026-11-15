@@ -948,6 +948,62 @@ describe("the migration that lets the feed articles of every feed keep a list vi
   });
 });
 
+describe("the migration to the relevance order", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the list views and the articles, allows the order, and ranks every article by its time and relevance", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    const insertView = (list: string, categoryId: number | null, feedId: number | null, sort = "oldest") =>
+      db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, ?, ?, ?)").run(list, categoryId, feedId, sort);
+    insertView("feed", null, 5);
+    insertView("unread", null, null);
+    insertView("category", 3, null);
+    expect(() => insertView("all", null, null, "relevance")).toThrow();
+    db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (1, 3, 'news', 't', 's', 'b', 5, ?, '2026-01-02T00:00:00.000Z', ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO articles (id, category_id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (2, 3, 'feed', 5, 'k', 'news', 't', 's', 'b', ?, '2026-01-03T00:00:00.000Z', ?)`,
+    ).run(now, now);
+    const views = () => db.prepare("SELECT * FROM list_views ORDER BY id").all();
+    const before = views();
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("033_"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(views()).toEqual(before);
+    insertView("all", null, null, "relevance");
+    expect(db.prepare("SELECT sort FROM list_views WHERE list = 'all'").get()).toEqual({ sort: "relevance" });
+    expect(() => insertView("starred", null, null, "random")).toThrow();
+    expect(() => insertView("unread", null, null)).toThrow();
+
+    // Importance 5 is relevance 1: 48 hours later. A feed article starts with neither behaviour nor a term match.
+    expect(db.prepare("SELECT id, feed_score, term_match, rank_at FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, feed_score: 0, term_match: 0, rank_at: "2026-01-04T00:00:00.000Z" },
+      { id: 2, feed_score: 0, term_match: 0, rank_at: "2026-01-03T00:00:00.000Z" },
+    ]);
+    db.prepare("UPDATE articles SET feed_score = 0.5, term_match = 1 WHERE id = 2").run();
+    expect(db.prepare("SELECT rank_at FROM articles WHERE id = 2").get()).toEqual({ rank_at: "2026-01-04T12:00:00.000Z" });
+    expect(db.prepare("SELECT relevance_score FROM feeds WHERE id = 5").get()).toEqual({ relevance_score: 0 });
+    expect(
+      db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'articles' AND name LIKE '%rank%'").get(),
+    ).toEqual({ n: 6 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+    // The cascades of the table made again still work.
+    db.prepare("DELETE FROM categories WHERE id = 3").run();
+    expect(db.prepare("SELECT list FROM list_views ORDER BY id").all()).toEqual([{ list: "feed" }, { list: "unread" }, { list: "all" }]);
+  });
+});
+
 describe("the migration to feed stats", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 

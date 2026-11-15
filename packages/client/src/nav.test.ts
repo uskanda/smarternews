@@ -279,6 +279,12 @@ describe("what a list asks the server for", () => {
     expect(targetFilter({ type: "recentlyRead" })).toEqual({ recentlyRead: "true" });
   });
 
+  it("sends the order of the list unless it is newest first, the server's default", () => {
+    expect(targetFilter({ type: "unread" }, "newest")).toEqual({ unread: "true" });
+    expect(targetFilter({ type: "unread" }, "oldest")).toEqual({ unread: "true", order: "oldest" });
+    expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: false }, "relevance")).toEqual({ category: 7, order: "relevance" });
+  });
+
   it("narrows a mark-all-read the same way", () => {
     expect(targetScope({ type: "unread" })).toEqual({});
     expect(targetScope({ type: "generated" })).toEqual({ origin: "generated" });

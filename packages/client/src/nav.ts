@@ -164,7 +164,7 @@ export function parseListKey(key: string): ListTarget | null {
  * the server's default and is not sent.
  */
 export function targetFilter(target: ListTarget, sort: ListSort = "newest"): ArticleListQuery {
-  return { ...filterOf(target), ...(sort === "oldest" ? { order: "oldest" as const } : {}) };
+  return { ...filterOf(target), ...(sort === "newest" ? {} : { order: sort }) };
 }
 
 function filterOf(target: ListTarget): ArticleListQuery {
