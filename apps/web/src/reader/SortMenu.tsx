@@ -1,21 +1,19 @@
+import { SORT_LABELS as LABELS } from "@smarternews/client";
 import type { ListSort } from "@smarternews/core/api";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "../ui/controls.tsx";
 
-const LABELS: Record<ListSort, string> = { newest: "新しい順", oldest: "古い順" };
-const OPTIONS: ListSort[] = ["newest", "oldest"];
-
 // Looks like the menu of an entry in the left pane (DESIGN.md): surface, outline-strong, rounded md, no shadow.
 const MENU = "absolute left-0 top-full z-50 mt-xs min-w-40 rounded-md border border-outline-strong bg-surface p-xs type-body-md text-on-surface";
 const MENU_ITEM =
-  "tap flex w-full cursor-default items-center gap-sm rounded-sm px-md py-xs text-left outline-none hover:bg-selected focus:bg-selected focus:outline-2 focus:-outline-offset-2 focus:outline-primary";
+  "tap flex w-full cursor-default items-center gap-sm whitespace-nowrap rounded-sm px-md py-xs text-left outline-none hover:bg-selected focus:bg-selected focus:outline-2 focus:-outline-offset-2 focus:outline-primary";
 
 /**
- * The order of the list: a button that names the order in use, and a menu of the two orders. The keyboard
- * opens it with Enter, Space or the down arrow on the button, moves with the arrows, chooses with Enter or
- * Space, and leaves with Escape.
+ * The order of the list: a button that names the order in use, and a menu of the orders the list offers. The
+ * keyboard opens it with Enter, Space or the down arrow on the button, moves with the arrows, chooses with
+ * Enter or Space, and leaves with Escape.
  */
-export function SortMenu({ sort, onChange }: { sort: ListSort; onChange: (sort: ListSort) => void }) {
+export function SortMenu({ sort, options, onChange }: { sort: ListSort; options: readonly ListSort[]; onChange: (sort: ListSort) => void }) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -76,7 +74,7 @@ export function SortMenu({ sort, onChange }: { sort: ListSort; onChange: (sort: 
       </Button>
       {open ? (
         <div ref={menu} id={menuId} role="menu" aria-label="並び順" className={MENU} onKeyDown={onMenuKey}>
-          {OPTIONS.map((option) => (
+          {options.map((option) => (
             <button
               key={option}
               type="button"

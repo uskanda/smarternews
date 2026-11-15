@@ -40,6 +40,7 @@ import {
   nextTarget,
   RECENTLY_READ_LABEL,
   sortKeyFor,
+  sortOptionsOf,
   targetFilter,
   targetScope,
   UNCATEGORIZED_LABEL,
@@ -234,23 +235,25 @@ export function ReaderPage({ view }: { view: View }) {
       ...(readToggle && !includeRead ? { unread: "true" as const } : {}),
     };
   }, [target, category, isEvents, readToggle, includeRead, importantOnly, sort]);
-  // The search: the words, a category by its slug or a feed by its id, and whether only unread articles count.
+  // The search: the words, a category by its slug or a feed by its id, and whether only unread or starred articles count.
   const words = isSearch ? (search.get("q") ?? "").trim() : "";
   const searchSlug = isSearch ? search.get("category") : null;
   const searchCategory = searchSlug ? categories.data?.find((entry) => entry.slug === searchSlug) : undefined;
   const feedParam = isSearch ? search.get("feed") : null;
   const searchFeedId = feedParam && /^\d{1,15}$/.test(feedParam) ? Number(feedParam) : undefined;
   const searchUnread = isSearch && search.get("unread") === "true";
+  const searchStarred = isSearch && search.get("starred") === "true";
   const searchQuery = useMemo(
     () => ({
       q: words,
       ...(searchCategory ? { category: searchCategory.id } : {}),
       ...(searchFeedId !== undefined ? { feed: searchFeedId } : {}),
       ...(searchUnread ? { unread: "true" as const } : {}),
+      ...(searchStarred ? { starred: "true" as const } : {}),
     }),
-    [words, searchCategory, searchFeedId, searchUnread],
+    [words, searchCategory, searchFeedId, searchUnread, searchStarred],
   );
-  const narrowed = searchSlug !== null || searchFeedId !== undefined || searchUnread;
+  const narrowed = searchSlug !== null || searchFeedId !== undefined || searchUnread || searchStarred;
   // A category is named by its slug, so the search waits for the categories when it names one.
   const results = useArticleSearch(searchQuery, isSearch && words.length > 0 && (searchSlug === null || categories.data !== undefined));
   const terms = isSearch ? results.data?.pages[0]?.terms : undefined;
@@ -277,7 +280,7 @@ export function ReaderPage({ view }: { view: View }) {
   const listKey = JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
-  const sortKey = target ? sortKeyFor(target) : undefined;
+  const sortKey = target ? sortKeyFor(target, sort) : undefined;
   const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
@@ -536,7 +539,7 @@ export function ReaderPage({ view }: { view: View }) {
     }
   }
 
-  function toggleParam(name: "read" | "min" | "unread", value: string, on: boolean) {
+  function toggleParam(name: "read" | "min" | "unread" | "starred", value: string, on: boolean) {
     const next = new URLSearchParams(search);
     if (on) next.set(name, value);
     else next.delete(name);
@@ -554,7 +557,7 @@ export function ReaderPage({ view }: { view: View }) {
   }
   function widen() {
     const next = new URLSearchParams(search);
-    for (const name of ["category", "feed", "unread"]) next.delete(name);
+    for (const name of ["category", "feed", "unread", "starred"]) next.delete(name);
     setSearch(next, { replace: true });
   }
   const narrowingId = useId();
@@ -728,7 +731,7 @@ export function ReaderPage({ view }: { view: View }) {
           {importanceFilter ? (
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
-          {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
+          {sortMenu && target !== null ? <SortMenu sort={sort} options={sortOptionsOf(target)} onChange={changeSort} /> : null}
           {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
@@ -762,6 +765,7 @@ export function ReaderPage({ view }: { view: View }) {
                 </select>
               </span>
               <Checkbox label="未読だけ" checked={searchUnread} onChange={(event) => toggleParam("unread", "true", event.target.checked)} />
+              <Checkbox label="スターだけ" checked={searchStarred} onChange={(event) => toggleParam("starred", "true", event.target.checked)} />
             </>
           ) : null}
         </div>

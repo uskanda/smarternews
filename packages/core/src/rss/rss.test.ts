@@ -24,6 +24,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   readAt: null,
   openedAt: null,
   starred: false,
+  starredAt: null,
   primaryUrl: "https://example.org/a",
   refCount: 2,
   event: null,

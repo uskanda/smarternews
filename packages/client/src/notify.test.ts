@@ -26,6 +26,7 @@ function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
     readAt: null,
     openedAt: null,
     starred: false,
+    starredAt: null,
     primaryUrl: null,
     refCount: 1,
     event: null,

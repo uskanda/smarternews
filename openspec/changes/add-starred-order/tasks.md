@@ -18,12 +18,17 @@
 
 ## 4. Web
 
-- [ ] 4.1 `SortMenu.tsx` と `ReaderPage.tsx` に、並び順のメニューと検索の結果の「スターだけ」を足す。先にテストを書いて失敗を確かめ、実装のあとに通す
+- [x] 4.1 `SortMenu.tsx` と `ReaderPage.tsx` に、並び順のメニューと検索の結果の「スターだけ」を足す。先にテストを書いて失敗を確かめ、実装のあとに通す
 
 ## 5. アプリ
 
-- [ ] 5.1 `ListScreen.tsx` と `useReaderList.ts` に、並び順の選択肢と検索の結果の「スターだけ」を足す。先にテストを書いて失敗を確かめ、実装のあとに通す
+- [x] 5.1 `ListScreen.tsx` と `useReaderList.ts` に、並び順の選択肢と検索の結果の「スターだけ」を足す。先にテストを書いて失敗を確かめ、実装のあとに通す
 
 ## 6. 全体の確認
 
 - [ ] 6.1 `openspec validate add-starred-order --strict` と `make verify` が通ることを確かめる
+
+6.1は、実装した環境では終えていない。
+`openspec validate`、lint、型の検査、テスト、ビルド、トークンとDESIGN.mdの検査は通った。
+textlintと用語の検査は、mainにある `add-feed-articles-list` の文書で失敗し、この変更の文書には指摘がない。
+`check:private` は、実行の環境が作業ディレクトリに置く読めない空のファイルを開こうとして失敗した。
