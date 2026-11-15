@@ -2,8 +2,8 @@
 
 ## 1. 保存とmigration
 
-- [x] 1.1 `database.test.ts`に033のmigrationのテストを足して失敗を確かめる。既存の`update_note`が`updated_at`の時刻で写り、文のない記事は写らず、記事を消すと行も消える
-- [x] 1.2 `033_article_update_notes.sql`で表と索引を作り、既存の文を写して、1.1のテストが通ることを確かめる
+- [x] 1.1 `database.test.ts`に034のmigrationのテストを足して失敗を確かめる。既存の`update_note`が`updated_at`の時刻で写り、文のない記事は写らず、記事を消すと行も消える
+- [x] 1.2 `034_article_update_notes.sql`で表と索引を作り、既存の文を写して、1.1のテストが通ることを確かめる
 - [x] 1.3 `articles.test.ts`と`followup.test.ts`に、書き直しごとの文が表に残るテストを足して失敗を確かめる。文のない回は行を残さない
 - [x] 1.4 `reviseArticle`で文のある回を表に足し、説明のコメントを直して、1.3のテストが通ることを確かめる
 
