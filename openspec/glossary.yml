@@ -554,3 +554,7 @@ terms:
     definition: "ダイジェストのカテゴリの区画の1行が、内容の出典にした記事。"
     aliases: ["参照記事"]
     en: "source article"
+  - term: "プレースホルダー"
+    definition: "入力欄が空のときに欄の中に薄く表示する、入れるものを示す文字列。"
+    aliases: ["プレースホルダ"]
+    en: "placeholder"

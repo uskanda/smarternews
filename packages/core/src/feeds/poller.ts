@@ -11,6 +11,8 @@ export class FeedPoller {
   /** Everything this poller fetches goes through this chain, so no two fetches overlap. */
   #tail: Promise<void> = Promise.resolve();
   #roundPending = false;
+  #roundRunning = false;
+  #roundAgain = false;
   #timer: NodeJS.Timeout | undefined;
   #pages: PageFetcher | undefined;
   #pagesDay = "";
@@ -19,11 +21,19 @@ export class FeedPoller {
     this.#deps = deps;
   }
 
-  /** Starts a round over the feeds that are due now, unless one is already waiting or under way. */
+  /**
+   * Starts a round over the feeds that are due now, unless one is already waiting. While a round is under way
+   * it has already read which feeds are due, so another follows it: what became due meanwhile, as after a
+   * request to fetch every feed, does not wait for the next tick of the timer.
+   */
   tick(): void {
-    if (this.#roundPending) return;
+    if (this.#roundPending) {
+      if (this.#roundRunning) this.#roundAgain = true;
+      return;
+    }
     this.#roundPending = true;
     this.#tail = this.#tail.then(async () => {
+      this.#roundRunning = true;
       try {
         await this.#round();
       } catch (error) {
@@ -31,6 +41,11 @@ export class FeedPoller {
         console.error("feed poller:", error);
       } finally {
         this.#roundPending = false;
+        this.#roundRunning = false;
+        if (this.#roundAgain) {
+          this.#roundAgain = false;
+          this.tick();
+        }
       }
     });
   }
@@ -80,9 +95,13 @@ export class FeedPoller {
     return this.exclusive(() => fetchFeed(this.#withPages(), feedId));
   }
 
-  /** Resolves when everything queued so far has been fetched. */
-  idle(): Promise<void> {
-    return this.#tail;
+  /** Resolves when everything queued has been fetched, a round that follows the one under way included. */
+  async idle(): Promise<void> {
+    let tail: Promise<void>;
+    do {
+      tail = this.#tail;
+      await tail;
+    } while (tail !== this.#tail);
   }
 
   /** Fetches what is due now, then looks again every `intervalMs`. */
