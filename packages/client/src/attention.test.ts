@@ -31,7 +31,9 @@ describe("attentionText", () => {
     expect(attentionText({ ...base, kind: "empty-search", source: "news-search", engine: "bing-news", query: "zero-day" })).toBe(
       "セキュリティのトピック「悪用された脆弱性」で、Bing Newsの検索語「zero-day」の結果が3回続けて0件です。",
     );
-    expect(attentionText({ ...base, kind: "empty-search", source: "llm-search" })).toBe("セキュリティのトピック「悪用された脆弱性」で、LLM検索の結果が3回続けて0件です。");
+    expect(attentionText({ ...base, kind: "empty-search", source: "llm-search" })).toBe(
+      "セキュリティのトピック「悪用された脆弱性」で、LLM検索の新しい候補が3回続けて0件です。1日1回に減らしています。",
+    );
   });
 
   it("says a topic has had no article for 14 days", () => {

@@ -561,6 +561,25 @@ export function useDismissAttention(onFailed: () => void) {
   });
 }
 
+/**
+ * Puts a topic's web search by the model, cut to once a day, back to every run. On success the topic and the
+ * attention items are read again, so the item and the note in the topic's editor go away; `onFailed` says it failed.
+ */
+export function useRestoreLlmSearch(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (topicId: number) => api.restoreLlmSearch(topicId),
+    onSuccess: async (topic) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["attention"] }),
+        client.invalidateQueries({ queryKey: ["topics", topic.categoryId] }),
+      ]);
+    },
+    onError: () => onFailed(),
+  });
+}
+
 export function useRun(id: number | null) {
   const { api } = useApp();
   return useQuery({

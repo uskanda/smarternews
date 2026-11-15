@@ -126,6 +126,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | `PATCH /api/v1/topics/:id` | Change `text`, `enabled`, `sources`, `search`, `queries` |
 | `DELETE /api/v1/topics/:id` | Delete it (status 204) |
 | `POST /api/v1/topics/:id/interpret` | Ask for a new interpretation before the next run |
+| `POST /api/v1/topics/:id/llm-search/restore` | Put the topic's web search by the model back to every run |
 | `POST /api/v1/topics/:id/trials` | Try a text on the topic without saving it (status 202) |
 | `GET /api/v1/topic-trials/:id` | Read a trial: its status and, once it succeeded, its result |
 | `POST /api/v1/topics/:id/rewrite-proposals` | Ask the model for new wordings of the topic, without saving anything |
@@ -139,6 +140,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 ```
 
 A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override. `missesSinceInterpretation` counts the [misses](#misses) of the topic's articles marked after its last interpretation; a topic interpreted before this count existed counts all of its misses.
+
+Web search by the model leaves out pages an earlier run of the category settled before it fetches them, and is given the headlines of the topic's ten latest generated articles. When three of its searches in a row find no new candidate, the server cuts it to once a day: a run leaves it out if a search of the topic that did not fail was made earlier that day, in the time zone of the settings, by a scheduled or a manual run. `llmSearchReduced` tells whether the topic's search is cut; it is always `false` for a topic without web search by the model. A search that finds a new candidate puts it back to every run. So does `POST /api/v1/topics/:id/llm-search/restore`, which takes no body and answers the topic; only the searches after it count towards cutting it again. Changing `text` starts the count again too.
 
 ### Topic trials
 
@@ -834,7 +837,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 |---|---|
 | `run-failed` | The latest scheduled run of an enabled category, or its last retry, failed with no retry planned, or stopped at a limit, and no later run succeeded or partly failed |
 | `uninterpreted` | An enabled topic is still uninterpreted, and the latest finished run of its category failed to interpret it |
-| `empty-search` | A news search (one engine and one query of a topic) or a topic's web search by the model returned nothing in its last three attempts. Attempts that failed are left out |
+| `empty-search` | A news search (one engine and one query of a topic) returned nothing in its last three attempts, or a topic's web search by the model found no new candidate in its last three and is cut to once a day. Attempts that failed are left out |
 | `no-adoption` | An enabled topic, made at least 14 days ago, has had no article written or updated in the last 14 days |
 | `google-unresolved` | The last three runs that tried to resolve Google News redirect links resolved none |
 

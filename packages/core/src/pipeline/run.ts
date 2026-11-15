@@ -7,6 +7,7 @@ import {
   insertArticle,
   openEventArticles,
   recentNewsArticles,
+  recentTopicHeadlines,
   reviseArticle,
   type ArticleDigest,
   type EventFields,
@@ -32,11 +33,13 @@ import { applyInterpretation, listTopics } from "../db/topics.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { LlmLimitError, type CallBudget, type TaskRunner } from "../llm/runner.ts";
+import { llmSearchedSince } from "../runs/llm-search-reduction.ts";
 import { extractArticle } from "../sources/extract.ts";
 import { collectFeed } from "../sources/feed.ts";
 import { collectLlmSearch } from "../sources/llm-search.ts";
 import { searchNews, type NewsEngine, type NewsSearchResult } from "../sources/news-search.ts";
 import type { CollectWindow, RawCandidate } from "../sources/types.ts";
+import { startOfLocalDay } from "../time.ts";
 import { resolveEvent } from "./events.ts";
 import { reasonText, type ReasonCode } from "./reasons.ts";
 
@@ -131,6 +134,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     ? { since: new Date(ctx.now.getTime() - windowHours * HOUR), hours: windowHours }
     : { since: null, hours: EVENT_SEARCH_HOURS };
   const isSeen = (url: string) => isSeenUrl(ctx.db, ctx.category.id, url);
+  const today = startOfLocalDay(ctx.now, ctx.settings.timeZone).toISOString();
   const found = new Map<string, Found>();
 
   /** A search is recorded with what it returned, so that searches that keep finding nothing can be pointed out. */
@@ -190,11 +194,12 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
         }
       }
     }
-    if (topic.sources.llmSearch) {
+    // A search cut to once a day for finding nothing new is left out once it ran that day, by any kind of run.
+    if (topic.sources.llmSearch && !(topic.llmSearchReduced && llmSearchedSince(ctx.db, topic.id, today))) {
       await attempt(topic, "llm-search", topic.text, () => {
         if (!ctx.runner.canSearch()) throw new Error("the provider assigned to the search task cannot search the web");
         return plain(collectLlmSearch(
-          { runner: ctx.runner, budget: ctx.budget, pages: ctx.pages },
+          { runner: ctx.runner, budget: ctx.budget, pages: ctx.pages, isSeen },
           {
             topicText: topic.text,
             criteria: topic.criteria,
@@ -203,6 +208,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
             windowDays: ctx.category.windowDays,
             now: ctx.now,
             since: window.since,
+            recentHeadlines: recentTopicHeadlines(ctx.db, topic.id),
           },
         ));
       }, { kind: "llm-search", engine: null, query: topic.text });

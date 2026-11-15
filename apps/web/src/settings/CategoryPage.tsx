@@ -32,7 +32,17 @@ import {
   STATUS_LABEL,
   TRIGGER_LABEL,
 } from "@smarternews/client";
-import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTimeZone, useTopics, useTopicStats } from "../api/queries.ts";
+import {
+  useCategories,
+  useCounts,
+  useFeeds,
+  useProviders,
+  useRestoreLlmSearch,
+  useRuns,
+  useTimeZone,
+  useTopics,
+  useTopicStats,
+} from "../api/queries.ts";
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -232,6 +242,23 @@ async function refreshTopics(client: QueryClient, categoryId: number): Promise<v
   await client.invalidateQueries({ queryKey: ["topics", categoryId] });
 }
 
+/**
+ * The topic's web search by the model is cut to once a day, because it kept finding nothing new; the user can put
+ * it back to every run. The note goes away once the list of topics is read again.
+ */
+function LlmSearchReduced({ topicId }: { topicId: number }) {
+  const toast = useToast();
+  const restore = useRestoreLlmSearch(() => toast({ message: "LLM検索を元に戻せませんでした。もう一度試してください。" }));
+  return (
+    <div className="flex flex-wrap items-center gap-sm">
+      <p className="type-label-sm text-on-surface-muted">新しい候補が続けて見つからないため、1日1回に減らしています。</p>
+      <Button onClick={() => restore.mutate(topicId)} disabled={restore.isPending}>
+        元に戻す
+      </Button>
+    </div>
+  );
+}
+
 function TopicEditor({
   topic,
   canSearch,
@@ -365,6 +392,7 @@ function TopicEditor({
             検索のタスクに割り当てたプロバイダーが検索できないため、いまの設定では使われません。
           </p>
         )}
+        {topic.llmSearchReduced ? <LlmSearchReduced topicId={topic.id} /> : null}
       </div>
       <Field
         label={TOPIC_QUERIES.label}

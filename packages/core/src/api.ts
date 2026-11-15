@@ -161,6 +161,11 @@ export const topicSchema = z.object({
    * interpretation reads. Every miss counts for a topic interpreted before the time of interpretation was kept.
    */
   missesSinceInterpretation: z.number().int(),
+  /**
+   * Whether the topic's web search by the model is cut to once a day, because its last three attempts found no
+   * new candidate. Always false for a topic without web search by the model.
+   */
+  llmSearchReduced: z.boolean(),
 });
 export type Topic = z.infer<typeof topicSchema>;
 

@@ -495,6 +495,20 @@ export function recentNewsArticles(db: Database, categoryId: number, since: stri
     .map(toDigest);
 }
 
+/**
+ * The headlines of the generated articles of a topic, the latest written or updated first, at most `limit`.
+ * Feed articles are left out. No time limit applies.
+ */
+export function recentTopicHeadlines(db: Database, topicId: number, limit = 10): string[] {
+  return db
+    .prepare(
+      `SELECT a.title FROM article_topics t JOIN articles a ON a.id = t.article_id
+        WHERE t.topic_id = ? AND a.${GENERATED} ORDER BY a.updated_at DESC, a.id DESC LIMIT ?`,
+    )
+    .all(topicId, limit)
+    .map((row) => str(row.title));
+}
+
 /** Event articles of the category whose event has not ended. */
 export function openEventArticles(db: Database, categoryId: number, now: string): ArticleDigest[] {
   return db

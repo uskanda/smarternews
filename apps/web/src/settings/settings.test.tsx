@@ -9,6 +9,7 @@ import {
   insertFeed,
   listCategories,
   listTopics,
+  recordSearchAttempt,
   saveArticleNote,
   setArticleFlags,
   updateCategory,
@@ -516,6 +517,74 @@ describe("topics", () => {
     await screen.findByRole("region", { name: "トピック" });
 
     expect(screen.getByRole("checkbox", { name: "LLM検索" })).not.toHaveAccessibleDescription(/使われません/);
+  });
+
+  describe("web search by the model cut to once a day", () => {
+    const NOTE = "新しい候補が続けて見つからないため、1日1回に減らしています。";
+
+    /** A topic whose web search by the model found no new candidate in three runs in a row. */
+    function reduced(server: TestServer, categoryId: number) {
+      const created = createTopic(server.db, categoryId, { text: "local events", sources: { llmSearch: true } }, server.clock);
+      for (let index = 0; index < 3; index += 1) {
+        const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
+        recordSearchAttempt(server.db, {
+          runId: run.id,
+          topicId: created.id,
+          kind: "llm-search",
+          engine: null,
+          query: created.text,
+          ok: true,
+          returned: 0,
+          googleAttempted: 0,
+          googleUnresolved: 0,
+          createdAt: server.clock().toISOString(),
+        });
+      }
+      return created;
+    }
+
+    it("says so next to the choice, and puts it back to every run", async () => {
+      const server = makeServer();
+      const category = server.category("Security");
+      const created = reduced(server, category.id);
+      const { user, requests } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+      await user.click(await screen.findByRole("button", { name: "local events を編集" }));
+      expect(await screen.findByText(NOTE)).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "元に戻す" }));
+
+      await waitFor(() => expect(screen.queryByText(NOTE)).not.toBeInTheDocument());
+      expect(requests).toContain(`POST /api/v1/topics/${created.id}/llm-search/restore`);
+      expect(getTopic(server.db, created.id).llmSearchReduced).toBe(false);
+    });
+
+    it("keeps the note and says so when it cannot be put back", async () => {
+      const server = makeServer();
+      const category = server.category("Security");
+      reduced(server, category.id);
+      let down = false;
+      const { user } = renderApp({ server, route: `/settings/categories/${category.id}`, offline: () => down });
+
+      await user.click(await screen.findByRole("button", { name: "local events を編集" }));
+      await screen.findByText(NOTE);
+      down = true;
+      await user.click(screen.getByRole("button", { name: "元に戻す" }));
+
+      expect(await screen.findByText("LLM検索を元に戻せませんでした。もう一度試してください。")).toBeInTheDocument();
+      expect(screen.getByText(NOTE)).toBeInTheDocument();
+    });
+
+    it("says nothing for a topic whose search is not cut", async () => {
+      const server = makeServer();
+      const category = server.category("Security");
+      topic(server, category.id, "local events", true);
+      const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+      await user.click(await screen.findByRole("button", { name: "local events を編集" }));
+      await screen.findByRole("checkbox", { name: "LLM検索" });
+
+      expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+    });
   });
 
   it("moves the focus into the editor that opens, and back to the button when it closes", async () => {
