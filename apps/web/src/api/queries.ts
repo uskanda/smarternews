@@ -197,16 +197,27 @@ const patchListeners = new WeakMap<QueryClient, Set<ArticlePatchListener>>();
 
 /**
  * Changes an article in every list and in its own entry, and tells those listening: the rows a list keeps outside
- * the cache. A miss is only on the article: the lists do not show it.
+ * the cache. A miss and stopped follow-ups are only on the article: the lists do not show them.
  */
-function patchArticle(client: QueryClient, id: number, { missed, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed">>): void {
+function patchArticle(
+  client: QueryClient,
+  id: number,
+  { missed, followUpsStopped, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed" | "followUpsStopped">>,
+): void {
   client.setQueriesData<InfiniteData<ArticleList>>({ queryKey: ["articles"] }, (data) =>
     data
       ? { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) })) }
       : data,
   );
   client.setQueryData<Article>(["article", id], (article) =>
-    article ? { ...article, ...patch, ...(missed !== undefined ? { missed } : {}) } : article,
+    article
+      ? {
+          ...article,
+          ...patch,
+          ...(missed !== undefined ? { missed } : {}),
+          ...(followUpsStopped !== undefined ? { followUpsStopped } : {}),
+        }
+      : article,
   );
   if (Object.keys(patch).length === 0) return;
   for (const listener of patchListeners.get(client) ?? []) listener(id, patch);
@@ -379,12 +390,13 @@ export function useRecordOpened() {
   );
 }
 
-/** A change of an article's read state, star or miss, as sent to the server. */
+/** A change of an article's read state, star, miss or stopped follow-ups, as sent to the server. */
 export interface ArticleFlagChange {
   id: number;
   isRead?: boolean;
   starred?: boolean;
   missed?: boolean;
+  followUpsStopped?: boolean;
 }
 
 /** A query to fetch again once no change of flags is under way: `exact` for one that was stopped. */
@@ -472,6 +484,7 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
         ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
         ...(change.starred !== undefined ? { starred: !change.starred } : {}),
         ...(change.missed !== undefined ? { missed: !change.missed } : {}),
+        ...(change.followUpsStopped !== undefined ? { followUpsStopped: !change.followUpsStopped } : {}),
       });
       onFailed(change);
     },
@@ -583,6 +596,25 @@ export function useDismissAttention(onFailed: () => void) {
       if (context?.before) client.setQueryData<AttentionList>(["attention"], context.before);
       onFailed();
     },
+  });
+}
+
+/**
+ * Puts a topic's web search by the model, cut to once a day, back to every run. On success the topic and the
+ * attention items are read again, so the item and the note in the topic's editor go away; `onFailed` says it failed.
+ */
+export function useRestoreLlmSearch(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (topicId: number) => api.restoreLlmSearch(topicId),
+    onSuccess: async (topic) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["attention"] }),
+        client.invalidateQueries({ queryKey: ["topics", topic.categoryId] }),
+      ]);
+    },
+    onError: () => onFailed(),
   });
 }
 

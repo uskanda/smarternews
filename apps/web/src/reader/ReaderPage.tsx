@@ -48,7 +48,7 @@ import {
   type ListTarget,
 } from "@smarternews/client";
 import { PANES, usePanes } from "../lib/panes.ts";
-import { listPathOf } from "../lib/paths.ts";
+import { categorySettingsPath, listPathOf } from "../lib/paths.ts";
 import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
@@ -58,9 +58,10 @@ import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
-import { EventList } from "./EventList.tsx";
+import { CategorySettingsLink, EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
+import { MarkOlderMenu, type MarkOlderPeriod } from "./MarkOlderMenu.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -304,16 +305,42 @@ export function ReaderPage({ view }: { view: View }) {
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
   // change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(
-    isSearch ? searchQuery : isMention ? { mention: mentionName } : isAnnotations ? { annotations: true } : { ...filter, order: undefined },
-  );
+  // Until the category or the feed the path names is known, the list has a key of its own: what is read in the
+  // meantime is kept under it, and carried over once the list turns out to be an unread or recently read one.
+  const pendingKey = inCategory || view === "feed" ? `pending:${view}:${params.slug ?? params.feedId ?? ""}` : null;
+  const pending = target === null && pendingKey !== null;
+  const listKey =
+    target === null && pendingKey !== null
+      ? pendingKey
+      : JSON.stringify(
+          isSearch ? searchQuery : isMention ? { mention: mentionName } : isAnnotations ? { annotations: true } : { ...filter, order: undefined },
+        );
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
-  if (kept.key !== listKey) setKept({ key: listKey, items: [] });
+  if (kept.key !== listKey) {
+    const settled = !pending && kept.key === pendingKey && (unreadOnly || recentlyRead);
+    setKept({ key: listKey, items: settled ? kept.items : [] });
+  }
   const sortKey = target ? sortKeyFor(target) : undefined;
-  const items = useMemo(
-    () => (noArticles ? EMPTY : mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort)),
-    [noArticles, fetched, kept, listKey, sortKey, sort],
-  );
+  // The article open now, as the server last gave it. A row of it may be made from it before the list arrives.
+  const opened = useArticle(articleId).data;
+  // What is kept joins the list once it has arrived, so that a row read before then does not stand alone meanwhile.
+  // A kept row shows what arrived since it was kept, such as a translated title, with the flags it was kept with.
+  // What arrived updated after the row was kept is a follow-up, made unread again on the server: it shows as it
+  // arrived.
+  const arrived = active.data !== undefined;
+  const items = useMemo(() => {
+    if (noArticles) return EMPTY;
+    if (!arrived) return fetched;
+    const fresh = new Map(fetched.map((item) => [item.id, item]));
+    if (opened) fresh.set(opened.id, opened);
+    const rows = (kept.key === listKey ? kept.items : []).map((item) => {
+      const latest = fresh.get(item.id);
+      if (!latest) return item;
+      if (latest.updatedAt > item.updatedAt) return latest;
+      return { ...latest, isRead: item.isRead, starred: item.starred, readAt: item.readAt };
+    });
+    return mergeKept(fetched, rows, sortKey, sort);
+  }, [noArticles, arrived, fetched, opened, kept, listKey, sortKey, sort]);
   // The kept rows are outside the cache: what changes an article there, a translated title or a change of flags
   // undone after a failure, is put on them here.
   useArticlePatchListener((id, patch) =>
@@ -413,12 +440,15 @@ export function ReaderPage({ view }: { view: View }) {
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
-  /** Shows a change of the read state in the list: an unread or recently read list keeps the row. */
+  /**
+   * Shows a change of the read state in the list: an unread or recently read list keeps the row. An article opened
+   * before the list arrived, or from beyond the pages loaded, is not in the list: its row is made from the article.
+   */
   function showRead(id: number, isRead: boolean) {
     // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
     if (!isRead) scrollRead.exclude(id);
-    const summary = items.find((item) => item.id === id);
-    if ((unreadOnly || recentlyRead) && summary) {
+    const summary = items.find((item) => item.id === id) ?? (opened?.id === id ? opened : undefined);
+    if ((unreadOnly || recentlyRead || pending) && summary) {
       setKept((current) => ({
         key: listKey,
         items: [...current.items.filter((item) => item.id !== id), { ...summary, isRead }],
@@ -464,7 +494,8 @@ export function ReaderPage({ view }: { view: View }) {
   }
   /** Sends a change of flags again, as the screen of now has it: a retry after a failure. */
   function sendFlags(change: ArticleFlagChange) {
-    const { id, isRead, starred, missed } = change;
+    const { id, isRead, starred, missed, followUpsStopped } = change;
+    if (followUpsStopped !== undefined) return void flags.mutate(change);
     if (missed !== undefined) {
       if (isRead !== undefined) showRead(id, isRead);
       return void flags.mutate(change);
@@ -474,9 +505,13 @@ export function ReaderPage({ view }: { view: View }) {
   }
   flagFailed.current = (change) => {
     // The kept rows are put back with the cache, by the listener above.
-    const { isRead, starred, missed } = change;
+    const { isRead, starred, missed, followUpsStopped } = change;
     const message =
-      missed !== undefined
+      followUpsStopped !== undefined
+        ? followUpsStopped
+          ? "続報を止められませんでした"
+          : "続報の停止を解除できませんでした"
+        : missed !== undefined
         ? missed
           ? "外れの印を付けられませんでした"
           : "外れの印を外せませんでした"
@@ -500,7 +535,6 @@ export function ReaderPage({ view }: { view: View }) {
   // Opening an unread article marks it as read, once per visit to that article. An article that waits for its
   // full content has it asked for: once read, it would no longer be fetched by itself. Its body is shown now, so
   // the server records the opening; marking read anywhere else does not.
-  const opened = useArticle(articleId).data;
   const recordOpened = useRecordOpened();
   const autoMarked = useRef<number | null>(null);
   useEffect(() => {
@@ -577,17 +611,40 @@ export function ReaderPage({ view }: { view: View }) {
     void client.invalidateQueries({ queryKey: ["counts"] });
   }
 
-  async function markAllRead() {
+  function markAllRead() {
+    return markRead((asOf) => asOf, true, "");
+  }
+  /**
+   * Marks read what is older than the period. It stays on this list, whatever the setting: what is left unread is
+   * what the reader is about to read.
+   */
+  function markOlderRead(period: MarkOlderPeriod) {
+    return markRead(
+      (asOf) => {
+        const cutoff = new Date(now().getTime() - period.ms).toISOString();
+        return cutoff < asOf ? cutoff : asOf;
+      },
+      false,
+      `${period.label}より古い未読はありません`,
+    );
+  }
+  /**
+   * Marks read the unread articles of the list updated before the time `before` gives for the time the list was
+   * read, and offers to undo it. `none` is what is said when nothing was marked; empty, the count is said.
+   */
+  async function markRead(before: (asOf: string) => string, advance: boolean, none: string) {
     if (!listControls) return;
     // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
     // marked too, whatever the order. A refetch reads the first page again, and moves the time with it.
-    const before = list.data?.pages[0]?.asOf;
-    if (before === undefined || fetched.length === 0) return;
+    const asOf = list.data?.pages[0]?.asOf;
+    if (asOf === undefined || fetched.length === 0) return;
     try {
-      const result = await api.markRead({ before, ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
+      const result = await api.markRead({ before: before(asOf), ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
       refresh();
+      // Nothing to undo, and nothing finished to move on from.
+      if (result.updated === 0 && none.length > 0) return void toast({ message: none });
       // Moving on is an extra: when it fails, the marking has still happened and can still be undone.
-      const opened = target && settings.data?.advanceAfterMarkAll ? await openNext(target).catch(() => null) : null;
+      const opened = advance && target && settings.data?.advanceAfterMarkAll ? await openNext(target).catch(() => null) : null;
       toast({
         message: opened ? `${result.updated}件を既読にしました。「${opened}」を開きました` : `${result.updated}件を既読にしました`,
         durationMs: 10_000,
@@ -842,7 +899,15 @@ export function ReaderPage({ view }: { view: View }) {
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} moveRef={annotationMove} />
   ) : isEvents ? (
-    <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
+    <EventList
+      title={title}
+      settingsPath={category ? categorySettingsPath(category.id) : null}
+      events={items}
+      selectedId={current}
+      to={articlePath}
+      timeZone={timeZone}
+      now={now()}
+    />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
@@ -853,7 +918,14 @@ export function ReaderPage({ view }: { view: View }) {
             {title}
           </h1>
           <div className="flex flex-wrap gap-sm">
-            {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
+            {canMarkAll ? (
+              <span className="flex">
+                <Button className="rounded-r-none!" onClick={() => void markAllRead()}>
+                  すべて既読にする
+                </Button>
+                <MarkOlderMenu onChoose={(period) => void markOlderRead(period)} />
+              </span>
+            ) : null}
             <Button onClick={refresh}>読み直す</Button>
           </div>
         </div>
@@ -901,6 +973,7 @@ export function ReaderPage({ view }: { view: View }) {
               <Checkbox label="未読だけ" checked={searchUnread} onChange={(event) => toggleParam("unread", "true", event.target.checked)} />
             </>
           ) : null}
+          {inCategory && category ? <CategorySettingsLink to={categorySettingsPath(category.id)} className="self-center" /> : null}
         </div>
       </header>
       {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}
@@ -1009,6 +1082,7 @@ export function ReaderPage({ view }: { view: View }) {
               onToggleStar={toggleStar}
               onToggleRead={(article) => setRead(article.id, !article.isRead)}
               onToggleMiss={toggleMiss}
+              onToggleFollowUps={(article) => flags.mutate({ id: article.id, followUpsStopped: !article.followUpsStopped })}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),
