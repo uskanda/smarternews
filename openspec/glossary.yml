@@ -506,6 +506,10 @@ terms:
     definition: "セレクターの提案のタスクかプログラムの推定が出す、利用者が選ぶためのセレクターの組。"
     aliases: []
     en: "selector candidate"
+  - term: "本文のセレクター"
+    definition: "購読フィードごとに指定する、記事のページで本文の要素を指すセレクター。全文と要約の取り出しで、Readabilityの結果の代わりに使う。"
+    aliases: ["本文セレクター", "コンテンツセレクター"]
+    en: "content selector"
   - term: "抜き出した名前"
     definition: "記事を書くタスクか要約のタスクが記事から取り出した、人、組織、製品、地名の名前。"
     aliases: ["メンション", "エンティティ", "固有表現"]
