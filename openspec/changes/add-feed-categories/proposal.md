@@ -33,7 +33,7 @@
 ## Impact
 
 - `packages/core`: フィードのパーサー（`sources/feed.ts`）と保存（`feeds/ingest.ts`）を変える。
-- `packages/core`: 移行（`032_article_feed_categories.sql`）を足す。
+- `packages/core`: 移行（`037_article_feed_categories.sql`）を足す。
 - `packages/core`: フィルターの照合（`filters/match.ts`、`db/filters.ts`）を変える。
 - `packages/core`: APIの型（`api.ts`）と記事の読み出し（`db/articles.ts`）を変える。
 - `apps/web`: フィルターの入力（`settings/FilterForm.tsx`）と本文の画面（`reader/ArticleView.tsx`）を変える。

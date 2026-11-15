@@ -1,13 +1,14 @@
 import type { Category, Feed, Filter, FilterAction, FilterCondition, FilterField, FilterMatch, FilterScope } from "@smarternews/core/api";
 import { MAX_FILTER_CONDITIONS } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { ApiError, describeProblem, type FieldProblem } from "@smarternews/client";
 import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, messageFor } from "../ui/controls.tsx";
-import { useUnsaved } from "./unsaved.tsx";
+import { useDialogCancel } from "../ui/FormDialog.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 // The inputs of a filter, shared by the settings of filters and the dialog that makes one from a selection.
 
@@ -221,14 +222,19 @@ export function FilterForm({
   const [general, setGeneral] = useState<string | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Counts the changes to the draft, so that a count asked for before one can be told apart and dropped.
+  const version = useRef(0);
   const scopeId = useId();
-  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again.
+  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again. One
+  // that starts filled in, as from a selection, counts once it differs from what it started with.
+  const start = filter ?? initial;
   useUnsaved(
     label ?? (filter ? "フィルターの編集" : "新しいフィルター"),
-    filter
-      ? contentOf(draft) !== contentOf({ ...filter, scope: scopeKey(filter.scope) })
+    start
+      ? contentOf(draft) !== contentOf({ ...start, scope: scopeKey(start.scope) })
       : draft.conditions.some((condition) => condition.value.trim() !== ""),
   );
+  const cancel = useDialogCancel(onDone ?? (() => {}));
 
   const scope = scopeOf(draft.scope);
   const complete = scope !== null && draft.conditions.every((condition) => condition.fields.length > 0 && condition.value.trim().length > 0);
@@ -243,6 +249,7 @@ export function FilterForm({
   };
 
   function change(next: Partial<Draft>) {
+    version.current += 1;
     setDraft((current) => ({ ...current, ...next }));
     setProblems([]);
     setGeneral(null);
@@ -262,13 +269,17 @@ export function FilterForm({
   }
 
   async function check() {
+    const asked = version.current;
     setBusy(true);
     try {
       const result = await api.previewFilter({ ...body(), ...(filter ? { id: filter.id } : {}) });
+      // An answer about conditions that have changed since would show the old count beside the new ones.
+      if (version.current !== asked) return;
       setProblems([]);
       setGeneral(null);
       setPreview(result.hiddenCount);
     } catch (error) {
+      if (version.current !== asked) return;
       setPreview(null);
       refused(error);
     } finally {
@@ -293,6 +304,7 @@ export function FilterForm({
           onCreated(saved);
           return;
         }
+        version.current += 1;
         setDraft(draftOf());
         setPreview(null);
         toast({ message: `フィルターを追加しました。${saved.hiddenCount > 0 ? `${saved.hiddenCount}件を隠しています。` : "いま隠している記事はありません。"}` });
@@ -418,7 +430,7 @@ export function FilterForm({
         <Button onClick={() => void check()} disabled={!complete || busy}>
           隠れる件数を確かめる
         </Button>
-        {onDone ? <Button onClick={onDone}>やめる</Button> : null}
+        {onDone ? <Button onClick={cancel}>やめる</Button> : null}
       </div>
     </form>
   );

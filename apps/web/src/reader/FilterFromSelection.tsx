@@ -1,16 +1,14 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import type { Article, Filter, FilterScope } from "@smarternews/core/api";
+import { useState } from "react";
 import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
-import { FilterForm, useRefresh } from "../settings/FilterForm.tsx";
+import { FilterForm, useRefresh, type FilterStart } from "../settings/FilterForm.tsx";
 import { useToast } from "../shell/toast.tsx";
+import { FormDialog } from "../ui/FormDialog.tsx";
 
 // Making a hide filter of the text selected in a feed article: the inputs of the settings of filters, filled in.
-// Saving leaves the article open; the lists and the counts are read again, and the notice can undo it.
-
-const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";
-const PANEL =
-  "fixed top-1/2 left-1/2 z-50 flex max-h-[90dvh] w-[min(90vw,var(--spacing-measure-article))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-y-auto rounded-lg border border-outline bg-surface p-xl";
+// Saving leaves the article open; the lists and the counts are read again, and the notice can undo it. Once the
+// inputs differ from what they were filled in with, closing the dialog asks first.
 
 /** How many articles a filter hides now, in the words of a notice. */
 const hiddenText = (count: number) => (count > 0 ? `${count}件を隠しています。` : "いま隠している記事はありません。");
@@ -27,6 +25,12 @@ export function FilterFromSelectionDialog({ value, article, onClose, onCreated }
   const categories = useCategories().data ?? [];
   const feed = feeds.find((each) => each.id === article.feedId);
   const category = categories.find((each) => each.id === feed?.categoryId && each.kind === "news");
+  // Kept as it is while the dialog is open: the form tells a change by comparing with it.
+  const [initial] = useState<FilterStart>(() => ({
+    action: "hide",
+    scope: { type: "all" },
+    conditions: [{ fields: ["title", "content"], match: "contains", value }],
+  }));
   const preferred: FilterScope[] = [
     ...(feed ? [{ type: "feed" as const, feedId: feed.id }] : []),
     ...(category ? [{ type: "category" as const, categoryId: category.id }] : []),
@@ -52,20 +56,9 @@ export function FilterFromSelectionDialog({ value, article, onClose, onCreated }
   }
 
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content data-hotkeys="off" aria-describedby={undefined} className={PANEL}>
-          <Dialog.Title className="type-headline-md">隠すフィルターを作る</Dialog.Title>
-          <p className="type-label-sm text-on-surface-muted">配信記事のタイトルと配信された内容を照合します。スターまたは注釈のある記事は隠しません。</p>
-          <FilterForm
-            initial={{ action: "hide", scope: { type: "all" }, conditions: [{ fields: ["title", "content"], match: "contains", value }] }}
-            preferred={preferred}
-            onDone={onClose}
-            onCreated={created}
-          />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <FormDialog open onOpenChange={(open) => (open ? undefined : onClose())} title="隠すフィルターを作る" layout="article">
+      <p className="type-label-sm text-on-surface-muted">配信記事のタイトルと配信された内容を照合します。スターまたは注釈のある記事は隠しません。</p>
+      <FilterForm initial={initial} preferred={preferred} onDone={onClose} onCreated={created} />
+    </FormDialog>
   );
 }

@@ -13,7 +13,7 @@
 
 ## 3. 保存とAPI
 
-- [x] 3.1 `032_article_feed_categories.sql` で `articles` に `feed_categories` の列を足す。`storeItems` で、新しい記事と保存済みの記事に分類を保存する
+- [x] 3.1 `037_article_feed_categories.sql` で `articles` に `feed_categories` の列を足す。`storeItems` で、新しい記事と保存済みの記事に分類を保存する
 - [x] 3.2 `ingest.test.ts` で、変更の前に保存した記事が次の取得で分類を得ることを確かめる。分類だけの変化で照合し直し、翻訳を消さないことも確かめる
 - [x] 3.3 `articleSchema` に `feedCategories` を足し、`getArticle` で返す。読めないJSONを空の配列にすることを確かめる
 

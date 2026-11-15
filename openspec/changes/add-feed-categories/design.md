@@ -39,7 +39,7 @@ XMLのパーサーの `isArray` に `category` と `dc:subject` を足し、要�
 
 ### 分類は articles の feed_categories の列にJSONで置く
 
-`032_article_feed_categories.sql` で `articles` に `feed_categories TEXT` を足す。中身は文字列のJSONの配列で、分類がないときはNULLにする。
+`037_article_feed_categories.sql` で `articles` に `feed_categories TEXT` を足す。中身は文字列のJSONの配列で、分類がないときはNULLにする。
 生成記事と、変更の前に保存した記事はNULLのままである。読み出し（`getArticle`）は、NULL、読めないJSON、配列でない値を空の配列にし、文字列でない要素を捨てる。
 
 ### 分類の変化は書き換えとして照合し直す

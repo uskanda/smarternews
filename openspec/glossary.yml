@@ -125,6 +125,10 @@ terms:
     definition: "実行がニュース検索の検索先と検索語の組か、LLM検索のトピックで、1回検索したことの記録。"
     aliases: []
     en: "search attempt"
+  - term: "LLM検索"
+    definition: "検索のタスクにトピックのページを探させ、返ったURLのページを取得して候補にする取得元。"
+    aliases: []
+    en: "web search by the model"
   - term: "配信終了"
     definition: "サイトが410を返し続けている購読フィードの状態で、取得の失敗より強い。"
     aliases: []
@@ -166,6 +170,10 @@ terms:
     definition: "外れの印を付けた時点の記事の見出し、カテゴリ、トピック、時刻を写した記録で、記事が消えても残る。"
     aliases: []
     en: "miss record"
+  - term: "続報の停止"
+    definition: "利用者が生成記事に付ける、話題は合っているがその記事の続報はもう要らないことを示す印。"
+    aliases: ["ミュート"]
+    en: "follow-ups stopped"
   - term: "理由の種類"
     definition: "プログラムが候補を除外したときの理由を表す決まった値で、判定による除外は持たない。"
     aliases: ["理由コード"]
@@ -558,3 +566,23 @@ terms:
     definition: "ダイジェストのカテゴリの区画の1行が、内容の出典にした記事。"
     aliases: ["参照記事"]
     en: "source article"
+  - term: "関連度"
+    definition: "記事が利用者の関心にどれだけ近いかを表す0から1の値で、生成記事は重要度から、配信記事は行動の値と語の一致から決まる。"
+    aliases: ["関連スコア"]
+    en: "relevance"
+  - term: "関連度順"
+    definition: "記事の時刻に関連度×48時間を足した並びの値の大きい順に並べる、記事の一覧の並び順。"
+    aliases: ["関連度の並び", "マジックソート"]
+    en: "relevance order"
+  - term: "行動の値"
+    definition: "購読フィードごとの、直近30日の記事を開いたかスターを付けた割合を、最も高い購読フィードを1として比べた0から1の値。"
+    aliases: ["行動スコア"]
+    en: "behaviour score"
+  - term: "スケジューラー"
+    definition: "サーバーの中で定期に動き、スケジュールの実行、掃除、行動の値の計算を始める処理。"
+    aliases: []
+    en: "scheduler"
+  - term: "プレースホルダー"
+    definition: "入力欄が空のときに欄の中に薄く表示する、入れるものを示す文字列。"
+    aliases: ["プレースホルダ"]
+    en: "placeholder"

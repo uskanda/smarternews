@@ -614,7 +614,10 @@ describe("the migration to reason codes", () => {
       "INSERT INTO candidates (category_id, url, title, source_kind, status, reason, created_at) VALUES (1, ?, 't', 'feed', ?, ?, ?)",
     );
     const expected: Array<{ url: string; reason_code: string | null }> = [];
-    for (const code of REASON_CODES) {
+    // The kinds there were when this migration was written; later kinds have texts that name an article.
+    const codesOf028 = ["no-date", "below-minimum", "over-limit", "event-outside-window", "event-no-date"] as const;
+    expect(REASON_CODES).toEqual(expect.arrayContaining([...codesOf028]));
+    for (const code of codesOf028) {
       for (const language of ["ja", "en"]) {
         const url = `https://example.org/${code}/${language}`;
         candidate.run(url, "rejected", reasonText(code, language), now);
@@ -631,6 +634,58 @@ describe("the migration to reason codes", () => {
 
     expect(db.prepare("SELECT url, reason_code FROM candidates ORDER BY id").all()).toEqual(expected);
     expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 1").run()).toThrow();
+  });
+});
+
+describe("the migration to marks on follow-ups", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the candidates with their ids, kinds and topics, and allows the kinds of marked follow-ups", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "036")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO topics (id, category_id, text, created_at) VALUES (7, 1, 'tools', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (3, 'generated', 1, 'news', 't', 's', 'b', 3, ?, ?, ?)`,
+    ).run(now, now, now);
+    const candidate = db.prepare(
+      `INSERT INTO candidates (id, category_id, url, title, source_kind, status, reason, reason_code, importance, group_key, body, article_id, created_at)
+       VALUES (?, 1, ?, 't', 'feed', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    candidate.run(5, "https://example.org/a", "rejected", "件数上限", "over-limit", 2, null, null, null, now);
+    candidate.run(9, "https://example.org/b", "accepted", "new", null, 4, "1:1", "text", 3, now);
+    db.prepare("INSERT INTO candidate_topics (candidate_id, topic_id) VALUES (5, 7), (9, 7)").run();
+    const before = db.prepare("SELECT * FROM candidates ORDER BY id").all();
+
+    copyFileSync(join(SHIPPED, "036_follow_up_marks.sql"), join(dir, "036_follow_up_marks.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT * FROM candidates ORDER BY id").all()).toEqual(before);
+    expect(db.prepare("SELECT candidate_id, topic_id FROM candidate_topics ORDER BY candidate_id").all()).toEqual([
+      { candidate_id: 5, topic_id: 7 },
+      { candidate_id: 9, topic_id: 7 },
+    ]);
+    expect(db.prepare("SELECT follow_ups_stopped FROM articles WHERE id = 3").get()).toEqual({ follow_ups_stopped: 0 });
+    for (const code of ["missed-follow-up", "stopped-follow-up"]) {
+      expect(() => db.prepare("UPDATE candidates SET reason_code = ? WHERE id = 5").run(code)).not.toThrow();
+    }
+    expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 5").run()).toThrow();
+    // The topics of a candidate still go with it.
+    db.prepare("DELETE FROM candidates WHERE id = 5").run();
+    expect(db.prepare("SELECT count(*) AS n FROM candidate_topics").get()).toEqual({ n: 1 });
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'candidates' AND sql IS NOT NULL ORDER BY name")
+        .all()
+        .map((row) => row.name),
+    ).toEqual(["candidates_category_created", "candidates_category_status", "candidates_run"]);
   });
 });
 
@@ -945,6 +1000,62 @@ describe("the migration that lets the feed articles of every feed keep a list vi
     db.prepare("DELETE FROM feeds WHERE id = 5").run();
     db.prepare("DELETE FROM categories WHERE id = 3").run();
     expect(db.prepare("SELECT list FROM list_views ORDER BY id").all()).toEqual([{ list: "unread" }, { list: "feeds" }]);
+  });
+});
+
+describe("the migration to the relevance order", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the list views and the articles, allows the order, and ranks every article by its time and relevance", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    const insertView = (list: string, categoryId: number | null, feedId: number | null, sort = "oldest") =>
+      db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, ?, ?, ?)").run(list, categoryId, feedId, sort);
+    insertView("feed", null, 5);
+    insertView("unread", null, null);
+    insertView("category", 3, null);
+    expect(() => insertView("all", null, null, "relevance")).toThrow();
+    db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (1, 3, 'news', 't', 's', 'b', 5, ?, '2026-01-02T00:00:00.000Z', ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO articles (id, category_id, origin, feed_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at)
+       VALUES (2, 3, 'feed', 5, 'k', 'news', 't', 's', 'b', ?, '2026-01-03T00:00:00.000Z', ?)`,
+    ).run(now, now);
+    const views = () => db.prepare("SELECT * FROM list_views ORDER BY id").all();
+    const before = views();
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("033_"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(views()).toEqual(before);
+    insertView("all", null, null, "relevance");
+    expect(db.prepare("SELECT sort FROM list_views WHERE list = 'all'").get()).toEqual({ sort: "relevance" });
+    expect(() => insertView("starred", null, null, "random")).toThrow();
+    expect(() => insertView("unread", null, null)).toThrow();
+
+    // Importance 5 is relevance 1: 48 hours later. A feed article starts with neither behaviour nor a term match.
+    expect(db.prepare("SELECT id, feed_score, term_match, rank_at FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, feed_score: 0, term_match: 0, rank_at: "2026-01-04T00:00:00.000Z" },
+      { id: 2, feed_score: 0, term_match: 0, rank_at: "2026-01-03T00:00:00.000Z" },
+    ]);
+    db.prepare("UPDATE articles SET feed_score = 0.5, term_match = 1 WHERE id = 2").run();
+    expect(db.prepare("SELECT rank_at FROM articles WHERE id = 2").get()).toEqual({ rank_at: "2026-01-04T12:00:00.000Z" });
+    expect(db.prepare("SELECT relevance_score FROM feeds WHERE id = 5").get()).toEqual({ relevance_score: 0 });
+    expect(
+      db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'articles' AND name LIKE '%rank%'").get(),
+    ).toEqual({ n: 6 });
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+    // The cascades of the table made again still work.
+    db.prepare("DELETE FROM categories WHERE id = 3").run();
+    expect(db.prepare("SELECT list FROM list_views ORDER BY id").all()).toEqual([{ list: "feed" }, { list: "unread" }, { list: "all" }]);
   });
 });
 
@@ -1278,5 +1389,37 @@ describe("the migration to web feeds", () => {
     expect(db.prepare("SELECT format, page_selectors FROM feeds").all()).toEqual([{ format: "feed", page_selectors: null }]);
     expect(db.prepare("SELECT * FROM articles").all()).toEqual(articles);
     expect(() => db.prepare("UPDATE feeds SET format = 'html' WHERE id = 5").run()).toThrow();
+  });
+});
+
+describe("the migration to the notes of every rewrite", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the note an article has at the time it was last rewritten, and lets it go with the article", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "034")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at)
+       VALUES (1, 'sec', 'Security', 'news', '[]', 4, 7, '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at, revision, update_note)
+       VALUES (?, 1, 'news', 't', 's', 'b', 3,'2026-01-01T00:00:00.000Z', ?, '2026-01-01T00:00:00.000Z', ?, ?)`,
+    );
+    insert.run(1, "2026-01-02T13:00:00.000Z", 2, "価格が発表されました。");
+    insert.run(2, "2026-01-02T14:00:00.000Z", 1, null);
+    insert.run(3, "2026-01-01T00:00:00.000Z", 0, null);
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("034_"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT article_id, note, created_at FROM article_update_notes ORDER BY id").all()).toEqual([
+      { article_id: 1, note: "価格が発表されました。", created_at: "2026-01-02T13:00:00.000Z" },
+    ]);
+    db.prepare("DELETE FROM articles WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM article_update_notes").get()).toEqual({ n: 0 });
   });
 });

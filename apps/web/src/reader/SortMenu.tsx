@@ -2,8 +2,8 @@ import type { ListSort } from "@smarternews/core/api";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "../ui/controls.tsx";
 
-const LABELS: Record<ListSort, string> = { newest: "新しい順", oldest: "古い順" };
-const OPTIONS: ListSort[] = ["newest", "oldest"];
+const LABELS: Record<ListSort, string> = { newest: "新しい順", oldest: "古い順", relevance: "関連度順" };
+const OPTIONS: ListSort[] = ["newest", "oldest", "relevance"];
 
 // Looks like the menu of an entry in the left pane (DESIGN.md): surface, outline-strong, rounded md, no shadow.
 const MENU = "absolute left-0 top-full z-50 mt-xs min-w-40 rounded-md border border-outline-strong bg-surface p-xs type-body-md text-on-surface";
@@ -11,7 +11,7 @@ const MENU_ITEM =
   "tap flex w-full cursor-default items-center gap-sm rounded-sm px-md py-xs text-left outline-none hover:bg-selected focus:bg-selected focus:outline-2 focus:-outline-offset-2 focus:outline-primary";
 
 /**
- * The order of the list: a button that names the order in use, and a menu of the two orders. The keyboard
+ * The order of the list: a button that names the order in use, and a menu of the three orders. The keyboard
  * opens it with Enter, Space or the down arrow on the button, moves with the arrows, chooses with Enter or
  * Space, and leaves with Escape.
  */
