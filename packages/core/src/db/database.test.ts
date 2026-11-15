@@ -614,7 +614,10 @@ describe("the migration to reason codes", () => {
       "INSERT INTO candidates (category_id, url, title, source_kind, status, reason, created_at) VALUES (1, ?, 't', 'feed', ?, ?, ?)",
     );
     const expected: Array<{ url: string; reason_code: string | null }> = [];
-    for (const code of REASON_CODES) {
+    // The kinds there were when this migration was written; later kinds have texts that name an article.
+    const codesOf028 = ["no-date", "below-minimum", "over-limit", "event-outside-window", "event-no-date"] as const;
+    expect(REASON_CODES).toEqual(expect.arrayContaining([...codesOf028]));
+    for (const code of codesOf028) {
       for (const language of ["ja", "en"]) {
         const url = `https://example.org/${code}/${language}`;
         candidate.run(url, "rejected", reasonText(code, language), now);
@@ -631,6 +634,58 @@ describe("the migration to reason codes", () => {
 
     expect(db.prepare("SELECT url, reason_code FROM candidates ORDER BY id").all()).toEqual(expected);
     expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 1").run()).toThrow();
+  });
+});
+
+describe("the migration to marks on follow-ups", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the candidates with their ids, kinds and topics, and allows the kinds of marked follow-ups", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "032")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO topics (id, category_id, text, created_at) VALUES (7, 1, 'tools', ?)").run(now);
+    db.prepare(
+      `INSERT INTO articles (id, origin, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (3, 'generated', 1, 'news', 't', 's', 'b', 3, ?, ?, ?)`,
+    ).run(now, now, now);
+    const candidate = db.prepare(
+      `INSERT INTO candidates (id, category_id, url, title, source_kind, status, reason, reason_code, importance, group_key, body, article_id, created_at)
+       VALUES (?, 1, ?, 't', 'feed', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    candidate.run(5, "https://example.org/a", "rejected", "件数上限", "over-limit", 2, null, null, null, now);
+    candidate.run(9, "https://example.org/b", "accepted", "new", null, 4, "1:1", "text", 3, now);
+    db.prepare("INSERT INTO candidate_topics (candidate_id, topic_id) VALUES (5, 7), (9, 7)").run();
+    const before = db.prepare("SELECT * FROM candidates ORDER BY id").all();
+
+    copyFileSync(join(SHIPPED, "032_follow_up_marks.sql"), join(dir, "032_follow_up_marks.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT * FROM candidates ORDER BY id").all()).toEqual(before);
+    expect(db.prepare("SELECT candidate_id, topic_id FROM candidate_topics ORDER BY candidate_id").all()).toEqual([
+      { candidate_id: 5, topic_id: 7 },
+      { candidate_id: 9, topic_id: 7 },
+    ]);
+    expect(db.prepare("SELECT follow_ups_stopped FROM articles WHERE id = 3").get()).toEqual({ follow_ups_stopped: 0 });
+    for (const code of ["missed-follow-up", "stopped-follow-up"]) {
+      expect(() => db.prepare("UPDATE candidates SET reason_code = ? WHERE id = 5").run(code)).not.toThrow();
+    }
+    expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 5").run()).toThrow();
+    // The topics of a candidate still go with it.
+    db.prepare("DELETE FROM candidates WHERE id = 5").run();
+    expect(db.prepare("SELECT count(*) AS n FROM candidate_topics").get()).toEqual({ n: 1 });
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'candidates' AND sql IS NOT NULL ORDER BY name")
+        .all()
+        .map((row) => row.name),
+    ).toEqual(["candidates_category_created", "candidates_category_status", "candidates_run"]);
   });
 });
 

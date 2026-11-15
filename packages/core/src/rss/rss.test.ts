@@ -45,6 +45,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   mentions: [],
   attachments: [],
   missed: false,
+  followUpsStopped: false,
   refs: [
     {
       url: "https://example.org/a",

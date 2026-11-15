@@ -282,6 +282,7 @@ function toArticle(db: Database, row: Row): Article {
     mentions: mentionsOf(db, id),
     attachments: attachmentsOf(row),
     missed: isMissed(db, id),
+    followUpsStopped: bool(row.follow_ups_stopped),
   };
 }
 
@@ -452,7 +453,14 @@ export interface ArticleDigest {
   summary: string;
   body: string;
   firstPublishedAt: string;
+  /** The reader marked the article as a miss: a run writes no follow-up to it. */
+  missed: boolean;
+  /** The reader stopped the follow-ups of the article: a run writes none. */
+  followUpsStopped: boolean;
 }
+
+/** The columns of a digest, with whether the article has a miss. */
+const DIGEST_COLUMNS = "a.*, EXISTS (SELECT 1 FROM misses m WHERE m.article_id = a.id) AS missed";
 
 function toDigest(row: Row): ArticleDigest {
   return {
@@ -461,13 +469,15 @@ function toDigest(row: Row): ArticleDigest {
     summary: str(row.summary),
     body: str(row.body),
     firstPublishedAt: str(row.first_published_at),
+    missed: bool(row.missed),
+    followUpsStopped: bool(row.follow_ups_stopped),
   };
 }
 
 /** News articles of the category touched since the given time: what a new page could be a follow-up to. */
 export function recentNewsArticles(db: Database, categoryId: number, since: string): ArticleDigest[] {
   return db
-    .prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'news' AND updated_at >= ? ORDER BY id`)
+    .prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.${GENERATED} AND a.category_id = ? AND a.kind = 'news' AND a.updated_at >= ? ORDER BY a.id`)
     .all(categoryId, since)
     .map(toDigest);
 }
@@ -475,13 +485,15 @@ export function recentNewsArticles(db: Database, categoryId: number, since: stri
 /** Event articles of the category whose event has not ended. */
 export function openEventArticles(db: Database, categoryId: number, now: string): ArticleDigest[] {
   return db
-    .prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'event' AND event_ends_at >= ? ORDER BY id`)
+    .prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.${GENERATED} AND a.category_id = ? AND a.kind = 'event' AND a.event_ends_at >= ? ORDER BY a.id`)
     .all(categoryId, now)
     .map(toDigest);
 }
 
 export function findEventByKey(db: Database, categoryId: number, key: string): ArticleDigest | null {
-  const row = db.prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND event_key = ? ORDER BY id LIMIT 1`).get(categoryId, key);
+  const row = db
+    .prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.${GENERATED} AND a.category_id = ? AND a.event_key = ? ORDER BY a.id LIMIT 1`)
+    .get(categoryId, key);
   return row ? toDigest(row) : null;
 }
 
@@ -909,17 +921,31 @@ function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[
  * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
  * one that was read already keeps its time, and one put back to unread loses it. Marking a generated article as a
  * miss marks it read too, unless the same patch says whether it is read; taking the mark away leaves that alone.
+ * Stopping the follow-ups of a generated article, or taking that back, leaves whether it is read alone.
  */
 export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, now: string): Article {
   const article = getArticle(db, id);
-  if (patch.missed !== undefined && article.origin !== "generated") {
-    throw new DomainError("invalid", `article ${id} is not a generated article`, [
-      { path: "missed", message: "only a generated article can be marked as a miss", code: "not_allowed" },
-    ]);
+  if (article.origin !== "generated") {
+    const refused = [
+      ...(patch.missed !== undefined ? [{ path: "missed", message: "only a generated article can be marked as a miss" }] : []),
+      ...(patch.followUpsStopped !== undefined
+        ? [{ path: "followUpsStopped", message: "only a generated article can have its follow-ups stopped" }]
+        : []),
+    ];
+    if (refused.length > 0) {
+      throw new DomainError(
+        "invalid",
+        `article ${id} is not a generated article`,
+        refused.map((issue) => ({ ...issue, code: "not_allowed" as const })),
+      );
+    }
   }
   transaction(db, () => {
     if (patch.missed === true) markMissed(db, id, now);
     if (patch.missed === false) unmarkMissed(db, id);
+    if (patch.followUpsStopped !== undefined) {
+      db.prepare("UPDATE articles SET follow_ups_stopped = ? WHERE id = ?").run(patch.followUpsStopped ? 1 : 0, id);
+    }
     const isRead = patch.isRead ?? (patch.missed === true ? true : undefined);
     if (isRead !== undefined) {
       const changed = num(

@@ -182,6 +182,90 @@ describe("what a follow-up adds", () => {
   });
 });
 
+describe("follow-up to an article the reader marked", () => {
+  it("rejects a follow-up to an article marked as a miss without writing, and leaves the article read", async () => {
+    const { h, article } = await published();
+    setArticleFlags(h.db, article.id, { missed: true }, "2026-03-01T12:30:00.000Z");
+    h.clock.advance(24 * HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+
+    const run = await h.run();
+
+    expect(h.requests.write).toHaveLength(1);
+    expect(h.articles()).toMatchObject([{ id: article.id, revision: 0, isRead: true }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Patch released {flaw}", reasonCode: "missed-follow-up" }]);
+    expect(h.candidates(run.id, "rejected")).toMatchObject([
+      { reason: 'follow-up to "Flaw disclosed {flaw} [i4]", which was marked as a miss' },
+    ]);
+    expect(run).toMatchObject({ articlesCreated: 0, articlesUpdated: 0, rejected: 1 });
+  });
+
+  it("rejects a follow-up to an article whose follow-ups were stopped, and names it in the output language", async () => {
+    const h = pipelineHarness({ outputLanguage: "ja" });
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Flaw disclosed {flaw} [i4]", link: "https://example.org/disclosed" }]);
+    await h.run();
+    const [article] = h.articles();
+    setArticleFlags(h.db, article!.id, { followUpsStopped: true }, "2026-03-01T12:30:00.000Z");
+    h.clock.advance(24 * HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+
+    const run = await h.run();
+
+    expect(h.requests.write).toHaveLength(1);
+    expect(h.articles()).toMatchObject([{ revision: 0, isRead: false }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Patch released {flaw}", reasonCode: "stopped-follow-up" }]);
+    expect(h.candidates(run.id, "rejected")).toMatchObject([{ reason: `続報を止めた記事「${article!.title}」の続報` }]);
+  });
+
+  it("gives the miss first when an article has both marks", async () => {
+    const { h, article } = await published();
+    setArticleFlags(h.db, article.id, { missed: true, followUpsStopped: true }, "2026-03-01T12:30:00.000Z");
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+
+    const run = await h.run();
+
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Patch released {flaw}", reasonCode: "missed-follow-up" }]);
+  });
+
+  it("gives the reason of the mark to a follow-up below the minimum importance", async () => {
+    const { h, article } = await published();
+    setArticleFlags(h.db, article.id, { followUpsStopped: true }, "2026-03-01T12:30:00.000Z");
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Minor note {flaw} [i1]", link: "https://example.org/minor" }]);
+
+    const run = await h.run();
+
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Minor note {flaw} [i1]", reasonCode: "stopped-follow-up" }]);
+  });
+
+  it("writes no new article for a late follow-up to a marked article", async () => {
+    const { h, article } = await published();
+    setArticleFlags(h.db, article.id, { followUpsStopped: true }, "2026-03-01T12:30:00.000Z");
+    h.clock.advance(7 * 24 * HOUR);
+    h.feed(FEED, [{ title: "Lawsuit filed {flaw}", link: "https://example.org/lawsuit" }]);
+
+    const run = await h.run();
+
+    expect(h.articles()).toHaveLength(1);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Lawsuit filed {flaw}", reasonCode: "stopped-follow-up" }]);
+  });
+
+  it("rewrites the article again once the mark is taken away", async () => {
+    const { h, article } = await published();
+    setArticleFlags(h.db, article.id, { followUpsStopped: true }, "2026-03-01T12:30:00.000Z");
+    setArticleFlags(h.db, article.id, { followUpsStopped: false }, "2026-03-01T12:40:00.000Z");
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+
+    const run = await h.run();
+
+    expect(h.articles()).toMatchObject([{ revision: 1, isRead: false }]);
+    expect(run).toMatchObject({ articlesUpdated: 1 });
+  });
+});
+
 describe("follow-up after 72 hours", () => {
   it("writes a new article that points back to the earlier one", async () => {
     const { h, article } = await published();
