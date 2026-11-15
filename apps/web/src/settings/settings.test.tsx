@@ -814,6 +814,92 @@ describe("the settings file", () => {
   });
 });
 
+describe("the fields after the settings change elsewhere", () => {
+  const moved = "version: 1\nsettings:\n  timeZone: Asia/Tokyo\n  readerInfo: Maintains web services.\n";
+
+  async function load(user: ReturnType<typeof renderApp>["user"], text: string) {
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), new File([text], "moved.yaml"));
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
+  }
+
+  it("shows the loaded values, and saving the global settings keeps them", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const zone = within(global).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(zone).toHaveValue("UTC"));
+
+    await load(user, moved);
+
+    await waitFor(() => expect(zone).toHaveValue("Asia/Tokyo"));
+    expect(within(await section("読み手情報")).getByLabelText("読み手情報")).toHaveValue("Maintains web services.");
+    const days = within(global).getByLabelText("更新が止まったとみなす日数");
+    await user.clear(days);
+    await user.type(days, "45");
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(45));
+    expect(getSettings(server.db)).toMatchObject({ timeZone: "Asia/Tokyo", readerInfo: "Maintains web services." });
+  });
+
+  it("replaces what was not saved with the loaded values, and leaves nothing unsaved", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const unloadStopped = () => !fireEvent(window, new Event("beforeunload", { cancelable: true }));
+    const global = await section("全体設定");
+    const zone = within(global).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(zone).toHaveValue("UTC"));
+    await user.clear(zone);
+    await user.type(zone, "Europe/Berlin");
+    expect(unloadStopped()).toBe(true);
+
+    await load(user, moved);
+
+    await waitFor(() => expect(zone).toHaveValue("Asia/Tokyo"));
+    await waitFor(() => expect(unloadStopped()).toBe(false));
+  });
+
+  it("keeps what was not saved in the global settings when only the reader information changes", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const zone = within(global).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(zone).toHaveValue("UTC"));
+    await user.clear(zone);
+    await user.type(zone, "Europe/Berlin");
+
+    const reader = await section("読み手情報");
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    await user.click(within(reader).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
+    expect(zone).toHaveValue("Europe/Berlin");
+  });
+
+  it("keeps the focus on the save buttons after saving", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const days = within(global).getByLabelText("更新が止まったとみなす日数");
+    await waitFor(() => expect(days).not.toHaveValue(""));
+    await user.clear(days);
+    await user.type(days, "45");
+    const saveGlobal = within(global).getByRole("button", { name: "保存する" });
+    await user.click(saveGlobal);
+    await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(45));
+    expect(saveGlobal).toHaveFocus();
+
+    const reader = await section("読み手情報");
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    const saveReader = within(reader).getByRole("button", { name: "保存する" });
+    await user.click(saveReader);
+    await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
+    expect(saveReader).toHaveFocus();
+  });
+});
+
 describe("connecting the Android app", () => {
   it("shows no connection code until the user asks for it, and says that the code holds the token", async () => {
     renderApp({ route: "/settings" });
