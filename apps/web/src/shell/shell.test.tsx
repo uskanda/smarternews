@@ -153,6 +153,15 @@ describe("panes by width", () => {
     expect(await within(nav()).findByRole("link", { name: /^未読/ })).toBeInTheDocument();
   });
 
+  it("widens the drawer of views with the font size, up to 80% of the screen", async () => {
+    const { server } = seeded();
+    const { user } = renderApp({ server, route: "/all", width: 390 });
+
+    await user.click(await screen.findByRole("button", { name: "項目を開く" }));
+    // jsdom lays nothing out: 12.5rem is 200px at the default font size and 400px at 200%.
+    expect(await screen.findByRole("dialog", { name: "項目" })).toHaveClass("w-[min(80vw,var(--spacing-drawer))]");
+  });
+
   it("shows only the list on a narrow screen until an article is chosen", async () => {
     const { server } = seeded();
     const { user } = renderApp({ server, route: "/all", width: 390 });
