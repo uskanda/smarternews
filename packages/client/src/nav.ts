@@ -164,7 +164,7 @@ export function parseListKey(key: string): ListTarget | null {
  * the server's default and is not sent.
  */
 export function targetFilter(target: ListTarget, sort: ListSort = "newest"): ArticleListQuery {
-  return { ...filterOf(target), ...(sort === "oldest" ? { order: "oldest" as const } : {}) };
+  return { ...filterOf(target), ...(sort !== "newest" ? { order: sort } : {}) };
 }
 
 function filterOf(target: ListTarget): ArticleListQuery {
@@ -224,14 +224,27 @@ export function hasSortMenu(target: ListTarget, categories: Category[] | undefin
   return target.type !== "recentlyRead" && target.type !== "annotations" && !isEventCategory(target, categories);
 }
 
+/** The labels of the orders, as the menu of the order names them. */
+export const SORT_LABELS: Record<ListSort, string> = { newest: "新しい順", oldest: "古い順", starred: "スターを付けた順" };
+
+/**
+ * The orders the menu of the list offers: newest and oldest first, and for the starred articles also the order
+ * they were starred in.
+ */
+export function sortOptionsOf(target: ListTarget): ListSort[] {
+  return target.type === "starred" ? ["newest", "oldest", "starred"] : ["newest", "oldest"];
+}
+
 /**
  * The order the list of the target is shown in: the one its list view keeps, newest first for an entry
- * without one, and always newest first where the order cannot be chosen.
+ * without one, and always newest first where the order cannot be chosen. An order the menu of the entry does
+ * not offer is newest first too.
  */
 export function listSortOf(target: ListTarget, views: ListView[] | undefined, categories: Category[] | undefined): ListSort {
   if (!hasSortMenu(target, categories)) return "newest";
   const key = listKey(target);
-  return views?.find((view) => view.key === key)?.sort ?? "newest";
+  const sort = views?.find((view) => view.key === key)?.sort ?? "newest";
+  return sortOptionsOf(target).includes(sort) ? sort : "newest";
 }
 
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */

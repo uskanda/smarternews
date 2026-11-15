@@ -552,6 +552,11 @@ export const articleSummarySchema = z.object({
    */
   openedAt: z.string().nullable(),
   starred: z.boolean(),
+  /**
+   * When the article was starred. Null for an article without a star. A star given before star times were kept
+   * has the article's last update at that time. Starring an article already starred keeps the time.
+   */
+  starredAt: z.string().nullable(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
   event: articleEventSchema.nullable(),
@@ -634,8 +639,11 @@ export const articleSchema = articleSummarySchema.extend({
 });
 export type Article = z.infer<typeof articleSchema>;
 
-/** The order of an article list: by the time lists sort by, newest first or oldest first. */
-export const listSortSchema = z.enum(["newest", "oldest"]);
+/**
+ * The order of an article list: by the time lists sort by, newest first or oldest first, or, for the starred
+ * articles only, by the time they were starred, last starred first.
+ */
+export const listSortSchema = z.enum(["newest", "oldest", "starred"]);
 export type ListSort = z.infer<typeof listSortSchema>;
 
 export const articleListQuerySchema = z.object({
@@ -656,7 +664,7 @@ export const articleListQuerySchema = z.object({
   recentlyRead: z.enum(["true"]).optional(),
   /**
    * Newest first when left out. Refused with `kind=event` and `recentlyRead=true`, whose order is fixed, even
-   * as `newest`.
+   * as `newest`. `starred` is refused without `starred=true`.
    */
   order: listSortSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -682,7 +690,8 @@ export type ArticleList = z.infer<typeof articleListSchema>;
 
 /**
  * A search of the articles. Without narrowing it covers every article, generated and delivered, read or not,
- * ended events included; what filters hide is left out, and so are hidden duplicates unless a feed is named.
+ * ended events included; what filters hide is left out, and so are hidden duplicates unless a feed is named or
+ * only starred articles are asked for.
  */
 export const articleSearchQuerySchema = z.object({
   /** The terms, separated by spaces. Checked by `parseSearchTerms`: not empty, at most 200 characters. */
@@ -690,6 +699,8 @@ export const articleSearchQuerySchema = z.object({
   category: z.coerce.number().int().optional(),
   feed: z.coerce.number().int().optional(),
   unread: z.enum(["true"]).optional(),
+  /** Only starred articles: those the list of starred articles holds, hidden duplicates included. */
+  starred: z.enum(["true"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });
@@ -836,7 +847,10 @@ export function listViewKey(target: ListViewTarget): string {
   return target.list;
 }
 
-/** How one entry shows its articles. An entry the server does not answer has every default: newest first. */
+/**
+ * How one entry shows its articles. An entry the server does not answer has every default: newest first. Only
+ * the entry of starred articles can be in the order by star time.
+ */
 export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema });
 export type ListView = z.infer<typeof listViewSchema>;
 

@@ -44,6 +44,13 @@ describe("mergeKept", () => {
     expect(sortKeyFor({ type: "recentlyRead" })(entry)).toBe("2026-03-02T08:00:00Z");
     expect(sortKeyFor({ type: "unread" })(entry)).toBe("2026-03-01T12:00:00Z");
   });
+
+  it("orders the starred articles by star time in that order, and by update otherwise", () => {
+    const entry = { ...item(1, "2026-03-01T12:00:00Z"), starredAt: "2026-03-03T08:00:00Z" };
+    expect(sortKeyFor({ type: "starred" }, "starred")(entry)).toBe("2026-03-03T08:00:00Z");
+    expect(sortKeyFor({ type: "starred" }, "newest")(entry)).toBe("2026-03-01T12:00:00Z");
+    expect(sortKeyFor({ type: "starred" }, "starred")({ ...entry, starredAt: null })).toBe("");
+  });
 });
 
 describe("mergeKept oldest first", () => {

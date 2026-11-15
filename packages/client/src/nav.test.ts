@@ -7,7 +7,7 @@ import {
   parseHideRead,
   hasImportanceFilter,
   hasListControls,
-  hideEmptyEntries, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
+  hideEmptyEntries, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, sortOptionsOf, targetFilter, targetScope, type ListTarget } from "./nav.ts";
 
 const category = (id: number, name: string, overrides: Partial<Category> = {}): Category => ({
   id,
@@ -348,10 +348,28 @@ describe("the order of a list", () => {
     }
   });
 
-  it("is asked of the server only when it is oldest first", () => {
+  it("is asked of the server only when it is not newest first", () => {
     expect(targetFilter({ type: "feed", feedId: 12 }, "oldest")).toEqual({ feed: 12, order: "oldest" });
     expect(targetFilter({ type: "feed", feedId: 12 }, "newest")).toEqual({ feed: 12 });
     expect(targetFilter({ type: "unread" })).toEqual({ unread: "true" });
+    expect(targetFilter({ type: "starred" }, "starred")).toEqual({ starred: "true", order: "starred" });
+  });
+
+  it("offers the order by star time in the starred articles alone", () => {
+    expect(sortOptionsOf({ type: "starred" })).toEqual(["newest", "oldest", "starred"]);
+    for (const target of [{ type: "unread" }, { type: "all" }, { type: "generated" }, { type: "feeds" }, { type: "feed", feedId: 12 }, { type: "category", categoryId: 1, generatedOnly: false }] as ListTarget[]) {
+      expect(sortOptionsOf(target)).toEqual(["newest", "oldest"]);
+    }
+  });
+
+  it("follows the order by star time for the starred articles, and reads it as newest first for any other entry", () => {
+    const starredViews = [
+      { key: "starred", sort: "starred" as const },
+      // The server refuses this; a list that cannot be in the order is newest first all the same.
+      { key: "all", sort: "starred" as const },
+    ];
+    expect(listSortOf({ type: "starred" }, starredViews, categories)).toBe("starred");
+    expect(listSortOf({ type: "all" }, starredViews, categories)).toBe("newest");
   });
 
   it("is kept under a key the server reads for every entry of the list but the recently read articles", () => {

@@ -359,8 +359,8 @@ describe("searching articles", () => {
     expect(result).toMatchObject({ items: [{ id, excerpt: null, excerptFromNote: false }], nextCursor: null, terms: ["電池"] });
 
     // The server refuses a cursor it did not issue; what matters here is what was sent.
-    await api.search({ q: "電池 工場", category: 3, feed: 4, unread: "true", cursor: "c", limit: 20 }).catch(() => undefined);
-    expect(seen.at(-1)!.url).toBe("/api/v1/search?q=%E9%9B%BB%E6%B1%A0+%E5%B7%A5%E5%A0%B4&category=3&feed=4&unread=true&cursor=c&limit=20");
+    await api.search({ q: "電池 工場", category: 3, feed: 4, unread: "true", starred: "true", cursor: "c", limit: 20 }).catch(() => undefined);
+    expect(seen.at(-1)!.url).toBe("/api/v1/search?q=%E9%9B%BB%E6%B1%A0+%E5%B7%A5%E5%A0%B4&category=3&feed=4&unread=true&starred=true&cursor=c&limit=20");
   });
 
   it("fails as invalid for an empty query", async () => {

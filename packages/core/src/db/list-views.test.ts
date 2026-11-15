@@ -69,6 +69,25 @@ describe("changing a list view", () => {
     expect(listListViews(db).items).toEqual([]);
   });
 
+  it("keeps the order by star time for the starred articles", () => {
+    const { db } = setup();
+    expect(updateListView(db, "starred", { sort: "starred" })).toEqual({ key: "starred", sort: "starred" });
+    expect(listListViews(db).items).toEqual([{ key: "starred", sort: "starred" }]);
+    expect(getListView(db, "starred")).toEqual({ key: "starred", sort: "starred" });
+    expect(updateListView(db, "starred", { sort: "oldest" })).toEqual({ key: "starred", sort: "oldest" });
+  });
+
+  it("refuses the order by star time for any entry but the starred articles as invalid", () => {
+    const { db, tools, feed } = setup();
+    updateListView(db, "all", { sort: "oldest" });
+    for (const key of ["unread", "all", "generated", "feeds", "uncategorized", `category-${tools.id}`, `category-${tools.id}-generated`, `feed-${feed}`]) {
+      expect(() => updateListView(db, key, { sort: "starred" })).toThrow(
+        expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "sort" })] }),
+      );
+    }
+    expect(listListViews(db).items).toEqual([{ key: "all", sort: "oldest" }]);
+  });
+
   it("refuses an event category, the recently read articles and a key it cannot read as invalid", () => {
     const { db, events } = setup();
     for (const key of [`category-${events.id}`, `category-${events.id}-generated`, "recently-read", "search", "feed-x"]) {

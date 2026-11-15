@@ -253,6 +253,23 @@ describe("read state and stars", () => {
     expect(body.items.map((item: { id: number }) => item.id)).toEqual([starred]);
   });
 
+  it("lists the starred articles by star time, and refuses that order for any other list", async () => {
+    const s = testServer();
+    const category = s.category();
+    const first = s.article(category.id);
+    const second = s.article(category.id);
+
+    const starred = await (await s.patch(`/api/v1/articles/${second}`, { starred: true })).json();
+    s.clock.advance(60_000);
+    await s.patch(`/api/v1/articles/${first}`, { starred: true });
+
+    expect(starred.starredAt).toEqual(expect.any(String));
+    const body = await (await s.get("/api/v1/articles?starred=true&order=starred")).json();
+    expect(body.items.map((item: { id: number }) => item.id)).toEqual([first, second]);
+    expect((await s.get("/api/v1/articles?order=starred")).status).toBe(400);
+    expect((await s.get(`/api/v1/articles?category=${category.id}&order=starred`)).status).toBe(400);
+  });
+
   it("refuses a change with a field of the wrong type", async () => {
     const s = testServer();
     const id = s.article(s.category().id);
