@@ -40,7 +40,7 @@ import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
-import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "../ui/unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -96,7 +96,7 @@ function Categories() {
 
   return (
     <section id="categories" aria-label="カテゴリ" className={SECTION}>
-      <h2 className="type-headline-md">カテゴリ</h2>
+      <h2 tabIndex={-1} className="type-headline-md">カテゴリ</h2>
       {categories.isError ? <ErrorNotice error={categories.error} onRetry={() => void categories.refetch()} /> : null}
       {categories.data?.length === 0 ? (
         <p className="type-body-md text-on-surface-muted">カテゴリはまだありません。下の欄から追加してください。</p>
@@ -142,6 +142,14 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const [text, setText] = useState(settings.readerInfo);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  // A settings file or another device may change the value: show it rather than save the old one over it.
+  const [shown, setShown] = useState(settings.readerInfo);
+  if (shown !== settings.readerInfo) {
+    setShown(settings.readerInfo);
+    setText(settings.readerInfo);
+    setProblem(null);
+    setError(null);
+  }
   useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
@@ -160,7 +168,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
 
   return (
     <section id="reader" aria-label="読み手情報" className={SECTION}>
-      <h2 className="type-headline-md">読み手情報</h2>
+      <h2 tabIndex={-1} className="type-headline-md">読み手情報</h2>
       <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
         <Field
           label="読み手情報"
@@ -184,23 +192,53 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   );
 }
 
-function GlobalSettings({ settings }: { settings: Settings }) {
-  const { api } = useApp();
-  const client = useQueryClient();
-  const toast = useToast();
-  const [form, setForm] = useState({
+function globalForm(settings: Settings) {
+  return {
     outputLanguage: settings.outputLanguage,
     timeZone: settings.timeZone,
     language: settings.search.language,
     region: settings.search.region,
     digestSchedule: settings.digestSchedule.join(", "),
-  });
+  };
+}
+
+/** The values the global settings show, as one string to compare. */
+function globalValues(settings: Settings): string {
+  return JSON.stringify([
+    settings.outputLanguage,
+    settings.timeZone,
+    settings.search.language,
+    settings.search.region,
+    settings.digestSchedule,
+    settings.advanceAfterMarkAll,
+    settings.removeDuplicates,
+    settings.staleFeedDays,
+  ]);
+}
+
+function GlobalSettings({ settings }: { settings: Settings }) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const toast = useToast();
+  const [form, setForm] = useState(() => globalForm(settings));
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
   const duplicatesHint = useId();
   const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
+  // A settings file, another device or this form's own save may change the values: show them rather than
+  // save the old ones over them.
+  const [shown, setShown] = useState(() => globalValues(settings));
+  if (shown !== globalValues(settings)) {
+    setShown(globalValues(settings));
+    setForm(globalForm(settings));
+    setAdvance(settings.advanceAfterMarkAll);
+    setRemoveDuplicates(settings.removeDuplicates);
+    setStaleDays(String(settings.staleFeedDays));
+    setProblems({});
+    setError(null);
+  }
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
@@ -243,7 +281,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         digestSchedule: digestTimes.value,
       });
       client.setQueryData(["settings"], saved);
-      // The server puts the times in order and drops the same time given twice.
+      // The server puts the times in order and drops the same time given twice. When that leaves the stored
+      // values as they were, nothing above replaces the field, so it is put in that order here.
       setForm((shown) => ({ ...shown, digestSchedule: saved.digestSchedule.join(", ") }));
       // Which feeds are stale follows the days at once.
       void client.invalidateQueries({ queryKey: ["feeds"] });
@@ -256,7 +295,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 
   return (
     <section id="global" aria-label="全体設定" className={SECTION}>
-      <h2 className="type-headline-md">全体設定</h2>
+      <h2 tabIndex={-1} className="type-headline-md">全体設定</h2>
       <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
         <Field
           label="出力言語"
@@ -354,7 +393,7 @@ function DeviceSettings() {
   const id = useId();
   return (
     <section id="device" aria-labelledby={`${id}-title`} className={SECTION}>
-      <h2 id={`${id}-title`} className="type-headline-md">
+      <h2 id={`${id}-title`} tabIndex={-1} className="type-headline-md">
         この端末の設定
       </h2>
       <p id={`${id}-hint`} className="max-w-measure type-body-md text-on-surface-muted">
@@ -448,7 +487,7 @@ function SettingsFile() {
 
   return (
     <section id="settings-file" aria-label="設定ファイル" className={SECTION}>
-      <h2 className="type-headline-md">設定ファイル</h2>
+      <h2 tabIndex={-1} className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         カテゴリ、トピック、購読フィード、フィルター、語の色付け、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
       </p>
@@ -552,7 +591,7 @@ function Providers() {
   const status = providers.data;
   return (
     <section id="providers" aria-label="プロバイダー" className={SECTION}>
-      <h2 className="type-headline-md">プロバイダー</h2>
+      <h2 tabIndex={-1} className="type-headline-md">プロバイダー</h2>
       {providers.isError ? <ErrorNotice error={providers.error} onRetry={() => void providers.refetch()} /> : null}
       {status ? (
         <>
@@ -722,7 +761,7 @@ function UsageSection() {
   const data = usage.data;
   return (
     <section id="usage" aria-label="利用量" className={SECTION}>
-      <h2 className="type-headline-md">利用量</h2>
+      <h2 tabIndex={-1} className="type-headline-md">利用量</h2>
       {usage.isError ? <ErrorNotice error={usage.error} onRetry={() => void usage.refetch()} /> : null}
       {data ? (
         <>
@@ -808,7 +847,7 @@ function SettingsSections() {
       </header>
       <Categories />
       <section id="feeds" aria-label="購読フィード" className={SECTION}>
-        <h2 className="type-headline-md">購読フィード</h2>
+        <h2 tabIndex={-1} className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
         </p>
@@ -826,7 +865,7 @@ function SettingsSections() {
         </ul>
       </section>
       <section id="term-highlights" aria-label="語の色付け" className={SECTION}>
-        <h2 className="type-headline-md">語の色付け</h2>
+        <h2 tabIndex={-1} className="type-headline-md">語の色付け</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           登録した語を、生成記事と配信記事の両方の一覧と本文で色付けします。語はまとまりに分け、まとまりごとに色を選びます。色付けは記事を隠しません。
         </p>
@@ -850,7 +889,7 @@ function SettingsSections() {
       <Providers />
       <UsageSection />
       <section id="tokens" aria-label="トークン" className={SECTION}>
-        <h2 className="type-headline-md">トークン</h2>
+        <h2 tabIndex={-1} className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           このブラウザーに保存したAPIのトークンを消します。次に開くとき、もう一度入力が必要になります。
         </p>

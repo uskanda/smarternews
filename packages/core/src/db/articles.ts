@@ -23,6 +23,7 @@ import type {
   Registration,
   SeenArticle,
 } from "../api.ts";
+import { listSortSchema } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { searchBody } from "../search/plain.ts";
@@ -133,6 +134,7 @@ function toSummary(row: Row): ArticleSummary {
     unconfirmed: bool(row.unconfirmed),
     firstPublishedAt: str(row.first_published_at),
     updatedAt: str(row.updated_at),
+    rankAt: str(row.rank_at),
     revision: num(row.revision),
     isRead: bool(row.is_read),
     readAt: strOrNull(row.read_at),
@@ -166,6 +168,21 @@ function refsOf(db: Database, articleId: number): ArticleRef[] {
       importance: numOrNull(row.importance),
       isNew: row.is_new === 1,
     }));
+}
+
+/**
+ * The notes of the rewrites since the reader last read the article before a rewrite, oldest first: every note written
+ * after that time, by the same measure that makes a source new. In an article never read, the note of the last rewrite
+ * only, none when that rewrite had none. None for an article never rewritten and for a feed article.
+ */
+function updateNotesOf(db: Database, row: Row): Article["updateNotes"] {
+  if (str(row.origin) !== "generated" || num(row.revision) === 0) return [];
+  const readBefore = strOrNull(row.read_before_update_at);
+  const [condition, value] = readBefore === null ? ["created_at = ?", str(row.updated_at)] : ["created_at > ?", readBefore];
+  return db
+    .prepare(`SELECT note, created_at FROM article_update_notes WHERE article_id = ? AND ${condition} ORDER BY created_at, id`)
+    .all(num(row.id), value)
+    .map((note) => ({ note: str(note.note), createdAt: str(note.created_at) }));
 }
 
 /** How many earlier articles the chain of an article gives at most. */
@@ -274,6 +291,7 @@ function toArticle(db: Database, row: Row): Article {
     previousArticles: previousArticlesOf(db, row),
     otherFeeds: otherFeedsOf(db, id),
     refs: refsOf(db, id),
+    updateNotes: updateNotesOf(db, row),
     topics: db
       .prepare("SELECT t.id, t.text FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ? ORDER BY t.id")
       .all(id)
@@ -282,6 +300,7 @@ function toArticle(db: Database, row: Row): Article {
     mentions: mentionsOf(db, id),
     attachments: attachmentsOf(row),
     missed: isMissed(db, id),
+    followUpsStopped: bool(row.follow_ups_stopped),
   };
 }
 
@@ -401,9 +420,11 @@ export function insertArticle(
 
 /**
  * Rewrites an article with a follow-up: new content, more references, unread again, one revision further. The
- * note on what the rewrite adds replaces the earlier one, even when there is none: an earlier note is about another
- * rewrite. The time the article was read is kept as the time it was read before the rewrite; an article still
- * unread keeps the earlier such time, so that the sources of every rewrite since the reader last read it are new.
+ * note on what the rewrite adds replaces the article's note, even when there is none: the article's note is that of
+ * the last rewrite, which the lists show. A note is also kept with the time of the rewrite, so that the notes of
+ * every rewrite since the reader last read the article can be shown; a rewrite without a note keeps nothing. The time
+ * the article was read is kept as the time it was read before the rewrite; an article still unread keeps the earlier
+ * such time, so that the sources and notes of every rewrite since the reader last read it are new.
  */
 export function reviseArticle(
   db: Database,
@@ -440,6 +461,9 @@ export function reviseArticle(
     input.event?.registration ?? null,
     id,
   );
+  if (input.updateNote) {
+    db.prepare("INSERT INTO article_update_notes (article_id, note, created_at) VALUES (?, ?, ?)").run(id, input.updateNote, input.now);
+  }
   addRefs(db, id, input.refs, input.now);
   addTopics(db, id, input.topicIds);
 }
@@ -452,7 +476,14 @@ export interface ArticleDigest {
   summary: string;
   body: string;
   firstPublishedAt: string;
+  /** The reader marked the article as a miss: a run writes no follow-up to it. */
+  missed: boolean;
+  /** The reader stopped the follow-ups of the article: a run writes none. */
+  followUpsStopped: boolean;
 }
+
+/** The columns of a digest, with whether the article has a miss. */
+const DIGEST_COLUMNS = "a.*, EXISTS (SELECT 1 FROM misses m WHERE m.article_id = a.id) AS missed";
 
 function toDigest(row: Row): ArticleDigest {
   return {
@@ -461,27 +492,45 @@ function toDigest(row: Row): ArticleDigest {
     summary: str(row.summary),
     body: str(row.body),
     firstPublishedAt: str(row.first_published_at),
+    missed: bool(row.missed),
+    followUpsStopped: bool(row.follow_ups_stopped),
   };
 }
 
 /** News articles of the category touched since the given time: what a new page could be a follow-up to. */
 export function recentNewsArticles(db: Database, categoryId: number, since: string): ArticleDigest[] {
   return db
-    .prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'news' AND updated_at >= ? ORDER BY id`)
+    .prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.${GENERATED} AND a.category_id = ? AND a.kind = 'news' AND a.updated_at >= ? ORDER BY a.id`)
     .all(categoryId, since)
     .map(toDigest);
+}
+
+/**
+ * The headlines of the generated articles of a topic, the latest written or updated first, at most `limit`.
+ * Feed articles are left out. No time limit applies.
+ */
+export function recentTopicHeadlines(db: Database, topicId: number, limit = 10): string[] {
+  return db
+    .prepare(
+      `SELECT a.title FROM article_topics t JOIN articles a ON a.id = t.article_id
+        WHERE t.topic_id = ? AND a.${GENERATED} ORDER BY a.updated_at DESC, a.id DESC LIMIT ?`,
+    )
+    .all(topicId, limit)
+    .map((row) => str(row.title));
 }
 
 /** Event articles of the category whose event has not ended. */
 export function openEventArticles(db: Database, categoryId: number, now: string): ArticleDigest[] {
   return db
-    .prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'event' AND event_ends_at >= ? ORDER BY id`)
+    .prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.${GENERATED} AND a.category_id = ? AND a.kind = 'event' AND a.event_ends_at >= ? ORDER BY a.id`)
     .all(categoryId, now)
     .map(toDigest);
 }
 
 export function findEventByKey(db: Database, categoryId: number, key: string): ArticleDigest | null {
-  const row = db.prepare(`SELECT * FROM articles WHERE ${GENERATED} AND category_id = ? AND event_key = ? ORDER BY id LIMIT 1`).get(categoryId, key);
+  const row = db
+    .prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.${GENERATED} AND a.category_id = ? AND a.event_key = ? ORDER BY a.id LIMIT 1`)
+    .get(categoryId, key);
   return row ? toDigest(row) : null;
 }
 
@@ -619,9 +668,9 @@ export function recordFullContentFailure(db: Database, id: number, failure: { re
 type CursorValue = [string, number];
 
 /**
- * A cursor holds the time and id of the last article of a page and, for a list oldest first, that order. A
- * cursor without an order is of a list newest first, as every cursor was before lists had an order, or of a
- * list whose order is fixed.
+ * A cursor holds the time and id of the last article of a page and, for a list oldest first or by relevance,
+ * that order; by relevance the time is `rank_at`. A cursor without an order is of a list newest first, as every
+ * cursor was before lists had an order, or of a list whose order is fixed.
  */
 function encodeCursor(value: CursorValue, order: ListSort = "newest"): string {
   return Buffer.from(JSON.stringify(order === "newest" ? value : [...value, order])).toString("base64url");
@@ -639,7 +688,7 @@ function decodeCursor(cursor: string, order: ListSort = "newest"): CursorValue {
     Array.isArray(value) &&
     typeof value[0] === "string" &&
     typeof value[1] === "number" &&
-    (value.length === 2 || (value.length === 3 && (value[2] === "newest" || value[2] === "oldest")))
+    (value.length === 2 || (value.length === 3 && listSortSchema.safeParse(value[2]).success))
   ) {
     const given = (value[2] as ListSort | undefined) ?? "newest";
     if (given !== order) {
@@ -708,8 +757,8 @@ function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): A
 
 /**
  * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
- * by start time, soonest first; every other list by last update, newest first unless oldest first is asked
- * for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
+ * by start time, soonest first; every other list by last update, newest first unless oldest first or relevance
+ * is asked for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   if (query.recentlyRead === "true") return listRecentlyRead(db, query, now);
@@ -717,6 +766,9 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const byEventStart = query.kind === "event";
   if (byEventStart) refuseOrder(query, "kind=event");
   const oldestFirst = query.order === "oldest";
+  // By `rank_at`: the time moved later by the relevance. Its value changes only when the scores are worked out
+  // again or the terms match differently, so a cursor keeps its place as any other does.
+  const byRelevance = query.order === "relevance";
   const params: Array<string | number> = [];
   // A feed article that filters hide is in no list.
   const where: string[] = [`NOT ${hiddenByFilters("a")}`];
@@ -757,11 +809,19 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
         ? "(a.event_starts_at > ? OR (a.event_starts_at = ? AND a.id > ?))"
         : oldestFirst
           ? "(a.updated_at > ? OR (a.updated_at = ? AND a.id > ?))"
-          : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
+          : byRelevance
+            ? "(a.rank_at < ? OR (a.rank_at = ? AND a.id < ?))"
+            : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
     );
     params.push(value, value, id);
   }
-  const order = byEventStart ? "a.event_starts_at ASC, a.id ASC" : oldestFirst ? "a.updated_at ASC, a.id ASC" : "a.updated_at DESC, a.id DESC";
+  const order = byEventStart
+    ? "a.event_starts_at ASC, a.id ASC"
+    : oldestFirst
+      ? "a.updated_at ASC, a.id ASC"
+      : byRelevance
+        ? "a.rank_at DESC, a.id DESC"
+        : "a.updated_at DESC, a.id DESC";
   const rows = db
     .prepare(
       `SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")}
@@ -772,7 +832,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const last = page.at(-1);
   const nextCursor =
     rows.length > limit && last
-      ? encodeCursor([str(byEventStart ? last.event_starts_at : last.updated_at), num(last.id)], query.order)
+      ? encodeCursor([str(byEventStart ? last.event_starts_at : byRelevance ? last.rank_at : last.updated_at), num(last.id)], query.order)
       : null;
   return { items: page.map(toSummary), nextCursor, asOf: now };
 }
@@ -909,17 +969,31 @@ function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[
  * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
  * one that was read already keeps its time, and one put back to unread loses it. Marking a generated article as a
  * miss marks it read too, unless the same patch says whether it is read; taking the mark away leaves that alone.
+ * Stopping the follow-ups of a generated article, or taking that back, leaves whether it is read alone.
  */
 export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, now: string): Article {
   const article = getArticle(db, id);
-  if (patch.missed !== undefined && article.origin !== "generated") {
-    throw new DomainError("invalid", `article ${id} is not a generated article`, [
-      { path: "missed", message: "only a generated article can be marked as a miss", code: "not_allowed" },
-    ]);
+  if (article.origin !== "generated") {
+    const refused = [
+      ...(patch.missed !== undefined ? [{ path: "missed", message: "only a generated article can be marked as a miss" }] : []),
+      ...(patch.followUpsStopped !== undefined
+        ? [{ path: "followUpsStopped", message: "only a generated article can have its follow-ups stopped" }]
+        : []),
+    ];
+    if (refused.length > 0) {
+      throw new DomainError(
+        "invalid",
+        `article ${id} is not a generated article`,
+        refused.map((issue) => ({ ...issue, code: "not_allowed" as const })),
+      );
+    }
   }
   transaction(db, () => {
     if (patch.missed === true) markMissed(db, id, now);
     if (patch.missed === false) unmarkMissed(db, id);
+    if (patch.followUpsStopped !== undefined) {
+      db.prepare("UPDATE articles SET follow_ups_stopped = ? WHERE id = ?").run(patch.followUpsStopped ? 1 : 0, id);
+    }
     const isRead = patch.isRead ?? (patch.missed === true ? true : undefined);
     if (isRead !== undefined) {
       const changed = num(

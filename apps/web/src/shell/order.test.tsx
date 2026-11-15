@@ -80,7 +80,7 @@ describe("the menu of an entry", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 
     fireEvent.contextMenu(link("A"));
-    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["上へ移動", "下へ移動"]);
+    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["上へ移動", "下へ移動", "カテゴリの設定"]);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 
@@ -90,6 +90,17 @@ describe("the menu of an entry", () => {
     }
     fireEvent.contextMenu(within(nav()).getAllByRole("link", { name: /^AI生成/ })[1]!);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens the settings of a category from its menu", async () => {
+    const { server, b } = seeded();
+    const { user, path } = await ready({ server, route: "/all" });
+
+    fireEvent.contextMenu(link("B"));
+    await user.click(await screen.findByRole("menuitem", { name: "カテゴリの設定" }));
+
+    await waitFor(() => expect(path()).toBe(`/settings/categories/${b.id}`));
+    expect(await screen.findByRole("heading", { level: 1, name: "B" })).toBeInTheDocument();
   });
 
   it("keeps the one-letter keys from the article behind it", async () => {
@@ -128,7 +139,8 @@ describe("the menu of an entry", () => {
     link("A").focus();
     await user.keyboard("{Shift>}{F10}{/Shift}");
     await screen.findByRole("menu");
-    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    // From カテゴリの設定 at the end, one up is 下へ移動.
+    await user.keyboard("{End}{ArrowUp}{Enter}");
 
     await waitFor(() => expect(groupLines().filter((line) => !line.startsWith(" "))).toEqual(["B", "A", "C", "Events", "未分類"]));
     await waitFor(() => expect(listCategories(server.db).map((category) => category.name)).toEqual(["B", "A", "C", "Events"]));
@@ -198,7 +210,7 @@ describe("moves in a row", () => {
 
   it("keeps the order after the last move when the answers arrive the other way round", async () => {
     const { server, a } = seeded();
-    const { user, held, release } = await ready({ server, route: "/all", hold: MOVES });
+    const { user, held, release } = await ready({ server, route: "/all", holdAnswer: MOVES });
 
     await moveUp(user, "Z");
     await moveUp(user, "Z");
@@ -223,7 +235,7 @@ describe("moves in a row", () => {
     const { user, held, release } = await ready({
       server,
       route: "/all",
-      hold: (request) => holding && request === "GET /api/v1/feeds",
+      holdAnswer: (request) => holding && request === "GET /api/v1/feeds",
       advanceTimers: (ms) => vi.advanceTimersByTimeAsync(ms).then(() => {}),
     });
 
@@ -242,7 +254,7 @@ describe("moves in a row", () => {
 
   it("drops the moves after one that fails, shows the stored order and says so", async () => {
     const { server, a } = seeded();
-    const { user, held, release, requests } = await ready({ server, route: "/all", hold: MOVES });
+    const { user, held, release, requests } = await ready({ server, route: "/all", holdAnswer: MOVES });
 
     await moveUp(user, "Z");
     await moveUp(user, "Z");

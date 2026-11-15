@@ -21,6 +21,7 @@ function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
     unconfirmed: false,
     firstPublishedAt: "2026-03-01T06:00:00.000Z",
     updatedAt: "2026-03-01T06:00:00.000Z",
+    rankAt: "2026-03-01T06:00:00.000Z",
     revision: 0,
     isRead: false,
     readAt: null,
