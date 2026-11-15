@@ -1677,6 +1677,16 @@ const settingsFileFilterSchema = z
   .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
 
+/** A rule in the file. Its scope is named as a filter's. */
+const settingsFileRuleSchema = z.object({
+  scope: settingsFileFilterScopeSchema,
+  /** Left out when the rule is enabled. */
+  enabled: z.boolean().optional(),
+  conditions: filterFields.conditions,
+  actions: ruleFields.actions,
+});
+export type SettingsFileRule = z.infer<typeof settingsFileRuleSchema>;
+
 /** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
 const settingsFileStopWordSchema = z.object({
   text: z.string().trim().min(1).max(100),
@@ -1716,6 +1726,8 @@ export const settingsFileSchema = z.object({
   /** Subscribed feeds that belong to no category. */
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
   filters: z.array(settingsFileFilterSchema).default([]),
+  /** Left out when there are none. */
+  rules: z.array(settingsFileRuleSchema).default([]),
   /** Read for files written before filters, and turned into hide filters over everything. Never written. */
   stopWords: z.array(settingsFileStopWordSchema).default([]),
   /** In the order of the groups. Left out when there are none. */
@@ -1735,6 +1747,7 @@ export const importResultSchema = z.object({
   feedsCreated: z.number().int(),
   feedsUpdated: z.number().int(),
   filtersCreated: z.number().int(),
+  rulesCreated: z.number().int(),
   termGroupsCreated: z.number().int(),
   highlightTermsCreated: z.number().int(),
   /** The entries of `listViews` that were applied. */
