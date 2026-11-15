@@ -43,6 +43,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   failureCount: 0,
   goneAt: null,
   nextFetchAt: null,
+  fetchRequestedAt: null,
   articleCount: 0,
   starredCount: 0,
   annotatedCount: 0,
@@ -219,6 +220,13 @@ describe("hideEmptyEntries", () => {
     expect(outline(hide(build(feeds)))).toEqual([...VIEWS, "Tools 5", "  Blog 5", "  Releases 0", "Bikes 0", "  Road 0"]);
   });
 
+  it("keeps a feed that has gone, with its category", () => {
+    const feeds = [feed(10, "Blog", 1), feed(11, "Releases", 1), feed(20, "Hill", 3), { ...feed(21, "Road", 3), goneAt: "2026-11-01T00:00:00.000Z" }, feed(30, "Loose", null)];
+    const model = hide(build(feeds));
+    expect(outline(model)).toEqual([...VIEWS, "Tools 5", "  Blog 5", "Bikes 0", "  Road 0"]);
+    expect(model.groups[1]!.children[0]!.state).toBe("gone");
+  });
+
   it("keeps the entry that is open, and the category above it", () => {
     expect(outline(hide(build(), { type: "feed", feedId: 20 })).slice(7)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  Hill 0"]);
     expect(outline(hide(build(), { type: "category", categoryId: 3, generatedOnly: true })).slice(7)).toEqual(["Tools 5", "  Blog 5", "Bikes 0", "  AI生成 0"]);
@@ -283,6 +291,12 @@ describe("what a list asks the server for", () => {
     expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: true })).toEqual({ category: 7, origin: "generated" });
     expect(targetFilter({ type: "feed", feedId: 31 })).toEqual({ feed: 31 });
     expect(targetFilter({ type: "recentlyRead" })).toEqual({ recentlyRead: "true" });
+  });
+
+  it("sends the order of the list unless it is newest first, the server's default", () => {
+    expect(targetFilter({ type: "unread" }, "newest")).toEqual({ unread: "true" });
+    expect(targetFilter({ type: "unread" }, "oldest")).toEqual({ unread: "true", order: "oldest" });
+    expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: false }, "relevance")).toEqual({ category: 7, order: "relevance" });
   });
 
   it("narrows a mark-all-read the same way", () => {

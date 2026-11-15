@@ -21,6 +21,20 @@ export interface RenderOptions {
   advanceTimers?: (ms: number) => void | Promise<void>;
   /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
   browserHistory?: boolean;
+  /**
+   * Holds back a request, given as "GET /api/v1/articles?…", until the promise returned for it settles. The server
+   * answers it then, as it stands at that moment. Returning undefined lets the request through at once.
+   */
+  hold?: (request: string) => Promise<void> | undefined;
+}
+
+/** A gate a test opens when it chooses: `wait` settles once `open` is called. */
+export function gate(): { wait: Promise<void>; open: () => void } {
+  let open: () => void = () => {};
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { wait, open };
 }
 
 /** The browser's back. jsdom goes through its history after a task. */
@@ -47,6 +61,7 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.token !== null) window.localStorage.setItem("smarternews.token", options.token ?? API_TOKEN);
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
+  const holds: Hold[] = [];
   let path = options.route ?? "/";
   let go: (delta: number) => void = () => {
     throw new Error("The app has not rendered its router yet.");
@@ -55,9 +70,16 @@ export function renderApp(options: RenderOptions = {}) {
   const view = render(
     <App
       fetchImpl={(input, init) => {
-        requests.push(`${init?.method ?? "GET"} ${input}`);
+        const request = `${init?.method ?? "GET"} ${input}`;
+        requests.push(request);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
-        return server.app.request(input, init);
+        const held = options.hold?.(request);
+        if (held) return held.then(() => server.app.request(input, init));
+        const response = server.app.request(input, init);
+        const hold = holds.find((entry) => entry.match(request));
+        if (!hold) return response;
+        hold.held += 1;
+        return hold.gate.then(() => response);
       }}
       initialEntries={options.browserHistory ? undefined : [path]}
       now={() => server.clock()}
@@ -80,5 +102,32 @@ export function renderApp(options: RenderOptions = {}) {
     back: async () => {
       await act(async () => go(-1));
     },
+    /**
+     * Holds back the responses of the requests that `match`, sent from now until `release`. The server answers
+     * each request when it is sent; the app gets the answer only once released, as from a slow connection.
+     */
+    hold: (match: (request: string) => boolean) => {
+      let open: () => void = () => {};
+      const hold: Hold = { match, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
+      holds.push(hold);
+      return {
+        /** How many responses are held back. */
+        held: () => hold.held,
+        /** Passes the held responses on, and the later ones at once. */
+        release: async () => {
+          holds.splice(holds.indexOf(hold), 1);
+          await act(async () => {
+            open();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          });
+        },
+      };
+    },
   };
+}
+
+interface Hold {
+  match: (request: string) => boolean;
+  held: number;
+  gate: Promise<void>;
 }

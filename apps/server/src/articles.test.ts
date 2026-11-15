@@ -125,6 +125,37 @@ describe("oldest first and the time a list was read", () => {
     expect(unread.items.map((item: { id: number }) => item.id)).toEqual([later]);
   });
 
+  it("pages by relevance, the important articles of the last two days first, and refuses it for events", async () => {
+    const s = testServer();
+    const category = s.category();
+    const minor = s.article(category.id, { importance: 1 });
+    s.clock.advance(DAY);
+    const recent = s.article(category.id, { importance: 1 });
+    const pages: Array<Array<{ id: number; rankAt: string }>> = [];
+    let cursor: string | null = null;
+    do {
+      const body = (await (await s.get(`/api/v1/articles?order=relevance&limit=1${cursor ? `&cursor=${cursor}` : ""}`)).json()) as {
+        items: Array<{ id: number; rankAt: string }>;
+        nextCursor: string | null;
+      };
+      pages.push(body.items);
+      cursor = body.nextCursor;
+    } while (cursor);
+    expect(pages.flat().map((item) => item.id)).toEqual([recent, minor]);
+
+    // A day older, but of importance 5: 48 hours later.
+    s.clock.advance(MINUTE);
+    const important = s.article(category.id, { importance: 5 });
+    s.db.prepare("UPDATE articles SET updated_at = ? WHERE id = ?").run(new Date(s.clock().getTime() - DAY - 2 * MINUTE).toISOString(), important);
+    const body = await (await s.get("/api/v1/articles?order=relevance")).json();
+    expect(body.items.map((item: { id: number }) => item.id)).toEqual([important, recent, minor]);
+
+    const newest = (await (await s.get("/api/v1/articles?limit=1")).json()) as { nextCursor: string };
+    expect((await s.get(`/api/v1/articles?order=relevance&limit=1&cursor=${newest.nextCursor}`)).status).toBe(400);
+    expect((await s.get("/api/v1/articles?kind=event&order=relevance")).status).toBe(400);
+    expect((await s.get("/api/v1/articles?recentlyRead=true&order=relevance")).status).toBe(400);
+  });
+
   it("says when the recently read articles and a search were read", async () => {
     const s = testServer();
     s.article(s.category().id, { title: "電池の話" });
@@ -304,6 +335,36 @@ describe("misses", () => {
     expect(response.status).toBe(400);
     expect((await response.json()).error.fields[0]).toMatchObject({ path: "missed", code: "not_allowed" });
     expect((await (await s.get(`/api/v1/articles/${post}`)).json()).isRead).toBe(false);
+  });
+});
+
+describe("stopping follow-ups", () => {
+  it("stops the follow-ups of a generated article and lets them come again, leaving the read state alone", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).followUpsStopped).toBe(false);
+
+    const stopped = await s.patch(`/api/v1/articles/${id}`, { followUpsStopped: true });
+
+    expect(stopped.status).toBe(200);
+    expect(await stopped.json()).toMatchObject({ id, followUpsStopped: true, isRead: false, missed: false });
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).followUpsStopped).toBe(true);
+    await s.patch(`/api/v1/articles/${id}`, { isRead: true });
+    expect(await (await s.patch(`/api/v1/articles/${id}`, { followUpsStopped: false })).json()).toMatchObject({
+      followUpsStopped: false,
+      isRead: true,
+    });
+  });
+
+  it("refuses a feed article and changes nothing", async () => {
+    const s = testServer();
+    const post = seedFeedArticle(s.db, seedFeed(s.db));
+
+    const response = await s.patch(`/api/v1/articles/${post}`, { followUpsStopped: true, isRead: true });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields[0]).toMatchObject({ path: "followUpsStopped", code: "not_allowed" });
+    expect(await (await s.get(`/api/v1/articles/${post}`)).json()).toMatchObject({ followUpsStopped: false, isRead: false });
   });
 });
 
