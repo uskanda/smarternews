@@ -53,6 +53,7 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
   const held: Array<{ request: string; answer: () => void; fail: () => void }> = [];
+  const holds: Hold[] = [];
   let path = options.route ?? "/";
   let go: (delta: number) => void = () => {
     throw new Error("The app has not rendered its router yet.");
@@ -64,11 +65,16 @@ export function renderApp(options: RenderOptions = {}) {
         const request = `${init?.method ?? "GET"} ${input}`;
         requests.push(request);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
-        const answer = Promise.resolve(server.app.request(input, init));
-        if (!options.hold?.(request)) return answer;
-        return new Promise<Response>((resolve, reject) => {
-          held.push({ request, answer: () => resolve(answer), fail: () => reject(new TypeError("fetch failed")) });
-        });
+        const response = Promise.resolve(server.app.request(input, init));
+        if (options.hold?.(request)) {
+          return new Promise<Response>((resolve, reject) => {
+            held.push({ request, answer: () => resolve(response), fail: () => reject(new TypeError("fetch failed")) });
+          });
+        }
+        const hold = holds.find((entry) => entry.match(request));
+        if (!hold) return response;
+        hold.held += 1;
+        return hold.gate.then(() => response);
       }}
       initialEntries={options.browserHistory ? undefined : [path]}
       now={() => server.clock()}
@@ -106,5 +112,32 @@ export function renderApp(options: RenderOptions = {}) {
     back: async () => {
       await act(async () => go(-1));
     },
+    /**
+     * Holds back the responses of the requests that `match`, sent from now until `release`. The server answers
+     * each request when it is sent; the app gets the answer only once released, as from a slow connection.
+     */
+    hold: (match: (request: string) => boolean) => {
+      let open: () => void = () => {};
+      const hold: Hold = { match, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
+      holds.push(hold);
+      return {
+        /** How many responses are held back. */
+        held: () => hold.held,
+        /** Passes the held responses on, and the later ones at once. */
+        release: async () => {
+          holds.splice(holds.indexOf(hold), 1);
+          await act(async () => {
+            open();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          });
+        },
+      };
+    },
   };
+}
+
+interface Hold {
+  match: (request: string) => boolean;
+  held: number;
+  gate: Promise<void>;
 }

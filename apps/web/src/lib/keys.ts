@@ -39,6 +39,12 @@ function isTyping(target: EventTarget | null): boolean {
  */
 const NAV_KEYS = new Set(["Shift+J", "Shift+K", "/", "?", "g"]);
 
+/**
+ * Keys that run again while held down: the ones that move through articles and their text. Any other key runs
+ * once however long it is held, so that a held `Shift+A` does not go on to mark the next list read.
+ */
+const REPEATABLE_KEYS = new Set(["j", "k", "Space", "Shift+Space"]);
+
 function isInNavPane(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest('[data-hotkeys="nav"]') !== null;
 }
@@ -81,6 +87,8 @@ function onKeyDown(event: KeyboardEvent): void {
   if (event.ctrlKey || event.metaKey || event.altKey || isTyping(event.target) || isInQuietDialog(event.target)) return;
   const name = keyName(event);
   if (name === null) return;
+  // A repeat of a key held down is left alone, and does not use up a `g` that waits for its second key.
+  if (event.repeat && !REPEATABLE_KEYS.has(name)) return;
   if ((name === "Space" || name === "Shift+Space") && isPressedBySpace(event.target)) return;
   // In the left pane, the second key of a pair is taken too: the pair moves to another screen.
   if (isInNavPane(event.target) && !NAV_KEYS.has(name) && waitingUntil === null) return;
@@ -113,6 +121,7 @@ export function resetHotkeys(): void {
  * Runs an action when its key is pressed: `j`, `Shift+A`, `Space`, `?`, or a pair such as `g a`, whose second
  * key must come within a second of `g`. Keys are ignored while the user types in a field, and when Ctrl, Alt
  * or Meta is held, so browser shortcuts keep working. Space is left to a focused button, which it presses.
+ * A key held down runs again only when it moves: `j`, `k`, `Space` and `Shift+Space`; any other runs once.
  * `now` is the clock the second of a pair is measured with; the first clock any caller gives is used.
  */
 export function useHotkeys(actions: Actions, options: { now?: () => Date } = {}): void {
