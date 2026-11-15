@@ -5,6 +5,7 @@ import { replaceMentions } from "../db/mentions.ts";
 import { getFeed, insertFeed, listFeeds, updateFeed } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
 import { createFilter } from "../db/filters.ts";
+import { createRule } from "../db/rules.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { purgeExpired } from "../runs/retention.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
@@ -308,6 +309,68 @@ describe("fetchFeed", () => {
     await fetchFeed(s.deps, feed.id);
 
     expect(s.list().map((article) => article.title)).toEqual(["Release 2.0"]);
+  });
+});
+
+describe("rules when a feed is fetched", () => {
+  const titleHas = (value: string) => [{ fields: ["title" as const], match: "contains" as const, value }];
+  const flagsOf = (db: ReturnType<typeof createTestDb>, title: string) =>
+    db.prepare("SELECT is_read, starred, rule_notify_at, rule_summary_requested_at FROM articles WHERE title = ?").get(title)!;
+
+  it("act on a new article the moment it is stored, every rule it meets together", async () => {
+    const s = setup([{ title: "One" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    createRule(s.db, { scope: { type: "all" }, conditions: titleHas("障害"), actions: ["star", "notify"] }, s.clock);
+    createRule(s.db, { scope: { type: "feed", feedId: feed.id }, conditions: titleHas("障害"), actions: ["summarize"] }, s.clock);
+    s.clock.advance(HOUR);
+    s.serve([{ title: "大規模な障害", key: "o" }, { title: "One" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    const now = s.clock().toISOString();
+    expect(flagsOf(s.db, "大規模な障害")).toEqual({ is_read: 0, starred: 1, rule_notify_at: now, rule_summary_requested_at: now });
+    expect(flagsOf(s.db, "One")).toMatchObject({ starred: 0, rule_notify_at: null });
+  });
+
+  it("do not make an article one to notify when a rule marks it read", async () => {
+    const s = setup([{ title: "One" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    createRule(s.db, { scope: { type: "all" }, conditions: titleHas("障害"), actions: ["notify"] }, s.clock);
+    createRule(s.db, { scope: { type: "all" }, conditions: titleHas("障害"), actions: ["read"] }, s.clock);
+    s.serve([{ title: "障害", key: "o" }, { title: "One" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(flagsOf(s.db, "障害")).toMatchObject({ is_read: 1, rule_notify_at: null });
+  });
+
+  it("leave alone what was stored before, a rewritten article and an article a filter hides", async () => {
+    const s = setup([{ title: "障害 1", key: "a" }, { title: "新製品", key: "b" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    createRule(s.db, { scope: { type: "all" }, conditions: titleHas("障害"), actions: ["star"] }, s.clock);
+    createFilter(s.db, { action: "hide", scope: { type: "all" }, conditions: titleHas("PR") }, s.clock);
+    s.serve([
+      { title: "障害 1", key: "a" },
+      { title: "新製品の障害", key: "b" },
+      { title: "【PR】障害対策", key: "c" },
+    ]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(flagsOf(s.db, "障害 1").starred).toBe(0);
+    expect(flagsOf(s.db, "新製品の障害").starred).toBe(0);
+    expect(flagsOf(s.db, "【PR】障害対策").starred).toBe(0);
+  });
+
+  it("leave alone a disabled rule", async () => {
+    const s = setup([{ title: "One" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    createRule(s.db, { scope: { type: "all" }, conditions: titleHas("障害"), actions: ["star"], enabled: false }, s.clock);
+    s.serve([{ title: "障害", key: "o" }, { title: "One" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(flagsOf(s.db, "障害").starred).toBe(0);
   });
 });
 
@@ -775,6 +838,18 @@ describe("duplicates across feeds", () => {
       list: (query: Parameters<typeof listArticles>[1] = {}) => listArticles(db, query, clock().toISOString()).items,
     };
   }
+
+  it("applies the rules to the article kept, and not to a hidden duplicate", async () => {
+    const s = several();
+    createRule(s.db, { scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "fix" }], actions: ["star"] }, s.clock);
+    await s.deliver("A", [{ key: "a", title: "Vendor ships a fix", link: "https://news.example.org/1" }]);
+    await s.deliver("B", [{ key: "b", title: "Vendor ships a fix", link: "https://news.example.org/1" }]);
+
+    const starred = (name: "A" | "B", key: string) => s.db.prepare("SELECT starred FROM articles WHERE id = ?").get(s.idOf(name, key))!.starred;
+    expect(s.duplicateOf("B", "b")).toBe(s.idOf("A", "a"));
+    expect(starred("A", "a")).toBe(1);
+    expect(starred("B", "b")).toBe(0);
+  });
 
   it("stores the normalized page and title of a new article, and replaces them when the item is rewritten", async () => {
     const s = several();

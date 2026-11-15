@@ -1137,6 +1137,66 @@ export const filterArticlesQuerySchema = z.object({
 });
 export type FilterArticlesQuery = z.infer<typeof filterArticlesQuerySchema>;
 
+// ---- rules -------------------------------------------------------------------------------------
+
+/** What a rule does to a feed article when it is first stored. */
+export const ruleActionSchema = z.enum(["star", "read", "notify", "summarize"]);
+export type RuleAction = z.infer<typeof ruleActionSchema>;
+export const RULE_ACTIONS = ruleActionSchema.options;
+
+/** The conditions and scope have the form of a filter's. */
+export const ruleSchema = z.object({
+  id: z.number().int(),
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema),
+  /** In the order of `RULE_ACTIONS`. */
+  actions: z.array(ruleActionSchema),
+  enabled: z.boolean(),
+  createdAt: z.string(),
+});
+export type Rule = z.infer<typeof ruleSchema>;
+
+const ruleFields = {
+  scope: filterScopeSchema,
+  conditions: filterFields.conditions,
+  actions: z
+    .array(ruleActionSchema)
+    .min(1, "a rule needs at least one action")
+    .refine((actions) => new Set(actions).size === actions.length, "an action is chosen twice"),
+  enabled: z.boolean(),
+};
+
+export const ruleCreateSchema = z.object({ ...ruleFields, enabled: ruleFields.enabled.optional() });
+export type RuleCreate = z.infer<typeof ruleCreateSchema>;
+
+export const ruleUpdateSchema = z.object(ruleFields).partial();
+export type RuleUpdate = z.infer<typeof ruleUpdateSchema>;
+
+/** A rule to count against the stored feed articles, without saving it. */
+export const rulePreviewSchema = z.object({ scope: ruleFields.scope, conditions: ruleFields.conditions });
+export type RulePreview = z.infer<typeof rulePreviewSchema>;
+
+export const rulePreviewResultSchema = z.object({ matchCount: z.number().int() });
+export type RulePreviewResult = z.infer<typeof rulePreviewResultSchema>;
+
+/** The feed articles a rule made ones to notify, after a time, newest first. */
+export const ruleNotificationsQuerySchema = z.object({
+  after: z.iso.datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+export type RuleNotificationsQuery = z.infer<typeof ruleNotificationsQuerySchema>;
+
+export const ruleNotificationSchema = z.object({
+  /** When a rule made the article one to notify. */
+  notifiedAt: z.string(),
+  feedTitle: z.string(),
+  article: articleSummarySchema,
+});
+export type RuleNotification = z.infer<typeof ruleNotificationSchema>;
+
+export const ruleNotificationListSchema = z.object({ items: z.array(ruleNotificationSchema) });
+export type RuleNotificationList = z.infer<typeof ruleNotificationListSchema>;
+
 // ---- term highlights ---------------------------------------------------------------------------
 
 /** The colours a term group can take. Their values are in DESIGN.md, one for each colour scheme. */
