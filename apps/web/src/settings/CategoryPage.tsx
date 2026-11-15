@@ -32,7 +32,17 @@ import {
   STATUS_LABEL,
   TRIGGER_LABEL,
 } from "@smarternews/client";
-import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTimeZone, useTopics, useTopicStats } from "../api/queries.ts";
+import {
+  useCategories,
+  useCounts,
+  useFeeds,
+  useProviders,
+  useRestoreLlmSearch,
+  useRuns,
+  useTimeZone,
+  useTopics,
+  useTopicStats,
+} from "../api/queries.ts";
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { useApp } from "../app/context.ts";
 import { usePending } from "../lib/pending.ts";
@@ -48,7 +58,7 @@ import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { KIND_LABEL } from "./SettingsPage.tsx";
-import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -237,12 +247,30 @@ async function refreshTopics(client: QueryClient, categoryId: number): Promise<v
   await client.invalidateQueries({ queryKey: ["topics", categoryId] });
 }
 
+/**
+ * The topic's web search by the model is cut to once a day, because it kept finding nothing new; the user can put
+ * it back to every run. The note goes away once the list of topics is read again.
+ */
+function LlmSearchReduced({ topicId }: { topicId: number }) {
+  const toast = useToast();
+  const restore = useRestoreLlmSearch(() => toast({ message: "LLM検索を元に戻せませんでした。もう一度試してください。" }));
+  return (
+    <div className="flex flex-wrap items-center gap-sm">
+      <p className="type-label-sm text-on-surface-muted">新しい候補が続けて見つからないため、1日1回に減らしています。</p>
+      <Button onClick={() => restore.mutate(topicId)} disabled={restore.isPending}>
+        元に戻す
+      </Button>
+    </div>
+  );
+}
+
 function TopicEditor({
   topic,
   canSearch,
   focusText = false,
   onClose,
   onRestored,
+  afterRemoval,
 }: {
   topic: Topic;
   canSearch: boolean;
@@ -251,6 +279,8 @@ function TopicEditor({
   onClose: () => void;
   /** The topic went back to a version: the editor is to start again from the values the server answered. */
   onRestored: (topic: Topic) => void;
+  /** Where the focus goes once the topic is deleted and its row, with the button that asked, is gone. */
+  afterRemoval: () => HTMLElement | null;
 }) {
   const { api } = useApp();
   const client = useQueryClient();
@@ -273,6 +303,7 @@ function TopicEditor({
   const [closing, setClosing] = useState(false);
   // Saving and deleting the topic: one waits for its answer before either can be sent again.
   const [pending, run] = usePending();
+  const removed = useRef(false);
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   useUnsaved(`トピック『${topic.text}』の編集`, dirty);
   const text = (name: "text" | "feeds" | "queries" | "language" | "region") => (event: { target: { value: string } }) => {
@@ -335,6 +366,7 @@ function TopicEditor({
   async function remove() {
     try {
       await api.deleteTopic(topic.id);
+      removed.current = true;
       await refreshTopics(client, topic.categoryId);
       toast({ message: "トピックを削除しました" });
     } catch (caught) {
@@ -376,6 +408,7 @@ function TopicEditor({
             検索のタスクに割り当てたプロバイダーが検索できないため、いまの設定では使われません。
           </p>
         )}
+        {topic.llmSearchReduced ? <LlmSearchReduced topicId={topic.id} /> : null}
       </div>
       <Field
         label={TOPIC_QUERIES.label}
@@ -444,6 +477,7 @@ function TopicEditor({
         open={confirming}
         title="トピックを削除しますか"
         onDismiss={() => setConfirming(false)}
+        returnFocus={() => (removed.current ? afterRemoval() : null)}
         actions={
           <>
             <Button variant="danger" disabled={pending} onClick={() => void run(remove)}>
@@ -465,7 +499,7 @@ function TopicEditor({
  * open keeps what was typed and takes the focus to the text. The editor opened with the button takes the focus to
  * its first field too, and when the editor closes, the focus goes back to the button.
  */
-function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
+function TopicItem({ topic, canSearch, afterRemoval }: { topic: Topic; canSearch: boolean; afterRemoval: () => HTMLElement | null }) {
   // Following the same link again keeps the hash but gives the move a new key.
   const { hash, key } = useLocation();
   const anchor = `topic-${topic.id}`;
@@ -540,6 +574,7 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
               setFocusText(true);
               setRestored(next);
             }}
+            afterRemoval={afterRemoval}
           />
         </div>
       ) : null}
@@ -598,6 +633,8 @@ function Topics({ category }: { category: Category }) {
   const [error, setError] = useState<unknown>(null);
   const [adding, run] = usePending();
   useUnsaved("新しいトピック", text.trim() !== "");
+  const heading = useRef<HTMLHeadingElement>(null);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void run(add);
@@ -620,13 +657,15 @@ function Topics({ category }: { category: Category }) {
 
   return (
     <section id="topics" aria-label="トピック" className={SECTION}>
-      <h2 className="type-headline-md">トピック</h2>
+      <h2 ref={heading} tabIndex={-1} className="type-headline-md">
+        トピック
+      </h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         追いたい話題を、キーワードか文章で書きます。何を拾い、何を除くかを文章で書くほど、外れが減ります。
       </p>
       {topics.isError ? <ErrorNotice error={topics.error} onRetry={() => void topics.refetch()} /> : null}
       {topics.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">トピックはまだありません。</p> : null}
-      <ul className="max-w-measure">{topics.data?.map((topic) => <TopicItem key={topic.id} topic={topic} canSearch={canSearch} />)}</ul>
+      <ul className="max-w-measure">{topics.data?.map((topic) => <TopicItem key={topic.id} topic={topic} canSearch={canSearch} afterRemoval={() => heading.current} />)}</ul>
       <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-sm">
         <Field
           label={NEW_TOPIC.label}
@@ -854,6 +893,10 @@ export function CategoryPage() {
             設定へ戻る
           </Link>
           <h1 className="type-headline-md">{category.name}</h1>
+          {/* Disabled or not: the articles of a disabled category stay, and this is the way to them. */}
+          <Link to={`/c/${category.slug}`} className="tap self-start type-label-sm text-primary underline underline-offset-4">
+            {category.kind === "event" ? "イベントの一覧" : "記事の一覧"}
+          </Link>
           <SectionLinks categoryId={category.id} />
         </header>
         <ScrollToSection categoryId={category.id} />

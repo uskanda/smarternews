@@ -7,6 +7,7 @@ import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { refreshFiltered } from "./filters.ts";
+import { feedRelevanceScores } from "./relevance.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { getSettings } from "./settings.ts";
 
@@ -299,8 +300,9 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
-          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors,
+          relevance_score)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -319,6 +321,8 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.fetchFullContent ? now : null,
       format,
       input.selectors ? JSON.stringify(input.selectors) : null,
+      // A new feed has too few articles of its own: it takes the average of the others until the next count.
+      feedRelevanceScores(db, clock()).fallback,
     );
   return getFeed(db, num(result.lastInsertRowid), clock());
 }

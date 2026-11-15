@@ -1,7 +1,6 @@
 import { Link, useSearchParams } from "react-router";
-import { useAttention, useCategories, useDismissAttention, useRuns, useTimeZone, RUNS_LIMIT } from "../api/queries.ts";
-import { attentionLink, attentionText, formatFull, retryLabel, runCostLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";
-import { useToast } from "../shell/toast.tsx";
+import { useAttention, useCategories, useDismissAttention, useRestoreLlmSearch, useRuns, useTimeZone, RUNS_LIMIT } from "../api/queries.ts";
+import { attentionLink, attentionText, formatFull, restorableLlmSearch, retryLabel, runCostLabel, STATUS_LABEL, TRIGGER_LABEL } from "@smarternews/client";import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const NUMBER = "py-sm pr-lg text-right tabular-nums";
@@ -14,6 +13,7 @@ function AttentionSection() {
   const attention = useAttention().data;
   const toast = useToast();
   const dismiss = useDismissAttention(() => toast({ message: "確認したことを保存できませんでした。もう一度試してください。" }));
+  const restore = useRestoreLlmSearch(() => toast({ message: "LLM検索を元に戻せませんでした。もう一度試してください。" }));
   if (!attention || attention.items.length === 0) return null;
   return (
     <section aria-labelledby="attention-heading" className="flex flex-col gap-sm border-b border-outline px-lg py-md md:px-2xl">
@@ -23,6 +23,7 @@ function AttentionSection() {
       <ul className="flex max-w-measure flex-col gap-sm type-body-md">
         {attention.items.map((item) => {
           const link = attentionLink(item);
+          const restorable = restorableLlmSearch(item);
           return (
             <li key={item.key} className="flex flex-wrap items-center justify-between gap-sm border-b border-outline pb-sm last:border-b-0">
               <span className="flex min-w-0 flex-col gap-px">
@@ -33,7 +34,14 @@ function AttentionSection() {
                   </Link>
                 ) : null}
               </span>
-              <Button onClick={() => dismiss.mutate(item.key)}>確認した</Button>
+              <span className="flex flex-wrap gap-sm">
+                {restorable !== null ? (
+                  <Button onClick={() => restore.mutate(restorable)} disabled={restore.isPending && restore.variables === restorable}>
+                    元に戻す
+                  </Button>
+                ) : null}
+                <Button onClick={() => dismiss.mutate(item.key)}>確認した</Button>
+              </span>
             </li>
           );
         })}

@@ -21,6 +21,20 @@ export interface RenderOptions {
   advanceTimers?: (ms: number) => void | Promise<void>;
   /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
   browserHistory?: boolean;
+  /**
+   * Holds back a request, given as "GET /api/v1/articles?…", until the promise returned for it settles. The server
+   * answers it then, as it stands at that moment. Returning undefined lets the request through at once.
+   */
+  hold?: (request: string) => Promise<void> | undefined;
+}
+
+/** A gate a test opens when it chooses: `wait` settles once `open` is called. */
+export function gate(): { wait: Promise<void>; open: () => void } {
+  let open: () => void = () => {};
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { wait, open };
 }
 
 /** The browser's back. jsdom goes through its history after a task. */
@@ -59,6 +73,8 @@ export function renderApp(options: RenderOptions = {}) {
         const request = `${init?.method ?? "GET"} ${input}`;
         requests.push(request);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
+        const held = options.hold?.(request);
+        if (held) return held.then(() => server.app.request(input, init));
         const response = server.app.request(input, init);
         const hold = holds.find((entry) => entry.match(request));
         if (!hold) return response;
