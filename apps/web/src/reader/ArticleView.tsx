@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDate, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading, StarMark } from "../ui/controls.tsx";
+import { articleLink } from "../lib/article-link.ts";
 import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
@@ -224,6 +225,7 @@ export function ArticleView({
   onToggleStar,
   onToggleRead,
   onToggleMiss,
+  onCopyLink,
   fullContent,
   terms,
   focusAnnotation = null,
@@ -241,6 +243,8 @@ export function ArticleView({
   onToggleRead: (article: Article) => void;
   /** Marks a generated article as a miss, or takes the mark away. Not offered for a feed article. */
   onToggleMiss: (article: Article) => void;
+  /** Copies the headline and the main source as a Markdown link. Offered only for an article with a main source. */
+  onCopyLink: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
@@ -500,6 +504,11 @@ export function ArticleView({
               {article.missed ? "外れの印を外す" : "外れの印を付ける"}
             </Button>
           )}
+          {articleLink(article) !== null ? (
+            <Button aria-keyshortcuts="c" onClick={() => onCopyLink(article)}>
+              リンクをコピー
+            </Button>
+          ) : null}
         </div>
         {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}
       </div>

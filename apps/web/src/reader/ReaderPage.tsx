@@ -20,6 +20,8 @@ import {
   useTimeZone,
 } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { articleLink } from "../lib/article-link.ts";
+import { copyText } from "../lib/clipboard.ts";
 import { unfold } from "../lib/collapsed.ts";
 import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
@@ -395,6 +397,12 @@ export function ReaderPage({ view }: { view: View }) {
     if (!wasRead) showRead(id, false);
     flags.mutate({ id, missed: false, ...(wasRead ? {} : { isRead: false }) });
   }
+  /** Copies the headline and the main source of the article as a Markdown link, and says whether it was copied. */
+  async function copyLink(target: Pick<Article, "title" | "translatedTitle" | "primaryUrl">) {
+    const link = articleLink(target);
+    if (link === null) return;
+    toast({ message: (await copyText(link)) ? "リンクをコピーしました" : "リンクをコピーできませんでした" });
+  }
   function setStar(id: number, starred: boolean) {
     setKept((current) => ({
       key: current.key,
@@ -656,6 +664,8 @@ export function ReaderPage({ view }: { view: View }) {
       // The same as the button under the body of a generated article, and only while it is shown.
       x: opened?.origin === "generated" && opened.id === articleId ? () => toggleMiss(opened) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
+      // The same as the button under the body, and only while it is shown: for the article in the article pane.
+      c: opened && opened.id === articleId && articleLink(opened) !== null ? () => void copyLink(opened) : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
         opened?.origin === "feed" && opened.id === articleId && !fullContent.isFetching(opened.id)
@@ -850,6 +860,7 @@ export function ReaderPage({ view }: { view: View }) {
               onToggleStar={toggleStar}
               onToggleRead={(article) => setRead(article.id, !article.isRead)}
               onToggleMiss={toggleMiss}
+              onCopyLink={(article) => void copyLink(article)}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),

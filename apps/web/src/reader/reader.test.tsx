@@ -883,6 +883,70 @@ describe("misses", () => {
   });
 });
 
+describe("the link of an article", () => {
+  /** The toast with the message: the article shows notes of its own as statuses. */
+  const toastSays = (text: string) => screen.findByText(text, { selector: '[role="status"] > span' });
+
+  it("copies the title of a generated article and its main source as a Markdown link with the button", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Two sources", refs: ["https://example.org/first", "https://example.org/second"] });
+    const { user } = renderApp({ server, route: `/all/${id}` });
+
+    const button = await screen.findByRole("button", { name: "リンクをコピー" });
+    expect(button).toHaveAttribute("aria-keyshortcuts", "c");
+    await user.click(button);
+
+    await toastSays("リンクをコピーしました");
+    expect(await navigator.clipboard.readText()).toBe("[Two sources](https://example.org/first)");
+  });
+
+  it("copies the link of the article in the article pane with c", async () => {
+    const server = makeServer();
+    server.article(server.category().id, { title: "By key", refs: ["https://example.org/key"] });
+    const { user } = renderApp({ server, route: "/all" });
+    await user.click(await screen.findByRole("link", { name: /By key/ }));
+    await screen.findByRole("heading", { level: 2, name: "By key" });
+
+    await user.keyboard("c");
+
+    await toastSays("リンクをコピーしました");
+    expect(await navigator.clipboard.readText()).toBe("[By key](https://example.org/key)");
+  });
+
+  it("offers nothing to copy for a generated article without a source, and c does nothing there", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "No source", refs: [] });
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    await screen.findByRole("heading", { level: 2, name: "No source" });
+    await navigator.clipboard.writeText("before");
+
+    await user.keyboard("c");
+
+    expect(screen.queryByRole("button", { name: "リンクをコピー" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    expect(screen.queryByText("リンクをコピーしました")).not.toBeInTheDocument();
+    expect(await navigator.clipboard.readText()).toBe("before");
+  });
+
+  it("says so when the browser copies neither way", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Refused", refs: ["https://example.org/refused"] });
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    const button = await screen.findByRole("button", { name: "リンクをコピー" });
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new Error("denied")) } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+    onTestFinished(() => {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      delete (document as { execCommand?: unknown }).execCommand;
+    });
+
+    await user.click(button);
+
+    await toastSays("リンクをコピーできませんでした");
+  });
+});
+
 describe("a star or a read state the server cannot store", () => {
   /** The toast with the message: the article shows notes of its own as statuses. */
   const toastSays = async (text: string) =>

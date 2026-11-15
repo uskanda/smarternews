@@ -1,4 +1,4 @@
-import { insertFeed, listListViews, recordFetchFailure, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
+import { insertFeed, listListViews, recordFetchFailure, saveAutoSummary, saveTranslatedTitle, setArticleFlags, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -305,6 +305,19 @@ describe("a feed article that is opened", () => {
     await user.keyboard("s");
     expect(await within(await opened()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     open.mockRestore();
+  });
+
+  it("copies the link to its page with the headline it shows, the translated title when there is one", async () => {
+    const { server, blog, newPost } = seeded();
+    saveTranslatedTitle(server.db, newPost, { original: "New post", title: "新しい投稿", sourceLanguage: "en" });
+    const { user } = renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "新しい投稿" });
+
+    await user.click(within(pane).getByRole("button", { name: "リンクをコピー" }));
+
+    await screen.findByText("リンクをコピーしました", { selector: '[role="status"] > span' });
+    expect(await navigator.clipboard.readText()).toBe("[新しい投稿](https://blog.example.org/new)");
   });
 });
 

@@ -4,6 +4,7 @@ import { anchorOf, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, t
 import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
+import { copyText } from "../lib/clipboard.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
@@ -193,12 +194,6 @@ function selectionIn(
   // Where the selection is on the screen; a browser without the measure puts the menu at the top.
   const box = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : { top: 0, bottom: 0, left: 0 };
   return { value, anchor, filterable, topicDraft, rect: { top: box.top, bottom: box.bottom, left: box.left } };
-}
-
-/** Copies the text selected, as the browser's own menu would. */
-function copy(value: string) {
-  if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => document.execCommand("copy"));
-  else document.execCommand("copy");
 }
 
 /** The first mark of a highlight, which takes the focus, or its entry among those the body no longer holds. */
@@ -591,7 +586,7 @@ export function AnnotatedBody({
                     </ContextMenu.Item>
                   )),
                   <ContextMenu.Separator key="separator" className="my-xs border-t border-outline" />,
-                  <ContextMenu.Item key="copy" className={MENU_ITEM} onSelect={() => copy(menuFor.value)}>
+                  <ContextMenu.Item key="copy" className={MENU_ITEM} onSelect={() => void copyText(menuFor.value)}>
                     コピー
                   </ContextMenu.Item>,
                 ]
