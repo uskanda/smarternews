@@ -22,7 +22,7 @@ show-followup-changes（まだarchiveしていない）で、3つの列を足し
 
 ### 表`article_update_notes`
 
-032のmigrationで、`id`、`article_id`、`note`、`created_at`の表を作る。`article_id`は`articles(id)`を指し、`ON DELETE CASCADE`を付ける。索引は`(article_id, created_at)`に作る。記事を消すと行も消えるので、180日の削除や配信記事の削除に手を入れずに済む。
+033のmigrationで、`id`、`article_id`、`note`、`created_at`の表を作る。`article_id`は`articles(id)`を指し、`ON DELETE CASCADE`を付ける。索引は`(article_id, created_at)`に作る。記事を消すと行も消えるので、180日の削除や配信記事の削除に手を入れずに済む。
 
 同じmigrationで、`update_note`が空でない記事の文を、`updated_at`を`created_at`にして写す。`update_note`は最新の書き直しの文なので、その時刻は`updated_at`と一致する。写しておくと、移行の直後に読んで次の書き直しが来ても、移行前の文が消えない。
 
@@ -64,4 +64,4 @@ show-followup-changes（まだarchiveしていない）で、3つの列を足し
 
 ## Migration Plan
 
-032のmigrationはサーバーの起動時に当たる。表を作って写すだけで、既存の列は変えない。戻すときは、前の版のサーバーが`article_update_notes`を読まないだけで動く。
+033のmigrationはサーバーの起動時に当たる。表を作って写すだけで、既存の列は変えない。戻すときは、前の版のサーバーが`article_update_notes`を読まないだけで動く。

@@ -1286,7 +1286,7 @@ describe("the migration to the notes of every rewrite", () => {
 
   it("keeps the note an article has at the time it was last rewritten, and lets it go with the article", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "032")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     db.prepare(
@@ -1301,7 +1301,7 @@ describe("the migration to the notes of every rewrite", () => {
     insert.run(2, "2026-01-02T14:00:00.000Z", 1, null);
     insert.run(3, "2026-01-01T00:00:00.000Z", 0, null);
 
-    const file = readdirSync(SHIPPED).find((name) => name.startsWith("032"))!;
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("033"))!;
     copyFileSync(join(SHIPPED, file), join(dir, file));
     migrate(db, dir);
 

@@ -26,7 +26,7 @@
 
 ## Impact
 
-- `packages/core/src/db/migrations/032_article_update_notes.sql`（新しい表と、今ある文の写し）
+- `packages/core/src/db/migrations/033_article_update_notes.sql`（新しい表と、今ある文の写し）
 - `packages/core/src/db/articles.ts`（`reviseArticle`での記録と、記事の詳細での取り出し）
 - `packages/core/src/api.ts`（`articleSchema`の`updateNotes`）
 - `apps/web/src/reader/ArticleView.tsx`（本文の画面の表示）
