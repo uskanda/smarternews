@@ -7,6 +7,7 @@ import type {
   ArticleSearchQuery,
   ArticleSummary,
   AttentionList,
+  Feed,
   Highlight,
   HighlightCreate,
   ListSort,
@@ -36,10 +37,23 @@ export function useCategories() {
   return useQuery({ queryKey: ["categories"], queryFn: () => api.categories() });
 }
 
-/** The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles. */
+/** How often the feeds are fetched again while some wait for a fetch of all: its end shows within this time. */
+export const FETCH_ALL_REFRESH_MS = 3_000;
+
+/** Whether the feed still waits for its turn in a fetch of all. */
+export const awaitsFetch = (feed: Pick<Feed, "fetchRequestedAt">): boolean => feed.fetchRequestedAt !== null;
+
+/**
+ * The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles.
+ * While some wait for a fetch of all they are fetched again every few seconds, which is how its end is noticed.
+ */
 export function useFeeds() {
   const { api } = useApp();
-  return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
+  return useQuery({
+    queryKey: ["feeds"],
+    queryFn: () => api.feeds(),
+    refetchInterval: (query) => (query.state.data?.some(awaitsFetch) ? FETCH_ALL_REFRESH_MS : REFRESH_MS),
+  });
 }
 
 /** The filters with what each hides now. Asked for again whenever a filter, a feed or a category changes. */
@@ -408,12 +422,15 @@ export function useUsage() {
   return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
 }
 
+/** How many runs the run history asks for, newest first. The list has no way to load older ones. */
+export const RUNS_LIMIT = 100;
+
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */
 export function useRuns(category?: number) {
   const { api } = useApp();
   return useQuery({
     queryKey: ["runs", category ?? null],
-    queryFn: () => api.runs({ category, limit: 100 }),
+    queryFn: () => api.runs({ category, limit: RUNS_LIMIT }),
     refetchInterval: (query) =>
       query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 3000 : REFRESH_MS,
   });
@@ -564,13 +581,17 @@ export function useAnnotationActions() {
       stale();
     },
     async saveNote(articleId: number, text: string): Promise<ArticleNote> {
+      const before = client.getQueryData<Article>(["article", articleId])?.annotations.note ?? null;
       const note = await api.saveArticleNote(articleId, text);
       patchArticle(articleId, (annotations) => ({ ...annotations, note }));
-      const listed = client
-        .getQueryData<AnnotationPages>(["annotations"])
-        ?.pages.some((page) => page.items.some((item) => item.id === note.id));
+      const list = client.getQueryData<AnnotationPages>(["annotations"]);
+      const listed = list?.pages.some((page) => page.items.some((item) => item.id === note.id));
       if (listed) patchList((items) => items.map((item) => (item.id === note.id ? { ...item, note: note.text } : item)));
-      else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
+      else if (before?.id === note.id) {
+        // A note written before keeps the place of when it was made, on a page not loaded yet, where the next page
+        // brings it with the new text. When no page is left to load, the list is older than the note and is read again.
+        if (list && list.pages.at(-1)?.nextCursor == null) void client.invalidateQueries({ queryKey: ["annotations"] });
+      } else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
       stale();
       return note;
     },

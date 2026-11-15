@@ -36,6 +36,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   failureCount: 0,
   goneAt: null,
   nextFetchAt: null,
+  fetchRequestedAt: null,
   articleCount: 0,
   starredCount: 0,
   annotatedCount: 0,

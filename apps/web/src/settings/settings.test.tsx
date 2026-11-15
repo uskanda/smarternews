@@ -9,11 +9,12 @@ import {
   insertFeed,
   listCategories,
   listTopics,
+  saveArticleNote,
   setArticleFlags,
   updateCategory,
 } from "@smarternews/core";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -87,6 +88,51 @@ describe("the links to the sections", () => {
     await user.click(within(screen.getByRole("navigation", { name: "設定の区画" })).getByRole("link", { name: "トークン" }));
 
     await waitFor(() => expect(scroll.mock.contexts).toContain(tokens));
+    scroll.mockRestore();
+  });
+});
+
+describe("the links to the sections of a category", () => {
+  const SECTIONS = ["カテゴリの設定", "トピック", "トピックの成績", "実行", "削除"];
+  const nav = () => screen.getByRole("navigation", { name: "カテゴリの区画" });
+
+  it("lists the five sections under the heading, each pointing at its section", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+    await section("実行");
+
+    const links = within(nav()).getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(SECTIONS);
+    for (const [index, link] of links.entries()) {
+      const [path, id] = link.getAttribute("href")!.split("#");
+      expect(path).toBe(`/settings/categories/${category.id}`);
+      expect(document.getElementById(id!)).toHaveAccessibleName(SECTIONS[index]);
+    }
+  });
+
+  it("scrolls to the section the address names once the topics and their stats are in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws");
+    renderApp({ server, route: `/settings/categories/${category.id}#run` });
+
+    const run = await section("実行");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(run));
+    scroll.mockRestore();
+  });
+
+  it("moves to the section a link names", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const remove = await section("削除");
+
+    await user.click(within(nav()).getByRole("link", { name: "削除" }));
+
+    await waitFor(() => expect(scroll.mock.contexts).toContain(remove));
     scroll.mockRestore();
   });
 });
@@ -284,6 +330,27 @@ describe("deleting a category", () => {
 
     await waitFor(() => expect(listCategories(server.db)).toEqual([]));
     await waitFor(() => expect(path()).toBe("/settings"));
+  });
+
+  it("takes the annotations of its generated articles out of the list of annotations", async () => {
+    const { server, category } = seeded();
+    const other = server.category("Other");
+    saveArticleNote(server.db, server.article(category.id), "消えるメモ", server.clock().toISOString());
+    saveArticleNote(server.db, server.article(other.id), "残るメモ", server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: "/annotations" });
+    expect(await screen.findByText("消えるメモ")).toBeInTheDocument();
+
+    const nav = () => screen.getByRole("navigation", { name: "項目" });
+    await user.click(within(nav()).getByRole("link", { name: "設定" }));
+    await user.click(await screen.findByRole("link", { name: "Security" }));
+    await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await waitFor(() => expect(path()).toBe("/settings"));
+
+    await user.click(within(nav()).getByRole("link", { name: /^注釈/ }));
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    expect(await within(list).findByText("残るメモ")).toBeInTheDocument();
+    expect(within(list).queryByText("消えるメモ")).toBeNull();
   });
 
   it("disables instead when the user chooses that", async () => {
@@ -575,6 +642,56 @@ describe("the stats of the topics", () => {
     expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
   });
 
+  it("opens the editor again when the same topic is followed a second time", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    await screen.findByLabelText("トピックの文章");
+    await user.click(within(item).getByRole("button", { name: "閉じる" }));
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+    scroll.mockClear();
+
+    await user.click(link);
+
+    const text = await screen.findByLabelText("トピックの文章");
+    expect(text).toHaveValue("exploited flaws");
+    expect(text).toHaveFocus();
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
+  });
+
+  it("keeps what is typed in an open editor when its topic is followed again, and moves the focus to its text", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const text = await screen.findByLabelText("トピックの文章");
+    await user.clear(text);
+    await user.type(text, "zero-days");
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    scroll.mockClear();
+
+    await user.click(link);
+
+    expect(screen.getByLabelText("トピックの文章")).toBe(text);
+    expect(text).toHaveValue("zero-days");
+    await waitFor(() => expect(text).toHaveFocus());
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
+  });
+
   it("counts a topic added on the page", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -832,6 +949,26 @@ describe("connecting the Android app", () => {
     const expected = qrPath(buildConnectLink(window.location.origin, API_TOKEN));
     expect(code.querySelector("path")?.getAttribute("d")).toBe(expected.d);
     expect(expected.d.length).toBeGreaterThan(100);
+  });
+
+  it("shows a code with the entered token where the browser keeps no site data", async () => {
+    const denied = () => {
+      throw new DOMException("The site data is blocked.", "SecurityError");
+    };
+    const spies = [
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "removeItem").mockImplementation(denied),
+    ];
+    onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+    const { user } = renderApp({ route: "/settings", token: null });
+
+    await user.type(await screen.findByLabelText("APIのトークン"), API_TOKEN);
+    await user.click(screen.getByRole("button", { name: "接続する" }));
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    expect(code.querySelector("path")?.getAttribute("d")).toBe(qrPath(buildConnectLink(window.location.origin, API_TOKEN)).d);
   });
 
   it("draws the code black on white in the dark scheme too", async () => {
