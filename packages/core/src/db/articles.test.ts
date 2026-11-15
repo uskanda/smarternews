@@ -931,6 +931,63 @@ describe("what a follow-up added", () => {
     expect(getArticle(s.db, s.id).updateNote).toBeNull();
   });
 
+  describe("the notes since the reader last read the article", () => {
+    const notes = (s: ReturnType<typeof story>) => getArticle(s.db, s.id).updateNotes;
+    const stored = (s: ReturnType<typeof story>) =>
+      s.db.prepare("SELECT note, created_at FROM article_update_notes WHERE article_id = ? ORDER BY id").all(s.id);
+
+    it("are none for an article never rewritten", () => {
+      expect(notes(story())).toEqual([]);
+    });
+
+    it("keep every rewrite since it was read, oldest first, while the list gives the last one", () => {
+      const s = story();
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", "発売日が決まりました。");
+      expect(notes(s)).toEqual([
+        { note: "価格が発表されました。", createdAt: "2026-03-01T13:00:00.000Z" },
+        { note: "発売日が決まりました。", createdAt: "2026-03-01T14:00:00.000Z" },
+      ]);
+      expect(listArticles(s.db, {}, NOW).items[0]!.updateNote).toBe("発売日が決まりました。");
+    });
+
+    it("keep the note of an earlier rewrite when the last one has none, which stores nothing", () => {
+      const s = story();
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", null);
+      expect(notes(s)).toEqual([{ note: "価格が発表されました。", createdAt: "2026-03-01T13:00:00.000Z" }]);
+      expect(stored(s)).toEqual([{ note: "価格が発表されました。", created_at: "2026-03-01T13:00:00.000Z" }]);
+      expect(getArticle(s.db, s.id).updateNote).toBeNull();
+    });
+
+    it("are only those after the reader read it again", () => {
+      const s = story();
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T13:30:00.000Z");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", "発売日が決まりました。");
+      expect(notes(s)).toEqual([{ note: "発売日が決まりました。", createdAt: "2026-03-01T14:00:00.000Z" }]);
+    });
+
+    it("are the note of the last rewrite only in an article never read, and none when it has none", () => {
+      const s = story();
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", "発売日が決まりました。");
+      expect(notes(s)).toEqual([{ note: "発売日が決まりました。", createdAt: "2026-03-01T14:00:00.000Z" }]);
+      s.revise(["https://example.org/d"], "2026-03-01T15:00:00.000Z", null);
+      expect(notes(s)).toEqual([]);
+    });
+
+    it("go with the article", () => {
+      const s = story();
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.db.prepare("DELETE FROM articles WHERE id = ?").run(s.id);
+      expect(stored(s)).toEqual([]);
+    });
+  });
+
   it("marks new the sources added after the reader read the article, and keeps them new once it is opened", () => {
     const s = story();
     setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");

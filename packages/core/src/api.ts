@@ -622,6 +622,13 @@ export const articleSchema = articleSummarySchema.extend({
    */
   otherFeeds: z.array(z.object({ articleId: z.number().int(), feedId: z.number().int(), feedTitle: z.string() })),
   refs: z.array(articleRefSchema),
+  /**
+   * What the rewrites since the reader last read the article added, oldest first: each note with the time of its
+   * rewrite. Every note after the time the article was read before a rewrite, as with `isNew`; in an article never
+   * read, the note of the last rewrite only. A rewrite without a note has no entry. Empty for an article never
+   * rewritten and for a feed article. `updateNote` stays the note of the last rewrite.
+   */
+  updateNotes: z.array(z.object({ note: z.string(), createdAt: z.string() })),
   topics: z.array(z.object({ id: z.number().int(), text: z.string() })),
   /** The reader's highlights and note on the article. A screen finds the highlights in the body it draws. */
   annotations: articleAnnotationsSchema,

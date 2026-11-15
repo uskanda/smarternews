@@ -41,6 +41,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   snippetOnly: false,
   previousArticleId: null,
   previousArticles: [],
+  updateNotes: [],
   otherFeeds: [],
   annotations: { note: null, highlights: [] },
   mentions: [],

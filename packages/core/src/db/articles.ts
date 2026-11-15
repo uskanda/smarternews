@@ -170,6 +170,21 @@ function refsOf(db: Database, articleId: number): ArticleRef[] {
     }));
 }
 
+/**
+ * The notes of the rewrites since the reader last read the article before a rewrite, oldest first: every note written
+ * after that time, by the same measure that makes a source new. In an article never read, the note of the last rewrite
+ * only, none when that rewrite had none. None for an article never rewritten and for a feed article.
+ */
+function updateNotesOf(db: Database, row: Row): Article["updateNotes"] {
+  if (str(row.origin) !== "generated" || num(row.revision) === 0) return [];
+  const readBefore = strOrNull(row.read_before_update_at);
+  const [condition, value] = readBefore === null ? ["created_at = ?", str(row.updated_at)] : ["created_at > ?", readBefore];
+  return db
+    .prepare(`SELECT note, created_at FROM article_update_notes WHERE article_id = ? AND ${condition} ORDER BY created_at, id`)
+    .all(num(row.id), value)
+    .map((note) => ({ note: str(note.note), createdAt: str(note.created_at) }));
+}
+
 /** How many earlier articles the chain of an article gives at most. */
 const PREVIOUS_ARTICLES_LIMIT = 20;
 
@@ -276,6 +291,7 @@ function toArticle(db: Database, row: Row): Article {
     previousArticles: previousArticlesOf(db, row),
     otherFeeds: otherFeedsOf(db, id),
     refs: refsOf(db, id),
+    updateNotes: updateNotesOf(db, row),
     topics: db
       .prepare("SELECT t.id, t.text FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ? ORDER BY t.id")
       .all(id)
@@ -403,9 +419,11 @@ export function insertArticle(
 
 /**
  * Rewrites an article with a follow-up: new content, more references, unread again, one revision further. The
- * note on what the rewrite adds replaces the earlier one, even when there is none: an earlier note is about another
- * rewrite. The time the article was read is kept as the time it was read before the rewrite; an article still
- * unread keeps the earlier such time, so that the sources of every rewrite since the reader last read it are new.
+ * note on what the rewrite adds replaces the article's note, even when there is none: the article's note is that of
+ * the last rewrite, which the lists show. A note is also kept with the time of the rewrite, so that the notes of
+ * every rewrite since the reader last read the article can be shown; a rewrite without a note keeps nothing. The time
+ * the article was read is kept as the time it was read before the rewrite; an article still unread keeps the earlier
+ * such time, so that the sources and notes of every rewrite since the reader last read it are new.
  */
 export function reviseArticle(
   db: Database,
@@ -442,6 +460,9 @@ export function reviseArticle(
     input.event?.registration ?? null,
     id,
   );
+  if (input.updateNote) {
+    db.prepare("INSERT INTO article_update_notes (article_id, note, created_at) VALUES (?, ?, ?)").run(id, input.updateNote, input.now);
+  }
   addRefs(db, id, input.refs, input.now);
   addTopics(db, id, input.topicIds);
 }

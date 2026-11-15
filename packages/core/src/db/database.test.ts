@@ -1336,3 +1336,35 @@ describe("the migration to web feeds", () => {
     expect(() => db.prepare("UPDATE feeds SET format = 'html' WHERE id = 5").run()).toThrow();
   });
 });
+
+describe("the migration to the notes of every rewrite", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("keeps the note an article has at the time it was last rewritten, and lets it go with the article", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at)
+       VALUES (1, 'sec', 'Security', 'news', '[]', 4, 7, '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO articles (id, category_id, kind, title, summary, body, importance, first_published_at, updated_at, created_at, revision, update_note)
+       VALUES (?, 1, 'news', 't', 's', 'b', 3,'2026-01-01T00:00:00.000Z', ?, '2026-01-01T00:00:00.000Z', ?, ?)`,
+    );
+    insert.run(1, "2026-01-02T13:00:00.000Z", 2, "価格が発表されました。");
+    insert.run(2, "2026-01-02T14:00:00.000Z", 1, null);
+    insert.run(3, "2026-01-01T00:00:00.000Z", 0, null);
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("033"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT article_id, note, created_at FROM article_update_notes ORDER BY id").all()).toEqual([
+      { article_id: 1, note: "価格が発表されました。", created_at: "2026-01-02T13:00:00.000Z" },
+    ]);
+    db.prepare("DELETE FROM articles WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM article_update_notes").get()).toEqual({ n: 0 });
+  });
+});
