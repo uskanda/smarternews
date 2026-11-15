@@ -28,7 +28,7 @@
 
 ### 索引の追加
 
-`032_previous_article_index.sql`で`articles (previous_article_id)`に索引を足す。その後の記事をたどる問い合わせと未読の続報の件数は、`previous_article_id = ?`で後の記事を探す。一覧の1行ごとに走るので、索引なしでは表を全部読むことになる。
+`037_previous_article_index.sql`で`articles (previous_article_id)`に索引を足す。その後の記事をたどる問い合わせと未読の続報の件数は、`previous_article_id = ?`で後の記事を探す。一覧の1行ごとに走るので、索引なしでは表を全部読むことになる。
 
 ### 集約に渡すスター付きの記事
 

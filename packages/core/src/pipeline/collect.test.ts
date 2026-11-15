@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../config.ts";
 import { setArticleFlags } from "../db/articles.ts";
+import { createRun } from "../db/runs.ts";
 import { listSearchAttempts } from "../db/search-attempts.ts";
 import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
 import { listTopicVersions } from "../db/versions.ts";
+import { restoreLlmSearch } from "../runs/llm-search-reduction.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 
@@ -281,6 +283,105 @@ describe("recording search attempts", () => {
     expect(listSearchAttempts(h.db, run.id)).toEqual([
       expect.objectContaining({ topicId: topic.id, kind: "llm-search", engine: null, query: "Topic", ok: true, returned: 1 }),
     ]);
+  });
+
+  it("counts only the new candidates of the model's web search, and does not fetch the settled pages again", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { llmSearch: true });
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/found", title: "Found by search", snippet: "s" }] });
+    h.page("https://example.org/found", "The page text.", "2026-03-01T10:00:00Z");
+    await h.run();
+    const fetchedBefore = h.urls().filter((url) => url === "https://example.org/found").length;
+
+    const second = await h.run();
+
+    expect(listSearchAttempts(h.db, second.id)).toEqual([expect.objectContaining({ kind: "llm-search", ok: true, returned: 0 })]);
+    expect(h.urls().filter((url) => url === "https://example.org/found")).toHaveLength(fetchedBefore);
+  });
+});
+
+describe("the headlines handed to the model's web search", () => {
+  it("passes the titles of the topic's generated articles to the search task", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { llmSearch: true });
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/found", title: "Found by search", snippet: "s" }] });
+    h.page("https://example.org/found", "The page text.", "2026-03-01T10:00:00Z");
+    await h.run();
+    expect(h.requests.search[0]!.prompt).not.toContain("Found by search");
+
+    await h.run();
+
+    expect(h.requests.search[1]!.prompt).toContain("<material>\n- Found by search\n</material>");
+  });
+});
+
+describe("web search by the model cut to once a day", () => {
+  /** A topic whose web search by the model found nothing new in three runs, the last at 06:00 UTC. */
+  async function reduced(trigger: "schedule" | "manual" = "manual") {
+    const h = pipelineHarness({ now: "2026-03-01T00:00:00.000Z" });
+    const topic = h.addTopic("Topic", { llmSearch: true });
+    h.handlers.search = () => ({ results: [] });
+    for (const at of ["2026-02-28T06:00:00.000Z", "2026-02-28T18:00:00.000Z", "2026-03-01T06:00:00.000Z"]) {
+      h.clock.set(at);
+      await h.run();
+    }
+    expect(getTopic(h.db, topic.id).llmSearchReduced).toBe(true);
+    const runAt = async (at: string) => {
+      h.clock.set(at);
+      const run = createRun(h.db, { categoryId: h.category.id, trigger, slot: null }, h.clock);
+      return h.execute(run.id);
+    };
+    return { h, topic, runAt };
+  }
+
+  it("does not search again on the same day, by a scheduled run or by a manual one, and records no attempt", async () => {
+    for (const trigger of ["schedule", "manual"] as const) {
+      const { h, runAt } = await reduced(trigger);
+      const run = await runAt("2026-03-01T18:00:00.000Z");
+      expect(h.requests.search).toHaveLength(3);
+      expect(listSearchAttempts(h.db, run.id)).toEqual([]);
+    }
+  });
+
+  it("searches once on the next day", async () => {
+    const { h, runAt } = await reduced();
+    await runAt("2026-03-02T06:00:00.000Z");
+    await runAt("2026-03-02T18:00:00.000Z");
+    expect(h.requests.search).toHaveLength(4);
+  });
+
+  it("searches again on the same day when that day's search failed", async () => {
+    const { h, runAt } = await reduced();
+    h.handlers.search = () => {
+      throw new Error("search failed");
+    };
+    await runAt("2026-03-02T06:00:00.000Z");
+    h.handlers.search = () => ({ results: [] });
+    await runAt("2026-03-02T18:00:00.000Z");
+    expect(h.requests.search.length).toBeGreaterThan(4);
+  });
+
+  it("searches every run again once a search finds a new candidate", async () => {
+    const { h, topic, runAt } = await reduced();
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/new", title: "New page", snippet: "s" }] });
+    h.page("https://example.org/new", "The page text.", "2026-03-02T05:00:00Z");
+    await runAt("2026-03-02T06:00:00.000Z");
+    expect(getTopic(h.db, topic.id).llmSearchReduced).toBe(false);
+    await runAt("2026-03-02T07:00:00.000Z");
+    expect(h.requests.search).toHaveLength(5);
+  });
+
+  it("searches again on the same day after the user restores it, or rewrites the topic", async () => {
+    const { h, topic, runAt } = await reduced();
+    restoreLlmSearch(h.db, topic.id, h.clock);
+    await runAt("2026-03-01T18:00:00.000Z");
+    expect(h.requests.search).toHaveLength(4);
+
+    const other = await reduced();
+    updateTopic(other.h.db, other.topic.id, { text: "Topic, rewritten" }, other.h.clock);
+    other.h.handlers.interpret = () => ({ queries: ["q"], criteria: "c", suggestedSources: { newsSearch: false, llmSearch: true } });
+    await other.runAt("2026-03-01T18:00:00.000Z");
+    expect(other.h.requests.search).toHaveLength(4);
   });
 });
 

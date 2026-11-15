@@ -2,7 +2,7 @@
 
 ## 1. 集約の入力
 
-- [x] 1.1 `032_previous_article_index.sql`で`articles (previous_article_id)`に索引を足し、データベースのテストが通ることを確かめる
+- [x] 1.1 `037_previous_article_index.sql`で`articles (previous_article_id)`に索引を足し、データベースのテストが通ることを確かめる
 - [x] 1.2 `db/articles.test.ts`に`starredStoryTips`のテストを先に書き、失敗することを確かめる。対象は、90日の境界、20件の上限、後の記事への置き換え、枝分かれと輪の扱いである。ほかのカテゴリ、イベント、スターのない記事を除くことも確かめる
 - [x] 1.3 `starredStoryTips`を実装し、1.2のテストが通ることを確かめる
 - [x] 1.4 `followup.test.ts`に実行の処理のテストを先に書き、失敗することを確かめる。30日前に更新したスター付きの記事が集約の`existingArticles`に入り、続く候補は前の記事を指す新しい記事になる。スターのない30日前の記事は入らない。偽のTaskRunnerで確かめる
