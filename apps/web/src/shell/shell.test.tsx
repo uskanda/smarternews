@@ -904,6 +904,19 @@ describe("hiding the entries without unread articles", () => {
     await waitFor(() => expect(entry(/^Empty/)).not.toBeInTheDocument());
   });
 
+  it("keeps a feed that has gone, with its mark and its category, once it is on", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, cars } = seeded();
+    const ended = feedOf(server, "Ended", cars.id);
+    recordFetchFailure(server.db, ended.id, { now: server.clock().toISOString(), error: "HTTP status 410: x", gone: true });
+    renderApp({ server });
+
+    await waitFor(() => expect(entry(/^Busy/)).toHaveTextContent("1"));
+    expect(entry(/^Empty/)).not.toBeInTheDocument();
+    expect(entry(/^Cars/)).toBeInTheDocument();
+    expect(within(entry(/^Ended/)!).getByRole("img", { name: "配信終了" })).toBeInTheDocument();
+  });
+
   it("passes the hidden entries by with Shift+J and Shift+K", async () => {
     window.localStorage.setItem("smarternews.nav.hideRead", "on");
     const { server, busy, late } = seeded();
