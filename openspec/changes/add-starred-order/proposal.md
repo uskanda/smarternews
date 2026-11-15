@@ -32,7 +32,7 @@
 
 ## Impact
 
-- `packages/core/src/db/migrations/032_starred_at.sql`（新規）：記事の表の `starred_at` の列と索引、`list_views` の作り直し
+- `packages/core/src/db/migrations/033_starred_at.sql`（新規）：記事の表の `starred_at` の列と索引、`list_views` の作り直し
 - `packages/core/src/api.ts`：並び順の値、記事の要約、検索の条件
 - `packages/core/src/db/articles.ts`：一覧、続きの値、スターの変更、検索
 - `packages/core/src/db/list-views.ts`：「スターを付けた順」を保存できる項目の検査

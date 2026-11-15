@@ -954,7 +954,7 @@ describe("the migration to star times", () => {
   /** A database migrated up to the one before the migration, with a category, a feed and two articles. */
   function before() {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "032")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const now = "2026-01-01T00:00:00.000Z";
@@ -967,7 +967,7 @@ describe("the migration to star times", () => {
     article.run(1, "k1", "2025-12-01T00:00:00.000Z", "2025-12-10T00:00:00.000Z", now, 1);
     article.run(2, "k2", now, now, now, 0);
     const migrateTo = () => {
-      const file = readdirSync(SHIPPED).find((name) => name.startsWith("032_"))!;
+      const file = readdirSync(SHIPPED).find((name) => name.startsWith("033_"))!;
       copyFileSync(join(SHIPPED, file), join(dir, file));
       migrate(db, dir);
     };

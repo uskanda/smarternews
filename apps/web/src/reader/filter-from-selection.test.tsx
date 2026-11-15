@@ -217,6 +217,27 @@ describe("the menu of a right click on the article", () => {
     await user.click(within(menu).getByRole("menuitem", { name: "ハイライト" }));
     await waitFor(() => expect(article.querySelector("mark.annotation-mark")).toHaveTextContent("特売"));
   });
+
+  it("keeps the one-letter keys from the article behind it", async () => {
+    const { server, feed, id } = shop();
+    const { user, path } = renderApp({ server, route: `/f/${feed.id}/${id}` });
+    const article = await opened();
+    const body = await within(article).findByText(/春の特売/);
+    await within(screen.getByRole("region", { name: "記事の一覧" })).findByText("夏の特売");
+
+    selectText(article.querySelector(".article-body")!, "特売");
+    await screen.findByRole("toolbar", { name: "選んだ文字列" });
+    fireEvent.contextMenu(body, { button: 2, clientX: 40, clientY: 50 });
+    const menu = await screen.findByRole("menu", { name: "選んだ文字列の操作" });
+    await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+    await user.keyboard("js");
+    await settle();
+
+    expect(path()).toBe(`/f/${feed.id}/${id}`);
+    expect(screen.getByRole("menu", { name: "選んだ文字列の操作" })).toBeInTheDocument();
+    // The open menu hides the rest of the page from the accessibility tree.
+    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+  });
 });
 
 describe("keys while the dialog for a hide filter is open", () => {

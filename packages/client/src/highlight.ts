@@ -31,7 +31,7 @@ export interface TermMatcher {
    * the upper one wins.
    */
   owners(text: string): Int32Array;
-  /** The groups whose terms occur in any of the texts, in the order of the groups, each once. */
+  /** The groups whose terms occur in any of the texts, in the order of the groups, each once. Each text is judged once. */
   groupsIn(texts: ReadonlyArray<string | null | undefined>): TermGroup[];
 }
 
@@ -43,6 +43,7 @@ export function createTermMatcher(groups: readonly TermGroup[]): TermMatcher {
   const prepared = groups.map((group) => [...new Set(group.terms.map((term) => normalizeForMatch(term.text)).filter((term) => term.length > 0))]);
   const empty = prepared.every((terms) => terms.length === 0);
   const kept = new Map<string, readonly TermPart[]>();
+  const judged = new Map<string, readonly number[]>();
 
   function owners(text: string): Int32Array {
     const owner = new Int32Array(text.length).fill(NONE);
@@ -78,15 +79,26 @@ export function createTermMatcher(groups: readonly TermGroup[]): TermMatcher {
     return parts;
   }
 
+  /** The positions of the groups whose terms occur in the text, kept as the parts of `split` are. */
+  function groupsOf(text: string): readonly number[] {
+    const known = judged.get(text);
+    if (known) return known;
+    const normalized = normalizeWithMap(text).normalized;
+    const found: number[] = [];
+    prepared.forEach((terms, index) => {
+      if (terms.some((term) => normalized.includes(term))) found.push(index);
+    });
+    if (judged.size >= KEPT_TEXTS) judged.delete(judged.keys().next().value!);
+    judged.set(text, found);
+    return found;
+  }
+
   function groupsIn(texts: ReadonlyArray<string | null | undefined>): TermGroup[] {
     if (empty) return [];
     const found = new Set<number>();
     for (const text of texts) {
       if (!text) continue;
-      const normalized = normalizeWithMap(text).normalized;
-      prepared.forEach((terms, index) => {
-        if (!found.has(index) && terms.some((term) => normalized.includes(term))) found.add(index);
-      });
+      for (const index of groupsOf(text)) found.add(index);
     }
     return groups.filter((_, index) => found.has(index));
   }
