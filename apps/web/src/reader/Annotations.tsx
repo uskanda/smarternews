@@ -2,7 +2,7 @@ import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { anchorOf, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
 import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -53,23 +53,30 @@ function segmentOf(root: Element, node: Node): Element | null {
  * The highlights of a body drawn in `count` parts. Each part tells the text of its tree once it is drawn; when
  * every part has, and there are highlights, they are found in the text the parts make together, and the body is
  * drawn again with their marks. Without highlights the text is only kept, for a selection to be measured in.
+ * `bodyKey` names the body shown: when it changes, the text of the body before is let go and told again.
  */
-export function useBodyAnnotations(highlights: readonly Highlight[], count: number, enabled: boolean) {
-  const texts = useRef<string[]>([]);
-  const known = useRef<string[] | null>(null);
-  const [shown, setShown] = useState<string[] | null>(null);
+export function useBodyAnnotations(highlights: readonly Highlight[], count: number, enabled: boolean, bodyKey = "") {
+  const kept = useRef<{ key: string; texts: string[]; known: string[] | null }>({ key: bodyKey, texts: [], known: null });
+  // The text told for another body is let go before it is read.
+  if (kept.current.key !== bodyKey) kept.current = { key: bodyKey, texts: [], known: null };
+  const [told, setTold] = useState<{ key: string; parts: string[] } | null>(null);
+  const shown = told?.key === bodyKey ? told.parts : null;
   const wanted = enabled && highlights.length > 0;
   const tell = useCallback(
     (index: number, text: string) => {
-      texts.current[index] = text;
+      const body = kept.current;
+      if (body.key !== bodyKey) return;
+      body.texts[index] = text;
       if (!wanted) return;
-      const all = texts.current.slice(0, count);
-      if (all.length < count || all.some((part) => part === undefined)) return;
-      if (known.current && known.current.length === all.length && known.current.every((part, at) => part === all[at])) return;
-      known.current = all;
-      setShown(all);
+      // A part may tell its text before those ahead of it: a part not told yet is a hole, which `some` would skip.
+      const parts = Array.from({ length: count }, (_, at): string | undefined => body.texts[at]);
+      if (parts.some((part) => part === undefined)) return;
+      const all = parts as string[];
+      if (body.known && body.known.length === all.length && body.known.every((part, at) => part === all[at])) return;
+      body.known = all;
+      setTold({ key: bodyKey, parts: all });
     },
-    [wanted, count],
+    [wanted, count, bodyKey],
   );
   const located = useMemo(
     () => (wanted && shown && shown.length === count ? locateHighlights(shown.join(PART_SEPARATOR), highlights) : null),
@@ -80,7 +87,7 @@ export function useBodyAnnotations(highlights: readonly Highlight[], count: numb
     enabled ? { ranges: bySegment?.[index] ?? [], onText: (text: string) => tell(index, text) } : undefined;
   /** The text of the parts as drawn now, and where each starts in it. */
   const current = () => {
-    const parts = texts.current.slice(0, count).map((part) => part ?? "");
+    const parts = kept.current.texts.slice(0, count).map((part) => part ?? "");
     return { text: parts.join(PART_SEPARATOR), starts: partStarts(parts) };
   };
   return { marksFor, located, current };
@@ -383,9 +390,13 @@ function MissingHighlights({ highlights, onOpen }: { highlights: readonly Highli
  * and in the original title: the element under `scope` that carries `FILTER_SOURCE_ATTRIBUTE`. A right click on
  * `scope` over a selection that offers something opens the same actions as a menu; otherwise the browser's own.
  * In any article, a topic can be added from a selection anywhere under `scope`, while a category holds topics.
+ *
+ * `bodyKey` names the body shown, as the full content or a translation. When it changes, only the body is drawn
+ * anew and its highlights found again; the menus and the dialogs stay open with what was written in them.
  */
 export function AnnotatedBody({
   article,
+  bodyKey,
   count,
   enabled,
   focusId,
@@ -393,6 +404,7 @@ export function AnnotatedBody({
   render,
 }: {
   article: Article;
+  bodyKey: string;
   count: number;
   enabled: boolean;
   focusId: number | null;
@@ -401,7 +413,7 @@ export function AnnotatedBody({
   render: (marksFor: (index: number) => AnnotationMarks | undefined) => ReactNode;
 }) {
   const highlights = article.annotations.highlights;
-  const { marksFor, located, current } = useBodyAnnotations(highlights, count, enabled);
+  const { marksFor, located, current } = useBodyAnnotations(highlights, count, enabled, bodyKey);
   const actions = useAnnotationActions();
   const toast = useToast();
   const root = useRef<HTMLDivElement>(null);
@@ -512,14 +524,15 @@ export function AnnotatedBody({
     ...(selection.topicDraft !== null ? [{ label: "トピックを足す…", run: () => setTopicFor(selection.topicDraft) }] : []),
   ];
 
-  // From the list of annotations: the highlight is brought into view and focused, once it is drawn.
-  const focused = useRef<number | null>(null);
+  // From the list of annotations: the highlight is brought into view and focused, once it is drawn, and again
+  // in each body shown after.
+  const focused = useRef<{ id: number; bodyKey: string } | null>(null);
   const settled = highlights.length === 0 || located !== null;
   useLayoutEffect(() => {
-    if (focusId === null || focused.current === focusId || !settled) return;
+    if (focusId === null || (focused.current?.id === focusId && focused.current.bodyKey === bodyKey) || !settled) return;
     const place = placeOf(root.current, focusId);
     if (!place) return;
-    focused.current = focusId;
+    focused.current = { id: focusId, bodyKey };
     place.scrollIntoView?.({ block: "center" });
     place.focus({ preventScroll: true });
   });
@@ -550,7 +563,8 @@ export function AnnotatedBody({
           if ((event.key === "Enter" || event.key === " ") && open(event.target)) event.preventDefault();
         }}
       >
-        {render(marksFor)}
+        {/* A new body is drawn from nothing, so that each part tells its text again. */}
+        <Fragment key={bodyKey}>{render(marksFor)}</Fragment>
         {enabled ? (
           <MissingHighlights
             highlights={missing}

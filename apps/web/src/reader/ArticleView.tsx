@@ -434,7 +434,7 @@ export function ArticleView({
         <ArticleNoteSection article={article} />
         {/* Highlights are on the full content when there is one: while what the feed delivered is shown instead, none is. */}
         <AnnotatedBody
-          key={`${fullShown}-${translated ? "translated" : "original"}`}
+          bodyKey={`${fullShown}-${translated ? "translated" : "original"}`}
           article={article}
           count={translated ? article.translation!.segments.length : 1}
           enabled={article.fullContent === null || fullShown}
