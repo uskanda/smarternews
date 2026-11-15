@@ -1,7 +1,7 @@
 import type { Category, Feed } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
 import { buildNav, hideEmptyEntries, listKey, type ListTarget, type NavModel } from "./nav.ts";
-import { applyMove, dropAt, edgeScroll, groupAt, movableOf, nextEventCategory, nextTarget, stepMove, stepTarget, type Row } from "./order.ts";
+import { applyMove, dropAt, edgeScroll, groupAt, jumpCandidates, movableOf, nextEventCategory, nextTarget, stepMove, stepTarget, type Row } from "./order.ts";
 
 const category = (id: number, name: string, kind: Category["kind"] = "news"): Category => ({
   id,
@@ -339,5 +339,56 @@ describe("nextEventCategory", () => {
     expect(nextEventCategory(model(), cat(4))).toEqual(cat(4));
     expect(nextEventCategory(model(), null)).toEqual(cat(4));
     expect(nextEventCategory(buildNav({ categories: [category(1, "A")], feeds: [], counts: undefined }), null)).toBeNull();
+  });
+});
+
+describe("jumpCandidates", () => {
+  const keys = (nav: NavModel, query: string) => jumpCandidates(nav, query).map((candidate) => listKey(candidate.target));
+
+  it("lists the categories and the feeds in the order of the left pane, without the generated articles", () => {
+    expect(keys(model(), "")).toEqual(["category-1", "feed-11", "feed-12", "feed-13", "category-2", "feed-21", "category-3", "category-4", "uncategorized", "feed-91"]);
+  });
+
+  it("gives each feed the name of its group, and each entry its unread count", () => {
+    const candidates = jumpCandidates(model({ "feed-12": 4, "category-2": 2 }), "");
+    expect(candidates.find((candidate) => listKey(candidate.target) === "feed-12")).toEqual({ target: fd(12), label: "Y", unread: 4, group: "A" });
+    expect(candidates.find((candidate) => listKey(candidate.target) === "feed-91")?.group).toBe("未分類");
+    expect(candidates.find((candidate) => listKey(candidate.target) === "category-2")).toEqual({ target: cat(2), label: "B", unread: 2, group: null });
+  });
+
+  it("keeps the entries whose name holds the text", () => {
+    const nav = buildNav({
+      categories: [category(1, "テック")],
+      feeds: [feed(11, "Example Blog", 1), feed(12, "Daily News", 1), feed(13, "Another blog", null)],
+      counts: undefined,
+    });
+    expect(keys(nav, "blog")).toEqual(["feed-11", "feed-13"]);
+    expect(keys(nav, "テッ")).toEqual(["category-1"]);
+    expect(keys(nav, "nothing")).toEqual([]);
+  });
+
+  it("does not tell full-width from half-width letters, nor capitals from small ones", () => {
+    const nav = buildNav({ categories: [category(1, "ﾃｯｸ")], feeds: [feed(11, "Example Blog", 1)], counts: undefined });
+    expect(keys(nav, "ＢＬＯＧ")).toEqual(["feed-11"]);
+    expect(keys(nav, "EXAMPLE")).toEqual(["feed-11"]);
+    expect(keys(nav, "テック")).toEqual(["category-1"]);
+  });
+
+  it("keeps only the entries that hold every word", () => {
+    const nav = buildNav({ categories: [category(1, "A")], feeds: [feed(11, "Tech News", 1), feed(12, "World News", 1)], counts: undefined });
+    expect(keys(nav, "news tech")).toEqual(["feed-11"]);
+    expect(keys(nav, "  news　world ")).toEqual(["feed-12"]);
+    expect(keys(nav, "   ")).toEqual(["category-1", "feed-11", "feed-12"]);
+  });
+
+  it("does not match a feed by the name of its category", () => {
+    expect(keys(model(), "a")).toEqual(["category-1"]);
+  });
+
+  it("takes the entries a hidden pane leaves out from the model before hiding", () => {
+    const full = model({ "feed-11": 1 });
+    const shown = hideEmptyEntries(full, { current: null, counted: true });
+    expect(keys(shown, "Z")).toEqual([]);
+    expect(keys(full, "Z")).toEqual(["feed-13"]);
   });
 });
