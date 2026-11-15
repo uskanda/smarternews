@@ -30,11 +30,11 @@
 
 ## 6. Webの画面
 
-- [ ] 6.1 `feeds-settings.test.tsx` に、欄の保存と解除、説明、見本の表示のテストを書き、失敗を確かめる
-- [ ] 6.2 `FeedsPage.tsx` の編集のフォームに、本文のセレクターの欄と見本を足す
+- [x] 6.1 `feeds-settings.test.tsx` に、欄の保存と解除、説明、見本の表示のテストを書き、失敗を確かめる
+- [x] 6.2 `FeedsPage.tsx` の編集のフォームに、本文のセレクターの欄と見本を足す
 
 ## 7. 文書と確認
 
-- [ ] 7.1 `docs/api.md` に、`contentSelector` と見本の操作を足す
+- [x] 7.1 `docs/api.md` に、`contentSelector` と見本の操作を足す
 - [ ] 7.2 `openspec validate add-content-selector --strict` が通ることを確かめる
 - [ ] 7.3 `make verify` が通ることを確かめる

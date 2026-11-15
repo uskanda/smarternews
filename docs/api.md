@@ -443,7 +443,8 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/page/candidates` | Propose selectors for a page without a feed, each with a preview. See [Web feeds](#web-feeds) |
 | `POST /api/v1/feeds/page/preview` | Show what a set of selectors takes out of a page |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, and `selectors` of a web feed |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, `contentSelector`, and `selectors` of a web feed |
+| `POST /api/v1/feeds/:id/content-preview` | Show what a content selector takes out of the page of the feed's newest article. See [Content selector](#content-selector) |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -488,6 +489,7 @@ Fields of a feed:
 | `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
 | `translate` | True when the titles and contents of this feed's articles are translated into the output language. Switching it on translates nothing that is stored: an article the feed already has is translated when it is opened |
 | `fetchFullContent` | True when the server fetches the page of every article this feed delivers and stores its text as the full content. Only articles stored after it was switched on are fetched |
+| `contentSelector` | The CSS selector of the element that holds the article body on this feed's pages, or `null` to let Readability find it. See [Content selector](#content-selector) |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `goneAt` | When the first of the 410 (Gone) answers in a row came, or `null`. Any other answer empties it. The feed stays enabled and goes on being fetched |
@@ -503,6 +505,29 @@ A fetch that fails is recorded on the feed and not in the run history. After eac
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
 The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders. Web feeds are not in it: OPML has no way to hold their selectors. The settings file has them.
+
+### Content selector
+
+Full content, and a summary that reads an article's page, take the article body out of the page with Readability. On a site where Readability takes the wrong part, such as a list of related articles or the comments, set `contentSelector` on the feed, at registration or in a change: the first element of the page that the CSS selector matches becomes the body instead, rewritten by the same rules. A page where it matches no element with text is read by Readability as before. Full content that is shorter than what the feed delivered is still refused with `shorter`. The selector is at most 300 characters; one that is not a CSS selector, or one the server cannot use, is refused with status 400 and the field `contentSelector`. `null` takes it away.
+
+A change of `contentSelector`, taking it away included, forgets the full content, its failure, and the content translation of the feed's unread articles, so that they are taken again by the new selector: right away for those that wait for full content, and when a reader asks for the others. Read articles keep theirs, and summaries stay. Sending the value the feed already has changes nothing.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"contentSelector":"article .post-body"}' "$API/api/v1/feeds/1"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"contentSelector":"article .post-body"}' "$API/api/v1/feeds/1/content-preview"
+```
+
+`content-preview` takes `{"contentSelector": ...}`, a selector or `null` for Readability, and fetches the page of the feed's newest article with a URL by the rules of full content. It answers one of:
+
+| `status` | Fields |
+|---|---|
+| `ok` | `article` (`id`, `title`, `url`); `matched`, false when the selector matched no element with text and the body is Readability's; `markdown`, the first 1000 characters of the body; `chars`, the characters of the whole body; `shorter`, true when the body is shorter than what the feed delivered |
+| `failed` | `article`, and `error` with `reason` and `detail` as for full content |
+| `no-article` | Nothing: the feed has no article with a URL |
+
+It calls no model and stores nothing. An unknown feed answers 404.
 
 ### Web feeds
 

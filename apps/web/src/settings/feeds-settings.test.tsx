@@ -717,6 +717,114 @@ describe("full content of a feed", () => {
   });
 });
 
+describe("the content selector of a feed", () => {
+  const HINT =
+    "全文と要約の本文を、記事のページのどの要素から取り出すかをCSSセレクターで指定します。空のときと、ページに当たる要素がないときは、Readabilityで本文を見つけます。値を変えて保存すると、この購読フィードの未読の記事の全文を取得し直します。";
+  const ARTICLE = "https://blog.example.org/story";
+  const STORY = "The council approved the budget after a long debate about the old bridge. ".repeat(6).trim();
+  const COMMENT = "A comment from a reader that is not part of the article. ".repeat(8).trim();
+  const storyPage = () =>
+    new Response(`<html><head><title>Story</title></head><body><article><div class="story"><p>${STORY}</p></div><p>${COMMENT}</p><p>${COMMENT}</p></article></body></html>`, {
+      headers: { "content-type": "text/html" },
+    });
+
+  async function openForm(server: TestServer, title: string) {
+    const rendered = renderApp({ server, route: "/settings/feeds" });
+    const row = await rowOf(title);
+    await rendered.user.click(within(row).getByRole("button", { name: `${title}を編集` }));
+    return { ...rendered, row };
+  }
+
+  it("is saved from the edit form, with what it does and that unread articles are fetched again said beside it, and taken away when emptied", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user, row } = await openForm(server, "Blog");
+
+    const field = within(row).getByLabelText("本文のセレクター");
+    expect(field).toHaveValue("");
+    expect(field).toHaveAccessibleDescription(HINT);
+    await user.type(field, "article .body");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).contentSelector).toBe("article .body");
+
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを編集" }));
+    const again = within(await rowOf("Blog")).getByLabelText("本文のセレクター");
+    expect(again).toHaveValue("article .body");
+    await user.clear(again);
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getFeed(server.db, feed.id).contentSelector).toBeNull());
+  });
+
+  it("says beside the field that a value is not a CSS selector, and saves nothing", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), "div[[");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(row).findByText("CSSセレクターとして読めません。")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).contentSelector).toBeNull();
+  });
+
+  it("shows what the selector takes out of the page of the newest article, without saving", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: ARTICLE, title: "Budget approved" });
+    server.site.set(ARTICLE, storyPage);
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), ".story");
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("セレクターに当たる要素から本文を取り出しました。")).toBeInTheDocument();
+    expect(within(row).getByText("見本に使った記事：Budget approved")).toBeInTheDocument();
+    const body = within(row).getByLabelText("取り出した本文の先頭");
+    expect(body).toHaveTextContent("The council approved the budget");
+    expect(body).not.toHaveTextContent("A comment from a reader");
+    expect(getFeed(server.db, feed.id).contentSelector).toBeNull();
+  });
+
+  it("says that a selector that matches nothing falls back to Readability", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: ARTICLE, title: "Budget approved" });
+    server.site.set(ARTICLE, storyPage);
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), ".missing");
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("セレクターに当たる要素がないため、Readabilityの結果に戻ります。")).toBeInTheDocument();
+    expect(within(row).getByLabelText("取り出した本文の先頭")).toHaveTextContent("The council approved the budget");
+  });
+
+  it("says that there is no article to try it on", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: null });
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), ".story");
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("見本に使える記事がありません。元のページのURLを持つ記事が届いてから試してください。")).toBeInTheDocument();
+  });
+
+  it("says why the page of the article could not be read", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: ARTICLE, title: "Budget approved" });
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("見本に使った記事：Budget approved")).toBeInTheDocument();
+    expect(within(row).getByText("ページから本文を取り出せませんでした。ページが見つかりませんでした（HTTP 404）。")).toBeInTheDocument();
+  });
+});
+
 describe("stale feeds and the numbers of a feed", () => {
   const DAY = 86_400_000;
   const daysAgo = (server: TestServer, days: number) => new Date(server.clock().getTime() - days * DAY).toISOString();
