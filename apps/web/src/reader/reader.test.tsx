@@ -439,6 +439,97 @@ describe("moving past the last article loaded", () => {
     expect(path()).toBe(`/all/${ids[0]}`);
     expect(screen.getByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
   });
+
+  const failed = "続きを読み込めませんでした。もう一度試してください。";
+
+  it("stays on the article and says so when the next page fails to load with j", async () => {
+    const { server, ids } = seeded();
+    let offline = false;
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}`, offline: () => offline });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    offline = true;
+    await user.keyboard("j");
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[1]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 2" })).toBeInTheDocument();
+
+    offline = false;
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Story 1" })).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[0]}`);
+  });
+
+  it("stays on the article and says so when the next page fails to load with Space", async () => {
+    const { server, ids } = seeded();
+    let offline = false;
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}`, offline: () => offline });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    offline = true;
+    await user.keyboard(" ");
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[1]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 2" })).toBeInTheDocument();
+  });
+
+  it("does not open the first article of the second page when the third fails to load", async () => {
+    const server = makeServer();
+    const ids = articles(
+      server,
+      server.category().id,
+      Array.from({ length: 101 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    let offline = false;
+    const { user, path } = renderApp({ server, route: `/all/${ids[52]}`, offline: () => offline });
+    await screen.findByRole("heading", { level: 2, name: "Story 53" });
+    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+    await user.click(within(list()).getByRole("link", { name: /Story 2(?!\d)/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+
+    offline = true;
+    await user.keyboard("j");
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(path()).toBe(`/all/${ids[1]}`);
+    expect(screen.getByRole("heading", { level: 2, name: "Story 2" })).toBeInTheDocument();
+  });
+
+  it("does not take the reader back to the list left while the next page was loading", async () => {
+    const server = makeServer();
+    const ids = articles(
+      server,
+      server.category("News").id,
+      Array.from({ length: 51 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const request = server.app.request.bind(server.app);
+    vi.spyOn(server.app, "request").mockImplementation((input, ...rest) =>
+      String(input).includes("cursor=") ? held.then(() => request(input, ...rest)) : request(input, ...rest),
+    );
+    const { user, path } = renderApp({ server, route: `/all/${ids[1]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 2" });
+    await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
+
+    await user.keyboard("j");
+    await user.click(within(nav()).getByRole("link", { name: /News/ }));
+    await waitFor(() => expect(path()).toBe("/c/news"));
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+
+    expect(path()).toBe("/c/news");
+    expect(screen.queryByText(failed)).not.toBeInTheDocument();
+  });
 });
 
 describe("moving through a long list", () => {
@@ -1070,6 +1161,72 @@ describe("stars", () => {
     await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
     await waitFor(() => expect(rowTitles()).toEqual(["Keep me"]));
+  });
+
+  /** Three starred articles, listed newest first as Star 3, Star 2, Star 1. */
+  function starredThree() {
+    const server = makeServer();
+    const ids = articles(server, server.category().id, [{ title: "Star 1" }, { title: "Star 2" }, { title: "Star 3" }]);
+    for (const id of ids) setArticleFlags(server.db, id!, { starred: true }, server.clock().toISOString());
+    return { server, ids };
+  }
+  const starIcon = (title: RegExp) => within(row(title)).queryByRole("img", { name: "スター" });
+
+  /** Opens Star 2 in the starred list and takes its star away with s. */
+  async function unstarSecond(server: TestServer, id: number) {
+    const rendered = renderApp({ server, route: "/starred" });
+    await rendered.user.click(await within(list()).findByRole("link", { name: /Star 2/ }));
+    await screen.findByRole("heading", { level: 2, name: "Star 2" });
+    await rendered.user.keyboard("s");
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(false));
+    return rendered;
+  }
+
+  it("keeps a row unstarred in the starred list, without the star, and moves on from it with j", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+    expect(rowTitles()).toEqual(["Star 3", "Star 2", "Star 1"]);
+    expect(within(list()).getByRole("link", { name: /Star 2/ })).toHaveAttribute("aria-current", "true");
+
+    await user.keyboard("j");
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Star 1" })).toBeInTheDocument();
+  });
+
+  it("drops the unstarred row once the starred list is refreshed", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Star 3", "Star 1"]));
+  });
+
+  it("drops the unstarred row once another list is chosen and the starred list opened again", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+
+    await user.click(within(nav()).getByRole("link", { name: "最近読んだ記事" }));
+    await screen.findByRole("heading", { level: 1, name: "最近読んだ記事" });
+    await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Star 3", "Star 1"]));
+  });
+
+  it("stars the kept row again with s, and shows it once", async () => {
+    const { server, ids } = starredThree();
+    const { user } = await unstarSecond(server, ids[1]!);
+    await waitFor(() => expect(starIcon(/Star 2/)).not.toBeInTheDocument());
+
+    await user.keyboard("s");
+
+    await waitFor(() => expect(getArticle(server.db, ids[1]!).starred).toBe(true));
+    await waitFor(() => expect(starIcon(/Star 2/)).toBeInTheDocument());
+    expect(rowTitles()).toEqual(["Star 3", "Star 2", "Star 1"]);
   });
 });
 
@@ -1775,6 +1932,27 @@ describe("Space through the article", () => {
 
     await waitFor(() => expect(path()).toBe(`/unread/${newer}?min=4`));
     expect(pane.scrollTop).toBe(0);
+  });
+
+  it("does nothing, nor do s and m, on the path of a feed that does not exist after すべて was read", async () => {
+    const { server, newer } = seeded();
+    const { user, requests } = renderApp({ server, route: `/all/${newer}`, browserHistory: true });
+    await screen.findByRole("heading", { level: 2, name: "Newer story" });
+    await waitFor(() => expect(getArticle(server.db, newer).isRead).toBe(true));
+    await act(async () => {
+      window.history.pushState(null, "", "/f/999");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(await screen.findByText("この購読フィードはありません。")).toBeInTheDocument();
+    const before = requests.length;
+
+    await user.keyboard("s");
+    await user.keyboard("m");
+    await user.keyboard(" ");
+
+    expect(window.location.pathname).toBe("/f/999");
+    expect(requests.slice(before).filter((request) => request.includes("/articles/"))).toEqual([]);
+    expect(getArticle(server.db, newer)).toMatchObject({ starred: false, isRead: true });
   });
 
   it("moves with j after a click on a checkbox above the list", async () => {

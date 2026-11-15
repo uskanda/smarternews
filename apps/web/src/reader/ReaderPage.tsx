@@ -264,9 +264,12 @@ export function ReaderPage({ view }: { view: View }) {
   const recentlyRead = filter.recentlyRead === "true";
   const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
   const active = isSearch ? results : isMention ? mentionList : list;
+  // No list of articles: the annotations, and a feed or a category not known, or not yet. Their filter is empty,
+  // the filter of すべて, whose rows are in the cache: they are no rows of this page, for the keys or the list.
+  const noArticles = isAnnotations || (!isSearch && !isMention && target === null);
   const fetched = useMemo<ArticleSummary[]>(
-    () => (isSearch ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items) ?? EMPTY,
-    [isSearch, isMention, results.data, mentionList.data, list.data],
+    () => (noArticles ? undefined : (isSearch ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items)) ?? EMPTY,
+    [noArticles, isSearch, isMention, results.data, mentionList.data, list.data],
   );
   const excerpts = useMemo(
     () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
@@ -275,11 +278,16 @@ export function ReaderPage({ view }: { view: View }) {
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
   // change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
+  const listKey = JSON.stringify(
+    isSearch ? searchQuery : isMention ? { mention: mentionName } : isAnnotations ? { annotations: true } : { ...filter, order: undefined },
+  );
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const sortKey = target ? sortKeyFor(target) : undefined;
-  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
+  const items = useMemo(
+    () => (noArticles ? EMPTY : mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort)),
+    [noArticles, fetched, kept, listKey, sortKey, sort],
+  );
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
   // not in the recently read articles, which is where a mistake is put right, nor in search results, the
@@ -396,11 +404,14 @@ export function ReaderPage({ view }: { view: View }) {
     if (!wasRead) showRead(id, false);
     flags.mutate({ id, missed: false, ...(wasRead ? {} : { isRead: false }) });
   }
+  /** Changes the star: a row unstarred in the starred list is kept there, like a read one in an unread list. */
   function setStar(id: number, starred: boolean) {
-    setKept((current) => ({
-      key: current.key,
-      items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)),
-    }));
+    const summary = items.find((item) => item.id === id);
+    setKept((current) =>
+      !starred && target?.type === "starred" && summary
+        ? { key: listKey, items: [...current.items.filter((item) => item.id !== id), { ...summary, starred }] }
+        : { key: current.key, items: current.items.map((item) => (item.id === id ? { ...item, starred } : item)) },
+    );
     flags.mutate({ id, starred });
   }
   function toggleStar(target: { id: number; starred: boolean }) {
@@ -598,17 +609,32 @@ export function ReaderPage({ view }: { view: View }) {
     // Only the first article opened adds to the history; a run of keys after it would make back slow to leave.
     void navigate(articlePath(id), { replace: articleId !== null });
   };
-  /** Past the last article loaded, the next page is loaded first, and its first article opened. */
+  // The list and the article on screen now, read after an await to see whether the reader has gone elsewhere.
+  const place = useRef({ listKey, articleId });
+  place.current = { listKey, articleId };
+  /**
+   * Past the last article loaded, the next page is loaded first, and its first article opened. A page that did
+   * not load leaves the article open and says so; a reader who went elsewhere meanwhile is left there.
+   */
   const moveOn = async () => {
     if (loadingMore.current) return;
     loadingMore.current = true;
+    const from = { listKey, articleId };
+    const loaded = active.data?.pages.length ?? 0;
     try {
-      const loaded = active.data?.pages.length ?? 0;
-      const result = await active.fetchNextPage();
-      const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
-      // A page that could not be loaded leaves the last page the one the reader is on.
-      const first = pages.length > loaded ? pages.at(-1)?.items[0] : undefined;
+      let failed = false;
+      let first: { id: number } | undefined;
+      try {
+        const result = await active.fetchNextPage();
+        const pages: ReadonlyArray<{ items: ReadonlyArray<{ id: number }> }> = result.data?.pages ?? [];
+        failed = result.isError;
+        if (pages.length > loaded) first = pages[loaded]?.items[0];
+      } catch {
+        failed = true;
+      }
+      if (place.current.listKey !== from.listKey || place.current.articleId !== from.articleId) return;
       if (first) go(first.id, 1);
+      else if (failed) toast({ message: "続きを読み込めませんでした。もう一度試してください。" });
     } finally {
       loadingMore.current = false;
     }
@@ -682,18 +708,22 @@ export function ReaderPage({ view }: { view: View }) {
   }, [nearEnd, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
   // The article pane starts every article at its top.
   const articlePane = useRef<HTMLDivElement>(null);
+  /** The move through the list of annotations, which that list puts here while it is shown. */
+  const annotationMove = useRef<((step: 1 | -1) => void) | null>(null);
   useLayoutEffect(() => {
     if (articlePane.current) articlePane.current.scrollTop = 0;
   }, [articleId]);
   /**
    * Space: the body down by a screen less a line, so the last line read stays in view, or on to the next
-   * article at its end. Shift+Space the other way. Without a body, the article j or k would choose.
+   * article at its end. Shift+Space the other way. Without a body, the article j or k would choose. On the
+   * list of annotations, the annotation j or k would choose there.
    */
   const page = (step: 1 | -1) => {
     const pane = articlePane.current;
-    if (articleId === null || !pane) return move(step);
+    const onward = () => (isAnnotations ? annotationMove.current?.(step) : move(step));
+    if (articleId === null || !pane) return onward();
     const end = step === 1 ? pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 : pane.scrollTop <= 0;
-    if (end) return move(step);
+    if (end) return onward();
     // The line height is in pixels at the browser's default 16px; the text grows with the font size it is set to.
     const rootSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
     const line = lineHeights["body-lg"] * (rootSize > 0 ? rootSize / 16 : 1);
@@ -773,7 +803,7 @@ export function ReaderPage({ view }: { view: View }) {
   const listMinute = Math.floor(now().getTime() / 60_000) * 60_000;
 
   const listPane = isAnnotations ? (
-    <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
+    <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} moveRef={annotationMove} />
   ) : isEvents ? (
     <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
   ) : (
@@ -801,6 +831,7 @@ export function ReaderPage({ view }: { view: View }) {
           {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
+          {(view === "feeds" || view === "uncategorized") && categories.data ? <AddFeedDialog categories={categories.data} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
           {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
           {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}

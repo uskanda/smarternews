@@ -92,6 +92,51 @@ describe("the links to the sections", () => {
   });
 });
 
+describe("the links to the sections of a category", () => {
+  const SECTIONS = ["カテゴリの設定", "トピック", "トピックの成績", "実行", "削除"];
+  const nav = () => screen.getByRole("navigation", { name: "カテゴリの区画" });
+
+  it("lists the five sections under the heading, each pointing at its section", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+    await section("実行");
+
+    const links = within(nav()).getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(SECTIONS);
+    for (const [index, link] of links.entries()) {
+      const [path, id] = link.getAttribute("href")!.split("#");
+      expect(path).toBe(`/settings/categories/${category.id}`);
+      expect(document.getElementById(id!)).toHaveAccessibleName(SECTIONS[index]);
+    }
+  });
+
+  it("scrolls to the section the address names once the topics and their stats are in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws");
+    renderApp({ server, route: `/settings/categories/${category.id}#run` });
+
+    const run = await section("実行");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(run));
+    scroll.mockRestore();
+  });
+
+  it("moves to the section a link names", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const remove = await section("削除");
+
+    await user.click(within(nav()).getByRole("link", { name: "削除" }));
+
+    await waitFor(() => expect(scroll.mock.contexts).toContain(remove));
+    scroll.mockRestore();
+  });
+});
+
 describe("the main action of the settings", () => {
   it("is none: no button stands out over the others", async () => {
     renderApp({ route: "/settings" });
@@ -595,6 +640,56 @@ describe("the stats of the topics", () => {
     await user.click(await within(stats).findByRole("link", { name: "exploited flaws" }));
 
     expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
+  });
+
+  it("opens the editor again when the same topic is followed a second time", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    await screen.findByLabelText("トピックの文章");
+    await user.click(within(item).getByRole("button", { name: "閉じる" }));
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+    scroll.mockClear();
+
+    await user.click(link);
+
+    const text = await screen.findByLabelText("トピックの文章");
+    expect(text).toHaveValue("exploited flaws");
+    expect(text).toHaveFocus();
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
+  });
+
+  it("keeps what is typed in an open editor when its topic is followed again, and moves the focus to its text", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const text = await screen.findByLabelText("トピックの文章");
+    await user.clear(text);
+    await user.type(text, "zero-days");
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    scroll.mockClear();
+
+    await user.click(link);
+
+    expect(screen.getByLabelText("トピックの文章")).toBe(text);
+    expect(text).toHaveValue("zero-days");
+    await waitFor(() => expect(text).toHaveFocus());
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
   });
 
   it("counts a topic added on the page", async () => {
