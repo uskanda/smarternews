@@ -39,6 +39,61 @@ describe("running a category now", () => {
   });
 });
 
+describe("the latest run on the category page", () => {
+  const latest = () => screen.findByRole("region", { name: "実行" });
+
+  it("shows the state, the counts and a link to the run", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const other = server.category("Tools");
+    finished(server, category.id, { status: "failed" });
+    const id = finished(server, category.id, { articlesCreated: 3, articlesUpdated: 1 });
+    finished(server, other.id, { status: "failed" });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const section = await latest();
+    await waitFor(() => expect(section).toHaveTextContent("成功"));
+    expect(section).toHaveTextContent("手動");
+    expect(section).toHaveTextContent("作成 3件・更新 1件");
+    expect(section).not.toHaveTextContent("失敗");
+    const links = within(section).getAllByRole("link").filter((link) => link.getAttribute("href") === `/runs/${id}`);
+    expect(links).toHaveLength(1);
+  });
+
+  it("says that the latest run failed", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    finished(server, category.id);
+    finished(server, category.id, { status: "failed" });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const section = await latest();
+    await waitFor(() => expect(within(section).getByText("失敗")).toHaveClass("text-error"));
+  });
+
+  it("turns to the run that was just started", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    finished(server, category.id, { articlesCreated: 2 });
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const section = await latest();
+    await waitFor(() => expect(section).toHaveTextContent("成功"));
+
+    await user.click(within(section).getByRole("button", { name: "いますぐ実行" }));
+
+    await waitFor(() => expect(section).toHaveTextContent(/待機中|実行中/));
+    expect(section).not.toHaveTextContent("成功");
+  });
+
+  it("says that the category has not run yet", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    expect(await within(await latest()).findByText("まだ実行していません。")).toBeInTheDocument();
+  });
+});
+
 describe("the run history", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -115,6 +170,40 @@ describe("the run history", () => {
 
     await waitFor(() => expect(rows()[0]).toHaveTextContent("成功"));
     expect(within(rows()[0]!).getAllByRole("cell")[6]).toHaveTextContent("3");
+  });
+
+  const ALL_LIMIT = "新しい100件だけを表示しています。カテゴリで絞り込むと、それより古い実行が出ます。";
+  const CATEGORY_LIMIT = "このカテゴリの新しい100件だけを表示しています。";
+
+  it("says that only the newest 100 runs are shown when the list reaches 100", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 100; i++) finished(server, category.id);
+    renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByText(ALL_LIMIT)).toBeInTheDocument();
+    expect(rows()).toHaveLength(100);
+  });
+
+  it("says nothing about the limit when the list has fewer than 100 runs", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 99; i++) finished(server, category.id);
+    renderApp({ server, route: "/runs" });
+
+    await waitFor(() => expect(rows()).toHaveLength(99));
+    expect(screen.queryByText(ALL_LIMIT)).not.toBeInTheDocument();
+    expect(screen.queryByText(CATEGORY_LIMIT)).not.toBeInTheDocument();
+  });
+
+  it("does not suggest narrowing when the list is already narrowed to a category", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 100; i++) finished(server, category.id);
+    renderApp({ server, route: `/runs?category=${category.id}` });
+
+    expect(await screen.findByText(CATEGORY_LIMIT)).toBeInTheDocument();
+    expect(screen.queryByText(ALL_LIMIT)).not.toBeInTheDocument();
   });
 
   it("says that there are no runs yet", async () => {
