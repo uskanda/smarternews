@@ -339,7 +339,7 @@ describe("keys while a dialog is open", () => {
   it("does not move through the list behind the dialog for adding a feed", async () => {
     const { server, tools } = seeded();
     const view = await openAddDialog(`/c/${tools.slug}`, server);
-    within(view.dialog).getByRole("button", { name: "閉じる" }).focus();
+    within(view.dialog).getByRole("button", { name: "やめる" }).focus();
     await view.user.keyboard("j");
 
     expect(view.path()).toBe(`/c/${tools.slug}`);

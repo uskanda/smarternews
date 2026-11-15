@@ -727,7 +727,7 @@ describe("failures", () => {
     expect(alert).toHaveTextContent("サーバーに接続できません");
 
     down = false;
-    await user.click(within(alert).getByRole("button", { name: "再試行" }));
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
     expect(await screen.findByRole("link", { name: /Back online/ })).toBeInTheDocument();
   });
 

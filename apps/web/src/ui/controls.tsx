@@ -100,7 +100,7 @@ export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () =
       <span>{messageFor(error)}</span>
       {onRetry ? (
         <Button onClick={onRetry} className="text-on-surface">
-          再試行
+          もう一度試す
         </Button>
       ) : null}
     </div>

@@ -13,7 +13,7 @@ const buttonsOf = (element: HTMLElement) => within(element).getAllByRole("button
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 const MAKE = "隠すフィルターを作る…";
 /** Offered beside the filter wherever a category holds topics: see add-topic.test.tsx. */
-const TOPIC = "トピックを足す…";
+const TOPIC = "トピックを追加…";
 
 /** Selects the given occurrence of `text` among the characters under `root`, as a mouse would. */
 function selectText(root: Element, text: string, occurrence = 0) {

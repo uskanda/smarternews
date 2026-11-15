@@ -46,7 +46,7 @@ function HiddenArticles({ filter }: { filter: Filter }) {
       {list.hasNextPage ? (
         <div>
           <Button onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-            さらに表示
+            さらに読み込む
           </Button>
         </div>
       ) : null}

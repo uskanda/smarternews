@@ -44,7 +44,7 @@ export function AddTopicDialog({
   trigger?: ReactNode;
 }) {
   return (
-    <FormDialog open={open} onOpenChange={onOpenChange} trigger={trigger} title="トピックを足す">
+    <FormDialog open={open} onOpenChange={onOpenChange} trigger={trigger} title="トピックを追加">
       {/* Drawn only while open, so each opening starts from the draft. */}
       <AddTopicForm draft={draft} categoryId={categoryId} onDone={() => onOpenChange(false)} />
     </FormDialog>
@@ -56,7 +56,7 @@ export function AddTopicButton({ draft, categoryId }: { draft: string; categoryI
   const [open, setOpen] = useState(false);
   const choices = useTopicCategories();
   if (choices.length === 0) return null;
-  return <AddTopicDialog draft={draft} categoryId={categoryId} open={open} onOpenChange={setOpen} trigger={<Button>トピックを足す…</Button>} />;
+  return <AddTopicDialog draft={draft} categoryId={categoryId} open={open} onOpenChange={setOpen} trigger={<Button>トピックを追加…</Button>} />;
 }
 
 function AddTopicForm({ draft, categoryId, onDone }: { draft: string; categoryId: number | null; onDone: () => void }) {

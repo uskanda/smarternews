@@ -14,7 +14,7 @@ export function AddFeedDialog({ categories, category }: { categories: Category[]
     <FormDialog open={open} onOpenChange={setOpen} trigger={<Button>購読フィードを追加</Button>} title="購読フィードを追加">
       <AddFeedForm categories={categories} categoryId={category.id} onAdded={() => setOpen(false)} />
       <div className="flex justify-end">
-        <Button onClick={() => setOpen(false)}>閉じる</Button>
+        <Button onClick={() => setOpen(false)}>やめる</Button>
       </div>
     </FormDialog>
   );

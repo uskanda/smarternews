@@ -123,7 +123,7 @@ describe("highlighting a selection", () => {
     selectText(article.querySelector(".article-body")!, QUOTE);
     // A topic can be added too, as the article's category holds topics.
     await waitFor(() =>
-      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを足す…"]),
+      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを追加…"]),
     );
     await user.click(within(menu()!).getByRole("button", { name: "ハイライト" }));
 
