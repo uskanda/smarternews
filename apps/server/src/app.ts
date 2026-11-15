@@ -52,6 +52,7 @@ import {
   getRun,
   getSettings,
   getTopic,
+  restoreLlmSearch,
   importOpml,
   importSettings,
   listArticles,
@@ -325,6 +326,11 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   api.post("/topics/:id/interpret", (c) => c.json(requestInterpretation(db, idParam(c, "topic"))));
+  api.post("/topics/:id/llm-search/restore", (c) => {
+    const id = idParam(c, "topic");
+    restoreLlmSearch(db, id, clock);
+    return c.json(getTopic(db, id));
+  });
   // Judges stored candidates again with a text that is not saved. Answers at once; the result is asked for below.
   // Nothing is stored but the record of the model calls.
   api.post("/topics/:id/trials", async (c) => {

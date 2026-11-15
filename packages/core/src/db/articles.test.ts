@@ -17,6 +17,7 @@ import {
   recordArticleOpened,
   openEventArticles,
   recentNewsArticles,
+  recentTopicHeadlines,
   reviseArticle,
   requestAutoSummary,
   saveAutoSummary,
@@ -27,6 +28,7 @@ import { createCategory } from "./categories.ts";
 import type { Database } from "./database.ts";
 import { updateFeed } from "./feeds.ts";
 import { updateSettings } from "./settings.ts";
+import { createTopic } from "./topics.ts";
 
 const NOW = "2026-03-01T12:00:00.000Z";
 
@@ -81,6 +83,26 @@ describe("what only generated articles take part in", () => {
 
     expect(deleteUnstarredArticlesBefore(db, "2026-01-01T00:00:00.000Z")).toBe(1);
     expect(db.prepare("SELECT id FROM articles").all()).toEqual([{ id: feedArticle }]);
+  });
+});
+
+describe("the headlines handed to web search by the model", () => {
+  it("gives the topic's ten generated articles written or updated last, without feed articles or a time limit", () => {
+    const db = createTestDb();
+    const clock = fakeClock(NOW);
+    const category = createCategory(db, { name: "Tools", kind: "news" }, clock);
+    const topic = createTopic(db, category.id, { text: "Topic" }, clock);
+    const other = createTopic(db, category.id, { text: "Other" }, clock);
+    const content = { kind: "news" as const, summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null, previousArticleId: null, refs: [] };
+    for (let day = 1; day <= 12; day += 1) {
+      const at = `2025-${String(day).padStart(2, "0")}-01T00:00:00.000Z`;
+      insertArticle(db, { ...content, categoryId: category.id, title: `Story ${day}`, now: at, topicIds: [topic.id] });
+    }
+    insertArticle(db, { ...content, categoryId: category.id, title: "Other topic", now: NOW, topicIds: [other.id] });
+    const feedArticle = seedFeedArticle(db, seedFeed(db, { categoryId: category.id }), { at: NOW });
+    db.prepare("INSERT INTO article_topics (article_id, topic_id) VALUES (?, ?)").run(feedArticle, topic.id);
+
+    expect(recentTopicHeadlines(db, topic.id)).toEqual(["Story 12", "Story 11", "Story 10", "Story 9", "Story 8", "Story 7", "Story 6", "Story 5", "Story 4", "Story 3"]);
   });
 });
 

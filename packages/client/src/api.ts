@@ -266,6 +266,8 @@ export function createApi(options: ApiOptions) {
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
     /** Has the topic interpreted again before the next run of its category. */
     interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
+    /** Puts the topic's web search by the model, cut to once a day, back to every run. */
+    restoreLlmSearch: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/llm-search/restore`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
     /** The versions of the topic, newest first. */
     topicVersions: (id: number): Promise<TopicVersion[]> => json(z.array(topicVersionSchema), `/topics/${id}/versions`),
