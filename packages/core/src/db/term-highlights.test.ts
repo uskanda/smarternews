@@ -136,19 +136,26 @@ describe("highlight terms", () => {
     expect(() => deleteHighlightTerm(db, a.id, 999)).toThrow(expect.objectContaining({ code: "not_found" }));
   });
 
-  it("change nothing of the articles: read, starred, the list and the counts stay", () => {
+  it("change nothing of the articles but their place in the relevance order: read, starred, the list and the counts stay", () => {
     const db = createTestDb();
     const feed = seedFeed(db);
     for (const title of ["規制の話 1", "規制の話 2", "規制の話 3"]) seedFeedArticle(db, feed, { title });
     const now = clock().toISOString();
     const first = listArticles(db, {}, now).items[0]!;
     setArticleFlags(db, first.id, { starred: true, isRead: true }, now);
-    const snapshot = () => ({ list: listArticles(db, {}, now), unread: listArticles(db, { unread: "true" }, now), counts: getCounts(db, now) });
+    const withoutRank = (list: ReturnType<typeof listArticles>) => ({ ...list, items: list.items.map(({ rankAt: _rank, ...item }) => item) });
+    const snapshot = () => ({
+      list: withoutRank(listArticles(db, {}, now)),
+      unread: withoutRank(listArticles(db, { unread: "true" }, now)),
+      counts: getCounts(db, now),
+    });
     const before = snapshot();
 
     const a = createTermGroup(db, { name: "A" }, clock);
     const term = addHighlightTerm(db, a.id, { text: "規制" }, clock).terms[0]!;
     expect(snapshot()).toEqual(before);
+    // A term match moves a feed article 24 hours later in the relevance order.
+    expect(listArticles(db, {}, now).items.map((item) => Date.parse(item.rankAt) - Date.parse(item.updatedAt))).toEqual([86_400_000, 86_400_000, 86_400_000]);
     deleteHighlightTerm(db, a.id, term.id);
     deleteTermGroup(db, a.id);
     expect(snapshot()).toEqual(before);

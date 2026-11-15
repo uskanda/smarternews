@@ -23,6 +23,7 @@ import type {
   Registration,
   SeenArticle,
 } from "../api.ts";
+import { listSortSchema } from "../api.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { searchBody } from "../search/plain.ts";
@@ -133,6 +134,7 @@ function toSummary(row: Row): ArticleSummary {
     unconfirmed: bool(row.unconfirmed),
     firstPublishedAt: str(row.first_published_at),
     updatedAt: str(row.updated_at),
+    rankAt: str(row.rank_at),
     revision: num(row.revision),
     isRead: bool(row.is_read),
     readAt: strOrNull(row.read_at),
@@ -619,9 +621,9 @@ export function recordFullContentFailure(db: Database, id: number, failure: { re
 type CursorValue = [string, number];
 
 /**
- * A cursor holds the time and id of the last article of a page and, for a list oldest first, that order. A
- * cursor without an order is of a list newest first, as every cursor was before lists had an order, or of a
- * list whose order is fixed.
+ * A cursor holds the time and id of the last article of a page and, for a list oldest first or by relevance,
+ * that order; by relevance the time is `rank_at`. A cursor without an order is of a list newest first, as every
+ * cursor was before lists had an order, or of a list whose order is fixed.
  */
 function encodeCursor(value: CursorValue, order: ListSort = "newest"): string {
   return Buffer.from(JSON.stringify(order === "newest" ? value : [...value, order])).toString("base64url");
@@ -639,7 +641,7 @@ function decodeCursor(cursor: string, order: ListSort = "newest"): CursorValue {
     Array.isArray(value) &&
     typeof value[0] === "string" &&
     typeof value[1] === "number" &&
-    (value.length === 2 || (value.length === 3 && (value[2] === "newest" || value[2] === "oldest")))
+    (value.length === 2 || (value.length === 3 && listSortSchema.safeParse(value[2]).success))
   ) {
     const given = (value[2] as ListSort | undefined) ?? "newest";
     if (given !== order) {
@@ -708,8 +710,8 @@ function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): A
 
 /**
  * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
- * by start time, soonest first; every other list by last update, newest first unless oldest first is asked
- * for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
+ * by start time, soonest first; every other list by last update, newest first unless oldest first or relevance
+ * is asked for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   if (query.recentlyRead === "true") return listRecentlyRead(db, query, now);
@@ -717,6 +719,9 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const byEventStart = query.kind === "event";
   if (byEventStart) refuseOrder(query, "kind=event");
   const oldestFirst = query.order === "oldest";
+  // By `rank_at`: the time moved later by the relevance. Its value changes only when the scores are worked out
+  // again or the terms match differently, so a cursor keeps its place as any other does.
+  const byRelevance = query.order === "relevance";
   const params: Array<string | number> = [];
   // A feed article that filters hide is in no list.
   const where: string[] = [`NOT ${hiddenByFilters("a")}`];
@@ -757,11 +762,19 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
         ? "(a.event_starts_at > ? OR (a.event_starts_at = ? AND a.id > ?))"
         : oldestFirst
           ? "(a.updated_at > ? OR (a.updated_at = ? AND a.id > ?))"
-          : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
+          : byRelevance
+            ? "(a.rank_at < ? OR (a.rank_at = ? AND a.id < ?))"
+            : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
     );
     params.push(value, value, id);
   }
-  const order = byEventStart ? "a.event_starts_at ASC, a.id ASC" : oldestFirst ? "a.updated_at ASC, a.id ASC" : "a.updated_at DESC, a.id DESC";
+  const order = byEventStart
+    ? "a.event_starts_at ASC, a.id ASC"
+    : oldestFirst
+      ? "a.updated_at ASC, a.id ASC"
+      : byRelevance
+        ? "a.rank_at DESC, a.id DESC"
+        : "a.updated_at DESC, a.id DESC";
   const rows = db
     .prepare(
       `SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")}
@@ -772,7 +785,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const last = page.at(-1);
   const nextCursor =
     rows.length > limit && last
-      ? encodeCursor([str(byEventStart ? last.event_starts_at : last.updated_at), num(last.id)], query.order)
+      ? encodeCursor([str(byEventStart ? last.event_starts_at : byRelevance ? last.rank_at : last.updated_at), num(last.id)], query.order)
       : null;
   return { items: page.map(toSummary), nextCursor, asOf: now };
 }

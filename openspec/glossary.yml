@@ -554,3 +554,19 @@ terms:
     definition: "ダイジェストのカテゴリの区画の1行が、内容の出典にした記事。"
     aliases: ["参照記事"]
     en: "source article"
+  - term: "関連度"
+    definition: "記事が利用者の関心にどれだけ近いかを表す0から1の値で、生成記事は重要度から、配信記事は行動の値と語の一致から決まる。"
+    aliases: ["関連スコア"]
+    en: "relevance"
+  - term: "関連度順"
+    definition: "記事の時刻に関連度×48時間を足した並びの値の大きい順に並べる、記事の一覧の並び順。"
+    aliases: ["関連度の並び", "マジックソート"]
+    en: "relevance order"
+  - term: "行動の値"
+    definition: "購読フィードごとの、直近30日の記事を開いたかスターを付けた割合を、最も高い購読フィードを1として比べた0から1の値。"
+    aliases: ["行動スコア"]
+    en: "behaviour score"
+  - term: "スケジューラー"
+    definition: "サーバーの中で定期に動き、スケジュールの実行、掃除、行動の値の計算を始める処理。"
+    aliases: []
+    en: "scheduler"

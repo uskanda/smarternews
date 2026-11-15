@@ -687,6 +687,122 @@ describe("the list oldest first", () => {
   });
 });
 
+describe("the list by relevance", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function listing() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const feed = seedFeed(db, { categoryId: category });
+    const article = (title: string, at: string, importance = 3) => generated(db, category, { title, importance }, at);
+    const feedArticle = (title: string, at: string, scores: { feed?: number; term?: number } = {}) => {
+      const id = seedFeedArticle(db, feed, { title, at });
+      db.prepare("UPDATE articles SET feed_score = ?, term_match = ? WHERE id = ?").run(scores.feed ?? 0, scores.term ?? 0, id);
+      return id;
+    };
+    const titles = (query: ArticleListQuery) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, feed, article, feedArticle, titles };
+  }
+
+  it("moves an article later by 48 hours times its relevance, and gives each article that time", () => {
+    const s = listing();
+    s.article("Important, a day old", ago(24 * HOUR), 5);
+    s.article("Minor, an hour old", ago(HOUR), 1);
+    s.article("Important, three days old", ago(72 * HOUR), 5);
+    s.article("Middling, ten hours old", ago(10 * HOUR), 3);
+    expect(s.titles({ order: "relevance" })).toEqual([
+      "Important, a day old",
+      "Middling, ten hours old",
+      "Minor, an hour old",
+      "Important, three days old",
+    ]);
+    const items = listArticles(s.db, { order: "relevance" }, NOW).items;
+    expect(items[0]!.rankAt).toBe(new Date(new Date(NOW).getTime() + 24 * HOUR).toISOString());
+    expect(items[2]!.rankAt).toBe(items[2]!.updatedAt);
+    // The newest first list is as it was.
+    expect(s.titles({})).toEqual(["Minor, an hour old", "Middling, ten hours old", "Important, a day old", "Important, three days old"]);
+  });
+
+  it("weighs a feed article half by its feed's behaviour and half by a term match, on the scale of importance", () => {
+    const s = listing();
+    s.feedArticle("Plain", ago(HOUR));
+    s.feedArticle("Term", ago(HOUR), { term: 1 });
+    s.feedArticle("Often opened feed", ago(2 * HOUR), { feed: 1 });
+    s.feedArticle("Both", ago(30 * HOUR), { feed: 1, term: 1 });
+    s.article("Importance 5, ten hours old", ago(10 * HOUR), 5);
+    // Term: +24h → 23h ahead. Often opened: +24h → 22h. Both: +48h → 18h. Importance 5: +48h → 38h.
+    expect(s.titles({ category: s.category, order: "relevance" })).toEqual([
+      "Importance 5, ten hours old",
+      "Term",
+      "Often opened feed",
+      "Both",
+      "Plain",
+    ]);
+    expect(s.titles({ feed: s.feed, unread: "true", order: "relevance" })).toEqual(["Term", "Often opened feed", "Both", "Plain"]);
+    expect(s.titles({ origin: "generated", order: "relevance" })).toEqual(["Importance 5, ten hours old"]);
+  });
+
+  it("pages by relevance without repeating or skipping articles of the same rank", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) {
+      if (index % 2 === 0) s.article(`#${index}`, ago((index % 10) * HOUR), (index % 5) + 1);
+      else s.feedArticle(`#${index}`, ago((index % 7) * HOUR), { feed: (index % 3) / 2, term: index % 4 === 1 ? 1 : 0 });
+    }
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    const ranks: string[] = [];
+    let cursor: string | undefined;
+    let last: ReturnType<typeof listArticles> | undefined;
+    do {
+      last = listArticles(s.db, { order: "relevance", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(last.items.length);
+      seen.push(...last.items.map((item) => item.title));
+      ranks.push(...last.items.map((item) => item.rankAt));
+      cursor = last.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    expect(ranks).toEqual([...ranks].sort().reverse());
+  });
+
+  it("keeps the order of a page already read when an article is opened before the next page", () => {
+    const s = listing();
+    for (let index = 0; index < 6; index += 1) s.feedArticle(`#${index}`, ago((index + 1) * HOUR));
+    const first = listArticles(s.db, { order: "relevance", limit: 3 }, NOW);
+    recordArticleOpened(s.db, first.items[2]!.id, NOW);
+    const next = listArticles(s.db, { order: "relevance", limit: 3, cursor: first.nextCursor! }, NOW);
+    expect([...first.items, ...next.items].map((item) => item.title)).toEqual(["#0", "#1", "#2", "#3", "#4", "#5"]);
+  });
+
+  it("refuses a cursor of another order, and the order for the events and the recently read articles", () => {
+    const s = listing();
+    for (let index = 0; index < 5; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR));
+    const newest = listArticles(s.db, { limit: 2 }, NOW);
+    const relevance = listArticles(s.db, { order: "relevance", limit: 2 }, NOW);
+    expect(listArticles(s.db, { order: "relevance", limit: 2, cursor: relevance.nextCursor! }, NOW).items.map((item) => item.title)).toEqual([
+      "#2",
+      "#3",
+    ]);
+    for (const query of [
+      { order: "relevance", cursor: newest.nextCursor! },
+      { cursor: relevance.nextCursor! },
+      { order: "oldest", cursor: relevance.nextCursor! },
+      { kind: "event", order: "relevance" },
+      { recentlyRead: "true", order: "relevance" },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid" }));
+    }
+  });
+
+  it("marks every unread article read by the time the list was read, however few were loaded", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) s.article(`#${index}`, ago((index + 1) * 60_000), (index % 5) + 1);
+    const page = listArticles(s.db, { category: s.category, unread: "true", order: "relevance", limit: 50 }, NOW);
+    expect(markArticlesRead(s.db, { categoryId: s.category, before: page.asOf }, NOW)).toHaveLength(120);
+  });
+});
+
 describe("open times", () => {
   const TEN = "2026-03-01T10:00:00.000Z";
   const ELEVEN = "2026-03-01T11:00:00.000Z";
