@@ -250,7 +250,11 @@ export function ArticleView({
 }) {
   const query = useArticle(id);
   const article = query.data;
-  const translating = useArticleTranslation(article);
+  // The content is translated once the full content arrived, or once it is known not to come. An article that
+  // waits for it counts as fetching from the start: the fetch is asked for by the reader page, after this renders.
+  const translating = useArticleTranslation(article, {
+    wait: fullContent.fetching || (article?.fullContentStatus === "waiting" && !fullContent.requestFailed),
+  });
   const summaryState = useSummaryRequest(article);
   const groups = useTermMatcher();
 

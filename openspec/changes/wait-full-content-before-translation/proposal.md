@@ -10,7 +10,7 @@
 - サーバーは、記事の本文を翻訳して保存する直前に元の文（題と、全文または配信された内容）が変わっていたら、新しい文で一度だけ翻訳し直す。2回目も変わっていたら、今までどおり失敗する。
 - 翻訳し直しは、同じ記事の進行中の翻訳を待つ依頼にも及ぶ。途中で届いた2つ目の依頼も、新しい文の訳を受け取る。
 - Webの画面は、全文の取得中と、記事が全文を待っている間は、本文を翻訳する操作を呼ばない。全文が届いたら全文を、取得に失敗したときと依頼に応答がなかったときは配信された内容を翻訳する。
-- 待つ間、画面は「翻訳しています。」を出さず、「全文を取得しています。」だけを出す。
+- 待つ間、画面は翻訳の途中の表示を出さず、全文の取得の途中の表示だけを出す。
 
 ## Capabilities
 
@@ -26,5 +26,6 @@
 ## Impact
 
 - `packages/core/src/translation/service.ts`（記事の翻訳）とそのテスト
-- `apps/web/src/api/queries.ts`（`useArticleTranslation`）、`apps/web/src/reader/ArticleView.tsx`、`apps/web/src/reader/full-content.test.tsx`
+- `apps/web/src/api/queries.ts`（`useArticleTranslation`）
+- `apps/web/src/reader/ArticleView.tsx`とそのテスト`apps/web/src/reader/full-content.test.tsx`
 - APIの形は変わらない。Androidアプリは変えない
