@@ -47,8 +47,7 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.token !== null) window.localStorage.setItem("smarternews.token", options.token ?? API_TOKEN);
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
-  // The requests whose answers wait until the test lets them through: matched against "METHOD path".
-  const holds: { match: (request: string) => boolean; gate: Promise<void> }[] = [];
+  const holds: Hold[] = [];
   let path = options.route ?? "/";
   let go: (delta: number) => void = () => {
     throw new Error("The app has not rendered its router yet.");
@@ -56,12 +55,15 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.browserHistory) window.history.replaceState(null, "", path);
   const view = render(
     <App
-      fetchImpl={async (input, init) => {
+      fetchImpl={(input, init) => {
         const request = `${init?.method ?? "GET"} ${input}`;
         requests.push(request);
-        if (options.offline?.()) throw new TypeError("fetch failed");
-        for (const hold of holds.filter((entry) => entry.match(request))) await hold.gate;
-        return server.app.request(input, init);
+        if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
+        const response = server.app.request(input, init);
+        const hold = holds.find((entry) => entry.match(request));
+        if (!hold) return response;
+        hold.held += 1;
+        return hold.gate.then(() => response);
       }}
       initialEntries={options.browserHistory ? undefined : [path]}
       now={() => server.clock()}
@@ -85,19 +87,26 @@ export function renderApp(options: RenderOptions = {}) {
       await act(async () => go(-1));
     },
     /**
-     * Keeps the answers to the matching requests ("METHOD path", such as "DELETE /api/v1/topics/3") waiting, as a
-     * slow server would, until `release` lets them through. The requests are counted in `requests` when sent.
+     * Holds back the responses of the requests that `match`, sent from now until `release`. The server answers
+     * each request when it is sent; the app gets the answer only once released, as from a slow connection.
+     * A string matches the whole "METHOD path" (such as "DELETE /api/v1/topics/3"), a pattern any part of it.
      */
-    hold: (match: string | RegExp) => {
-      let open!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        open = resolve;
-      });
-      const entry = { match: (request: string) => (typeof match === "string" ? request === match : match.test(request)), gate };
-      holds.push(entry);
+    hold: (match: string | RegExp | ((request: string) => boolean)) => {
+      let open: () => void = () => {};
+      const matches =
+        typeof match === "function"
+          ? match
+          : typeof match === "string"
+            ? (request: string) => request === match
+            : (request: string) => match.test(request);
+      const hold: Hold = { match: matches, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
+      holds.push(hold);
       return {
+        /** How many responses are held back. */
+        held: () => hold.held,
+        /** Passes the held responses on, and the later ones at once. */
         release: async () => {
-          holds.splice(holds.indexOf(entry), 1);
+          holds.splice(holds.indexOf(hold), 1);
           await act(async () => {
             open();
             await new Promise((resolve) => setTimeout(resolve, 0));
@@ -106,4 +115,10 @@ export function renderApp(options: RenderOptions = {}) {
       };
     },
   };
+}
+
+interface Hold {
+  match: (request: string) => boolean;
+  held: number;
+  gate: Promise<void>;
 }

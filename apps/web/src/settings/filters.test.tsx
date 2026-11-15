@@ -1,7 +1,7 @@
 import { createFilter, insertFeed, listFilters, updateFilter, type FilterCondition, type FilterCreate } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
@@ -22,6 +22,22 @@ function withArticles() {
   seedFeedArticle(server.db, feed.id, { title: "特売の予告", at: at(3) });
   seedFeedArticle(server.db, feed.id, { title: "新製品", at: at(4), author: "広報部" });
   return { server, feed };
+}
+
+/** Holds every answer to a count of the filter until the returned function is called. */
+function holdPreview(server: TestServer): () => void {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const original = server.app.request.bind(server.app);
+  server.app.request = (async (input: string, init?: RequestInit) => {
+    const response = await original(input, init);
+    if (String(input).includes("/filters/preview")) await gate;
+    return response;
+  }) as typeof server.app.request;
+  onTestFinished(() => {
+    server.app.request = original;
+  });
+  return release;
 }
 
 const rowOf = async (text: string) => {
@@ -112,6 +128,40 @@ describe("adding a filter", () => {
     expect(await within(form).findByRole("status")).toHaveTextContent("保存すると、3件が隠れます。");
     expect(listFilters(server.db)).toEqual([]);
     expect(await within(await section("フィルターの一覧")).findByText("フィルターはまだありません。")).toBeInTheDocument();
+  });
+
+  it("drops a count that comes back after the conditions changed, and counts the new ones when asked", async () => {
+    const { server } = withArticles();
+    const release = holdPreview(server);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+    const form = await section("フィルターの追加");
+
+    await user.type(within(form).getByLabelText("条件1の値"), "特売");
+    await user.click(within(form).getByRole("button", { name: "隠れる件数を確かめる" }));
+    await user.type(within(form).getByLabelText("条件1の値"), "の予告");
+    release();
+
+    await waitFor(() => expect(within(form).getByRole("button", { name: "隠れる件数を確かめる" })).toBeEnabled());
+    expect(within(form).queryByRole("status")).toBeNull();
+    await user.click(within(form).getByRole("button", { name: "隠れる件数を確かめる" }));
+    expect(await within(form).findByRole("status")).toHaveTextContent("保存すると、1件が隠れます。");
+  });
+
+  it("drops a refusal that comes back after the conditions changed", async () => {
+    const { server } = withArticles();
+    const release = holdPreview(server);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+    const form = await section("フィルターの追加");
+
+    await user.selectOptions(within(form).getByLabelText("条件1の方法"), "regex");
+    fireEvent.change(within(form).getByLabelText("条件1の値"), { target: { value: "(特売" } });
+    await user.click(within(form).getByRole("button", { name: "隠れる件数を確かめる" }));
+    fireEvent.change(within(form).getByLabelText("条件1の値"), { target: { value: "(特売)" } });
+    release();
+
+    await waitFor(() => expect(within(form).getByRole("button", { name: "隠れる件数を確かめる" })).toBeEnabled());
+    expect(within(form).queryByText("正規表現として読めません。かっこや記号の対応を確かめてください。")).toBeNull();
+    expect(within(form).getByLabelText("条件1の値")).not.toHaveAttribute("aria-invalid");
   });
 
   it("shows why a regular expression is refused next to its condition, and keeps what was typed", async () => {
