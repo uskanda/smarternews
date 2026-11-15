@@ -447,6 +447,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
+| `POST /api/v1/feeds/fetch` | Ask for every enabled feed to be fetched now |
 | `GET /api/v1/feeds/:id/stats` | What became of the articles it delivered in the last 30 days |
 | `GET /api/v1/feeds/opml` | Download every subscribed feed as OPML |
 | `POST /api/v1/feeds/opml` | Subscribe to the feeds of an OPML document sent as the request body |
@@ -462,6 +463,8 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application
   -d '{"intervalMinutes":null,"enabled":false}' "$API/api/v1/feeds/1"
 
 curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/feeds/1/fetch"
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/feeds/fetch"
 
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/feeds/opml" > feeds.opml
 curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$API/api/v1/feeds/opml"
@@ -492,6 +495,7 @@ Fields of a feed:
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `goneAt` | When the first of the 410 (Gone) answers in a row came, or `null`. Any other answer empties it. The feed stays enabled and goes on being fetched |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused. After a 429 or 503 answer with a `Retry-After` header, no earlier than the time it gives, one day ahead at most |
+| `fetchRequestedAt` | When a fetch of every feed was asked for, while this feed still waits for its turn; `nextFetchAt` is then the same time. `null` once it was fetched, and for a feed nothing asked for |
 | `articleCount`, `starredCount` | How many articles it has, and how many of them are starred |
 | `annotatedCount` | How many of its articles have an annotation, each counted once. Deleting the feed deletes them with their annotations |
 | `lastNewItemAt` | When a fetch last found an item the feed had never listed, or `null` when none was found yet |
@@ -499,6 +503,8 @@ Fields of a feed:
 | `recentArticleCount` | How many articles it delivered in the last 30 days: `received` of its stats |
 
 A fetch that fails is recorded on the feed and not in the run history. After each failure in a row the wait before the next try doubles, up to one day; a success brings it back to the interval. A 429 or 503 answer with a `Retry-After` header, in seconds or as a date, also puts the next scheduled try no earlier than the time it gives, one day ahead at most; `fetch` itself does not wait for it. A 410 answer sets `goneAt`, and the feed goes on being fetched like after any failure. `fetch` answers with `status` (`updated`, `not_modified` or `failed`), `created` (the number of new articles), `error` when it failed, and `feed`.
+
+`POST /api/v1/feeds/fetch` asks for every enabled feed at once and answers before anything is fetched, with `requested`, `skipped` and `requestedAt`. The `requested` feeds are fetched without waiting for their interval or for the longer wait after failures, one at a time and in the same line as the scheduled fetches, so the pause between requests to one host holds. A feed that waits for the time a `Retry-After` gave is left out and counted in `skipped`; `POST /api/v1/feeds/:id/fetch` still fetches it. Paused feeds are in neither count. Until a feed is fetched it carries `fetchRequestedAt`, so a client learns that all are done when no feed has one. A fetch, successful or not, empties it, and the next fetch is scheduled from that one as usual. Pausing a feed empties it too. The requests survive a restart: what was not fetched before is fetched after it.
 
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
