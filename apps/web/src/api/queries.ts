@@ -7,12 +7,23 @@ import type {
   ArticleSearchQuery,
   ArticleSummary,
   AttentionList,
+  Feed,
   Highlight,
   HighlightCreate,
   ListSort,
   ListViews,
 } from "@smarternews/core/api";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import {
+  hashKey,
+  partialMatchKey,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { createTermMatcher, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../app/context.ts";
@@ -36,10 +47,23 @@ export function useCategories() {
   return useQuery({ queryKey: ["categories"], queryFn: () => api.categories() });
 }
 
-/** The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles. */
+/** How often the feeds are fetched again while some wait for a fetch of all: its end shows within this time. */
+export const FETCH_ALL_REFRESH_MS = 3_000;
+
+/** Whether the feed still waits for its turn in a fetch of all. */
+export const awaitsFetch = (feed: Pick<Feed, "fetchRequestedAt">): boolean => feed.fetchRequestedAt !== null;
+
+/**
+ * The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles.
+ * While some wait for a fetch of all they are fetched again every few seconds, which is how its end is noticed.
+ */
 export function useFeeds() {
   const { api } = useApp();
-  return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
+  return useQuery({
+    queryKey: ["feeds"],
+    queryFn: () => api.feeds(),
+    refetchInterval: (query) => (query.state.data?.some(awaitsFetch) ? FETCH_ALL_REFRESH_MS : REFRESH_MS),
+  });
 }
 
 /** The filters with what each hides now. Asked for again whenever a filter, a feed or a category changes. */
@@ -363,20 +387,87 @@ export interface ArticleFlagChange {
   missed?: boolean;
 }
 
+/** A query to fetch again once no change of flags is under way: `exact` for one that was stopped. */
+interface StaleQuery {
+  queryKey: QueryKey;
+  exact: boolean;
+}
+
+/** What the changes of flags under way share. */
+interface FlagSending {
+  /** Changes sent or waiting for their turn, and not yet answered. */
+  pending: number;
+  /** For each article, answered once the last change of it that was made is answered. */
+  lines: Map<number, Promise<void>>;
+  /** For each change waiting to be sent, what it waits for: the answer to the change of its article before it. */
+  turns: Map<ArticleFlagChange, Promise<void>>;
+  /** What to fetch again once every change is answered, by the hash of its key. */
+  stale: Map<string, StaleQuery>;
+}
+
 /**
  * Sets the read state or the star of an article. The screen changes at once, in every list and in the article.
  * When the server cannot store it, the change is undone everywhere it was made, also for an article whose own
  * entry is not cached, and `onFailed` gets what was sent, to say so and to send it again.
+ *
+ * A fetch of a list or of the article under way when the change is made is stopped, so that an answer read
+ * before the change cannot show the old flags again; the queries stopped are fetched again once every change is
+ * answered, together with those the changes made stale. Changes of one article are sent one after another, each
+ * once the one before is answered, so that the server stores the last one made. Changes of other articles do not
+ * wait for them.
  */
 export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
   const { api } = useApp();
   const client = useQueryClient();
+  const sending = useRef<FlagSending>({ pending: 0, lines: new Map(), turns: new Map(), stale: new Map() });
+  const markStale = (queryKey: QueryKey, exact = false) => {
+    const { stale } = sending.current;
+    const hash = hashKey(queryKey);
+    // A key to fetch again with what is under it stays so when it is stopped as well.
+    if (stale.get(hash)?.exact === false) return;
+    stale.set(hash, { queryKey, exact });
+  };
   return useMutation({
-    mutationFn: ({ id, ...patch }: ArticleFlagChange) => api.updateArticle(id, patch),
-    onMutate: ({ id, ...patch }) => {
-      patchArticle(client, id, patch);
+    mutationFn: async (change: ArticleFlagChange) => {
+      // `onMutate` keys the turn by the very object this gets.
+      await sending.current.turns.get(change);
+      const { id, ...patch } = change;
+      return api.updateArticle(id, patch);
     },
-    onError: (_error, change) => {
+    onMutate: async (change) => {
+      const state = sending.current;
+      state.pending += 1;
+      // The turn is taken before anything is awaited, so that the changes of an article keep the order they were made in.
+      const before = state.lines.get(change.id) ?? Promise.resolve();
+      let answered: () => void = () => {};
+      const line = new Promise<void>((resolve) => (answered = resolve));
+      state.lines.set(change.id, line);
+      state.turns.set(change, before);
+      const { id, ...patch } = change;
+      const outcome = { failed: false };
+      const fetching = client
+        .getQueryCache()
+        .findAll({ fetchStatus: "fetching", predicate: ({ queryKey: [kind, key] }) => kind === "articles" || (kind === "article" && key === id) });
+      // A first load and a load of the next page are not stopped. Stopped, a list of unread articles would come
+      // without the article just read in it, and the key that went past the last row would go back to the first
+      // row of the last page. The change is put into what they bring instead.
+      const loading = (query: (typeof fetching)[number]) => query.state.data === undefined || query.state.fetchMeta?.fetchMore !== undefined;
+      for (const query of fetching.filter(loading)) {
+        void query.promise?.then(
+          () => {
+            if (!outcome.failed) patchArticle(client, id, patch);
+          },
+          () => {},
+        );
+      }
+      const stopped = fetching.filter((query) => !loading(query));
+      for (const query of stopped) markStale(query.queryKey, true);
+      await Promise.all(stopped.map((query) => client.cancelQueries({ queryKey: query.queryKey, exact: true })));
+      patchArticle(client, id, patch);
+      return { answered, line, outcome };
+    },
+    onError: (_error, change, context) => {
+      if (context) context.outcome.failed = true;
       patchArticle(client, change.id, {
         ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
         ...(change.starred !== undefined ? { starred: !change.starred } : {}),
@@ -384,17 +475,34 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
       });
       onFailed(change);
     },
-    onSettled: (_data, _error, variables) => {
-      void client.invalidateQueries({ queryKey: ["counts"] });
+    onSettled: (_data, _error, variables, context) => {
+      const state = sending.current;
+      state.turns.delete(variables);
+      if (context) {
+        context.answered();
+        if (state.lines.get(variables.id) === context.line) state.lines.delete(variables.id);
+      }
+      markStale(["counts"]);
       // A miss changes how many misses a topic has had since its interpretation.
-      if (variables.missed !== undefined) void client.invalidateQueries({ queryKey: ["topics"] });
+      if (variables.missed !== undefined) markStale(["topics"]);
       // Misses and stars are counted in the stats of the topics.
-      if (variables.missed !== undefined || variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["topic-stats"] });
+      if (variables.missed !== undefined || variables.starred !== undefined) markStale(["topic-stats"]);
       // A star changes which articles the starred list holds.
-      if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
+      if (variables.starred !== undefined) markStale(["articles"]);
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
       // the row it changed until the reader refreshes; it shows the new list once the reader comes back to it.
-      else if (variables.isRead !== undefined) void client.invalidateQueries({ queryKey: ["articles", { recentlyRead: "true" }] });
+      else if (variables.isRead !== undefined) markStale(["articles", { recentlyRead: "true" }]);
+      state.pending -= 1;
+      // A fetch for one change could read the server before a later change is stored, and show the old flags again.
+      if (state.pending > 0) return;
+      const stale = [...state.stale.values()];
+      state.stale.clear();
+      const whole = stale.filter((query) => !query.exact);
+      for (const query of stale) {
+        // A query under a key fetched again as a whole is not fetched a second time.
+        if (query.exact && whole.some((other) => partialMatchKey(query.queryKey, other.queryKey))) continue;
+        void client.invalidateQueries({ queryKey: query.queryKey, exact: query.exact });
+      }
     },
   });
 }
@@ -433,12 +541,15 @@ export function useUsage() {
   return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
 }
 
+/** How many runs the run history asks for, newest first. The list has no way to load older ones. */
+export const RUNS_LIMIT = 100;
+
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */
 export function useRuns(category?: number) {
   const { api } = useApp();
   return useQuery({
     queryKey: ["runs", category ?? null],
-    queryFn: () => api.runs({ category, limit: 100 }),
+    queryFn: () => api.runs({ category, limit: RUNS_LIMIT }),
     refetchInterval: (query) =>
       query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 3000 : REFRESH_MS,
   });
@@ -589,13 +700,17 @@ export function useAnnotationActions() {
       stale();
     },
     async saveNote(articleId: number, text: string): Promise<ArticleNote> {
+      const before = client.getQueryData<Article>(["article", articleId])?.annotations.note ?? null;
       const note = await api.saveArticleNote(articleId, text);
       patchArticle(articleId, (annotations) => ({ ...annotations, note }));
-      const listed = client
-        .getQueryData<AnnotationPages>(["annotations"])
-        ?.pages.some((page) => page.items.some((item) => item.id === note.id));
+      const list = client.getQueryData<AnnotationPages>(["annotations"]);
+      const listed = list?.pages.some((page) => page.items.some((item) => item.id === note.id));
       if (listed) patchList((items) => items.map((item) => (item.id === note.id ? { ...item, note: note.text } : item)));
-      else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
+      else if (before?.id === note.id) {
+        // A note written before keeps the place of when it was made, on a page not loaded yet, where the next page
+        // brings it with the new text. When no page is left to load, the list is older than the note and is read again.
+        if (list && list.pages.at(-1)?.nextCursor == null) void client.invalidateQueries({ queryKey: ["annotations"] });
+      } else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
       stale();
       return note;
     },
