@@ -17,11 +17,20 @@ export function sortKeyFor(target: ListTarget): SortKey {
  * An unread list stops returning an article once it is read; keeping it lets the user go back to it. The
  * list of recently read articles orders by read time, and keeps an article put back to unread with the read
  * time it had, so that it stays where it was. A list oldest first puts what it keeps in the same order.
+ *
+ * An article the list still returns shows as the list returns it, title and read time included, with the read
+ * state and the star of the kept copy: a list fetched before the change reached the server does not undo it. When
+ * the list has it updated after the kept copy, a follow-up rewrote it and made it unread again on the server, so
+ * it shows as the list returns it.
  */
 export function mergeKept(fetched: ArticleSummary[], kept: ArticleSummary[], key: SortKey = byUpdate, sort: ListSort = "newest"): ArticleSummary[] {
   if (kept.length === 0) return fetched;
   const byId = new Map(fetched.map((item) => [item.id, item]));
-  for (const item of kept) byId.set(item.id, item);
+  for (const item of kept) {
+    const listed = byId.get(item.id);
+    if (listed === undefined) byId.set(item.id, item);
+    else if (listed.updatedAt <= item.updatedAt) byId.set(item.id, { ...listed, isRead: item.isRead, starred: item.starred });
+  }
   const newestFirst = (a: ArticleSummary, b: ArticleSummary) => key(b).localeCompare(key(a)) || b.id - a.id;
   return [...byId.values()].sort(sort === "oldest" ? (a, b) => newestFirst(b, a) : newestFirst);
 }

@@ -12,10 +12,16 @@ describe("mergeKept", () => {
     expect(mergeKept(fetched, kept).map((entry) => entry.id)).toEqual([3, 2, 1]);
   });
 
-  it("uses the kept copy when the list still returns the article, so its read state shows", () => {
-    const fetched = [item(2, "2026-03-01T12:01:00Z", false)];
-    const kept = [item(2, "2026-03-01T12:01:00Z", true)];
-    expect(mergeKept(fetched, kept)).toEqual([item(2, "2026-03-01T12:01:00Z", true)]);
+  it("shows the read state and the star of the kept copy on the row the list still returns", () => {
+    const fetched = [{ ...item(2, "2026-03-01T12:01:00Z", false), starred: false, translatedTitle: "訳した見出し" }];
+    const kept = [{ ...item(2, "2026-03-01T12:01:00Z", true), starred: true, translatedTitle: null }];
+    expect(mergeKept(fetched, kept)).toEqual([{ ...item(2, "2026-03-01T12:01:00Z", true), starred: true, translatedTitle: "訳した見出し" }]);
+  });
+
+  it("uses the row the list returns as it is when it was updated after the kept copy: a follow-up shows unread", () => {
+    const fetched = [{ ...item(2, "2026-03-01T13:00:00Z", false), title: "Follow-up", starred: false }];
+    const kept = [{ ...item(2, "2026-03-01T12:01:00Z", true), starred: true }];
+    expect(mergeKept(fetched, kept)).toEqual(fetched);
   });
 
   it("orders articles with the same update time by identifier, newest first", () => {
@@ -37,6 +43,16 @@ describe("mergeKept", () => {
     const merged = mergeKept(fetched, kept, (entry) => entry.readAt ?? "");
     expect(merged.map((entry) => entry.id)).toEqual([3, 2, 1]);
     expect(merged[1]).toMatchObject({ isRead: false, readAt: "2026-03-01T12:02:00Z" });
+  });
+
+  it("orders an article the list still returns by the read time the list gives it", () => {
+    const read = (id: number, readAt: string) => ({ ...item(id, "2026-03-01T00:00:00Z", true), readAt });
+    // Article 1 was kept when read at 12:01, and read again at 12:04: the list has the later time.
+    const fetched = [read(1, "2026-03-01T12:04:00Z"), read(3, "2026-03-01T12:03:00Z")];
+    const kept = [read(1, "2026-03-01T12:01:00Z")];
+    const merged = mergeKept(fetched, kept, (entry) => entry.readAt ?? "");
+    expect(merged.map((entry) => entry.id)).toEqual([1, 3]);
+    expect(merged[0]).toMatchObject({ readAt: "2026-03-01T12:04:00Z" });
   });
 
   it("orders the recently read articles by read time, and every other list by update", () => {
