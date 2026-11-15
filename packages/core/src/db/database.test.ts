@@ -953,7 +953,7 @@ describe("the migration to the relevance order", () => {
 
   it("keeps the list views and the articles, allows the order, and ranks every article by its time and relevance", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "032")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const now = "2026-01-01T00:00:00.000Z";
@@ -976,7 +976,7 @@ describe("the migration to the relevance order", () => {
     const views = () => db.prepare("SELECT * FROM list_views ORDER BY id").all();
     const before = views();
 
-    const file = readdirSync(SHIPPED).find((name) => name.startsWith("032_"))!;
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("033_"))!;
     copyFileSync(join(SHIPPED, file), join(dir, file));
     migrate(db, dir);
 

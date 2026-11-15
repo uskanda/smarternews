@@ -30,7 +30,7 @@
 
 ### 並びの値は、時刻に関連度×2日を足した仮想の生成列にする
 
-移行032で、`articles` に次の列を足す。
+移行033で、`articles` に次の列を足す。032は、先に main に入った `add-fetch-all-feeds` が使っている。
 
 ```sql
 ALTER TABLE articles ADD COLUMN feed_score REAL NOT NULL DEFAULT 0;
@@ -129,7 +129,7 @@ CREATE INDEX articles_origin_rank ON articles (origin, rank_at, id);
 
 ## Migration Plan
 
-- 移行032は、列と索引を足し、`list_views` を作り直す。既存の記事の `feed_score` と `term_match` は0で、`rank_at` は既存の値から計算される。
+- 移行033は、列と索引を足し、`list_views` を作り直す。既存の記事の `feed_score` と `term_match` は0で、`rank_at` は既存の値から計算される。
 - 起動直後のスケジューラーの最初の計算で、行動の値が入る。語の一致は、移行のあとで最初に語を変えるまで0のままになるので、同じ計算で全配信記事を照合し直す。照合し直しは値の変わる記事だけを書くので、毎日行っても並びは変わらない。
 - 古いWebとアプリは `order=relevance` を送らない。関連度順を保存すると、古いアプリは表示の設定の応答を読めない。Webは同じサーバーが配信するので同時に新しくなる。アプリは新しい版を入れてから関連度順を選ぶ。
 - 戻すときは、サーバーを前の版に戻す。`list_views` に `relevance` の行が残ると前の版の型の検査で読めなくなるので、戻す前に関連度順の項目を新しい順に戻す。

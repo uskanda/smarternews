@@ -31,7 +31,7 @@
 
 ## Impact
 
-- データベース：移行032で、`articles` に `feed_score`、`term_match`、仮想の生成列 `rank_at` と、その索引を足す。`feeds` に `relevance_score` を足す。`list_views` を作り直して `relevance` を許す。
+- データベース：移行033で、`articles` に `feed_score`、`term_match`、仮想の生成列 `rank_at` と、その索引を足す。`feeds` に `relevance_score` を足す。`list_views` を作り直して `relevance` を許す。
 - `packages/core`：一覧の型と `listArticles` に関連度順を足す。関連度の計算の関数を足し、配信記事の保存、見出しの翻訳の保存、色付けの語の操作、スケジューラーから呼ぶ。設定ファイルは型の変更で `relevance` を読み書きする。
 - `packages/client`：`mergeKept`、`targetFilter`。
 - `apps/web`、`apps/mobile`：並び順のメニュー。

@@ -2,7 +2,7 @@
 
 ## 1. 保存の形
 
-- [x] 1.1 移行032で、`articles` と `feeds` に関連度の列と索引を足し、`list_views` を作り直して `relevance` を許す。移行の前からある行が残り、`rank_at` が入ることを `database.test.ts` で確かめる
+- [x] 1.1 移行033で、`articles` と `feeds` に関連度の列と索引を足し、`list_views` を作り直して `relevance` を許す。移行の前からある行が残り、`rank_at` が入ることを `database.test.ts` で確かめる
 
 ## 2. 関連度の計算
 

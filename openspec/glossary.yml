@@ -570,3 +570,7 @@ terms:
     definition: "サーバーの中で定期に動き、スケジュールの実行、掃除、行動の値の計算を始める処理。"
     aliases: []
     en: "scheduler"
+  - term: "プレースホルダー"
+    definition: "入力欄が空のときに欄の中に薄く表示する、入れるものを示す文字列。"
+    aliases: ["プレースホルダ"]
+    en: "placeholder"
