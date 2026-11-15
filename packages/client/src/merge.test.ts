@@ -46,6 +46,16 @@ describe("mergeKept", () => {
   });
 });
 
+describe("mergeKept by relevance", () => {
+  it("puts an article read during the visit back in its place by the time the relevance order sorts by", () => {
+    const ranked = (id: number, updatedAt: string, rankAt: string, isRead = false) => ({ ...item(id, updatedAt, isRead), rankAt });
+    const fetched = [ranked(3, "2026-03-01T10:00:00Z", "2026-03-03T10:00:00Z"), ranked(1, "2026-03-01T12:00:00Z", "2026-03-01T12:00:00Z")];
+    const kept = [ranked(2, "2026-03-01T08:00:00Z", "2026-03-02T08:00:00Z", true)];
+    expect(mergeKept(fetched, kept, undefined, "relevance").map((entry) => entry.id)).toEqual([3, 2, 1]);
+    expect(mergeKept(fetched, kept).map((entry) => entry.id)).toEqual([1, 3, 2]);
+  });
+});
+
 describe("mergeKept oldest first", () => {
   it("puts an article read during the visit back in its place among the oldest first", () => {
     const fetched = [item(1, "2026-03-01T12:00:00Z"), item(3, "2026-03-01T12:02:00Z"), item(5, "2026-03-01T12:02:00Z")];

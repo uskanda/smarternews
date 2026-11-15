@@ -55,6 +55,8 @@ export function Field({
   hint?: ReactNode;
   error?: string | null;
   multiline?: boolean;
+  /** Reaches the input or the text area, for putting the focus there. */
+  ref?: Ref<HTMLInputElement & HTMLTextAreaElement>;
 } & InputHTMLAttributes<HTMLInputElement> &
   TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const id = useId();

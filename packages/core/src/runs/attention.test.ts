@@ -6,6 +6,7 @@ import { recordSearchAttempt } from "../db/search-attempts.ts";
 import { updateTopic } from "../db/topics.ts";
 import { pipelineHarness, type Harness } from "../testing/pipeline.ts";
 import { dismissAttention, listAttention } from "./attention.ts";
+import { restoreLlmSearch } from "./llm-search-reduction.ts";
 
 const DAY = 86_400_000;
 const FEED = "https://example.org/feed.xml";
@@ -235,6 +236,34 @@ describe("a search that keeps finding nothing", () => {
     ]);
 
     updateTopic(h.db, topic.id, { sources: { llmSearch: false } });
+
+    expect(items(h, "empty-search")).toEqual([]);
+  });
+
+  it("goes away for web search by the model when the user restores it, and comes back with a new key after three more", () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Topic", { llmSearch: true });
+    for (let i = 0; i < 4; i++) searched(h, topic, 0, { kind: "llm-search" });
+    const [first] = items(h, "empty-search");
+
+    restoreLlmSearch(h.db, topic.id, h.clock);
+    expect(items(h, "empty-search")).toEqual([]);
+    searched(h, topic, 0, { kind: "llm-search" });
+    searched(h, topic, 0, { kind: "llm-search" });
+    expect(items(h, "empty-search")).toEqual([]);
+    searched(h, topic, 0, { kind: "llm-search" });
+
+    const [again] = items(h, "empty-search");
+    expect(again).toMatchObject({ topicId: topic.id, source: "llm-search" });
+    expect(again!.key).not.toBe(first!.key);
+  });
+
+  it("counts for web search by the model only the searches made with the topic's current text", () => {
+    const h = pipelineHarness();
+    const topic = h.addTopic("Topic", { llmSearch: true });
+    for (let i = 0; i < 3; i++) searched(h, topic, 0, { kind: "llm-search" });
+    const rewritten = updateTopic(h.db, topic.id, { text: "Topic, rewritten" });
+    for (let i = 0; i < 2; i++) searched(h, rewritten, 0, { kind: "llm-search" });
 
     expect(items(h, "empty-search")).toEqual([]);
   });
