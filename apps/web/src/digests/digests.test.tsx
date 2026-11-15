@@ -1,6 +1,6 @@
 import { updateSettings } from "@smarternews/core";
 import { materialLines, type FakeHandler } from "@smarternews/core/testing";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -102,6 +102,56 @@ describe("the digests page", () => {
 
     expect(path()).toBe(`/all/${evening}`);
     expect(await screen.findByRole("heading", { name: "Evening story" })).toBeInTheDocument();
+  });
+
+  /** Scrolls a region as the reader would. */
+  function scroll(region: HTMLElement, top: number) {
+    region.scrollTop = top;
+    fireEvent.scroll(region);
+  }
+
+  it("comes back where it was left after a source article on a narrow screen", async () => {
+    const { server } = await twoDigests();
+    const { user, path, back } = renderApp({ server, route: "/digests", width: 390 });
+    await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Evening summary");
+    scroll(page().parentElement!, 360);
+
+    await user.click(within(page()).getByRole("link", { name: "Evening story" }));
+    expect(path()).toMatch(/^\/all\/\d+$/);
+    await back();
+
+    await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Evening summary");
+    expect(page().parentElement!.scrollTop).toBe(360);
+  });
+
+  it("puts back both the list and the digest on a wide screen", async () => {
+    const { server } = await twoDigests();
+    const { user, back } = renderApp({ server, route: "/digests", width: 1280 });
+    await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Evening summary");
+    scroll(page().parentElement!, 280);
+    scroll(past().parentElement!, 90);
+
+    await user.click(within(page()).getByRole("link", { name: "Evening story" }));
+    await screen.findByRole("heading", { name: "Evening story" });
+    await back();
+
+    await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Evening summary");
+    expect(page().parentElement!.scrollTop).toBe(280);
+    expect(past().parentElement!.scrollTop).toBe(90);
+  });
+
+  it("starts from the top when the page is opened anew", async () => {
+    const { server } = await twoDigests();
+    const { user } = renderApp({ server, route: "/digests", width: 1280 });
+    await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Evening summary");
+    scroll(page().parentElement!, 280);
+
+    await user.click(within(page()).getByRole("link", { name: "Evening story" }));
+    await screen.findByRole("heading", { name: "Evening story" });
+    await user.click(screen.getByRole("link", { name: /^ダイジェスト/ }));
+
+    await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Evening summary");
+    expect(page().parentElement!.scrollTop).toBe(0);
   });
 
   it("says that there is no digest yet and when digests are made", async () => {

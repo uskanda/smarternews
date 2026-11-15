@@ -9,7 +9,7 @@
 
 - 自前のスクロール領域の位置を、履歴の項目ごとに覚えて、戻ったときに戻す。実行の詳細、ダイジェスト（狭い画面の1つの領域、広い画面の一覧と本文の2つの領域）、フィルターの画面で使う。再読み込みすると忘れる。
 - 実行の詳細の「トピックごとにまとめる」をURLのパラメーター `?group=topic` に持つ。切り替えでは履歴を増やさない。
-- フィルターの画面で開いている「隠している記事」を、URLのパラメーター `?shown=`（フィルターの番号をカンマでつないだもの）に持つ。開閉では履歴を増やさない。すでにないフィルターや数でない番号は無視する。
+- フィルターの画面で開いている「隠している記事」を、URLのパラメーター `?shown=`（例：`?shown=3,5`）にフィルターの番号の並びで持つ。開閉では履歴を増やさない。すでにないフィルターや数でない番号は無視する。
 
 ## Capabilities
 
@@ -26,5 +26,7 @@
 ## Impact
 
 - `apps/web/src/lib/scroll-memory.ts`（新規）：履歴の項目ごとにスクロール位置を覚えて戻すフック。
-- `apps/web/src/runs/RunPage.tsx`、`apps/web/src/digests/DigestPage.tsx`、`apps/web/src/settings/FiltersPage.tsx`：上のフックの利用と、URLのパラメーターへの状態の移し替え。
+- `apps/web/src/runs/RunPage.tsx`：上のフックの利用と、まとめる切り替えのURLへの移し替え。
+- `apps/web/src/digests/DigestPage.tsx`：上のフックの利用。
+- `apps/web/src/settings/FiltersPage.tsx`：上のフックの利用と、開いた「隠している記事」のURLへの移し替え。
 - サーバー、API、`packages/client`、Androidアプリに変更はない。

@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { useDigest, useDigests, useSettings, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useLayout } from "../lib/layout.ts";
+import { useScrollMemory } from "../lib/scroll-memory.ts";
 import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const TRIGGER_LABEL: Record<DigestTrigger, string> = { schedule: "定時", "catch-up": "補完", manual: "手動" };
@@ -154,6 +155,12 @@ export function DigestPage() {
   const selected = named ?? items[0]?.id ?? null;
   const digest = useDigest(selected);
   const notFound = digest.error instanceof ApiError && digest.error.kind === "not_found";
+  // Back from a source article, the digest and the list are where they were left. They are ready to be put
+  // back once the digest shown has come, or will not come.
+  const ready = digests.isSuccess && (selected === null || !digest.isPending);
+  const narrowRegion = useScrollMemory("digest", ready);
+  const listRegion = useScrollMemory("digest-list", ready);
+  const bodyRegion = useScrollMemory("digest-body", ready);
 
   const list = items.length > 0 ? <DigestList items={items} selected={selected} timeZone={timeZone} /> : null;
   const shown = notFound ? (
@@ -181,14 +188,18 @@ export function DigestPage() {
       ) : null}
       {items.length > 0 ? (
         layout === "narrow" ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-2xl overflow-y-auto px-lg py-xl">
+          <div ref={narrowRegion} className="flex min-h-0 flex-1 flex-col gap-2xl overflow-y-auto px-lg py-xl">
             {shown}
             {list}
           </div>
         ) : (
           <div className="flex min-h-0 flex-1">
-            <div className="w-list-min shrink-0 overflow-y-auto border-r border-outline p-sm">{list}</div>
-            <div className="min-w-0 flex-1 overflow-y-auto px-2xl py-xl">{shown}</div>
+            <div ref={listRegion} className="w-list-min shrink-0 overflow-y-auto border-r border-outline p-sm">
+              {list}
+            </div>
+            <div ref={bodyRegion} className="min-w-0 flex-1 overflow-y-auto px-2xl py-xl">
+              {shown}
+            </div>
           </div>
         )
       ) : null}
