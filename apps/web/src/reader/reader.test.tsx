@@ -261,6 +261,40 @@ describe("narrowing and paging", () => {
     expect(path()).toBe("/unread?min=4");
   });
 
+  it("says that the importance filter leaves nothing, and takes the filter off on request", async () => {
+    const server = makeServer();
+    articles(server, server.category("Security").id, [{ title: "Routine", importance: 3 }]);
+    const { user, path } = renderApp({ server, route: "/c/security?min=4" });
+
+    expect(await screen.findByText("重要度4以上の記事はありません。")).toBeInTheDocument();
+    expect(screen.queryByText(/既読も表示すると/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "絞り込みを外す" }));
+
+    expect(await screen.findByRole("link", { name: /Routine/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "重要度4以上だけ" })).not.toBeChecked();
+    expect(path()).toBe("/c/security");
+  });
+
+  it("says the same in 未読, in place of the link to the full list", async () => {
+    const server = makeServer();
+    articles(server, server.category().id, [{ title: "Routine", importance: 3 }]);
+    renderApp({ server, route: "/unread?min=4" });
+
+    expect(await screen.findByText("重要度4以上の記事はありません。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "絞り込みを外す" })).toBeInTheDocument();
+    expect(screen.queryByText("未読の記事はありません。")).not.toBeInTheDocument();
+  });
+
+  it("does not suggest showing read articles when they are shown already", async () => {
+    const server = makeServer();
+    server.category("Security");
+    renderApp({ server, route: "/c/security?read=1" });
+
+    expect(await screen.findByText("ここに出す記事はありません。")).toBeInTheDocument();
+    expect(screen.queryByText(/既読も表示すると/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "絞り込みを外す" })).not.toBeInTheDocument();
+  });
+
   it("loads further articles as the end of the list comes into view, until all 120 are shown once", async () => {
     const server = makeServer();
     const category = server.category();

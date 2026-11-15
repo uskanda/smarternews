@@ -94,7 +94,23 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
 };
 const EMPTY: ArticleSummary[] = [];
 
-function EmptyList({ view, hasSources }: { view: View; hasSources: boolean }) {
+/**
+ * What an empty list says. The importance filter comes first, since it may be why nothing is left; read articles
+ * are not suggested once they are shown.
+ */
+function EmptyList({
+  view,
+  hasSources,
+  includeRead,
+  importantOnly,
+  onWiden,
+}: {
+  view: View;
+  hasSources: boolean;
+  includeRead: boolean;
+  importantOnly: boolean;
+  onWiden: () => void;
+}) {
   const link = "text-primary underline underline-offset-4";
   if (!hasSources) {
     return (
@@ -103,6 +119,14 @@ function EmptyList({ view, hasSources }: { view: View; hasSources: boolean }) {
         <Link to="/settings" className={link}>
           設定でカテゴリを追加する
         </Link>
+      </div>
+    );
+  }
+  if (importantOnly) {
+    return (
+      <div className="flex flex-col items-start gap-sm p-lg type-body-md">
+        <p>重要度4以上の記事はありません。</p>
+        <Button onClick={onWiden}>絞り込みを外す</Button>
       </div>
     );
   }
@@ -131,7 +155,9 @@ function EmptyList({ view, hasSources }: { view: View; hasSources: boolean }) {
       ? "スターを付けた記事はありません。"
       : view === "all"
         ? "記事はまだありません。カテゴリを実行すると、ここに並びます。"
-        : "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
+        : includeRead
+          ? "ここに出す記事はありません。"
+          : "ここに出す記事はありません。既読も表示すると、読んだ記事を確かめられます。";
   return <p className="p-lg type-body-md text-on-surface-muted">{text}</p>;
 }
 
@@ -882,7 +908,13 @@ export function ReaderPage({ view }: { view: View }) {
         ) : null}
         {isMention && (mentionName.length === 0 || (mentionList.isSuccess && items.length === 0)) ? <MentionEmpty name={mentionName} /> : null}
         {!isSearch && !isMention && list.isSuccess && items.length === 0 ? (
-          <EmptyList view={view} hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0} />
+          <EmptyList
+            view={view}
+            hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0}
+            includeRead={readToggle && includeRead}
+            importantOnly={importantOnly}
+            onWiden={() => toggleParam("min", "4", false)}
+          />
         ) : null}
         <ul ref={listRows}>
           {items.map((item) => (
