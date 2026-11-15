@@ -76,9 +76,11 @@ export function App({ fetchImpl, initialEntries, now, onLocation, onHistory }: A
       if (next === null) queryClient.clear();
       setTokenState(next);
     };
+    const getToken = () => tokenRef.current;
     return {
-      api: createApi({ fetchImpl, getToken: () => tokenRef.current, onUnauthorized: () => setToken(null) }),
+      api: createApi({ fetchImpl, getToken, onUnauthorized: () => setToken(null) }),
       now: now ?? (() => new Date()),
+      getToken,
       clearToken: () => setToken(null),
       setToken,
     };
