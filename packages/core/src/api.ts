@@ -1492,9 +1492,37 @@ export type Usage = z.infer<typeof usageSchema>;
 
 // ---- digests -----------------------------------------------------------------------------------
 
-/** What made a digest: a time of the schedule, a time missed while the server was down, or the reader. */
-export const digestTriggerSchema = z.enum(["schedule", "catch-up", "manual"]);
+/**
+ * What made a digest: a time of the schedule, a time missed while the server was down, the reader asking for
+ * one now, or the reader asking for one of a list of articles.
+ */
+export const digestTriggerSchema = z.enum(["schedule", "catch-up", "manual", "list"]);
 export type DigestTrigger = z.infer<typeof digestTriggerSchema>;
+
+/**
+ * The list a digest is asked for: the articles of a name, a search with its narrowing as the search screen
+ * has it, or the starred articles. What the reader sends; the server looks the articles up itself.
+ */
+export const digestTargetRequestSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("mention"), name: mentionArticlesQuerySchema.shape.name }),
+  z.object({
+    type: z.literal("search"),
+    q: z.string(),
+    category: z.number().int().optional(),
+    feed: z.number().int().optional(),
+    unread: z.literal(true).optional(),
+  }),
+  z.object({ type: z.literal("starred") }),
+]);
+export type DigestTargetRequest = z.infer<typeof digestTargetRequestSchema>;
+
+/** The list a digest was made of, with the label the screens show in place of the period. */
+export const digestTargetSchema = z.object({
+  type: z.enum(["mention", "search", "starred"]),
+  /** For example 名前：OpenAI, 検索：半導体（カテゴリ：Tech、未読だけ）, スター. */
+  label: z.string(),
+});
+export type DigestTarget = z.infer<typeof digestTargetSchema>;
 
 /** One line of a category section, with the ids of the articles it is drawn from. */
 export const digestLineSchema = z.object({ text: z.string(), articleIds: z.array(z.number().int()) });
@@ -1517,6 +1545,11 @@ export const digestSummarySchema = z.object({
   /** How many articles the model was given. */
   articleCount: z.number().int(),
   executiveSummary: z.string(),
+  /**
+   * The list a digest of the trigger `list` was made of; null for a digest of a period. The period of a list
+   * digest runs from its oldest article to its newest.
+   */
+  target: digestTargetSchema.nullable(),
 });
 export type DigestSummary = z.infer<typeof digestSummarySchema>;
 
@@ -1527,7 +1560,11 @@ export const digestSchema = digestSummarySchema.extend({
 });
 export type Digest = z.infer<typeof digestSchema>;
 
-export const digestListQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(200).optional() });
+export const digestListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  /** `period`: only the digests of a period, leaving out those made of a list. Every digest when left out. */
+  kind: z.enum(["period"]).optional(),
+});
 export type DigestListQuery = z.infer<typeof digestListQuerySchema>;
 
 export const digestListSchema = z.object({
@@ -1543,6 +1580,13 @@ export type DigestList = z.infer<typeof digestListSchema>;
  */
 export const digestRequestResultSchema = z.object({ status: z.enum(["queued", "limit", "budget", "empty"]) });
 export type DigestRequestResult = z.infer<typeof digestRequestResultSchema>;
+
+/**
+ * The body of asking for a digest now. Without a target, the digest of the period that ends now; with one, the
+ * digest of that list, made of its newest articles, at most 200.
+ */
+export const digestRequestSchema = z.object({ target: digestTargetRequestSchema.optional() });
+export type DigestRequest = z.infer<typeof digestRequestSchema>;
 
 // ---- translation -------------------------------------------------------------------------------
 

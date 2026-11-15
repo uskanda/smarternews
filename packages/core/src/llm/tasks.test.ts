@@ -375,6 +375,16 @@ describe("the digest task", () => {
     expect(prompt).toContain('"id":10');
     expect(prompt).toContain("importance 4 and 5");
     expect(prompt).toContain("executiveSummary only");
+    expect(prompt).toContain("received in a period");
+  });
+
+  it("speaks of the articles of a list instead of a period when given a scope, and quotes the scope as material", () => {
+    const { prompt } = tasks.digest.build({ ...digestInput, scope: "名前：OpenAI" });
+    expect(prompt).not.toContain("Period:");
+    expect(prompt).not.toContain("received in a period");
+    expect(prompt).toContain("articles of one list the reader chose");
+    expect(prompt).toContain("名前：OpenAI");
+    expect(count(prompt, "<material>")).toBe(3);
   });
 
   it("takes an executive summary of up to 800 characters and up to five lines a section", () => {

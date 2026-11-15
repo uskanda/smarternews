@@ -9,13 +9,19 @@ import { loadCheckedAt, loadDigestNotifiedId, loadNotifySetting, saveCheckedAt, 
 
 export const CHANNEL = "articles";
 
+/**
+ * The latest digest that may be notified: one of a period. A digest the reader asked for of a list on the web is
+ * not notified; they see it come on the digests page.
+ */
+const DIGESTS_NOTIFIED = { limit: 1, kind: "period" } as const;
+
 /** Nothing that exists on the server now is notified later: neither the articles nor the digests. */
 export async function setBaseline(api: Api): Promise<void> {
   // Only generated articles are notified, so only they are looked at.
   const newest = await api.articles({ origin: "generated", limit: 1, includeEnded: "true" });
   await saveCheckedAt(baselineFrom(newest.items));
   try {
-    const latest = await api.digests({ limit: 1 });
+    const latest = await api.digests(DIGESTS_NOTIFIED);
     await saveDigestNotifiedId(latest.items[0]?.id ?? 0);
   } catch {
     // Without a mark the next check records where the digests stand, still without notifying.
@@ -27,7 +33,7 @@ export type CheckResult = "notified" | "nothing" | "skipped" | "failed";
 
 /** Shows the latest digest when it is newer than the one the device knows of. True when it did. */
 async function checkDigest(api: Api, setting: NotifySetting): Promise<boolean> {
-  const [list, notifiedId] = await Promise.all([api.digests({ limit: 1 }), loadDigestNotifiedId()]);
+  const [list, notifiedId] = await Promise.all([api.digests(DIGESTS_NOTIFIED), loadDigestNotifiedId()]);
   const latest = list.items[0];
   const plan = planDigestNotification({ setting, latest: latest ? { id: latest.id, executiveSummary: latest.executiveSummary } : null, notifiedId });
   if (plan.notification) {

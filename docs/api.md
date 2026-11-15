@@ -838,20 +838,24 @@ The `key` names the kind, the target and what set the item off: the failed run, 
 |---|---|
 | `GET /api/v1/digests` | List the digests, the latest first |
 | `GET /api/v1/digests/:id` | Read one digest |
-| `POST /api/v1/digests` | Make a digest of the period that ends now |
+| `POST /api/v1/digests` | Make a digest of the period that ends now, or of a list of articles |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests"
-curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests?limit=1"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"target":{"type":"search","q":"semiconductor","unread":true}}' "$API/api/v1/digests"
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests?limit=1&kind=period"
 ```
 
-A digest sums up the generated and feed articles of a period in one call of the `digest` task. The server makes one at the times of `digestSchedule` in the settings, and makes up at start-up for a time missed in the last six hours. A period runs from the end of the last digest to the time the digest is started, at most 24 hours back.
+A digest sums up the generated and feed articles of a period in one call of the `digest` task. The server makes one at the times of `digestSchedule` in the settings, and makes up at start-up for a time missed in the last six hours. A period runs from the end of the last digest of a period to the time the digest is started, at most 24 hours back.
 
-The list answers `items` and `building`, `true` while a digest is being made. `limit` takes 1 to 200 and is 30 by default. Each item has `id`, `createdAt`, `periodStart`, `periodEnd`, `trigger` (`schedule`, `catch-up` or `manual`), `articleCount`, the number of articles the model read, and `executiveSummary`.
+A digest of a list sums up the articles of a list the reader chose instead: the newest articles of the list, at most 200, which the server looks up itself as the list's screen does. The body of `POST` names the list in `target`: `{"type":"mention","name":"..."}` for the articles of a name, `{"type":"search","q":"...","category":1,"feed":2,"unread":true}` for a search, whose `category`, `feed` and `unread` are optional, and `{"type":"starred"}` for the starred articles. Its trigger is `list`, its period runs from its oldest article to its newest, and it is left out when the period of the next digest of a period is worked out. It counts towards `digestsPerDay` like any other digest.
+
+The list answers `items` and `building`, `true` while a digest is being made. `limit` takes 1 to 200 and is 30 by default; `kind=period` leaves out the digests of a list. Each item has `id`, `createdAt`, `periodStart`, `periodEnd`, `trigger` (`schedule`, `catch-up`, `manual` or `list`), `articleCount`, the number of articles the model read, `executiveSummary`, and `target`: for a digest of a list its `type` and the `label` the screens show in place of the period, such as `検索：semiconductor（未読だけ）`; `null` for a digest of a period.
 
 One digest adds `sections` and `articles`. A section has `categoryId`, `categoryName`, the name the category had when the digest was made, and `lines`, each with `text` and `articleIds`, the articles it is drawn from. Ids the model was not given are dropped before the digest is stored. `articles` gives `id`, `title` and `origin` of the source articles that are still stored; an id of a deleted article stays in its line and is missing from `articles`. Digests are deleted after 180 days.
 
-`POST` answers at once. It answers 202 with `{"status":"queued"}` when a digest is started, and 409 while one is being made. It answers 200 with `limit` when the day has made `digestsPerDay` calls for digests, `budget` when the provider of the task costs money and the budget period is used up, and `empty` when the period holds no article; the model is not called then. Digests are never in the RSS output.
+`POST` answers at once. It answers 202 with `{"status":"queued"}` when a digest is started, and 409 while one is being made. It answers 200 with `limit` when the day has made `digestsPerDay` calls for digests, `budget` when the provider of the task costs money and the budget period is used up, and `empty` when the period or the list holds no article; the model is not called then. Digests are never in the RSS output.
 
 ## Providers
 

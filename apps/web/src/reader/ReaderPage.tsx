@@ -1,4 +1,4 @@
-import type { Article, ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
+import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
@@ -62,6 +62,7 @@ import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
+import { SummarizeList } from "./SummarizeList.tsx";
 
 export type View =
   | "unread"
@@ -258,6 +259,22 @@ export function ReaderPage({ view }: { view: View }) {
   // The articles of a name: every one, read ones included, newest first, whatever the entry chosen before.
   const mentionName = isMention ? (search.get("name") ?? "").trim() : "";
   const mentionList = useMentionArticles(mentionName, isMention && mentionName.length > 0);
+  // The lists that can be summed up in a digest: a search with words, the articles of a name, the starred articles.
+  // A search that names a category waits for it, as the search itself does.
+  const digestTarget: DigestTargetRequest | null =
+    view === "starred"
+      ? { type: "starred" }
+      : isMention && mentionName.length > 0
+        ? { type: "mention", name: mentionName }
+        : isSearch && words.length > 0 && (searchSlug === null || searchCategory !== undefined)
+          ? {
+              type: "search",
+              q: words,
+              ...(searchCategory ? { category: searchCategory.id } : {}),
+              ...(searchFeedId !== undefined ? { feed: searchFeedId } : {}),
+              ...(searchUnread ? { unread: true as const } : {}),
+            }
+          : null;
 
   const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
@@ -794,6 +811,7 @@ export function ReaderPage({ view }: { view: View }) {
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
           {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
           {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}
+          {digestTarget ? <SummarizeList target={digestTarget} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">

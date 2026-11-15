@@ -346,6 +346,22 @@ describe("the digest notification", () => {
     expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "ダイジェスト", body: "Evening.", data: { digestId: latest } }]);
   });
 
+  it("does not notify a digest made of a list, nor take it for the digest last known", async () => {
+    const server = await makeServer();
+    await server.digest({ executiveSummary: "Before." });
+    await watching(server);
+    await server.advance(MINUTE);
+    await server.digest({ executiveSummary: "Of the starred.", trigger: "list", target: { type: "starred", label: "スター" } });
+
+    expect(await runCheck()).toBe("nothing");
+    expect(notifications().shown).toEqual([]);
+
+    await server.advance(MINUTE);
+    const evening = await server.digest({ executiveSummary: "Evening." });
+    await runCheck();
+    expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "ダイジェスト", body: "Evening.", data: { digestId: evening } }]);
+  });
+
   it("does not count toward the articles that are folded into one", async () => {
     const server = await makeServer();
     const category = await server.category();

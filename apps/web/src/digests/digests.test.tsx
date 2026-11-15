@@ -73,6 +73,24 @@ describe("the digests page", () => {
     expect(within(past()).getAllByRole("link")[1]).toHaveTextContent("07:00");
   });
 
+  it("shows a digest of a list with the label 一覧 and what it was made of, in place of its period", async () => {
+    const { server, script, morning } = await twoDigests();
+    server.db.prepare("UPDATE articles SET starred = 1 WHERE id = ?").run(morning);
+    server.clock.set("2026-03-01T20:00:00.000Z");
+    script.say("List summary");
+    expect(server.digests.buildFromList({ type: "starred" })).toBe("queued");
+    await server.digests.idle();
+    renderApp({ server, route: "/digests" });
+
+    expect(await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("List summary")).toBeInTheDocument();
+    expect(page()).toHaveTextContent("対象 スター・記事 1件");
+    expect(page()).not.toHaveTextContent("期間");
+    const first = within(past()).getAllByRole("link")[0]!;
+    expect(first).toHaveTextContent("一覧");
+    expect(first).toHaveTextContent("スター");
+    expect(within(past()).getAllByRole("link")[1]).toHaveTextContent("手動");
+  });
+
   it("opens a past digest from the list, and opens it again after a reload", async () => {
     const { server } = await twoDigests();
     const first = renderApp({ server, route: "/digests" });

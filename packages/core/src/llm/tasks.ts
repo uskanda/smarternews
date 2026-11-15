@@ -525,6 +525,11 @@ export interface DigestInput {
   timeZone: string;
   periodStart: string;
   periodEnd: string;
+  /**
+   * The list the articles were taken from, as the screens label it, for a digest the reader asked for of a list.
+   * Left out for a digest of a period: the prompt then speaks of the period.
+   */
+  scope?: string;
   /** The categories a section may be written for, in their order. Each has articles among the input. */
   categories: Array<{ id: number; name: string }>;
   articles: Array<{
@@ -559,15 +564,18 @@ const digest: TaskDefinition<DigestInput, DigestOutput> = {
   build: (input) => ({
     system: SYSTEM,
     prompt: [
-      "Task: write a digest of the articles a reader received in a period, so that the reader learns what matters most without reading them all.",
+      input.scope === undefined
+        ? "Task: write a digest of the articles a reader received in a period, so that the reader learns what matters most without reading them all."
+        : "Task: write a digest of the articles of one list the reader chose, so that the reader learns what matters most in it without reading them all.",
       `Output language: ${input.outputLanguage}. Write everything in this language, whatever language the articles use.`,
       `Current time: ${input.now} (reader's time zone: ${input.timeZone})`,
-      `Period: ${input.periodStart} to ${input.periodEnd}`,
+      input.scope === undefined ? `Period: ${input.periodStart} to ${input.periodEnd}` : "",
       reader(input.readerInfo),
       "Categories, one JSON object per line:",
       material(input.categories.map((category) => JSON.stringify(category)).join("\n")),
       "Articles, one JSON object per line. origin is generated for an article written from several sources, with an importance from 1 to 5; feed for an item a subscribed feed delivered, without an importance:",
       material(input.articles.map((article) => JSON.stringify(article)).join("\n")),
+      ...(input.scope === undefined ? [] : ["The list the articles were taken from, as the reader's screen names it:", material(input.scope)]),
       IMPORTANCE,
       "Rules:",
       "- State only what the articles say. Add no background, no opinion and nothing you know from elsewhere.",

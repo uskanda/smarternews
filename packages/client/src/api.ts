@@ -12,6 +12,7 @@ import {
   type DigestList,
   type DigestListQuery,
   type DigestRequestResult,
+  type DigestTargetRequest,
   highlightSchema,
   type AnnotationList,
   type AnnotationListQuery,
@@ -408,8 +409,12 @@ export function createApi(options: ApiOptions) {
     /** The digests, the latest first, and whether one is being made. */
     digests: (filter: DigestListQuery = {}): Promise<DigestList> => json(digestListSchema, `/digests${query(filter)}`),
     digest: (id: number): Promise<Digest> => json(digestSchema, `/digests/${id}`),
-    /** Asks for a digest now. Answers at once: a digest that was started shows in the list when it is made. */
-    requestDigest: (): Promise<DigestRequestResult> => json(digestRequestResultSchema, "/digests", { method: "POST" }),
+    /**
+     * Asks for a digest now: of the period that ends now, or of the list given. Answers at once: a digest that was
+     * started shows in the list when it is made.
+     */
+    requestDigest: (target?: DigestTargetRequest): Promise<DigestRequestResult> =>
+      json(digestRequestResultSchema, "/digests", target === undefined ? { method: "POST" } : body("POST", { target })),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
     usage: (): Promise<Usage> => json(usageSchema, "/usage"),

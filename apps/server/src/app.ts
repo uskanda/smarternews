@@ -41,6 +41,7 @@ import {
   getDigest,
   listDigests,
   digestListQuerySchema,
+  digestRequestSchema,
   ImageFetchError,
   verifyImageProxyPath,
   relayArticleImages,
@@ -507,12 +508,23 @@ export function createApp(deps: AppDeps): Hono {
   // digests
   api.get("/digests", (c) => {
     const query = parse(digestListQuerySchema, c.req.query());
-    const list: DigestList = { items: listDigests(db, { limit: query.limit }), building: digests.building };
+    const list: DigestList = { items: listDigests(db, { limit: query.limit, kind: query.kind }), building: digests.building };
     return c.json(list);
   });
   api.get("/digests/:id", (c) => c.json(getDigest(db, idParam(c, "digest"))));
-  api.post("/digests", (c) => {
-    const status = digests.buildNow();
+  api.post("/digests", async (c) => {
+    // The body is optional: without one, or without a target, the digest of the period that ends now.
+    const text = await c.req.text();
+    let body: unknown = {};
+    if (text.trim().length > 0) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new DomainError("invalid", "the request body is not JSON");
+      }
+    }
+    const { target } = parse(digestRequestSchema, body);
+    const status = target === undefined ? digests.buildNow() : digests.buildFromList(target);
     if (status === "busy") throw new DomainError("conflict", "a digest is being made");
     return c.json({ status }, status === "queued" ? 202 : 200);
   });
