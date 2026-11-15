@@ -66,7 +66,8 @@ function PageChoice({
 }
 
 /**
- * The fields for subscribing to a feed or a page, on the page of feeds and in the dialog above a category's list.
+ * The fields for subscribing to a feed or a page, on the page of feeds and in the dialog above the list of a
+ * category, of feeds or of uncategorized feeds.
  * It starts in `categoryId` when given, and tells `onAdded` once a feed is subscribed.
  */
 export function AddFeedForm({ categories, categoryId = null, onAdded }: { categories: Category[]; categoryId?: number | null; onAdded?: () => void }) {
@@ -76,7 +77,7 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
   const id = useId();
   const initialCategory = categoryId === null ? NO_CATEGORY : String(categoryId);
   const [url, setUrl] = useState("");
-  // Only on the page of feeds: the dialog above a category's list has no guard, and this does nothing there.
+  // Only on the page of feeds: the dialog above a list has no guard, and this does nothing there.
   useUnsaved("購読フィードの追加", url.trim() !== "");
   const [category, setCategory] = useState(initialCategory);
   const [found, setFound] = useState<Array<{ url: string; title: string }> | null>(null);
