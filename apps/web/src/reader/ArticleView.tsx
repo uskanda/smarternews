@@ -224,6 +224,7 @@ export function ArticleView({
   onToggleStar,
   onToggleRead,
   onToggleMiss,
+  onToggleFollowUps,
   fullContent,
   terms,
   focusAnnotation = null,
@@ -241,6 +242,8 @@ export function ArticleView({
   onToggleRead: (article: Article) => void;
   /** Marks a generated article as a miss, or takes the mark away. Not offered for a feed article. */
   onToggleMiss: (article: Article) => void;
+  /** Stops the follow-ups of a generated article, or lets them come again. Not offered for a feed article. */
+  onToggleFollowUps: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
@@ -496,9 +499,14 @@ export function ArticleView({
           </Button>
           <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
           {delivered ? null : (
-            <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
-              {article.missed ? "外れの印を外す" : "外れの印を付ける"}
-            </Button>
+            <>
+              <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
+                {article.missed ? "外れの印を外す" : "外れの印を付ける"}
+              </Button>
+              <Button aria-pressed={article.followUpsStopped} onClick={() => onToggleFollowUps(article)}>
+                {article.followUpsStopped ? "続報の停止を解除する" : "この話題の続報を止める"}
+              </Button>
+            </>
           )}
         </div>
         {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}

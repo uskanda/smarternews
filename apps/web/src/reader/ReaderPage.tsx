@@ -407,7 +407,8 @@ export function ReaderPage({ view }: { view: View }) {
   }
   /** Sends a change of flags again, as the screen of now has it: a retry after a failure. */
   function sendFlags(change: ArticleFlagChange) {
-    const { id, isRead, starred, missed } = change;
+    const { id, isRead, starred, missed, followUpsStopped } = change;
+    if (followUpsStopped !== undefined) return void flags.mutate(change);
     if (missed !== undefined) {
       if (isRead !== undefined) showRead(id, isRead);
       return void flags.mutate(change);
@@ -416,7 +417,7 @@ export function ReaderPage({ view }: { view: View }) {
     if (starred !== undefined) setStar(id, starred);
   }
   flagFailed.current = (change) => {
-    const { id, isRead, starred, missed } = change;
+    const { id, isRead, starred, missed, followUpsStopped } = change;
     // The rows kept in an unread or recently read list are not in the cache, so they are put back here.
     setKept((current) => ({
       key: current.key,
@@ -427,7 +428,11 @@ export function ReaderPage({ view }: { view: View }) {
       ),
     }));
     const message =
-      missed !== undefined
+      followUpsStopped !== undefined
+        ? followUpsStopped
+          ? "続報を止められませんでした"
+          : "続報の停止を解除できませんでした"
+        : missed !== undefined
         ? missed
           ? "外れの印を付けられませんでした"
           : "外れの印を外せませんでした"
@@ -850,6 +855,7 @@ export function ReaderPage({ view }: { view: View }) {
               onToggleStar={toggleStar}
               onToggleRead={(article) => setRead(article.id, !article.isRead)}
               onToggleMiss={toggleMiss}
+              onToggleFollowUps={(article) => flags.mutate({ id: article.id, followUpsStopped: !article.followUpsStopped })}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),

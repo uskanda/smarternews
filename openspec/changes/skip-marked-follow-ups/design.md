@@ -2,11 +2,12 @@
 
 ## Context
 
-動機は proposal.md の Why を参照する。
+動機はproposal.mdの「Why」を参照する。
 
-- 実行の `groupStories` は、ニュースでは直近14日に更新した生成記事、イベントでは終わっていないイベントの記事を集約のタスクに渡し、話題ごとに相手の記事（`existing`）と扱い（`new`、`update`、`follow`）を決める。`writeStories` は、基準未満と件数上限だけを本文の生成の前に除外する。
+- 実行の `groupStories` は、集約のタスクに既存の記事を渡す。ニュースでは直近14日に更新した生成記事、イベントでは終わっていないイベントの記事である。
+- `groupStories` は、話題ごとに相手の記事（`existing`）と扱い（`new`、`update`、`follow`）を決める。`writeStories` は、基準未満と件数上限だけを本文の生成の前に除外する。
 - 外れの印は記事と別の表（`misses`）にあり、記事が消えても残る。
-- 理由の種類は `candidates.reason_code` のCHECK制約に並んでいる。SQLiteではCHECK制約を変えられない。`candidate_topics` が `candidates` を参照している。
+- 理由の種類は `candidates` の `reason_code` のCHECK制約に並んでいる。SQLiteではCHECK制約を変えられない。`candidate_topics` が `candidates` を参照している。
 - トピックの成績は、理由の種類ごとに除外の数を数える。
 
 ## Goals / Non-Goals
@@ -46,7 +47,8 @@
 ### 保存
 
 - `articles.follow_ups_stopped INTEGER NOT NULL DEFAULT 0` を足す。記事が消えれば要らない印なので、列で足りる（grilling Q4）。
-- `candidates` は作り直してCHECK制約に2つの値を足す。先頭に `-- foreign_keys: off` を付け、列、id、索引（`candidates_run`、`candidates_category_status`、`candidates_category_created`）を引き継ぐ。`candidate_topics` の参照は、同じidで行を写すので保たれ、移行の処理が `foreign_key_check` で確かめる。
+- `candidates` は作り直してCHECK制約に2つの値を足す。先頭に `-- foreign_keys: off` を付け、列、id、索引を引き継ぐ。索引は `candidates_run`、`candidates_category_status`、`candidates_category_created` の3つである。
+- `candidate_topics` の参照は、同じidで行を写すので保たれる。移行の処理が `foreign_key_check` で確かめる。
 
 ### API
 
@@ -61,9 +63,9 @@
 
 ## Risks / Trade-offs
 
-- [集約が別の話題を印のある記事に結び付けると、要る候補まで除外する] → 理由の文に相手の記事の見出しを入れ、実行の詳細で確かめられるようにする。誤りなら印を外せば次からは除外されない。
-- [印は最後の更新から14日で集約の入力から外れる] → その後の同じ話題は新しい記事になる。grilling Q1で受け入れた。
-- [`candidates` の作り直しは表全体を写す] → 候補は30日で消えるので行は多くない。移行の前にデータベースの写しを取る既存の仕組みが働く。
+- ［集約が別の話題を印のある記事に結び付けると、要る候補まで除外する］→ 理由の文に相手の記事の見出しを入れ、実行の詳細で確かめられるようにする。誤りなら印を外せば次からは除外されない。
+- ［印は最後の更新から14日で集約の入力から外れる］→ その後の同じ話題は新しい記事になる。grilling Q1で受け入れた。
+- ［`candidates` の作り直しは表全体を写す］→ 候補は30日で消えるので行は多くない。移行の前にデータベースの写しを取る既存の仕組みが働く。
 
 ## Migration Plan
 

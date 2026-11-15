@@ -883,6 +883,40 @@ describe("misses", () => {
   });
 });
 
+describe("stopping follow-ups", () => {
+  it("stops the follow-ups of a generated article with the button and lets them come again, leaving the read state alone", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Long story" });
+    const { user } = renderApp({ server, route: "/unread" });
+    await user.click(await screen.findByRole("link", { name: /Long story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Long story" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await user.keyboard("m");
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+
+    await user.click(screen.getByRole("button", { name: "この話題の続報を止める" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ followUpsStopped: true, isRead: false, missed: false }));
+    expect(await screen.findByRole("button", { name: "続報の停止を解除する" })).toHaveAttribute("aria-pressed", "true");
+    expect(row(/Long story/)).toHaveAttribute("data-read", "false");
+
+    await user.click(screen.getByRole("button", { name: "続報の停止を解除する" }));
+
+    await waitFor(() => expect(getArticle(server.db, id)).toMatchObject({ followUpsStopped: false, isRead: false }));
+    expect(await screen.findByRole("button", { name: "この話題の続報を止める" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("offers no stop on a feed article", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: null }, server.clock);
+    const post = seedFeedArticle(server.db, feed.id, { title: "A post" });
+    renderApp({ server, route: `/all/${post}` });
+    await screen.findByRole("heading", { level: 2, name: "A post" });
+
+    expect(screen.queryByRole("button", { name: "この話題の続報を止める" })).not.toBeInTheDocument();
+  });
+});
+
 describe("a star or a read state the server cannot store", () => {
   /** The toast with the message: the article shows notes of its own as statuses. */
   const toastSays = async (text: string) =>

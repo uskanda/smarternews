@@ -168,15 +168,29 @@ export function useArticle(id: number | null) {
 }
 
 /** Applies a change to one article wherever it is cached: in every list and in its own entry. */
-/** Changes an article in every list and in its own entry. A miss is only on the article: the lists do not show it. */
-function patchArticle(client: QueryClient, id: number, { missed, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed">>): void {
+/**
+ * Changes an article in every list and in its own entry. A miss and stopped follow-ups are only on the article: the
+ * lists do not show them.
+ */
+function patchArticle(
+  client: QueryClient,
+  id: number,
+  { missed, followUpsStopped, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed" | "followUpsStopped">>,
+): void {
   client.setQueriesData<InfiniteData<ArticleList>>({ queryKey: ["articles"] }, (data) =>
     data
       ? { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) })) }
       : data,
   );
   client.setQueryData<Article>(["article", id], (article) =>
-    article ? { ...article, ...patch, ...(missed !== undefined ? { missed } : {}) } : article,
+    article
+      ? {
+          ...article,
+          ...patch,
+          ...(missed !== undefined ? { missed } : {}),
+          ...(followUpsStopped !== undefined ? { followUpsStopped } : {}),
+        }
+      : article,
   );
 }
 
@@ -330,12 +344,13 @@ export function useRecordOpened() {
   );
 }
 
-/** A change of an article's read state, star or miss, as sent to the server. */
+/** A change of an article's read state, star, miss or stopped follow-ups, as sent to the server. */
 export interface ArticleFlagChange {
   id: number;
   isRead?: boolean;
   starred?: boolean;
   missed?: boolean;
+  followUpsStopped?: boolean;
 }
 
 /**
@@ -356,6 +371,7 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
         ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
         ...(change.starred !== undefined ? { starred: !change.starred } : {}),
         ...(change.missed !== undefined ? { missed: !change.missed } : {}),
+        ...(change.followUpsStopped !== undefined ? { followUpsStopped: !change.followUpsStopped } : {}),
       });
       onFailed(change);
     },

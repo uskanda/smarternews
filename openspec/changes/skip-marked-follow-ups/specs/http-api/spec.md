@@ -34,7 +34,7 @@
 
 ### Requirement: 成績の印による除外の数
 
-トピックの成績の応答は、理由の種類が `missed-follow-up` か `stopped-follow-up` の除外された候補の数を `rejectedByMark` で示さなければならない（MUST）。この数は、トピックの候補のうち記事にならなかった数に含める。
+トピックの成績の応答は、`rejectedByMark` で除外された候補の数を示さなければならない（MUST）。数えるのは、理由の種類が `missed-follow-up` か `stopped-follow-up` の候補である。記事にならなかった候補の数は、この数を含む。
 
 #### Scenario: 印による除外を数える
 
