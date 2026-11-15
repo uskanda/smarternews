@@ -90,6 +90,15 @@ describe("the links to the sections", () => {
 
     await waitFor(() => expect(scroll.mock.contexts).toContain(tokens));
     scroll.mockRestore();
+    // The next Tab goes on from the section, not from the links at the top.
+    await waitFor(() => expect(within(tokens).getByRole("heading", { name: "トークン" })).toHaveFocus());
+  });
+
+  it("moves the focus to the heading of the section the address names", async () => {
+    renderApp({ route: "/settings#providers" });
+
+    const providers = await section("プロバイダー");
+    await waitFor(() => expect(within(providers).getByRole("heading", { name: "プロバイダー" })).toHaveFocus());
   });
 });
 
@@ -671,6 +680,7 @@ describe("topics", () => {
 
     await waitFor(() => expect(listTopics(server.db, category.id)).toEqual([]));
     expect(server.db.prepare("SELECT count(*) AS n FROM articles").get()).toEqual({ n: 1 });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "トピック" })).toHaveFocus());
   });
 });
 

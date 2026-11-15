@@ -265,6 +265,7 @@ function TopicEditor({
   focusText = false,
   onClose,
   onRestored,
+  afterRemoval,
 }: {
   topic: Topic;
   canSearch: boolean;
@@ -273,6 +274,8 @@ function TopicEditor({
   onClose: () => void;
   /** The topic went back to a version: the editor is to start again from the values the server answered. */
   onRestored: (topic: Topic) => void;
+  /** Where the focus goes once the topic is deleted and its row, with the button that asked, is gone. */
+  afterRemoval: () => HTMLElement | null;
 }) {
   const { api } = useApp();
   const client = useQueryClient();
@@ -293,7 +296,8 @@ function TopicEditor({
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
   const [closing, setClosing] = useState(false);
-  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  const removed = useRef(false);
+  const dirty =JSON.stringify(form) !== JSON.stringify(initial);
   useUnsaved(`トピック『${topic.text}』の編集`, dirty);
   const text = (name: "text" | "feeds" | "queries" | "language" | "region") => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
@@ -351,6 +355,7 @@ function TopicEditor({
   async function remove() {
     try {
       await api.deleteTopic(topic.id);
+      removed.current = true;
       await refreshTopics(client, topic.categoryId);
       toast({ message: "トピックを削除しました" });
     } catch (caught) {
@@ -461,6 +466,7 @@ function TopicEditor({
         open={confirming}
         title="トピックを削除しますか"
         onDismiss={() => setConfirming(false)}
+        returnFocus={() => (removed.current ? afterRemoval() : null)}
         actions={
           <>
             <Button variant="danger" onClick={() => void remove()}>
@@ -482,7 +488,7 @@ function TopicEditor({
  * open keeps what was typed and takes the focus to the text. The editor opened with the button takes the focus to
  * its first field too, and when the editor closes, the focus goes back to the button.
  */
-function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
+function TopicItem({ topic, canSearch, afterRemoval }: { topic: Topic; canSearch: boolean; afterRemoval: () => HTMLElement | null }) {
   // Following the same link again keeps the hash but gives the move a new key.
   const { hash, key } = useLocation();
   const anchor = `topic-${topic.id}`;
@@ -557,6 +563,7 @@ function TopicItem({ topic, canSearch }: { topic: Topic; canSearch: boolean }) {
               setFocusText(true);
               setRestored(next);
             }}
+            afterRemoval={afterRemoval}
           />
         </div>
       ) : null}
@@ -614,6 +621,7 @@ function Topics({ category }: { category: Category }) {
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   useUnsaved("新しいトピック", text.trim() !== "");
+  const heading = useRef<HTMLHeadingElement>(null);
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -633,13 +641,15 @@ function Topics({ category }: { category: Category }) {
 
   return (
     <section id="topics" aria-label="トピック" className={SECTION}>
-      <h2 className="type-headline-md">トピック</h2>
+      <h2 ref={heading} tabIndex={-1} className="type-headline-md">
+        トピック
+      </h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         追いたい話題を、キーワードか文章で書きます。何を拾い、何を除くかを文章で書くほど、外れが減ります。
       </p>
       {topics.isError ? <ErrorNotice error={topics.error} onRetry={() => void topics.refetch()} /> : null}
       {topics.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">トピックはまだありません。</p> : null}
-      <ul className="max-w-measure">{topics.data?.map((topic) => <TopicItem key={topic.id} topic={topic} canSearch={canSearch} />)}</ul>
+      <ul className="max-w-measure">{topics.data?.map((topic) => <TopicItem key={topic.id} topic={topic} canSearch={canSearch} afterRemoval={() => heading.current} />)}</ul>
       <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
         <Field
           label={NEW_TOPIC.label}
