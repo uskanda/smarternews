@@ -28,7 +28,7 @@ import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent, convertDescription, type ConvertedContent } from "./content.ts";
-import { extractPage, pageFailureReason, parsePage } from "./page.ts";
+import { checkContentSelectorUsable, extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
 const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*";
@@ -399,6 +399,8 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
   const url = normalizeUrl(input.url);
   if (findFeedByUrl(db, url)) throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   checkFeedCategory(db, input.categoryId);
+  // Refused before the URL is fetched, as the category is.
+  if (input.contentSelector) checkContentSelectorUsable(input.contentSelector);
 
   const result = input.format === "page" && input.selectors !== undefined ? await firstPage(deps, url, input.selectors) : await firstFeed(deps, url);
   const now = clock();
@@ -418,6 +420,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         autoSummarize: input.autoSummarize,
         translate: input.translate,
         fetchFullContent: input.fetchFullContent,
+        contentSelector: input.contentSelector,
       },
       clock,
     );

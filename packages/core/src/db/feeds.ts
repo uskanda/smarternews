@@ -2,8 +2,8 @@ import { FEED_STATS_DAYS, pageSelectorsSchema, type Feed, type FeedFormat, type 
 import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
-import { checkSelectorsUsable } from "../feeds/page.ts";
-import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
+import { checkContentSelectorUsable, checkSelectorsUsable } from "../feeds/page.ts";
+import { forgetUnreadFullContent, hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { refreshFiltered } from "./filters.ts";
@@ -94,6 +94,7 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     autoSummarize: bool(row.auto_summarize),
     translate: bool(row.translate),
     fetchFullContent: bool(row.fetch_full_content),
+    contentSelector: strOrNull(row.content_selector),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
@@ -257,6 +258,8 @@ export interface NewFeed {
   translate?: boolean;
   /** Fetch the full content of the articles this feed delivers from now on. */
   fetchFullContent?: boolean;
+  /** The element of an article's page that holds its body. None unless given. */
+  contentSelector?: string | null;
 }
 
 /** Stores a feed without fetching it. Refuses a URL that is already subscribed. */
@@ -271,13 +274,15 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
   if (format === "page" && input.selectors === undefined) {
     throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors", code: "required" }]);
   }
+  if (input.contentSelector) checkContentSelectorUsable(input.contentSelector);
   const now = clock().toISOString();
   const result = db
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
-          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors,
+          content_selector)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -296,6 +301,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.fetchFullContent ? now : null,
       format,
       input.selectors ? JSON.stringify(input.selectors) : null,
+      input.contentSelector || null,
     );
   return getFeed(db, num(result.lastInsertRowid), clock());
 }
@@ -318,7 +324,14 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
   checkSelectorsFit(current.format, patch.selectors);
+  if (patch.contentSelector) checkContentSelectorUsable(patch.contentSelector);
   transaction(db, () => {
+    if (patch.contentSelector !== undefined && patch.contentSelector !== current.contentSelector) {
+      db.prepare("UPDATE feeds SET content_selector = ? WHERE id = ?").run(patch.contentSelector, id);
+      // What was taken out of the pages by the old selector goes, so that the articles still to be read have it
+      // taken again by the new one. Read articles keep theirs: their pages may be gone.
+      forgetUnreadFullContent(db, id);
+    }
     // Used from the next fetch on; the articles stored before stay as they are.
     if (patch.selectors !== undefined) db.prepare("UPDATE feeds SET page_selectors = ? WHERE id = ?").run(JSON.stringify(patch.selectors), id);
     if (patch.title !== undefined) db.prepare("UPDATE feeds SET title = ?, title_set_by_user = 1 WHERE id = ?").run(patch.title, id);

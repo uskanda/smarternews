@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  contentPreviewRequestSchema,
   feedCreateSchema,
   feedUpdateSchema,
   pageSelectorsSchema,
@@ -311,5 +312,26 @@ describe("the selectors of a web feed", () => {
   it("lets a change give selectors but not a format", () => {
     expect(feedUpdateSchema.parse({ selectors: { item: "article" } })).toEqual({ selectors: { item: "article" } });
     expect(feedUpdateSchema.parse({ format: "page" })).toEqual({});
+  });
+});
+
+describe("the content selector of a feed", () => {
+  it("is taken at registration and at a change, trimmed, and null takes it away", () => {
+    expect(feedCreateSchema.parse({ url: "https://example.org/feed.xml", contentSelector: " article .body " })).toMatchObject({ contentSelector: "article .body" });
+    expect(feedUpdateSchema.parse({ contentSelector: "main" })).toEqual({ contentSelector: "main" });
+    expect(feedUpdateSchema.parse({ contentSelector: null })).toEqual({ contentSelector: null });
+    expect(feedUpdateSchema.parse({})).toEqual({});
+  });
+
+  it("refuses a value that is not a CSS selector, an empty one and a long one, naming the field", () => {
+    expect(issuesOf(feedUpdateSchema.safeParse({ contentSelector: "div[" }))).toEqual([{ path: "contentSelector", message: "not a CSS selector" }]);
+    expect(feedUpdateSchema.safeParse({ contentSelector: "  " }).success).toBe(false);
+    expect(feedUpdateSchema.safeParse({ contentSelector: "a".repeat(MAX_SELECTOR_CHARS + 1) }).success).toBe(false);
+  });
+
+  it("asks a preview for a selector or for none", () => {
+    expect(contentPreviewRequestSchema.parse({ contentSelector: "article" })).toEqual({ contentSelector: "article" });
+    expect(contentPreviewRequestSchema.parse({ contentSelector: null })).toEqual({ contentSelector: null });
+    expect(issuesOf(contentPreviewRequestSchema.safeParse({ contentSelector: "div[" }))).toEqual([{ path: "contentSelector", message: "not a CSS selector" }]);
   });
 });

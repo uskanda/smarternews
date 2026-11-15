@@ -30,6 +30,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   autoSummarize: false,
   translate: false,
   fetchFullContent: false,
+  contentSelector: null,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,

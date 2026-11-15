@@ -18,6 +18,8 @@ import {
   listMentionArticles,
   mentionArticlesQuerySchema,
   articleUpdateSchema,
+  contentPreviewRequestSchema,
+  previewContent,
   categoryCreateSchema,
   categoryUpdateSchema,
   createCategory,
@@ -423,7 +425,19 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
-  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
+  api.patch("/feeds/:id", async (c) => {
+    const feed = updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock);
+    // A changed content selector forgot the full content of unread articles: those that wait for it again are
+    // fetched now rather than at the next look. Nothing waits after any other change, and the look is cheap.
+    fullContent.tick();
+    return c.json(feed);
+  });
+  // What a content selector takes out of the page of the feed's newest article. No model is called and nothing is stored.
+  api.post("/feeds/:id/content-preview", async (c) => {
+    const id = idParam(c, "feed");
+    const { contentSelector } = parse(contentPreviewRequestSchema, await jsonBody(c));
+    return c.json(await previewContent({ db, pages: poller.pageFetcher() }, id, contentSelector));
+  });
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
     return c.json(listFeeds(db, clock()));

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
-import { recordArticleOpened } from "./articles.ts";
+import { recordArticleOpened, recordFullContentFailure, saveFullContent } from "./articles.ts";
+import { saveArticleTranslation } from "./translations.ts";
 import { createFilter, deleteFilter } from "./filters.ts";
 import { createCategory, deleteCategory } from "./categories.ts";
 import {
@@ -284,6 +285,86 @@ describe("full content fetching of a feed", () => {
     const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", fetchFullContent: true }, clock);
     expect(updateFeed(db, feed.id, { fetchFullContent: false }, clock).fetchFullContent).toBe(false);
     expect(since(db, feed.id)).toBeNull();
+  });
+});
+
+describe("the content selector of a feed", () => {
+  const full = (db: ReturnType<typeof createTestDb>, id: number) =>
+    db
+      .prepare(
+        `SELECT full_content, full_content_text, full_content_at, full_content_status, full_content_error, full_content_error_detail,
+                (SELECT count(*) FROM article_translations t WHERE t.article_id = a.id) AS translations
+           FROM articles a WHERE id = ?`,
+      )
+      .get(id)!;
+  const withFullContent = (db: ReturnType<typeof createTestDb>, feedId: number, isRead: boolean) => {
+    const id = seedFeedArticle(db, feedId, { isRead });
+    saveFullContent(db, id, { markdown: "Full text", text: "Full text", now: START });
+    saveArticleTranslation(db, id, { segments: [{ original: "Full text", translated: "全文" }], method: "google", truncated: false, now: START });
+    return id;
+  };
+  const cleared = { full_content: null, full_content_text: null, full_content_at: null, full_content_status: null, full_content_error: null, full_content_error_detail: null, translations: 0 };
+
+  it("is none for a feed registered without one, and is stored, changed and taken away", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example" }, clock);
+    expect(feed.contentSelector).toBeNull();
+    const given = insertFeed(db, { url: "https://example.org/b.xml", title: "B", contentSelector: "article .body" }, clock);
+    expect(getFeed(db, given.id).contentSelector).toBe("article .body");
+    expect(updateFeed(db, feed.id, { contentSelector: "main article" }, clock).contentSelector).toBe("main article");
+    expect(updateFeed(db, feed.id, { contentSelector: null }, clock).contentSelector).toBeNull();
+    expect(listFeeds(db).map((each) => each.contentSelector)).toEqual([null, "article .body"]);
+  });
+
+  it("refuses a selector the engine that reads pages cannot use, naming the field", () => {
+    const { db, clock } = setup();
+    expect(() => insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", contentSelector: "div:frobnicate" }, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "contentSelector" })] }),
+    );
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", contentSelector: "article" }, clock);
+    expect(() => updateFeed(db, feed.id, { contentSelector: "div:frobnicate", title: "Renamed" }, clock)).toThrow(
+      expect.objectContaining({ fields: [expect.objectContaining({ path: "contentSelector" })] }),
+    );
+    expect(getFeed(db, feed.id)).toMatchObject({ title: "Example", contentSelector: "article" });
+  });
+
+  it("forgets the full content, its failure and the translation of the unread articles of the feed when it changes", () => {
+    const { db, clock } = setup();
+    const feedId = seedFeed(db);
+    const other = seedFeed(db);
+    const unread = withFullContent(db, feedId, false);
+    const read = withFullContent(db, feedId, true);
+    const failed = seedFeedArticle(db, feedId);
+    recordFullContentFailure(db, failed, { reason: "shorter", detail: "10 < 20" });
+    const elsewhere = withFullContent(db, other, false);
+
+    updateFeed(db, feedId, { contentSelector: "article .body" }, clock);
+
+    expect(full(db, unread)).toEqual(cleared);
+    expect(full(db, failed)).toEqual(cleared);
+    expect(full(db, read)).toMatchObject({ full_content: "Full text", full_content_status: "fetched", translations: 1 });
+    expect(full(db, elsewhere)).toMatchObject({ full_content: "Full text", full_content_status: "fetched", translations: 1 });
+  });
+
+  it("forgets the full content when it is taken away, and keeps it when the same value comes again or it is not sent", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", contentSelector: "article" }, clock);
+    const kept = withFullContent(db, feed.id, false);
+    updateFeed(db, feed.id, { contentSelector: "article" }, clock);
+    updateFeed(db, feed.id, { title: "Renamed" }, clock);
+    expect(full(db, kept)).toMatchObject({ full_content: "Full text", translations: 1 });
+
+    updateFeed(db, feed.id, { contentSelector: null }, clock);
+    expect(full(db, kept)).toEqual(cleared);
+  });
+
+  it("keeps the summary that was made", () => {
+    const { db, clock } = setup();
+    const feedId = seedFeed(db);
+    const id = withFullContent(db, feedId, false);
+    db.prepare("UPDATE articles SET auto_summary = 'A summary', auto_summary_at = ? WHERE id = ?").run(START, id);
+    updateFeed(db, feedId, { contentSelector: "article" }, clock);
+    expect(db.prepare("SELECT auto_summary FROM articles WHERE id = ?").get(id)!.auto_summary).toBe("A summary");
   });
 });
 

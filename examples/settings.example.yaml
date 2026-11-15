@@ -59,6 +59,9 @@ categories:
         autoSummarize: true    # a model summarises the articles this feed delivers from now on
         translate: true        # titles and contents are translated into outputLanguage; they leave this server for that
         fetchFullContent: true # the page of each new article is fetched and its text kept as the full content
+        # The element of the article's page that holds its body, for full content and summaries. Left out,
+        # Readability finds the body; so it does on a page where the selector matches nothing.
+        contentSelector: "article .post-body"
   - slug: local-events
     name: Local events
     kind: event

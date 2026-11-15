@@ -83,6 +83,7 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     ...(feed.autoSummarize ? { autoSummarize: true } : {}),
     ...(feed.translate ? { translate: true } : {}),
     ...(feed.fetchFullContent ? { fetchFullContent: true } : {}),
+    ...(feed.contentSelector !== null ? { contentSelector: feed.contentSelector } : {}),
     // OPML cannot hold them: the settings file is where a web feed is carried to another server.
     ...(feed.selectors !== null ? { selectors: feed.selectors } : {}),
   };
@@ -221,6 +222,8 @@ function importSubscriptions(
             ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
             // Likewise full content: only articles stored from now on have it fetched.
             ...(entry.fetchFullContent !== undefined ? { fetchFullContent: entry.fetchFullContent } : {}),
+            // A changed one forgets the full content of the feed's unread articles, as a change in the apps does.
+            ...(entry.contentSelector !== undefined ? { contentSelector: entry.contentSelector } : {}),
             ...(entry.selectors !== undefined ? { selectors: entry.selectors } : {}),
           },
           clock,
@@ -240,6 +243,7 @@ function importSubscriptions(
           autoSummarize: entry.autoSummarize,
           translate: entry.translate,
           fetchFullContent: entry.fetchFullContent,
+          contentSelector: entry.contentSelector,
           format,
           selectors: entry.selectors,
         },

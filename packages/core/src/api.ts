@@ -909,6 +909,11 @@ export const feedSchema = z.object({
   translate: z.boolean(),
   /** Whether the full content of the articles this feed delivers from now on is fetched from their pages. */
   fetchFullContent: z.boolean(),
+  /**
+   * The element of an article's page that holds its body, for full content and for the summaries that read the
+   * page. Null means Readability finds it; so it does on a page where the selector matches nothing.
+   */
+  contentSelector: z.string().nullable(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -967,6 +972,8 @@ const feedFields = z.object({
   autoSummarize: z.boolean().optional(),
   translate: z.boolean().optional(),
   fetchFullContent: z.boolean().optional(),
+  /** Null takes it away. A change of it forgets the full content of the feed's unread articles. */
+  contentSelector: cssSelectorSchema.nullable().optional(),
 });
 
 /** A subscription. Without `format` it is a feed; a web feed (`format: "page"`) comes with its selectors. */
@@ -1030,6 +1037,36 @@ export const pageCandidatesSchema = z.object({
   fallback: selectorFallbackSchema.nullable(),
 });
 export type PageCandidates = z.infer<typeof pageCandidatesSchema>;
+
+/** A content selector to try on a feed's newest article, or null for what Readability finds. */
+export const contentPreviewRequestSchema = z.object({ contentSelector: cssSelectorSchema.nullable() });
+export type ContentPreviewRequest = z.infer<typeof contentPreviewRequestSchema>;
+
+/** The characters of the converted body a content preview shows at most. */
+export const CONTENT_PREVIEW_CHARS = 1000;
+
+const contentPreviewArticleSchema = z.object({ id: z.number().int(), title: z.string(), url: z.string() });
+
+/**
+ * What a content selector takes out of the page of a feed's newest article with a URL: nothing when the feed
+ * has no such article, why when the page could not be read, or the start of the body as full content would
+ * store it. `matched` is false when the selector matched no element with text, and the body is Readability's.
+ * `chars` counts the whole body; `shorter` is true when it is shorter than what the feed delivered, which full
+ * content would refuse.
+ */
+export const contentPreviewSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("no-article") }),
+  z.object({ status: z.literal("failed"), article: contentPreviewArticleSchema, error: fullContentErrorSchema }),
+  z.object({
+    status: z.literal("ok"),
+    article: contentPreviewArticleSchema,
+    matched: z.boolean(),
+    markdown: z.string(),
+    chars: z.number().int(),
+    shorter: z.boolean(),
+  }),
+]);
+export type ContentPreview = z.infer<typeof contentPreviewSchema>;
 
 /** What one fetch of a feed did, and the feed as it is afterwards. */
 export const feedFetchResultSchema = z.object({
@@ -1579,6 +1616,8 @@ const settingsFileSubscriptionSchema = z.object({
   translate: z.boolean().optional(),
   /** Left out, a new feed does not fetch full content and a known one keeps what it has. */
   fetchFullContent: z.boolean().optional(),
+  /** Left out, a new feed has none and a known one keeps what it has. */
+  contentSelector: cssSelectorSchema.optional(),
   /** The selectors of a web feed. Written for a web feed only: a subscription without them is a feed. */
   selectors: pageSelectorsSchema.optional(),
 });
