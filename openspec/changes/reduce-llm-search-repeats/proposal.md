@@ -30,7 +30,9 @@ LLM検索を有効にしたトピックでは、実行のたびに検索のタ�
 
 ## Impact
 
-- `packages/core`：`sources/llm-search.ts`、`llm/tasks.ts`、`pipeline/run.ts`、`runs/attention.ts`、`db/topics.ts`、`db/search-attempts.ts`、新しい移行 `032_llm_search_resets.sql`、新しいモジュール `runs/llm-search-reduction.ts`、`api.ts` のトピックの型。
+- `packages/core`の取得と実行：`sources/llm-search.ts`、`llm/tasks.ts`、`pipeline/run.ts`、`runs/attention.ts`。
+- `packages/core`の保存と型：`db/topics.ts`、`db/articles.ts`、`db/search-attempts.ts`、`api.ts`。
+- `packages/core`の新しいファイル：移行`032_llm_search_resets.sql`とモジュール`runs/llm-search-reduction.ts`。
 - `apps/server`：元に戻す操作の経路。
 - `apps/web`：実行履歴の画面の注意の区画と、カテゴリの設定の画面のトピックの編集。
 - `packages/client`：元に戻す操作の呼び出し。

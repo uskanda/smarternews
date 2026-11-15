@@ -125,6 +125,10 @@ terms:
     definition: "実行がニュース検索の検索先と検索語の組か、LLM検索のトピックで、1回検索したことの記録。"
     aliases: []
     en: "search attempt"
+  - term: "LLM検索"
+    definition: "検索のタスクにトピックのページを探させ、返ったURLのページを取得して候補にする取得元。"
+    aliases: []
+    en: "web search by the model"
   - term: "配信終了"
     definition: "サイトが410を返し続けている購読フィードの状態で、取得の失敗より強い。"
     aliases: []
