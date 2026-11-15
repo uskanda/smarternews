@@ -3,7 +3,7 @@
 ## 1. 保存と理由の種類
 
 - [x] 1.1 `reasons.ts` に、理由の種類 `missed-follow-up` と `stopped-follow-up` を足す。文は見出しを入れた日本語と英語にする。`reasons.test.ts` で確かめる
-- [x] 1.2 `033_follow_up_marks.sql` の移行で、`articles` に `follow_ups_stopped` の列を足す。`candidates` を作り直し、CHECK制約に2つの値を足す。既存の候補の行とid、`reason_code`、`candidate_topics` が残ることを `database.test.ts` で確かめる。新しい値を保存できることも確かめる
+- [x] 1.2 `036_follow_up_marks.sql` の移行で、`articles` に `follow_ups_stopped` の列を足す。`candidates` を作り直し、CHECK制約に2つの値を足す。既存の候補の行とid、`reason_code`、`candidate_topics` が残ることを `database.test.ts` で確かめる。新しい値を保存できることも確かめる
 
 ## 2. 実行での除外
 
