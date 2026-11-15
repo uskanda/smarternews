@@ -36,5 +36,8 @@
 ## 7. 文書と確認
 
 - [x] 7.1 `docs/api.md` に、`contentSelector` と見本の操作を足す
-- [ ] 7.2 `openspec validate add-content-selector --strict` が通ることを確かめる
-- [ ] 7.3 `make verify` が通ることを確かめる
+- [x] 7.2 `openspec validate add-content-selector --strict` が通ることを確かめる
+- [x] 7.3 `make verify` が通ることを確かめる
+
+7.3の `verify-private` は、作業した環境が置く、読めない空のファイルで止まった。
+そのため、この変更で足したファイルと変えたファイルにだけ、同じ検査の関数を当てて確かめた。ほかの検査は `make` で通した。
