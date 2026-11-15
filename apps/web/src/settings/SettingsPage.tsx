@@ -444,7 +444,7 @@ function SettingsFile() {
         `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。` +
           `語のまとまりを${done.termGroupsCreated}件作成、語を${done.highlightTermsCreated}件追加。`,
       );
-      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "articles", "term-groups"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "rules", "articles", "term-groups"]) void client.invalidateQueries({ queryKey: [key] });
     } catch (caught) {
       setError(caught);
     }
@@ -814,7 +814,7 @@ function SettingsSections() {
       <section id="feeds" aria-label="購読フィード" className={SECTION}>
         <h2 className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
+          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。条件に合う新しい記事には、ルールでスター、既読、通知、要約を自動で行えます。
         </p>
         <ul className="flex flex-col gap-xs type-body-md">
           <li>
@@ -825,6 +825,11 @@ function SettingsSections() {
           <li>
             <Link to="/settings/filters" className="tap text-primary underline underline-offset-4">
               フィルターを設定する
+            </Link>
+          </li>
+          <li>
+            <Link to="/settings/rules" className="tap text-primary underline underline-offset-4">
+              ルールを設定する
             </Link>
           </li>
         </ul>
