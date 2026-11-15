@@ -4,14 +4,14 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { useApp } from "../app/context.ts";
 import { FeedDeletionDialog } from "../settings/FeedDeletionDialog.tsx";
-import { AutoSummarize, FetchFullContent, Translate } from "../settings/FeedSwitches.tsx";
+import { AutoSummarize, FetchFullContent, TopicSource, Translate } from "../settings/FeedSwitches.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice } from "../ui/controls.tsx";
 import { FormDialog, useDialogCancel } from "../ui/FormDialog.tsx";
 import { useUnsaved } from "../ui/unsaved.tsx";
 
 /**
- * The three switches of a feed, from its own list. They start from the feed each time the dialog opens, and only
+ * The switches of a feed, from its own list: three, and a fourth for a feed of a category. They start from the feed each time the dialog opens, and only
  * they are sent, so the name, the category, the interval and the rest stay as they are. Once one is switched,
  * cancelling asks first; the rest of the settings and unsubscribing drop it without asking.
  */
@@ -23,9 +23,13 @@ function FeedOptionsForm({ feed, onDone, onUnsubscribe }: { feed: Feed; onDone: 
   const [autoSummarize, setAutoSummarize] = useState(feed.autoSummarize);
   const [translate, setTranslate] = useState(feed.translate);
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
+  const [topicSource, setTopicSource] = useState(feed.topicSource);
+  // Only a feed of a category can be a source of its topics.
+  const inCategory = feed.categoryId !== null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const changed = autoSummarize !== feed.autoSummarize || translate !== feed.translate || fetchFullContent !== feed.fetchFullContent;
+  const changed =
+    autoSummarize !== feed.autoSummarize || translate !== feed.translate || fetchFullContent !== feed.fetchFullContent || topicSource !== feed.topicSource;
   useUnsaved("購読フィードの設定", changed || busy);
   const cancel = useDialogCancel(onDone);
 
@@ -34,7 +38,7 @@ function FeedOptionsForm({ feed, onDone, onUnsubscribe }: { feed: Feed; onDone: 
     setBusy(true);
     setError(null);
     try {
-      await api.updateFeed(feed.id, { autoSummarize, translate, fetchFullContent });
+      await api.updateFeed(feed.id, { autoSummarize, translate, fetchFullContent, ...(inCategory ? { topicSource } : {}) });
       for (const key of ["feeds", "counts", "articles"]) void client.invalidateQueries({ queryKey: [key] });
       toast({ message: "購読フィードを保存しました" });
       onDone();
@@ -50,6 +54,7 @@ function FeedOptionsForm({ feed, onDone, onUnsubscribe }: { feed: Feed; onDone: 
       <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
+      {inCategory ? <TopicSource id={`${id}-topic-source-hint`} checked={topicSource} onChange={setTopicSource} /> : null}
       {error ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap items-center justify-end gap-sm">
         {/* The rest of the feed's settings, in its form among the settings of feeds. What was switched here and not saved is dropped. */}

@@ -686,7 +686,7 @@ describe("topics", () => {
 
 describe("the stats of the topics", () => {
   /** Stores a candidate of the topic collected now: rejected by the judge unless it says otherwise. */
-  function candidate(server: TestServer, categoryId: number, topicId: number, options: { siteName?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | "missed-follow-up" | "stopped-follow-up" | null } = {}) {
+  function candidate(server: TestServer, categoryId: number, topicId: number, options: { siteName?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | "missed-follow-up" | "stopped-follow-up" | null; sourceKind?: "news-search" | "subscription" } = {}) {
     const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
     insertCandidate(server.db, {
       categoryId,
@@ -697,7 +697,7 @@ describe("the stats of the topics", () => {
       snippet: "",
       siteName: options.siteName ?? "",
       publishedAt: null,
-      sourceKind: "news-search",
+      sourceKind: options.sourceKind ?? "news-search",
       status: options.status ?? "rejected",
       reason: "why",
       reasonCode: options.reasonCode ?? null,
@@ -713,7 +713,7 @@ describe("the stats of the topics", () => {
     const flaws = topic(server, category.id, "exploited flaws", true);
     candidate(server, category.id, flaws.id, { siteName: "ads.example" });
     candidate(server, category.id, flaws.id, { siteName: "ads.example", reasonCode: "below-minimum" });
-    candidate(server, category.id, flaws.id, { status: "pending" });
+    candidate(server, category.id, flaws.id, { status: "pending", sourceKind: "subscription" });
     candidate(server, category.id, flaws.id, { reasonCode: "missed-follow-up" });
     candidate(server, category.id, flaws.id, { reasonCode: "stopped-follow-up" });
     const missed = server.article(category.id, { topicIds: [flaws.id] });
@@ -726,7 +726,7 @@ describe("the stats of the topics", () => {
     expect(regions.indexOf("トピックの成績")).toBe(regions.indexOf("トピック") + 1);
     const row = await within(stats).findByRole("listitem");
     expect(row).toHaveAttribute("id", `topic-stats-${flaws.id}`);
-    await waitFor(() => expect(row).toHaveTextContent("集めた候補5件（ニュース検索 5）"));
+    await waitFor(() => expect(row).toHaveTextContent("集めた候補5件（ニュース検索 4、購読フィード 1）"));
     expect(row).toHaveTextContent("判定での除外1件");
     expect(row).toHaveTextContent("基準未満1件");
     expect(row).toHaveTextContent("印のある記事の続報2件");

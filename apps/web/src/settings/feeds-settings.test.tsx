@@ -618,8 +618,40 @@ describe("summaries of a feed", () => {
   });
 });
 
+describe("a feed as a topic source", () => {
+  it("is switched on in the edit form of a feed of a category, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const feed = feedOf(server, "Blog", tools.id);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "トピックの取得元にする" });
+    expect(choice).not.toBeChecked();
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(await rowOf("Blog")).findByText("トピックの取得元")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).topicSource).toBe(true);
+  });
+
+  it("is offered only while the form has a category chosen", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    expect(within(row).queryByRole("checkbox", { name: "トピックの取得元にする" })).not.toBeInTheDocument();
+    await user.selectOptions(within(row).getByLabelText("カテゴリ"), String(tools.id));
+    expect(within(row).getByRole("checkbox", { name: "トピックの取得元にする" })).toBeInTheDocument();
+  });
+});
+
 describe("translation of a feed", () => {
-  const HINT = "記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
+  const HINT ="記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
 
   it("is switched on in the edit form, and the list then marks the feed", async () => {
     const server = makeServer();

@@ -432,6 +432,34 @@ describe("one run", () => {
     expect(item).toHaveTextContent("Example News");
     expect(item).toHaveTextContent("exploited flaws");
     expect(item).toHaveTextContent("advertising without new information");
+    expect(item).not.toHaveTextContent("購読フィード");
+  });
+
+  it("marks a rejected candidate that a subscribed feed delivered", async () => {
+    const { server, category, id, flaws } = withRejections();
+    insertCandidate(server.db, {
+      categoryId: category.id,
+      runId: id,
+      url: "https://example.org/subscribed",
+      fetchable: true,
+      title: "From a subscribed feed",
+      snippet: "",
+      siteName: "Lang News",
+      publishedAt: null,
+      sourceKind: "subscription",
+      status: "rejected",
+      reason: "about another product",
+      reasonCode: null,
+      importance: 1,
+      topicIds: [flaws.id],
+      now: server.clock().toISOString(),
+    });
+    renderApp({ server, route: `/runs/${id}` });
+
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    const item = (await within(rejected).findByRole("link", { name: "From a subscribed feed" })).closest("li")!;
+    expect(item).toHaveTextContent("Lang News");
+    expect(item).toHaveTextContent("購読フィード");
   });
 
   it("leads from the topic of each rejected candidate to the editor of that topic", async () => {

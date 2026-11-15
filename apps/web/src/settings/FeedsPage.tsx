@@ -11,7 +11,7 @@ import { useToast } from "../shell/toast.tsx";
 import { FeedDeletionDialog } from "./FeedDeletionDialog.tsx";
 import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
-import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
+import { AutoSummarize, FetchFullContent, TopicSource, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { UnsavedGuard, useUnsaved } from "../ui/unsaved.tsx";
@@ -118,6 +118,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [autoSummarize, setAutoSummarize] = useState(feed.autoSummarize);
   const [translate, setTranslate] = useState(feed.translate);
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
+  const [topicSource, setTopicSource] = useState(feed.topicSource);
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [titleProblem, setTitleProblem] = useState<string | null>(null);
@@ -132,6 +133,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       autoSummarize !== feed.autoSummarize ||
       translate !== feed.translate ||
       fetchFullContent !== feed.fetchFullContent ||
+      topicSource !== feed.topicSource ||
       JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
   );
 
@@ -154,6 +156,8 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
         autoSummarize,
         translate,
         fetchFullContent,
+        // Only a feed of a category can be a source of its topics: a feed moved to none keeps what it had.
+        ...(category !== NO_CATEGORY ? { topicSource } : {}),
       });
       refresh("feeds", "counts", "articles", "filters");
       toast({ message: "購読フィードを保存しました" });
@@ -215,6 +219,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
+      {category !== NO_CATEGORY ? <TopicSource id={`${id}-topic-source-hint`} checked={topicSource} onChange={setTopicSource} /> : null}
       {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
       {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
@@ -287,6 +292,7 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.autoSummarize ? <Badge>自動で要約</Badge> : null}
       {feed.translate ? <Badge>翻訳</Badge> : null}
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
+      {feed.topicSource && feed.categoryId !== null ? <Badge>トピックの取得元</Badge> : null}
       {/* A feed the site answers is gone is told apart from a failing one: unsubscribing is what fixes it. */}
       {feed.goneAt ? <Badge tone="error">配信終了</Badge> : feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
       {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}

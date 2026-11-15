@@ -333,6 +333,28 @@ describe("the settings of a feed from its list", () => {
     await waitFor(() => expect(within(list()).getByRole("button", { name: "購読フィードの設定" })).toHaveFocus());
   });
 
+  it("makes a feed of a category a topic source, and says what that does", async () => {
+    const { server, blog } = seeded();
+    const view = await openOptions(server, blog.id);
+    const topicSource = within(view.dialog).getByRole("checkbox", { name: "トピックの取得元にする" });
+    expect(topicSource).not.toBeChecked();
+    expect(topicSource).toHaveAccessibleDescription(
+      "実行のたびに、対象期間内に届いた記事を、カテゴリのトピックの候補にします。判定にLLMを使います。記事は一覧にそのまま残ります。",
+    );
+    await view.user.click(topicSource);
+    await view.user.click(within(view.dialog).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getFeed(server.db, blog.id).topicSource).toBe(true));
+  });
+
+  it("has no topic source switch for a feed of no category", async () => {
+    const { server } = seeded();
+    const loose = feedOf(server, "Loose");
+    const { dialog } = await openOptions(server, loose.id);
+    expect(within(dialog).getByRole("checkbox", { name: "全文を取得する" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: "トピックの取得元にする" })).not.toBeInTheDocument();
+  });
+
   it("asks before closing with a switch changed, and changes nothing once it is thrown away", async () => {
     const { server, blog } = seeded();
     const view = await openOptions(server, blog.id);

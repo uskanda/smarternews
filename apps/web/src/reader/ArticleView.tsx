@@ -437,6 +437,17 @@ export function ArticleView({
             </ul>
           </section>
         ) : null}
+        {article.summarizedIn ? (
+          // The generated article a run wrote this feed article into: the same story, gathered from more pages.
+          <section aria-label="この記事をまとめた生成記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">この記事をまとめた生成記事</h3>
+            <p className="type-body-md">
+              <Link to={articlePath(article.summarizedIn.id)} className="tap break-words text-primary underline underline-offset-4">
+                {article.summarizedIn.title}
+              </Link>
+            </p>
+          </section>
+        ) : null}
         {article.autoSummary ? (
           // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
           <section aria-label="AIによる要約" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
@@ -533,6 +544,26 @@ export function ArticleView({
           </ul>
         </section>
         )}
+        {article.feedArticles.length > 0 ? (
+          // The articles of subscribed feeds this article was written from; each opens in the list of its feed, which
+          // includes read articles, as the other feeds of a feed article do.
+          <section aria-label="まとめた配信記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">まとめた配信記事</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.feedArticles.map((delivered) => (
+                <li key={delivered.articleId} className="min-w-0">
+                  <Link
+                    to={`${listPathOf({ type: "feed", feedId: delivered.feedId }, () => undefined)}/${delivered.articleId}?read=1`}
+                    className="tap break-words text-primary underline underline-offset-4"
+                  >
+                    {delivered.title}
+                  </Link>
+                  <span className="pl-sm text-on-surface-muted">{delivered.feedTitle}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <div className="flex flex-wrap gap-sm">
           <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
             {article.starred ? "スターを外す" : "スターを付ける"}
