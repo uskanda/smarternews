@@ -95,7 +95,7 @@ function Categories() {
 
   return (
     <section id="categories" aria-label="カテゴリ" className={SECTION}>
-      <h2 className="type-headline-md">カテゴリ</h2>
+      <h2 tabIndex={-1} className="type-headline-md">カテゴリ</h2>
       {categories.isError ? <ErrorNotice error={categories.error} onRetry={() => void categories.refetch()} /> : null}
       {categories.data?.length === 0 ? (
         <p className="type-body-md text-on-surface-muted">カテゴリはまだありません。下の欄から追加してください。</p>
@@ -159,7 +159,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
 
   return (
     <section id="reader" aria-label="読み手情報" className={SECTION}>
-      <h2 className="type-headline-md">読み手情報</h2>
+      <h2 tabIndex={-1} className="type-headline-md">読み手情報</h2>
       <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
         <Field
           label="読み手情報"
@@ -255,7 +255,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 
   return (
     <section id="global" aria-label="全体設定" className={SECTION}>
-      <h2 className="type-headline-md">全体設定</h2>
+      <h2 tabIndex={-1} className="type-headline-md">全体設定</h2>
       <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
         <Field
           label="出力言語"
@@ -353,7 +353,7 @@ function DeviceSettings() {
   const id = useId();
   return (
     <section id="device" aria-labelledby={`${id}-title`} className={SECTION}>
-      <h2 id={`${id}-title`} className="type-headline-md">
+      <h2 id={`${id}-title`} tabIndex={-1} className="type-headline-md">
         この端末の設定
       </h2>
       <p id={`${id}-hint`} className="max-w-measure type-body-md text-on-surface-muted">
@@ -452,7 +452,7 @@ function SettingsFile() {
 
   return (
     <section id="settings-file" aria-label="設定ファイル" className={SECTION}>
-      <h2 className="type-headline-md">設定ファイル</h2>
+      <h2 tabIndex={-1} className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         カテゴリ、トピック、購読フィード、フィルター、語の色付け、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
       </p>
@@ -556,7 +556,7 @@ function Providers() {
   const status = providers.data;
   return (
     <section id="providers" aria-label="プロバイダー" className={SECTION}>
-      <h2 className="type-headline-md">プロバイダー</h2>
+      <h2 tabIndex={-1} className="type-headline-md">プロバイダー</h2>
       {providers.isError ? <ErrorNotice error={providers.error} onRetry={() => void providers.refetch()} /> : null}
       {status ? (
         <>
@@ -726,7 +726,7 @@ function UsageSection() {
   const data = usage.data;
   return (
     <section id="usage" aria-label="利用量" className={SECTION}>
-      <h2 className="type-headline-md">利用量</h2>
+      <h2 tabIndex={-1} className="type-headline-md">利用量</h2>
       {usage.isError ? <ErrorNotice error={usage.error} onRetry={() => void usage.refetch()} /> : null}
       {data ? (
         <>
@@ -812,7 +812,7 @@ function SettingsSections() {
       </header>
       <Categories />
       <section id="feeds" aria-label="購読フィード" className={SECTION}>
-        <h2 className="type-headline-md">購読フィード</h2>
+        <h2 tabIndex={-1} className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
         </p>
@@ -830,7 +830,7 @@ function SettingsSections() {
         </ul>
       </section>
       <section id="term-highlights" aria-label="語の色付け" className={SECTION}>
-        <h2 className="type-headline-md">語の色付け</h2>
+        <h2 tabIndex={-1} className="type-headline-md">語の色付け</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           登録した語を、生成記事と配信記事の両方の一覧と本文で色付けします。語はまとまりに分け、まとまりごとに色を選びます。色付けは記事を隠しません。
         </p>
@@ -854,7 +854,7 @@ function SettingsSections() {
       <Providers />
       <UsageSection />
       <section id="tokens" aria-label="トークン" className={SECTION}>
-        <h2 className="type-headline-md">トークン</h2>
+        <h2 tabIndex={-1} className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           このブラウザーに保存したAPIのトークンを消します。次に開くとき、もう一度入力が必要になります。
         </p>

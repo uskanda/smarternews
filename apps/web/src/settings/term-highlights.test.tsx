@@ -135,6 +135,7 @@ describe("the term highlights page", () => {
     await user.click(within(dialog).getByRole("button", { name: "削除する" }));
 
     await waitFor(async () => expect(await shown()).toEqual(["B 紫"]));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "一覧" })).toHaveFocus());
   });
 
   it("adds a term to a group, refuses one it has in another width, and removes one", async () => {
@@ -154,6 +155,8 @@ describe("the term highlights page", () => {
 
     await user.click(within(item).getByRole("button", { name: "「関税」を削除" }));
     await waitFor(async () => expect(await shown()).toEqual(["通商 橙色 TSMC"]));
+    // The button went with the term; the focus stays in the group, where a term is added.
+    await waitFor(() => expect(within(item).getByLabelText("「通商」に足す語")).toHaveFocus());
   });
 
   it("moves a group up and down, cannot move the first up or the last down, and keeps the focus on the moved group", async () => {
