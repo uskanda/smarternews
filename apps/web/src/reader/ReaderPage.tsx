@@ -17,6 +17,7 @@ import {
   useListViews,
   useMentionArticles,
   useReadPatch,
+  useSavedSearches,
   useSettings,
   useTimeZone,
 } from "../api/queries.ts";
@@ -60,6 +61,7 @@ import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
+import { SaveSearchButton } from "./SaveSearchDialog.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -79,10 +81,12 @@ export type View =
   | "feed"
   /** Search results: the words and the narrowing are in the query of the path. */
   | "search"
+  /** The results of a saved search: its id is in the path, its words and narrowing on the server. */
+  | "savedSearch"
   /** The articles of a name found in articles: the name is in the query of the path. */
   | "mention";
 
-const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | "search" | "mention">, string> = {
+const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | "search" | "savedSearch" | "mention">, string> = {
   unread: "未読",
   all: "すべて",
   starred: "スター",
@@ -193,23 +197,29 @@ export function ReaderPage({ view }: { view: View }) {
   const feeds = useFeeds();
   const inCategory = view === "category" || view === "category-generated";
   const isSearch = view === "search";
+  const isSaved = view === "savedSearch";
+  // Both are search results, read with the search of the API: the words of the path, or those of a saved search.
+  const searching = isSearch || isSaved;
   const isMention = view === "mention";
   const isAnnotations = view === "annotations";
+  const savedSearches = useSavedSearches();
   const category: Category | undefined = inCategory ? categories.data?.find((entry) => entry.slug === params.slug) : undefined;
   const feed: Feed | undefined = view === "feed" ? feeds.data?.find((entry) => String(entry.id) === params.feedId) : undefined;
-  // Null until the category or the feed the path names is known.
+  const savedSearch = isSaved ? savedSearches.data?.find((entry) => String(entry.id) === params.savedSearchId) : undefined;
+  // Null until the category, the feed or the saved search the path names is known.
   const target = useMemo<ListTarget | null>(() => {
     if (inCategory) return category ? { type: "category", categoryId: category.id, generatedOnly: view === "category-generated" } : null;
     if (view === "feed") return feed ? { type: "feed", feedId: feed.id } : null;
+    if (view === "savedSearch") return savedSearch ? { type: "savedSearch", savedSearchId: savedSearch.id } : null;
     // Search results and the articles of a name are no list of the left pane.
     if (view === "search" || view === "mention") return null;
     return { type: view };
-  }, [view, inCategory, category, feed]);
+  }, [view, inCategory, category, feed, savedSearch]);
   const isEvents = view === "category" && category?.kind === "event";
   const readToggle = target !== null && hasReadToggle(target) && !isEvents;
-  // Search results and the articles of a name never offer marking everything read: they are found articles, not
-  // a list to finish.
-  const listControls = !isSearch && !isMention && (target === null || hasListControls(target));
+  // Search results, saved or not, and the articles of a name never offer marking everything read: they are found
+  // articles, not a list to finish.
+  const listControls = !searching && !isMention && (target === null || hasListControls(target));
   // Feed articles have no importance, so the filter is offered only where generated articles can be.
   // A feed is none of those even before the feeds have arrived and its target is known.
   const importanceFilter = listControls && view !== "feed" && (target === null || hasImportanceFilter(target));
@@ -243,30 +253,42 @@ export function ReaderPage({ view }: { view: View }) {
   const searchFeedId = feedParam && /^\d{1,15}$/.test(feedParam) ? Number(feedParam) : undefined;
   const searchUnread = isSearch && search.get("unread") === "true";
   const searchQuery = useMemo(
-    () => ({
-      q: words,
-      ...(searchCategory ? { category: searchCategory.id } : {}),
-      ...(searchFeedId !== undefined ? { feed: searchFeedId } : {}),
-      ...(searchUnread ? { unread: "true" as const } : {}),
-    }),
-    [words, searchCategory, searchFeedId, searchUnread],
+    () =>
+      // A saved search: its words and narrowing, unread only until the read ones are asked for.
+      savedSearch
+        ? {
+            q: savedSearch.query,
+            ...(savedSearch.categoryId !== null ? { category: savedSearch.categoryId } : {}),
+            ...(savedSearch.feedId !== null ? { feed: savedSearch.feedId } : {}),
+            ...(includeRead ? {} : { unread: "true" as const }),
+          }
+        : {
+            q: words,
+            ...(searchCategory ? { category: searchCategory.id } : {}),
+            ...(searchFeedId !== undefined ? { feed: searchFeedId } : {}),
+            ...(searchUnread ? { unread: "true" as const } : {}),
+          },
+    [savedSearch, includeRead, words, searchCategory, searchFeedId, searchUnread],
   );
   const narrowed = searchSlug !== null || searchFeedId !== undefined || searchUnread;
   // A category is named by its slug, so the search waits for the categories when it names one.
-  const results = useArticleSearch(searchQuery, isSearch && words.length > 0 && (searchSlug === null || categories.data !== undefined));
-  const terms = isSearch ? results.data?.pages[0]?.terms : undefined;
+  const results = useArticleSearch(
+    searchQuery,
+    isSaved ? savedSearch !== undefined : isSearch && words.length > 0 && (searchSlug === null || categories.data !== undefined),
+  );
+  const terms = searching ? results.data?.pages[0]?.terms : undefined;
   // The articles of a name: every one, read ones included, newest first, whatever the entry chosen before.
   const mentionName = isMention ? (search.get("name") ?? "").trim() : "";
   const mentionList = useMentionArticles(mentionName, isMention && mentionName.length > 0);
 
-  const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
+  const unreadOnly = isSearch ? searchUnread : isSaved ? !includeRead : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = filter.recentlyRead === "true";
-  const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
-  const active = isSearch ? results : isMention ? mentionList : list;
+  const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations && !isSaved);
+  const active = searching ? results : isMention ? mentionList : list;
   const fetched = useMemo<ArticleSummary[]>(
-    () => (isSearch ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items) ?? EMPTY,
-    [isSearch, isMention, results.data, mentionList.data, list.data],
+    () => (searching ? results.data : isMention ? mentionList.data : list.data)?.pages.flatMap((page) => page.items) ?? EMPTY,
+    [searching, isMention, results.data, mentionList.data, list.data],
   );
   const excerpts = useMemo(
     () => new Map(results.data?.pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)) ?? []),
@@ -275,15 +297,17 @@ export function ReaderPage({ view }: { view: View }) {
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
   // change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
+  const listKey = JSON.stringify(
+    isSaved ? { saved: params.savedSearchId, ...searchQuery } : isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined },
+  );
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
   if (kept.key !== listKey) setKept({ key: listKey, items: [] });
   const sortKey = target ? sortKeyFor(target) : undefined;
   const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
-  // not in the recently read articles, which is where a mistake is put right, nor in search results, the
-  // articles of a name, or events. None of these but events has a target.
+  // not in the recently read articles, which is where a mistake is put right, nor in search results, saved or
+  // not, the articles of a name, or events. None of these but events and saved searches has a target.
   const [refreshes, setRefreshes] = useState(0);
   const listScroll = useRef<HTMLDivElement>(null);
   const listRows = useRef<HTMLUListElement>(null);
@@ -326,7 +350,7 @@ export function ReaderPage({ view }: { view: View }) {
 
   const readPatch = useReadPatch();
   const scrollReadChosen = useScrollRead();
-  const scrollReadOn = scrollReadChosen && target !== null && !isSearch && !recentlyRead && !isEvents && listShown;
+  const scrollReadOn = scrollReadChosen && target !== null && !searching && !recentlyRead && !isEvents && listShown;
   const scrollRead = useScrollToRead({
     enabled: scrollReadOn,
     scrollRef: listScroll,
@@ -351,7 +375,11 @@ export function ReaderPage({ view }: { view: View }) {
   });
   const listHeight = useListHeight(listScroll, scrollReadOn);
 
-  const basePath = isMention ? "/mentions" : ((target && listPathOf(target, () => category?.slug)) ?? `/${view}`);
+  const basePath = isMention
+    ? "/mentions"
+    : isSaved
+      ? `/s/${params.savedSearchId ?? ""}`
+      : ((target && listPathOf(target, () => category?.slug)) ?? `/${view}`);
   const query = search.toString() ? `?${search.toString()}` : "";
   const articlePath = (id: number) => `${basePath}/${id}${query}`;
   const listPath = `${basePath}${query}`;
@@ -729,6 +757,9 @@ export function ReaderPage({ view }: { view: View }) {
   if (view === "feed" && feeds.data && !feed) {
     return <p className="p-xl type-body-md">この購読フィードはありません。</p>;
   }
+  if (isSaved && savedSearches.data && !savedSearch) {
+    return <p className="p-xl type-body-md">この保存した検索はありません。</p>;
+  }
 
   const showList = listShown;
   const showArticle = layout !== "narrow" || articleId !== null;
@@ -758,11 +789,13 @@ export function ReaderPage({ view }: { view: View }) {
             ? words.length > 0
               ? `「${words}」の検索結果`
               : "検索"
-            : view === "mention"
-              ? mentionName.length > 0
-                ? `「${mentionName}」を含む記事`
-                : "名前を含む記事"
-              : TITLES[view];
+            : view === "savedSearch"
+              ? (savedSearch?.name ?? "")
+              : view === "mention"
+                ? mentionName.length > 0
+                  ? `「${mentionName}」を含む記事`
+                  : "名前を含む記事"
+                : TITLES[view];
 
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
@@ -821,6 +854,14 @@ export function ReaderPage({ view }: { view: View }) {
                 </select>
               </span>
               <Checkbox label="未読だけ" checked={searchUnread} onChange={(event) => toggleParam("unread", "true", event.target.checked)} />
+              {/* The words and the narrowing are saved; whether only unread articles are shown is not. */}
+              <SaveSearchButton
+                search={{
+                  query: words,
+                  ...(searchCategory ? { categoryId: searchCategory.id } : {}),
+                  ...(searchFeedId !== undefined ? { feedId: searchFeedId } : {}),
+                }}
+              />
             </>
           ) : null}
         </div>
@@ -840,6 +881,13 @@ export function ReaderPage({ view }: { view: View }) {
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
         ) : null}
         {isMention && (mentionName.length === 0 || (mentionList.isSuccess && items.length === 0)) ? <MentionEmpty name={mentionName} /> : null}
+        {isSaved && savedSearch && results.isSuccess && items.length === 0 ? (
+          <p className="p-lg type-body-md text-on-surface-muted">
+            {includeRead
+              ? `「${savedSearch.query}」に一致する記事はありません。`
+              : `「${savedSearch.query}」に一致する未読の記事はありません。既読も表示すると、読んだ記事を確かめられます。`}
+          </p>
+        ) : null}
         {!isSearch && !isMention && list.isSuccess && items.length === 0 ? (
           <EmptyList view={view} hasSources={(categories.data?.length ?? 1) > 0 || (feeds.data?.length ?? 0) > 0} />
         ) : null}

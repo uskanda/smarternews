@@ -12,6 +12,8 @@ export function listPathOf(target: ListTarget, slugOf: (categoryId: number) => s
       return `/f/${target.feedId}`;
     case "recentlyRead":
       return "/recently-read";
+    case "savedSearch":
+      return `/s/${target.savedSearchId}`;
     default:
       return `/${target.type}`;
   }

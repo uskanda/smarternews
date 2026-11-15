@@ -3,7 +3,8 @@
 ## Context
 
 検索（`searchArticles`）は、全文検索の表 `article_search` で語を照合し、カテゴリか購読フィードで絞り込み、未読だけにもできる。結果の画面は `/search?q=&category=&feed=&unread=true` のURLを持つ。
-左のペインは `packages/client/src/nav.ts` の1つのモデル（`NavModel`）から描き、項目の種類（`ListTarget`）ごとに、キー、一覧の絞り込み、一括の既読や並び順のメニューを出すかが決まる。
+左のペインは `packages/client/src/nav.ts` の1つのモデル（`NavModel`）から描く。
+項目の種類（`ListTarget`）ごとに、キー、一覧の絞り込み、一括の既読や並び順のメニューを出すかが決まる。
 件数のAPI（`getCounts`）は、`articles` を1回集計して、未読の総数、カテゴリごと、購読フィードごとの数を返す。終了したイベントは未読に数えない。
 語の色付けの表 `term_groups` は、位置の列と `orderTermGroups`・`moveTermGroup` で並びを持ち、`/term-groups` のAPIと設定ファイルで往復する。
 
@@ -32,26 +33,30 @@
 
 ### 読み書き
 
-`packages/core/src/db/saved-searches.ts` に、`listSavedSearches`、`createSavedSearch`、`updateSavedSearch`、`deleteSavedSearch`、`orderSavedSearches`、`moveSavedSearch` を置く。並べ替えは `orderTermGroups` と `moveTermGroup` と同じ作りである。
+`packages/core/src/db/saved-searches.ts` に、一覧、作成、名前の変更、削除、並べ替え、移動の関数を置く。
+並べ替えと移動は、語の色付けの `orderTermGroups` や `moveTermGroup` に合わせる。
 作成では、検索語を `parseSearchTerms` で確かめ（空と200文字超を拒む）、カテゴリと購読フィードの存在を確かめる。両方の指定は入力の型で拒む。
 名前は前後の空白を除いて1文字から100文字までとする。更新できるのは名前だけである。
 
 ### 数え方
 
 `searchArticles` の条件を組み立てる部分を `searchConditions(query)` に切り出す。検索の結果の取得と、保存した検索の数え上げは、この関数を共有する。
-`getCounts` は、保存した検索ごとに、その条件に `unread: "true"` を加えた `SELECT count(*)` を1回ずつ実行し、`savedSearches: [{ id, unread }]` に入れる。終了したイベントも数える。これは検索の結果と同じで、件数のAPIのほかの数とは違う（Q8）。
+`getCounts` は、保存した検索ごとに `SELECT count(*)` を1回ずつ実行する。条件は、保存した条件に `unread: "true"` を加えたものである。
+結果は `savedSearches: [{ id, unread }]` に入れる。終了したイベントも数える。これは検索の結果と同じで、件数のAPIのほかの数とは違う（Q8）。
 保存した検索の数は利用者が手で足すだけなので、件数の読み出しのたびに数回の問い合わせが増えても許容できる。
 
 ### APIの型
 
-`api.ts` に `savedSearchSchema`（`id`、`name`、`query`、`categoryId`、`feedId`）、`savedSearchCreateSchema`、`savedSearchUpdateSchema`（名前だけ）、`savedSearchMoveSchema` を足す。
+`api.ts` に、保存した検索の型 `savedSearchSchema` を足す。欄は `id`、`name`、`query`、`categoryId`、`feedId` である。
+作成、名前の変更、移動の入力の型も足す。
 `countsSchema` に `savedSearches` を足し、`.default([])` にする。古いサーバーの応答も読める。
-経路は `GET/POST /saved-searches`、`PATCH/DELETE /saved-searches/:id`、`POST /saved-searches/:id/move` で、`/term-groups` に合わせる。
+経路の形は `/term-groups` に合わせる。
+`GET/POST /saved-searches`、`PATCH/DELETE /saved-searches/:id`、`POST /saved-searches/:id/move` である。
 
 ### 設定ファイル
 
-`savedSearches` の項目は、`name`、`query`、`scope` を持つ。`scope` はフィルターの項目と同じく、カテゴリをスラッグ（`{ category }`）で、購読フィードをURL（`{ feed }`）で指し、絞り込みがないときは書かない。
-読み込みでは、名前、検索語、絞り込みのすべてが同じものがあればそれを使い、なければ作る。ファイルの順を先に、ほかをあとに並べる。指す先がないときはファイル全体を拒む。
+`savedSearches` の項目は、`name`、`query`、`scope` を持つ。`scope` はフィルターの項目と同じく、カテゴリを識別名（`{ category }`）で、購読フィードをURL（`{ feed }`）で指し、絞り込みがないときは書かない。
+読み込みでは、名前、検索語、絞り込みのすべてが一致するものを使い、なければ作る。ファイルの順を先に、ほかをあとに並べる。指す先がないときはファイル全体を拒む。
 
 ### 左のペインのモデル
 
@@ -64,12 +69,12 @@
 
 経路 `s/:savedSearchId/:articleId?` に、`ReaderPage` の `view="savedSearch"` を当てる。保存した検索の条件で `useArticleSearch` を呼び、既読も表示する切り替え（`read=1`）がオフなら `unread: "true"` を足す。
 検索の結果と同じく、行に抜粋を出し、語を色付けする。スクロールで既読にする機能は、検索の結果と同じく働かせない。見出しは保存した検索の名前である。
-保存した検索がないID（削除された、または別の端末で消した）を開いたときは「この保存した検索はありません。」と出す。
+保存した検索がないID（削除された、または別の端末で消した）を開いたときは、保存した検索がないことを示す文を出す。
 
 ### 左のペインの表示とメニュー
 
 上の段の `ul` と「カテゴリ」の間に、見出し「保存した検索」と項目の `ul` を置く。項目が0件（隠した結果を含む）なら区切りごと出さない。
-項目のメニュー（右クリック、メニューキー、Shift+F10）は、「名前を変更」「上へ移動」「下へ移動」「削除」を持つ。名前の変更は `FormDialog`、削除の確認は `ConfirmDialog` を使う。開いている項目を削除したら「未読」へ移る。
+項目のメニューは、右クリックとShift+F10で開き、「名前を変更」「上へ移動」「下へ移動」「削除」を持つ。名前の変更は `FormDialog`、削除の確認は `ConfirmDialog` を使う。開いている項目を削除したら「未読」へ移る。
 移動は、一覧をすぐに並べ替えてからサーバーへ送り、失敗したら元に戻して知らせる。カテゴリと購読フィードの並べ替え（`useNavMoves`）と同じ作りである。
 
 ### 検索の結果からの保存

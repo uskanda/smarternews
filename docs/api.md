@@ -96,6 +96,8 @@ Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`
 
 `listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest` or `oldest`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
+`savedSearches` holds the [saved searches](#saved-searches) in their order: `name`, `query`, and `scope`, which is `{"category": "tools"}` or `{"feed": "https://example.com/feed.xml"}` and is left out for a search over every article. Export leaves `savedSearches` out when there are none. Import stores them after the categories and feeds of the file; one with the same name, words and scope as a saved search on the server is not saved again. The searches of the file come first, in the file's order, and the others follow. A scope that names a category or feed found neither in the file nor on the server makes the whole file invalid. `savedSearchesCreated` in the response counts the searches saved.
+
 ## Categories
 
 | Operation | Purpose |
@@ -207,7 +209,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/topics/7/versions
 | `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, or mark a generated article as a miss with `missed` (see [Misses](#misses)) |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
-| `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
+| `GET /api/v1/counts` | Unread and starred totals, and counts per category, per feed and per saved search |
 | `GET /api/v1/search` | Search the articles by words |
 | `POST /api/v1/articles/:id/open` | Record that the article's body was shown to a reader. Returns `openedAt` |
 | `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
@@ -277,6 +279,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
 | `generatedUnread` | Unread generated articles |
 | `uncategorizedUnread` | Unread articles of feeds without a category |
 | `categories` | Per category: `categoryId`, `unread`, `total`, `generatedUnread`, and `generatedTotal` (its generated articles, read or not) |
+| `savedSearches` | Per [saved search](#saved-searches): `id` and `unread`, the number of results it has with `unread=true`. Unlike the other counts, ended events are included, as in a search |
 | `feeds` | Per subscribed feed: `feedId` and `unread` |
 
 A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a filter hides. A hidden duplicate counts for its own feed and among the starred only, so a category's `unread` can be smaller than the sum of its feeds' `unread`.
@@ -371,6 +374,33 @@ curl -s -G -H "Authorization: Bearer $TOKEN" --data-urlencode "q=battery factory
 The search index is kept by triggers that call a function the server registers when it opens the database. A connection without that function, such as the `sqlite3` command, can read the database but cannot insert, change or delete articles.
 
 Generated articles without a star or an annotation are deleted 180 days after their last update, feed articles without a star or an annotation 90 days after the time they sort by. Starred and annotated articles are kept. An article whose last annotation is removed is deleted at the next purge once its time has passed.
+
+### Saved searches
+
+A saved search keeps the words of a search and at most one narrowing, a category or a feed, under a name. The web app lists them in the left pane and opens one as a search with `unread=true`; `counts` gives how many results each has so. Whether only unread articles are shown is not part of a saved search.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/saved-searches` | List them in their order |
+| `POST /api/v1/saved-searches` | Save a search at the end (status 201) |
+| `PATCH /api/v1/saved-searches/:id` | Change its `name` |
+| `DELETE /api/v1/saved-searches/:id` | Remove it (status 204) |
+| `POST /api/v1/saved-searches/:id/move` | Put it before another one, `{"before":2}`, or last, `{"before":null}`. Answers with every saved search in the new order |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Battery plants","query":"battery factory","categoryId":3}' "$API/api/v1/saved-searches"
+```
+
+Saved search fields:
+
+| Field | Content |
+|---|---|
+| `name` | 1 to 100 characters. Two saved searches may have the same name |
+| `query` | The words, as `q` of the search takes them: not empty, at most 200 characters |
+| `categoryId`, `feedId` | The narrowing, or `null`. At most one of them is set |
+
+Status 400 answers an empty name, words a search refuses, both `categoryId` and `feedId`, a category or feed that does not exist, and a `before` that names no saved search; status 404 answers a saved search that does not exist. The same words and narrowing may be saved more than once. Deleting the category or feed a saved search is narrowed to deletes the saved search too. Counting the saved searches calls no model.
 
 ## Mentions
 
