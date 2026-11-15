@@ -13,6 +13,7 @@ import {
   nextFetchAt,
   recordFetchFailure,
   recordFetchSuccess,
+  requestFetchAll,
   updateFeed,
 } from "./feeds.ts";
 import { updateSettings } from "./settings.ts";
@@ -194,6 +195,103 @@ describe("when a feed is due", () => {
     const after = getFeed(db, feed.id);
     expect(after).toMatchObject({ lastError: null, failureCount: 0, lastSucceededAt: later, lastFetchedAt: later });
     expect(nextFetchAt(db, after).getTime() - new Date(later).getTime()).toBe(30 * MINUTE);
+  });
+});
+
+describe("a request to fetch every feed", () => {
+  const hours = (count: number) => new Date(new Date(START).getTime() + count * 60 * MINUTE).toISOString();
+
+  it("makes the enabled feeds due at once, whatever their interval, and counts them", () => {
+    const { db, clock } = setup();
+    const a = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    const b = insertFeed(db, { url: "https://example.org/b.xml", title: "B", intervalMinutes: 120 }, clock);
+    recordFetchSuccess(db, a.id, { now: START });
+    recordFetchSuccess(db, b.id, { now: START });
+    clock.advance(MINUTE);
+    expect(dueFeeds(db, clock())).toEqual([]);
+
+    const request = requestFetchAll(db, clock());
+
+    expect(request).toEqual({ requested: 2, skipped: 0, requestedAt: clock().toISOString() });
+    expect(dueFeeds(db, clock()).map((feed) => feed.id)).toEqual([a.id, b.id]);
+    expect(getFeed(db, a.id)).toMatchObject({ fetchRequestedAt: request.requestedAt, nextFetchAt: request.requestedAt });
+  });
+
+  it("does not wait for the longer interval after failures", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    for (let index = 0; index < 3; index += 1) recordFetchFailure(db, feed.id, { now: START, error: "HTTP status 500" });
+    clock.advance(MINUTE);
+    expect(dueFeeds(db, clock())).toEqual([]);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 1, skipped: 0 });
+    expect(dueFeeds(db, clock()).map((entry) => entry.id)).toEqual([feed.id]);
+  });
+
+  it("passes by a feed that waits for the time a Retry-After gave, and counts it as skipped", () => {
+    const { db, clock } = setup();
+    const waiting = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    const other = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    recordFetchFailure(db, waiting.id, { now: START, error: "HTTP status 429", retryAfterUntil: hours(5) });
+    recordFetchSuccess(db, other.id, { now: START });
+    clock.advance(60 * MINUTE);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 1, skipped: 1 });
+    expect(dueFeeds(db, clock()).map((feed) => feed.id)).toEqual([other.id]);
+    expect(getFeed(db, waiting.id)).toMatchObject({ fetchRequestedAt: null, nextFetchAt: hours(5) });
+  });
+
+  it("takes a feed whose Retry-After time has passed", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    for (let index = 0; index < 4; index += 1) recordFetchFailure(db, feed.id, { now: START, error: "HTTP status 429", retryAfterUntil: hours(1) });
+    clock.advance(61 * MINUTE);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 1, skipped: 0 });
+    expect(dueFeeds(db, clock())).toHaveLength(1);
+  });
+
+  it("leaves a disabled feed out of both counts", () => {
+    const { db, clock } = setup();
+    const paused = insertFeed(db, { url: "https://example.org/a.xml", title: "A", enabled: false }, clock);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 0, skipped: 0 });
+    expect(getFeed(db, paused.id).fetchRequestedAt).toBeNull();
+    expect(dueFeeds(db, clock())).toEqual([]);
+  });
+
+  it("is forgotten once the feed was fetched, whether that worked or not, and the interval counts again", () => {
+    const { db, clock } = setup();
+    const worked = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    const failed = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    recordFetchSuccess(db, worked.id, { now: START });
+    recordFetchSuccess(db, failed.id, { now: START });
+    clock.advance(MINUTE);
+    requestFetchAll(db, clock());
+    const now = clock().toISOString();
+
+    recordFetchSuccess(db, worked.id, { now });
+    recordFetchFailure(db, failed.id, { now, error: "timed out" });
+
+    expect(getFeed(db, worked.id).fetchRequestedAt).toBeNull();
+    expect(getFeed(db, failed.id).fetchRequestedAt).toBeNull();
+    expect(dueFeeds(db, clock())).toEqual([]);
+    expect(nextFetchAt(db, getFeed(db, worked.id)).getTime() - clock().getTime()).toBe(30 * MINUTE);
+    expect(nextFetchAt(db, getFeed(db, failed.id)).getTime() - clock().getTime()).toBe(60 * MINUTE);
+  });
+
+  it("is forgotten when the feed is paused, so that it is not fetched at once when it is enabled again", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    recordFetchSuccess(db, feed.id, { now: START });
+    clock.advance(MINUTE);
+    requestFetchAll(db, clock());
+
+    updateFeed(db, feed.id, { enabled: false });
+    expect(getFeed(db, feed.id).fetchRequestedAt).toBeNull();
+    updateFeed(db, feed.id, { enabled: true });
+
+    expect(dueFeeds(db, clock())).toEqual([]);
   });
 });
 
