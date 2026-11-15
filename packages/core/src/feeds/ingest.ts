@@ -99,9 +99,10 @@ function storedAttachments(item: SubscriptionItem): string | null {
 
 /** The content of an item, or its Media RSS description when the feed gives no content. */
 function contentOf(item: SubscriptionItem, baseUrl: string, language: string): ConvertedContent {
+  // An embed is not shown, but kept as a link so that the reader knows it was there.
   return item.description !== null && item.contentHtml.length === 0
-    ? convertDescription(item.description, baseUrl, language)
-    : convertContent(item.contentHtml, baseUrl, language);
+    ? convertDescription(item.description, baseUrl, language, { embeds: true })
+    : convertContent(item.contentHtml, baseUrl, language, { embeds: true });
 }
 
 function setReference(db: Database, articleId: number, url: string | null, feedTitle: string, title: string): void {

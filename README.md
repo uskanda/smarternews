@@ -147,7 +147,7 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day. A `Retry-After` on a 429 or 503 answer is waited for as well, up to one day. A feed that answers 410 is shown as gone, with a suggestion to unsubscribe; it is not disabled.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
 - Articles of feeds can be starred and marked read like any other. Without a star they are deleted after 90 days.
-- The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts and embedded frames are removed.
+- The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts are removed. Videos, audio and embedded frames are not shown; each is kept as a link to its original address, named "Embedded content (host)".
 - Deleting a category keeps its feeds. They move to "未分類" with their articles.
 
 Images in the content are loaded by your browser or phone through the server, which fetches them from the site that publishes them (see [Images](#images)). For articles the model wrote, no image is ever loaded.

@@ -23,11 +23,12 @@
 
 ### Modified Capabilities
 
-- `feed-subscriptions`: 「内容の変換」で、埋め込みを元のアドレスへのリンクとして残す規則を足す
+- `feed-subscriptions`: 内容の変換の要件に、埋め込みを元のアドレスへのリンクとして残す規則を足す
 
 ## Impact
 
-- `packages/core`: 変換（`feeds/content.ts`）にオプションを足し、配信の内容（`feeds/ingest.ts`）と全文の取得（`feeds/full-content.ts`）で有効にする。
+- `packages/core`: 変換（`feeds/content.ts`）にオプションを足す。
+- `packages/core`: 配信の内容（`feeds/ingest.ts`）と全文の取得（`feeds/full-content.ts`）で、そのオプションを有効にする。
 - `packages/core`: 翻訳の区切り（`translation/segments.ts`）で、埋め込みのリンクだけの段落を翻訳しない。
 - 翻訳の答えの読み取り（`translation/google.ts`）は変えない。紛れ込んだタグは今までどおり捨てる。
 - `README.ja.md`、`README.md`: 内容の変換の説明を直す。

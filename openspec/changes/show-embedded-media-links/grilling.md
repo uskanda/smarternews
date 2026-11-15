@@ -1,7 +1,8 @@
 # grilling 記録: show-embedded-media-links
 
 GitHubのissueの213番のコメントで、1ラウンドの質問（Q1、Q2）に答えた記録である。
-issueは、内容の変換が `iframe`、`video`、`audio`、`object`、`embed` の要素を中身ごと捨てるため、動画や音声を埋め込んだ記事で読み手が動画のあったことに気付けない、というWeb UIの監査の項目（R-03）である。
+issueは、Web UIの監査の項目（R-03）である。内容の変換は `iframe`、`video`、`audio`、`object`、`embed` の要素を中身ごと捨てる。
+そのため、動画や音声を埋め込んだ記事では、読み手は動画があったことに気付けない。
 
 ## 決定
 
@@ -31,4 +32,4 @@ issueは、内容の変換が `iframe`、`video`、`audio`、`object`、`embed` 
 
 ## 状態
 
-frontier は空。共有理解は 2026-11-15 に確認済み。
+frontierは空。共有理解に到達した。利用者はQ1とQ2に答え、続く計画を2026-11-15に承認した。
