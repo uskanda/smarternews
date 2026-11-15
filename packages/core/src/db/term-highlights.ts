@@ -4,9 +4,11 @@ import { DomainError, notFound } from "../errors.ts";
 import { normalizeForMatch } from "../search/text.ts";
 import { transaction, type Database } from "./database.ts";
 import { num, str } from "./rows.ts";
+import { refreshAllTermMatches } from "./term-matches.ts";
 
-// Term groups and their terms. Only the terms are stored: the apps match them against what they show, so
-// nothing here touches an article, and no model is involved.
+// Term groups and their terms. The apps match the terms against what they show. The server matches them only
+// to keep whether each feed article has one, which the relevance order sorts by: adding or removing a term
+// matches every feed article again. Nothing else of an article changes, and no model is involved.
 
 /** Every term group in its order, each with its terms in the order they were added. */
 export function listTermGroups(db: Database): TermGroup[] {
@@ -66,7 +68,10 @@ export function updateTermGroup(db: Database, id: number, patch: TermGroupUpdate
 /** Removes a term group with its terms (ON DELETE CASCADE). */
 export function deleteTermGroup(db: Database, id: number): void {
   getTermGroup(db, id);
-  db.prepare("DELETE FROM term_groups WHERE id = ?").run(id);
+  transaction(db, () => {
+    db.prepare("DELETE FROM term_groups WHERE id = ?").run(id);
+    refreshAllTermMatches(db);
+  });
 }
 
 /** Stores the order of all term groups: the given ones first, in that order, then the rest as they were. */
@@ -103,18 +108,24 @@ export function addHighlightTerm(db: Database, groupId: number, input: Highlight
   if (db.prepare("SELECT 1 FROM highlight_terms WHERE group_id = ? AND normalized = ?").get(groupId, normalized)) {
     throw new DomainError("conflict", `the term "${input.text}" is already in this group`, [{ path: "text", message: "already registered" }]);
   }
-  db.prepare("INSERT INTO highlight_terms (group_id, text, normalized, created_at) VALUES (?, ?, ?, ?)").run(
-    groupId,
-    input.text,
-    normalized,
-    clock().toISOString(),
-  );
+  transaction(db, () => {
+    db.prepare("INSERT INTO highlight_terms (group_id, text, normalized, created_at) VALUES (?, ?, ?, ?)").run(
+      groupId,
+      input.text,
+      normalized,
+      clock().toISOString(),
+    );
+    refreshAllTermMatches(db);
+  });
   return getTermGroup(db, groupId);
 }
 
 /** Removes one term of a group. A term of another group is not found. */
 export function deleteHighlightTerm(db: Database, groupId: number, termId: number): void {
   getTermGroup(db, groupId);
-  const result = db.prepare("DELETE FROM highlight_terms WHERE id = ? AND group_id = ?").run(termId, groupId);
-  if (num(result.changes) === 0) throw notFound("term", termId);
+  transaction(db, () => {
+    const result = db.prepare("DELETE FROM highlight_terms WHERE id = ? AND group_id = ?").run(termId, groupId);
+    if (num(result.changes) === 0) throw notFound("term", termId);
+    refreshAllTermMatches(db);
+  });
 }

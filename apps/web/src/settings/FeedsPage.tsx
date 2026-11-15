@@ -2,7 +2,8 @@ import { FEED_INTERVAL_MINUTES_MAX, FEED_INTERVAL_MINUTES_MIN, FEED_TITLE_MAX_CH
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
-import { useFetchFeedNow } from "../lib/fetch-now.ts";
+import { saveBlob } from "../lib/download.ts";
+import { useFetchAllFeedsNow, useFetchFeedNow } from "../lib/fetch-now.ts";
 import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -14,7 +15,7 @@ import { ContentSelectorField, contentSelectorOf } from "./ContentSelector.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
-import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 const RANGE = "5分から1440分（24時間）の範囲で入力してください。";
@@ -448,12 +449,7 @@ function Opml() {
 
   async function download() {
     try {
-      const url = URL.createObjectURL(new Blob([await api.exportOpml()], { type: "text/x-opml" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "smarternews-feeds.opml";
-      link.click();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([await api.exportOpml()], { type: "text/x-opml" }), "smarternews-feeds.opml");
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -557,7 +553,8 @@ function Feeds() {
   const feeds = useFeeds();
   // Kept on this screen only: opened again, the list is in the order of the left pane.
   const [problemsFirst, setProblemsFirst] = useState(false);
-  const listed = feeds.data && problemsFirst ? [...feeds.data.filter(needsLook), ...feeds.data.filter((feed) => !needsLook(feed))] : feeds.data;
+  const { fetching: fetchingAll, fetchAll } = useFetchAllFeedsNow();
+  const listed =feeds.data && problemsFirst ? [...feeds.data.filter(needsLook), ...feeds.data.filter((feed) => !needsLook(feed))] : feeds.data;
   const categories = useCategories().data ?? [];
   const settings = useSettings().data;
   const timeZone = useTimeZone();
@@ -596,7 +593,13 @@ function Feeds() {
         {feeds.isPending && !feeds.isError ? <Loading /> : null}
         {feeds.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">購読フィードはまだありません。</p> : null}
         {feeds.data && feeds.data.length > 0 ? (
-          <Checkbox label="問題のある購読フィードを先頭に並べる" checked={problemsFirst} onChange={(event) => setProblemsFirst(event.target.checked)} />
+          <div className="flex flex-wrap items-center justify-between gap-md">
+            <Checkbox label="問題のある購読フィードを先頭に並べる" checked={problemsFirst} onChange={(event) => setProblemsFirst(event.target.checked)} />
+            {/* Every enabled feed at once. The rows keep their own button, which also fetches a feed whose site asked to wait. */}
+            <Button onClick={() => void fetchAll()} disabled={fetchingAll}>
+              {fetchingAll ? "取得中…" : "すべていま取得"}
+            </Button>
+          </div>
         ) : null}
         <ul>
           {listed?.map((feed) => (

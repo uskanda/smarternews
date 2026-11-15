@@ -15,13 +15,18 @@ export function attentionText(item: AttentionItem): string {
       return `${topic}を解釈できていません。`;
     case "empty-search":
       return item.source === "llm-search"
-        ? `${topic}で、LLM検索の結果が3回続けて0件です。`
+        ? `${topic}で、LLM検索の新しい候補が3回続けて0件です。1日1回に減らしています。`
         : `${topic}で、${ENGINE_LABEL[item.engine ?? ""] ?? item.engine}の検索語「${item.query ?? ""}」の結果が3回続けて0件です。`;
     case "no-adoption":
       return `${topic}で、14日間、記事の作成も更新もありません。`;
     case "google-unresolved":
       return "Google Newsの転送用URLを、3回の実行で続けて1件も解決できませんでした。記事は本文のない要約になります。";
   }
+}
+
+/** The topic whose web search by the model an item says is cut to once a day, which the user can put back; or null. */
+export function restorableLlmSearch(item: AttentionItem): number | null {
+  return item.kind === "empty-search" && item.source === "llm-search" ? item.topicId : null;
 }
 
 /** Where to look into an item: the failed run, or the topic in its category's settings. None for Google News. */

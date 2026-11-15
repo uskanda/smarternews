@@ -19,6 +19,7 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   unconfirmed: false,
   firstPublishedAt: "2026-03-01T12:00:00.000Z",
   updatedAt: "2026-03-01T12:00:00.000Z",
+  rankAt: "2026-03-01T12:00:00.000Z",
   revision: 0,
   isRead: false,
   readAt: null,
@@ -40,11 +41,13 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   snippetOnly: false,
   previousArticleId: null,
   previousArticles: [],
+  updateNotes: [],
   otherFeeds: [],
   annotations: { note: null, highlights: [] },
   mentions: [],
   attachments: [],
   missed: false,
+  followUpsStopped: false,
   refs: [
     {
       url: "https://example.org/a",

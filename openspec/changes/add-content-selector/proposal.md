@@ -35,7 +35,7 @@ add-full-contentは、Non-Goalsに「サイトごとに取り出しの方式を�
 - `packages/core/src/sources/extract.ts`：取り出しに、省略できる本文のセレクターを足す
 - `packages/core/src/feeds/full-content.ts`、`packages/core/src/feeds/summarize.ts`：本文のセレクターを取り出しに渡す。見本の処理を足す
 - `packages/core/src/db/feeds.ts`、`packages/core/src/db/articles.ts`：本文のセレクターの保存と、変えたときの未読の記事の全文の消去
-- `packages/core/src/db/migrations/032_feed_content_selector.sql`（新規）：`feeds` の表に列を1つ足す
+- `packages/core/src/db/migrations/037_feed_content_selector.sql`（新規）：`feeds` の表に列を1つ足す
 - `packages/core/src/api.ts`、`packages/core/src/settings-file.ts`：型、検証、設定ファイル
 - `apps/server/src/app.ts`：見本の操作の入口と、変更のあとの全文の取得の開始
 - `packages/client`、`apps/web`：見本の呼び出しと、編集のフォームの欄
