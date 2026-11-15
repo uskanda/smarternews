@@ -338,6 +338,36 @@ describe("misses", () => {
   });
 });
 
+describe("stopping follow-ups", () => {
+  it("stops the follow-ups of a generated article and lets them come again, leaving the read state alone", async () => {
+    const s = testServer();
+    const id = s.article(s.category().id);
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).followUpsStopped).toBe(false);
+
+    const stopped = await s.patch(`/api/v1/articles/${id}`, { followUpsStopped: true });
+
+    expect(stopped.status).toBe(200);
+    expect(await stopped.json()).toMatchObject({ id, followUpsStopped: true, isRead: false, missed: false });
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).followUpsStopped).toBe(true);
+    await s.patch(`/api/v1/articles/${id}`, { isRead: true });
+    expect(await (await s.patch(`/api/v1/articles/${id}`, { followUpsStopped: false })).json()).toMatchObject({
+      followUpsStopped: false,
+      isRead: true,
+    });
+  });
+
+  it("refuses a feed article and changes nothing", async () => {
+    const s = testServer();
+    const post = seedFeedArticle(s.db, seedFeed(s.db));
+
+    const response = await s.patch(`/api/v1/articles/${post}`, { followUpsStopped: true, isRead: true });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields[0]).toMatchObject({ path: "followUpsStopped", code: "not_allowed" });
+    expect(await (await s.get(`/api/v1/articles/${post}`)).json()).toMatchObject({ followUpsStopped: false, isRead: false });
+  });
+});
+
 describe("importance filter", () => {
   it("returns only the articles at or above the given importance", async () => {
     const s = testServer();

@@ -649,6 +649,11 @@ export const articleSchema = articleSummarySchema.extend({
   attachments: z.array(articleAttachmentSchema),
   /** True when the reader marked the generated article as a miss. Always false for a feed article. */
   missed: z.boolean(),
+  /**
+   * True when the reader stopped the follow-ups of the generated article: a run rejects the stories that follow it up
+   * without writing them. Always false for a feed article.
+   */
+  followUpsStopped: z.boolean(),
 });
 export type Article = z.infer<typeof articleSchema>;
 
@@ -764,6 +769,11 @@ export const articleUpdateSchema = z.object({
    * article.
    */
   missed: z.boolean().optional(),
+  /**
+   * Stops the follow-ups of a generated article, or lets them come again. Whether it is read stays as it is. Refused
+   * for a feed article.
+   */
+  followUpsStopped: z.boolean().optional(),
 });
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
 
@@ -1374,6 +1384,8 @@ export const topicStatsCountsSchema = z.object({
   overLimit: z.number().int(),
   /** Rejected for a date: no publication time, or an event outside the window or without a date. */
   rejectedByDate: z.number().int(),
+  /** Rejected before writing as a follow-up to an article marked as a miss or with its follow-ups stopped. */
+  rejectedByMark: z.number().int(),
   /** Generated articles of the topic made within the period. */
   created: z.number().int(),
   /** Generated articles of the topic rewritten at least once, the last time within the period. */
@@ -1414,7 +1426,7 @@ export type TopicStats = z.infer<typeof topicStatsSchema>;
 
 /** The candidates of the topic that no article came from, rejected at any step. */
 export function topicRejected(entry: TopicStatsEntry): number {
-  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate;
+  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate + entry.rejectedByMark;
 }
 
 /** The share of the topic's articles marked as misses; 0 without articles. */

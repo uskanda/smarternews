@@ -686,7 +686,7 @@ describe("topics", () => {
 
 describe("the stats of the topics", () => {
   /** Stores a candidate of the topic collected now: rejected by the judge unless it says otherwise. */
-  function candidate(server: TestServer, categoryId: number, topicId: number, options: { siteName?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | null } = {}) {
+  function candidate(server: TestServer, categoryId: number, topicId: number, options: { siteName?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | "missed-follow-up" | "stopped-follow-up" | null } = {}) {
     const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
     insertCandidate(server.db, {
       categoryId,
@@ -714,6 +714,8 @@ describe("the stats of the topics", () => {
     candidate(server, category.id, flaws.id, { siteName: "ads.example" });
     candidate(server, category.id, flaws.id, { siteName: "ads.example", reasonCode: "below-minimum" });
     candidate(server, category.id, flaws.id, { status: "pending" });
+    candidate(server, category.id, flaws.id, { reasonCode: "missed-follow-up" });
+    candidate(server, category.id, flaws.id, { reasonCode: "stopped-follow-up" });
     const missed = server.article(category.id, { topicIds: [flaws.id] });
     server.article(category.id, { topicIds: [flaws.id] });
     setArticleFlags(server.db, missed, { missed: true }, server.clock().toISOString());
@@ -724,9 +726,10 @@ describe("the stats of the topics", () => {
     expect(regions.indexOf("トピックの成績")).toBe(regions.indexOf("トピック") + 1);
     const row = await within(stats).findByRole("listitem");
     expect(row).toHaveAttribute("id", `topic-stats-${flaws.id}`);
-    await waitFor(() => expect(row).toHaveTextContent("集めた候補3件（ニュース検索 3）"));
+    await waitFor(() => expect(row).toHaveTextContent("集めた候補5件（ニュース検索 5）"));
     expect(row).toHaveTextContent("判定での除外1件");
     expect(row).toHaveTextContent("基準未満1件");
+    expect(row).toHaveTextContent("印のある記事の続報2件");
     expect(row).toHaveTextContent("作った記事2件");
     expect(row).toHaveTextContent("外れ1/2件（50%）");
     expect(row).toHaveTextContent("よく除外されるサイトads.example 2件");

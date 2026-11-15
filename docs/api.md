@@ -173,6 +173,7 @@ Nothing is stored but the record of the call, which belongs to no run. To use a 
 | `belowMinimum` | Candidates rejected because their story was below the category's `minImportance` |
 | `overLimit` | Candidates rejected because the run had written `maxArticlesPerRun` articles |
 | `rejectedByDate` | Candidates rejected for a date: news without a publication time, and events outside the window or without a date |
+| `rejectedByMark` | Candidates rejected as a follow-up to an article marked as a [miss](#misses) or with its [follow-ups stopped](#stopped-follow-ups) |
 | `created` | Generated articles of the topic made in the period. Feed articles are never counted |
 | `updated` | Generated articles of the topic rewritten by a follow-up, the last time in the period |
 | `opened`, `starred` | Of the articles in `created`: the ones opened, and the ones with a star now |
@@ -207,7 +208,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/topics/7/versions
 |---|---|
 | `GET /api/v1/articles` | List articles |
 | `GET /api/v1/articles/:id` | Read one with body, references and topics |
-| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, or mark a generated article as a miss with `missed` (see [Misses](#misses)) |
+| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, mark a generated article as a miss with `missed` (see [Misses](#misses)), or stop its follow-ups with `followUpsStopped` (see [Stopped follow-ups](#stopped-follow-ups)) |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
@@ -332,6 +333,7 @@ The detail adds these:
 | `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
 | `attachments` | The files the feed attached to a feed article (RSS enclosures, Media RSS contents and thumbnails), in the order the feed listed them: `url` (the original address), `kind` (`image`, `audio`, `video` or `other`), `mimeType`, `size` in bytes, `title`, `thumbnailOf` (for a thumbnail, the article's page; otherwise `null`) and `imageUrl` (for an image, its address on the image relay; otherwise `null`). They are not part of `body`. Empty for a generated article and for a feed article without attachments. The list does not have this field |
 | `missed` | True when the reader marked the generated article as a [miss](#misses). Always `false` for a feed article. The list does not have this field |
+| `followUpsStopped` | True when the reader [stopped the follow-ups](#stopped-follow-ups) of the generated article. Always `false` for a feed article. The list does not have this field |
 
 ### Misses
 
@@ -343,6 +345,19 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application
 ```
 
 The server keeps each miss with the article's title and topics as they were when it was marked. The record stays when the article is deleted, and a miss does not keep the article from being deleted. Deleting a topic takes it off the misses; deleting a category deletes its misses. When a topic is interpreted, at the start of a run after it was created, after its text changed, or after `POST /api/v1/topics/:id/interpret`, the interpret task also reads the titles of the topic's misses of the last 90 days, the newest 20 at most, and writes into the criteria what to leave out. A miss never makes a topic be interpreted again by itself.
+
+A run writes no follow-up to an article marked as a miss: see [Stopped follow-ups](#stopped-follow-ups).
+
+### Stopped follow-ups
+
+Stopping the follow-ups of a generated article says that its story is the right kind but you have read enough of it. `PATCH /api/v1/articles/:id` with `{"followUpsStopped":true}` sets the mark and `{"followUpsStopped":false}` takes it away; neither changes the read mark. A feed article gets 400, with `followUpsStopped` as the field and `not_allowed` as the code. The mark is kept on the article and goes with it. Unlike a miss, the interpret task never reads it.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"followUpsStopped":true}' "$API/api/v1/articles/1"
+```
+
+When the `cluster` task ties a story to an article marked as a miss or with its follow-ups stopped, the run rejects the story's candidates before it calls the `write` task, and before it compares the story with the category's `minImportance` and `maxArticlesPerRun`. This holds for a rewrite within 72 hours and for a new article after that alike, so the article stays as it is, read or not. An event found to be the same as a marked event article only after it was written is rejected the same way, without the rewrite. The rejected candidates carry the reason code `missed-follow-up` (the article has a miss, which comes first when it has both marks) or `stopped-follow-up`, and a reason in the output language that names the article's title, so the run's candidates show which article the story was tied to. The `cluster` task sees the articles updated in the last 14 days (for events, those not ended); a marked article is not updated, so 14 days after its last update a story about it is written as a new article again.
 
 ### Open times
 
