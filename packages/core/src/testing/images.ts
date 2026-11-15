@@ -19,6 +19,11 @@ export function jpegBytes(size = 64, fill = 0): Uint8Array {
   return padded(JPEG, size, fill);
 }
 
+/** A body that starts like an ICO image with one picture, as `/favicon.ico` answers. */
+export function icoBytes(size = 64, fill = 0): Uint8Array {
+  return padded([0, 0, 1, 0, 1, 0, 16, 16], size, fill);
+}
+
 /** A response with an image body, as another site answers. */
 export function imageResponse(bytes: Uint8Array, contentType = "image/png"): Response {
   return new Response(bytes as Uint8Array<ArrayBuffer>, { status: 200, headers: { "content-type": contentType } });

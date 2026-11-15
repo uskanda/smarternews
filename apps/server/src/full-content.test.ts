@@ -32,8 +32,11 @@ async function delivered(s: ReturnType<typeof testServer>, settings: { fetchFull
   return { feed, id: list.items[0].id as number };
 }
 
+/** The requests for article pages: not the feed, robots.txt, nor the site and its favicon, which the search for the icon asks. */
 const pageRequests = (s: ReturnType<typeof testServer>) =>
-  s.site.requests.map((request) => request.url).filter((url) => url !== FEED && !url.endsWith("/robots.txt"));
+  s.site.requests
+    .map((request) => request.url)
+    .filter((url) => url !== FEED && !url.endsWith("/robots.txt") && url !== "https://blog.example.org/" && !url.endsWith("/favicon.ico"));
 
 describe("full content fetching of a subscribed feed", () => {
   it("is off for a feed registered without saying so, and can be switched on at registration and by a change", async () => {

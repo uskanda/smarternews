@@ -24,6 +24,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   selectors: null,
   title,
   siteUrl: null,
+  iconUrl: null,
   categoryId,
   intervalMinutes: null,
   enabled: true,

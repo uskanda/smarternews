@@ -166,6 +166,20 @@ function FeedStateIcon({ state, label = FEED_STATE_LABEL[state] }: { state: Feed
   );
 }
 
+/**
+ * The frame before a feed's name, one letter square: the icon of its site through the relay, or nothing when it
+ * has none or the picture cannot be loaded. The frame stays either way, so the names below a category start at
+ * one place. The name beside it is what is read out.
+ */
+function FeedIcon({ url }: { url: string | null }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  return (
+    <span aria-hidden="true" data-feed-icon="" className="feed-icon">
+      {url !== null && failed !== url ? <img src={url} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setFailed(url)} /> : null}
+    </span>
+  );
+}
+
 /** An entry that opens a list of articles. It is current on that list and on an article opened from it. */
 function ListItem({
   entry,
@@ -174,10 +188,13 @@ function ListItem({
   holdsCurrent = false,
   state = entry.state,
   stateLabel,
+  icon,
   onNavigate,
 }: {
   entry: NavEntry;
   to: string;
+  /** For a feed: its icon, or null for none. Left out for every other entry, which has no frame for one. */
+  icon?: string | null;
   count?: number;
   /** True for a folded category whose hidden entry is the one that is open: the row shows where the reader is. */
   holdsCurrent?: boolean;
@@ -196,6 +213,7 @@ function ListItem({
       draggable={false}
       className={`${ITEM} ${current || holdsCurrent ? "bg-selected font-semibold" : ""}`}
     >
+      {icon !== undefined ? <FeedIcon url={icon} /> : null}
       <span className="min-w-0 flex-1 truncate">{entry.label}</span>
       {state ? (
         <>
@@ -238,6 +256,9 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const leavingRow = useRef<number | null>(null);
   if (leaving !== null) leavingRow.current = leaving;
   const leavingFeed = feeds?.find((feed) => feed.id === leaving);
+  const icons = useMemo(() => new Map(feeds?.map((feed) => [feed.id, feed.iconUrl])), [feeds]);
+  /** The icon of a feed entry, null when it has none; undefined for any other entry. */
+  const iconOf = (entry: NavEntry) => (entry.target.type === "feed" ? (icons.get(entry.target.feedId) ?? null) : undefined);
   const menu = (entry: NavEntry, link: ReactElement) => (
     <EntryMenu entry={entry} model={model} onMove={move} onUnsubscribe={setLeaving}>
       {link}
@@ -321,7 +342,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
                             onKeyDown={openEntryMenu}
                             className="nav-row nav-child flex"
                           >
-                            {menu(child, <ListItem entry={child} to={pathOf(child)} onNavigate={onNavigate} />)}
+                            {menu(child, <ListItem entry={child} to={pathOf(child)} icon={iconOf(child)} onNavigate={onNavigate} />)}
                           </li>
                         ))}
                   </ul>

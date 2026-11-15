@@ -480,6 +480,7 @@ Fields of a feed:
 | Field | Content |
 |---|---|
 | `url`, `title`, `siteUrl` | The feed, its name, and the page it belongs to |
+| `iconUrl` | The icon of the feed's site as a path of the image relay (see [Images](#images)), or `null` when none was found. The server looks for it after the first successful fetch and again 30 days after the last look: the icon an Atom feed (`<icon>`) or a JSON Feed (`favicon`) names, then the `<link rel="icon">` of the site's page, then `/favicon.ico`. RSS's `<image>` is not used. The original address is in no answer |
 | `format` | `feed` for RSS, Atom and RDF; `page` for a [web feed](#web-feeds). It never changes |
 | `selectors` | The selectors of a web feed; `null` for a feed |
 | `categoryId` | The category, or `null` |
@@ -601,7 +602,7 @@ The path has no origin. The web app loads it from its own origin; another client
 
 The signature is an HMAC-SHA256 of the original URL, made with a key that the server creates at its first start and keeps in the data directory as `image-proxy.key`. The key appears in no answer, no log and no settings file. A signed path does not expire. Deleting the key file and restarting the server makes every earlier path invalid; the next answers carry new ones.
 
-A request for a relay path needs no token, since an image element cannot send one. The server fetches the original with the same limits as a page: no request to a refused address, every redirect target checked, at most five redirects, the configured time limit and `User-Agent`. It sends nothing the device sent, such as cookies or the referrer, and it does not wait the interval per host or read `robots.txt`. It keeps at most four fetches open to one host; the others wait their turn. An image may be up to 10 MB, and its format is told from its bytes: JPEG, PNG, GIF, WebP and AVIF are served, anything else, SVG included, is refused.
+A request for a relay path needs no token, since an image element cannot send one. The server fetches the original with the same limits as a page: no request to a refused address, every redirect target checked, at most five redirects, the configured time limit and `User-Agent`. It sends nothing the device sent, such as cookies or the referrer, and it does not wait the interval per host or read `robots.txt`. It keeps at most four fetches open to one host; the others wait their turn. An image may be up to 10 MB, and its format is told from its bytes: JPEG, PNG, GIF, WebP, AVIF and ICO (served as `image/x-icon`, for site icons) are served, anything else, SVG included, is refused.
 
 | Status | Meaning |
 |---|---|

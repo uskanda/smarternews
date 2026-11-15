@@ -13,7 +13,7 @@
 - APIの購読フィードに `iconUrl` を足す。中身は署名した中継のパスで、元のURLは出さない。
 - 画像の中継は、ICOの画像を受け付け、`image/x-icon` として返す。
 - Webの左のペインで、購読フィードの名前の前に、文字の高さのアイコンを出す。アイコンのない行も同じ幅を空ける。
-- 一覧の行（`ArticleRow`）とAndroidのドロワーは変えない。
+- 一覧の行（`ArticleRow`）とAndroidの引き出しは変えない。
 
 ## Capabilities
 
@@ -33,7 +33,10 @@
 - `packages/core/src/sources/feed.ts`：Atomの `<icon>` とJSON Feedの `favicon` の読み取り
 - `packages/core/src/feeds/icon.ts`（新規）：アイコンを探す処理
 - `packages/core/src/feeds/ingest.ts`：登録と取得のあとにアイコンを探す
-- `packages/core/src/db/migrations/032_feed_icons.sql`（新規）、`packages/core/src/db/feeds.ts`：`icon_url` と `icon_checked_at` の列
-- `packages/core/src/api.ts`、`packages/core/src/images/rewrite.ts`、`apps/server/src/app.ts`：`iconUrl` を中継のパスで返す
+- `032_feed_icons.sql`（新規）：`feeds` の2列
+- `packages/core/src/db/feeds.ts`：2列の読み書き
+- `packages/core/src/api.ts`：`Feed` の `iconUrl`
+- `rewrite.ts`、`apps/server/src/app.ts`：`iconUrl` を中継のパスで返す
 - `apps/web/src/shell/Shell.tsx`：左のペインのアイコン
+- `docs/api.md`：`iconUrl` の項目と、中継が返すICO
 - Androidのアプリ：変えない

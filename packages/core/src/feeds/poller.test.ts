@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getFeed, insertFeed, updateFeed } from "../db/feeds.ts";
+import { getFeed, insertFeed, recordFeedIcon, updateFeed } from "../db/feeds.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
 import { fakeFetch, html, xml } from "../testing/http.ts";
@@ -13,6 +13,15 @@ const rss = (title: string, keys: string[]) =>
     .map((key) => `<item><title>${key}</title><guid>${key}</guid><link>https://example.org/${key}</link></item>`)
     .join("")}</channel></rss>`;
 
+/**
+ * Marks the feed as if its icon had just been looked for, so that the requests a test counts are the fetches of the
+ * feed alone. The icon has tests of its own (ingest.test.ts).
+ */
+function withoutIconSearch<T extends { id: number }>(db: ReturnType<typeof createTestDb>, feed: T): T {
+  recordFeedIcon(db, feed.id, { iconUrl: null, checkedAt: "9999-12-31T00:00:00.000Z" });
+  return feed;
+}
+
 function setup(routes: Parameters<typeof fakeFetch>[0]) {
   const db = createTestDb();
   const clock = fakeClock(START);
@@ -20,7 +29,7 @@ function setup(routes: Parameters<typeof fakeFetch>[0]) {
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 1_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
   const poller = new FeedPoller({ db, clock, fetcher });
   const add = (name: string, options: { intervalMinutes?: number; enabled?: boolean } = {}) =>
-    insertFeed(db, { url: `https://${name}.example.org/feed.xml`, title: name, ...options }, clock);
+    withoutIconSearch(db, insertFeed(db, { url: `https://${name}.example.org/feed.xml`, title: name, ...options }, clock));
   /** One round, as the timer would start it, waited for. */
   const round = async () => {
     poller.tick();
@@ -252,7 +261,7 @@ describe("FeedPoller and web feeds", () => {
   it("waits twice as long after each fetch that finds no item element, as after any failure", async () => {
     let body = listing(["a1"]);
     const s = setup({ [PAGE]: () => html(body) });
-    const feed = insertFeed(s.db, { url: PAGE, title: "W", format: "page", selectors: { item: "li" }, intervalMinutes: 30 }, s.clock);
+    const feed = withoutIconSearch(s.db, insertFeed(s.db, { url: PAGE, title: "W", format: "page", selectors: { item: "li" }, intervalMinutes: 30 }, s.clock));
     await s.round();
     expect(getFeed(s.db, feed.id)).toMatchObject({ failureCount: 0, articleCount: 1 });
     const pageRequests = () => s.urls().filter((url) => url === PAGE).length;

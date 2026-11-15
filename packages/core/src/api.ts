@@ -899,6 +899,11 @@ export const feedSchema = z.object({
   selectors: pageSelectorsSchema.nullable(),
   title: z.string(),
   siteUrl: z.string().nullable(),
+  /**
+   * The icon of the feed's site, as a path of the image relay; never its original address. Null when none was
+   * found.
+   */
+  iconUrl: z.string().nullable(),
   categoryId: z.number().int().nullable(),
   /** Null means the base interval of the settings. */
   intervalMinutes: z.number().int().nullable(),

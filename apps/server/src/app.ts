@@ -44,6 +44,7 @@ import {
   ImageFetchError,
   verifyImageProxyPath,
   relayArticleImages,
+  relayFeedIcon,
   relayFullContent,
   relayTranslation,
   getCategory,
@@ -123,6 +124,7 @@ import {
   type Database,
   type DigestList,
   type DigestWorker,
+  type Feed,
   type FeedFetchResult,
   type FeedPoller,
   type Fetcher,
@@ -208,6 +210,8 @@ export function createApp(deps: AppDeps): Hono {
   const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, digests, trials, images } = deps;
   /** An article as it is answered: the images of a feed article's content load through the relay. */
   const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
+  /** A feed as it is answered: its icon loads through the relay. */
+  const feedAnswer = (feed: Feed) => relayFeedIcon(feed, images.key);
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -400,11 +404,11 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // subscribed feeds
-  api.get("/feeds", (c) => c.json(listFeeds(db, clock())));
+  api.get("/feeds", (c) => c.json(listFeeds(db, clock()).map(feedAnswer)));
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
-    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, input)), 201);
+    return c.json(feedAnswer(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, input))), 201);
   });
   // Candidates for the selectors of a page without a feed. The one place a web feed calls a model, and only when
   // the day has room; otherwise the server's own guess. Waits for the model, up to its time limit. Stores nothing.
@@ -420,13 +424,13 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
-  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
+  api.get("/feeds/:id", (c) => c.json(feedAnswer(getFeed(db, idParam(c, "feed"), clock()))));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
-  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
+  api.patch("/feeds/:id", async (c) => c.json(feedAnswer(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock))));
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
-    return c.json(listFeeds(db, clock()));
+    return c.json(listFeeds(db, clock()).map(feedAnswer));
   });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
@@ -435,7 +439,7 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/:id/fetch", async (c) => {
     const id = idParam(c, "feed");
     const outcome = await poller.fetchNow(id);
-    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id, clock()) };
+    const result: FeedFetchResult = { ...outcome, feed: feedAnswer(getFeed(db, id, clock())) };
     return c.json(result);
   });
 
