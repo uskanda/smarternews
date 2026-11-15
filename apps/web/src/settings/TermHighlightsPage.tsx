@@ -9,7 +9,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
-import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 

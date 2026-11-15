@@ -40,7 +40,7 @@ import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
-import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "../ui/unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";

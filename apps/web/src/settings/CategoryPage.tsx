@@ -47,7 +47,7 @@ import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading } from "../ui/controls.tsx";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { KIND_LABEL } from "./SettingsPage.tsx";
-import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 

@@ -14,6 +14,7 @@ configure({ asyncUtilTimeout: 5000 });
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   resetPaneState();
   resetCollapsedState();
   resetThemeState();
