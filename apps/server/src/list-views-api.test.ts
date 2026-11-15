@@ -40,6 +40,17 @@ describe("list views", () => {
     expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [{ key: "starred", sort: "starred" }] });
   });
 
+  it("take the relevance order for a category and keep it", async () => {
+    const s = testServer();
+    const category = s.category("Tools");
+    expect(await (await s.patch(`/api/v1/list-views/category-${category.id}`, { sort: "relevance" })).json()).toEqual({
+      key: `category-${category.id}`,
+      sort: "relevance",
+    });
+    expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [{ key: `category-${category.id}`, sort: "relevance" }] });
+    expect((await s.patch("/api/v1/list-views/unread", { sort: "random" })).status).toBe(400);
+  });
+
   it("take a body without settings and change nothing", async () => {
     const s = testServer();
     await s.patch("/api/v1/list-views/unread", { sort: "oldest" });

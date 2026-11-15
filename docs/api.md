@@ -94,7 +94,7 @@ Settings fields:
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
-`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest` or `oldest`, or `starred` for the entry `starred` only. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
 ## Categories
 
@@ -126,6 +126,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | `PATCH /api/v1/topics/:id` | Change `text`, `enabled`, `sources`, `search`, `queries` |
 | `DELETE /api/v1/topics/:id` | Delete it (status 204) |
 | `POST /api/v1/topics/:id/interpret` | Ask for a new interpretation before the next run |
+| `POST /api/v1/topics/:id/llm-search/restore` | Put the topic's web search by the model back to every run |
 | `POST /api/v1/topics/:id/trials` | Try a text on the topic without saving it (status 202) |
 | `GET /api/v1/topic-trials/:id` | Read a trial: its status and, once it succeeded, its result |
 | `POST /api/v1/topics/:id/rewrite-proposals` | Ask the model for new wordings of the topic, without saving anything |
@@ -139,6 +140,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 ```
 
 A topic's response includes `interpreted`, the generated `queries` and `criteria`, and `sources` (`feeds`, `newsSearch`, `llmSearch`). Interpretation happens at the start of the next run of the category. When you create a topic without `sources`, the interpretation chooses `newsSearch` and `llmSearch` for you; once you set `sources` yourself, it leaves them alone. Changing `text` schedules a new interpretation. `search` overrides the language and region of news search for this topic; `null` removes the override. `missesSinceInterpretation` counts the [misses](#misses) of the topic's articles marked after its last interpretation; a topic interpreted before this count existed counts all of its misses.
+
+Web search by the model leaves out pages an earlier run of the category settled before it fetches them, and is given the headlines of the topic's ten latest generated articles. When three of its searches in a row find no new candidate, the server cuts it to once a day: a run leaves it out if a search of the topic that did not fail was made earlier that day, in the time zone of the settings, by a scheduled or a manual run. `llmSearchReduced` tells whether the topic's search is cut; it is always `false` for a topic without web search by the model. A search that finds a new candidate puts it back to every run. So does `POST /api/v1/topics/:id/llm-search/restore`, which takes no body and answers the topic; only the searches after it count towards cutting it again. Changing `text` starts the count again too.
 
 ### Topic trials
 
@@ -170,6 +173,7 @@ Nothing is stored but the record of the call, which belongs to no run. To use a 
 | `belowMinimum` | Candidates rejected because their story was below the category's `minImportance` |
 | `overLimit` | Candidates rejected because the run had written `maxArticlesPerRun` articles |
 | `rejectedByDate` | Candidates rejected for a date: news without a publication time, and events outside the window or without a date |
+| `rejectedByMark` | Candidates rejected as a follow-up to an article marked as a [miss](#misses) or with its [follow-ups stopped](#stopped-follow-ups) |
 | `created` | Generated articles of the topic made in the period. Feed articles are never counted |
 | `updated` | Generated articles of the topic rewritten by a follow-up, the last time in the period |
 | `opened`, `starred` | Of the articles in `created`: the ones opened, and the ones with a star now |
@@ -204,7 +208,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/topics/7/versions
 |---|---|
 | `GET /api/v1/articles` | List articles |
 | `GET /api/v1/articles/:id` | Read one with body, references and topics |
-| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, or mark a generated article as a miss with `missed` (see [Misses](#misses)) |
+| `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, mark a generated article as a miss with `missed` (see [Misses](#misses)), or stop its follow-ups with `followUpsStopped` (see [Stopped follow-ups](#stopped-follow-ups)) |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
 | `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
@@ -231,15 +235,17 @@ Query parameters of the list:
 | `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
 | `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred`, `minImportance` or `order` |
-| `order` | `newest` (the default) or `oldest`, by the same time either way, or `starred`: by `starredAt`, last starred first, allowed with `starred=true` only. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
+| `order` | `newest` (the default), `oldest` or `relevance`, see below; or `starred`: by `starredAt`, last starred first, allowed with `starred=true` only. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
 Unless `origin` or `feed` narrows it, a list holds generated articles and feed articles together. Articles come ordered by last update, newest first, or oldest first with `order=oldest`. A feed article sorts by the time its item was published. When the item has no date, or one in the future, the time it was fetched is used. A generated article that a follow-up rewrites moves to the newest end, in either order. With `kind=event` the order is by start time, soonest first. Every list leaves out events that have ended unless `includeEnded=true` is given.
 
+`order=relevance` puts the articles nearest the reader's interests first without letting old ones stay on top. Each article has a relevance from 0 to 1, and the list is ordered by `rankAt`, highest first: the same time as above, moved later by 48 hours times the relevance. An article of relevance 1 from yesterday thus comes before an article of relevance 0 from today. The relevance of a generated article comes from its importance: 1 is 0, 5 is 1. The relevance of a feed article is half the behaviour score of its feed and half whether its title, translated title or summary has a [highlight term](#term-highlights), matched as the apps colour terms (1 or 0). The behaviour score compares how many of the articles each feed delivered in the last 30 days were opened or starred, the feed with the highest share being 1; a feed with fewer than ten such articles, a new one too, takes the average of the others. The server works the scores out when it starts and once a day after that, and matches the terms again when an article is stored, a translated title is saved and the terms change, so `rankAt` does not move while a list is read. No model is called for any of this.
+
 `recentlyRead=true` lists the articles whose `readAt` falls within the last seven days (168 hours, not calendar days), ordered by `readAt`, newest first. It includes events that have ended and ignores `includeEnded`. Articles read before the server started to record read times have no `readAt`, so they never appear here. Combined with any other narrowing, the request gets 400.
 
-Each response has three fields: `items`, the articles of this page; `nextCursor`, which is `null` on the last page; and `asOf`, the time by the server's clock at which it read the list. A cursor belongs to the order it was issued for: the cursor of a list oldest first sent without `order=oldest`, or the other way round, gets 400, and so does a cursor of one order sent with `order=starred` or the other way round.
+Each response has three fields: `items`, the articles of this page; `nextCursor`, which is `null` on the last page; and `asOf`, the time by the server's clock at which it read the list. A cursor belongs to the order it was issued for: the cursor of a list oldest first sent without `order=oldest`, or the other way round, gets 400, and so does a cursor of one order sent with another.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles?unread=true&limit=20"
@@ -300,6 +306,7 @@ Fields of an article in the list:
 | `starredAt` | When the article was starred, by the server's clock. Starring an article that is already starred keeps the time, and taking the star away clears it. `null` for an article without a star. A star given before star times were recorded has the article's `updatedAt` of that time |
 | `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
+| `rankAt` | What `order=relevance` sorts by: `updatedAt` moved later by 48 hours times the article's relevance. For ordering, not for showing |
 | `event` | For events: `startsAt`, `endsAt`, `venue`, `fee`, `registration` |
 
 The detail adds these:
@@ -308,6 +315,7 @@ The detail adds these:
 |---|---|
 | `body`, `bodyHtml` | The article as Markdown and as HTML. For a feed article this is what the feed delivered (or, for an item without content, its Media RSS description), reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. The images of a feed article point to the server's relay (see [Images](#images)); only the HTML of a feed article contains images |
 | `refs` | Every source: `url`, `siteName`, `title`, `publishedAt`, `reason`, `importance` and `isNew`. `reason` and `importance` are what the judgement gave the source, `null` for a feed article and for older sources. `isNew` is true when a follow-up added the source after the reader last read the article before that follow-up; opening the article again keeps it. It is false in an article never read, for a source stored before the time sources were added was recorded, and in a feed article |
+| `updateNotes` | What the rewrites since the reader last read the article added, oldest first: each has `note` and `createdAt`, the time of its rewrite. It holds every note written after the reader last read the article before a rewrite, the same time `isNew` is measured from, so the note of an earlier rewrite stays when the last one has none. In an article never read it holds the note of the last rewrite only, and nothing when that rewrite had none. A rewrite without a note has no entry. Empty for an article never rewritten and for a feed article. `updateNote` stays the note of the last rewrite. The list does not have this field |
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
 | `autoSummary` | The summary a model wrote of a feed article: `text`, `source` and `createdAt`. `source` is `page` when it was written from the article's page, and `feed` when that page could not be read and only what the feed delivered was used. `null` when there is no summary, and always for a generated article |
@@ -326,6 +334,7 @@ The detail adds these:
 | `mentions` | The names of people, organizations, products and places found in the article, in the order they were stored: `name` and `kind` (`person`, `organization`, `product` or `place`). See [Mentions](#mentions). Empty for an article without them. The list does not have this field |
 | `attachments` | The files the feed attached to a feed article (RSS enclosures, Media RSS contents and thumbnails), in the order the feed listed them: `url` (the original address), `kind` (`image`, `audio`, `video` or `other`), `mimeType`, `size` in bytes, `title`, `thumbnailOf` (for a thumbnail, the article's page; otherwise `null`) and `imageUrl` (for an image, its address on the image relay; otherwise `null`). They are not part of `body`. Empty for a generated article and for a feed article without attachments. The list does not have this field |
 | `missed` | True when the reader marked the generated article as a [miss](#misses). Always `false` for a feed article. The list does not have this field |
+| `followUpsStopped` | True when the reader [stopped the follow-ups](#stopped-follow-ups) of the generated article. Always `false` for a feed article. The list does not have this field |
 
 ### Misses
 
@@ -337,6 +346,19 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application
 ```
 
 The server keeps each miss with the article's title and topics as they were when it was marked. The record stays when the article is deleted, and a miss does not keep the article from being deleted. Deleting a topic takes it off the misses; deleting a category deletes its misses. When a topic is interpreted, at the start of a run after it was created, after its text changed, or after `POST /api/v1/topics/:id/interpret`, the interpret task also reads the titles of the topic's misses of the last 90 days, the newest 20 at most, and writes into the criteria what to leave out. A miss never makes a topic be interpreted again by itself.
+
+A run writes no follow-up to an article marked as a miss: see [Stopped follow-ups](#stopped-follow-ups).
+
+### Stopped follow-ups
+
+Stopping the follow-ups of a generated article says that its story is the right kind but you have read enough of it. `PATCH /api/v1/articles/:id` with `{"followUpsStopped":true}` sets the mark and `{"followUpsStopped":false}` takes it away; neither changes the read mark. A feed article gets 400, with `followUpsStopped` as the field and `not_allowed` as the code. The mark is kept on the article and goes with it. Unlike a miss, the interpret task never reads it.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"followUpsStopped":true}' "$API/api/v1/articles/1"
+```
+
+When the `cluster` task ties a story to an article marked as a miss or with its follow-ups stopped, the run rejects the story's candidates before it calls the `write` task, and before it compares the story with the category's `minImportance` and `maxArticlesPerRun`. This holds for a rewrite within 72 hours and for a new article after that alike, so the article stays as it is, read or not. An event found to be the same as a marked event article only after it was written is rejected the same way, without the rewrite. The rejected candidates carry the reason code `missed-follow-up` (the article has a miss, which comes first when it has both marks) or `stopped-follow-up`, and a reason in the output language that names the article's title, so the run's candidates show which article the story was tied to. The `cluster` task sees the articles updated in the last 14 days (for events, those not ended); a marked article is not updated, so 14 days after its last update a story about it is written as a new article again.
 
 ### Open times
 
@@ -700,7 +722,7 @@ Status 400 answers a wrong regular expression, a keep filter over everything, an
 
 ## List views
 
-Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest` or `oldest`, and for `starred` alone also `starred`, by the time each article was starred. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
+Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
 
 | Operation | Purpose |
 |---|---|
@@ -718,7 +740,7 @@ Status 404 answers a category or feed that does not exist. Status 400 answers an
 
 ## Term highlights
 
-Term groups colour their terms in the lists and the texts of articles, generated and delivered alike. Nothing is hidden, and no article changes: the server only stores the groups and answers them, and the web app and the Android app match the terms against the text they show. A term matches as a filter's `contains` does: anywhere in the text, upper and lower case alike, full-width and half-width alike. Where terms of two groups match one place, the group that comes first colours it.
+Term groups colour their terms in the lists and the texts of articles, generated and delivered alike. Nothing is hidden, and no article changes: the server stores the groups and answers them, and the web app and the Android app match the terms against the text they show. The server matches the terms itself only to know which feed articles have one, which moves them up in the [relevance order](#articles); adding or removing a term or a group matches every feed article again. A term matches as a filter's `contains` does: anywhere in the text, upper and lower case alike, full-width and half-width alike. Where terms of two groups match one place, the group that comes first colours it.
 
 | Operation | Purpose |
 |---|---|
@@ -832,7 +854,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 |---|---|
 | `run-failed` | The latest scheduled run of an enabled category, or its last retry, failed with no retry planned, or stopped at a limit, and no later run succeeded or partly failed |
 | `uninterpreted` | An enabled topic is still uninterpreted, and the latest finished run of its category failed to interpret it |
-| `empty-search` | A news search (one engine and one query of a topic) or a topic's web search by the model returned nothing in its last three attempts. Attempts that failed are left out |
+| `empty-search` | A news search (one engine and one query of a topic) returned nothing in its last three attempts, or a topic's web search by the model found no new candidate in its last three and is cut to once a day. Attempts that failed are left out |
 | `no-adoption` | An enabled topic, made at least 14 days ago, has had no article written or updated in the last 14 days |
 | `google-unresolved` | The last three runs that tried to resolve Google News redirect links resolved none |
 

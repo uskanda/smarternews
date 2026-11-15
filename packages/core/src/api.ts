@@ -161,6 +161,11 @@ export const topicSchema = z.object({
    * interpretation reads. Every miss counts for a topic interpreted before the time of interpretation was kept.
    */
   missesSinceInterpretation: z.number().int(),
+  /**
+   * Whether the topic's web search by the model is cut to once a day, because its last three attempts found no
+   * new candidate. Always false for a topic without web search by the model.
+   */
+  llmSearchReduced: z.boolean(),
 });
 export type Topic = z.infer<typeof topicSchema>;
 
@@ -542,6 +547,12 @@ export const articleSummarySchema = z.object({
   unconfirmed: z.boolean(),
   firstPublishedAt: z.string(),
   updatedAt: z.string(),
+  /**
+   * What the relevance order sorts by: `updatedAt` moved later by 48 hours times the article's relevance, from 0
+   * to 1. A generated article's relevance comes from its importance; a feed article's from how often the reader
+   * opens or stars its feed's articles and whether its titles or summary have a highlight term. Not for showing.
+   */
+  rankAt: z.string(),
   revision: z.number().int(),
   isRead: z.boolean(),
   /** When the article was last marked read. Null for an unread article, and for one read before read times were kept. */
@@ -621,6 +632,13 @@ export const articleSchema = articleSummarySchema.extend({
    */
   otherFeeds: z.array(z.object({ articleId: z.number().int(), feedId: z.number().int(), feedTitle: z.string() })),
   refs: z.array(articleRefSchema),
+  /**
+   * What the rewrites since the reader last read the article added, oldest first: each note with the time of its
+   * rewrite. Every note after the time the article was read before a rewrite, as with `isNew`; in an article never
+   * read, the note of the last rewrite only. A rewrite without a note has no entry. Empty for an article never
+   * rewritten and for a feed article. `updateNote` stays the note of the last rewrite.
+   */
+  updateNotes: z.array(z.object({ note: z.string(), createdAt: z.string() })),
   topics: z.array(z.object({ id: z.number().int(), text: z.string() })),
   /** The reader's highlights and note on the article. A screen finds the highlights in the body it draws. */
   annotations: articleAnnotationsSchema,
@@ -636,14 +654,20 @@ export const articleSchema = articleSummarySchema.extend({
   attachments: z.array(articleAttachmentSchema),
   /** True when the reader marked the generated article as a miss. Always false for a feed article. */
   missed: z.boolean(),
+  /**
+   * True when the reader stopped the follow-ups of the generated article: a run rejects the stories that follow it up
+   * without writing them. Always false for a feed article.
+   */
+  followUpsStopped: z.boolean(),
 });
 export type Article = z.infer<typeof articleSchema>;
 
 /**
- * The order of an article list: by the time lists sort by, newest first or oldest first, or, for the starred
- * articles only, by the time they were starred, last starred first.
+ * The order of an article list: by the time lists sort by, newest first or oldest first; by relevance, which
+ * is by that time moved later by up to 48 hours for the articles nearest the reader's interests (`rankAt`); or,
+ * for the starred articles only, by the time they were starred, last starred first.
  */
-export const listSortSchema = z.enum(["newest", "oldest", "starred"]);
+export const listSortSchema = z.enum(["newest", "oldest", "relevance", "starred"]);
 export type ListSort = z.infer<typeof listSortSchema>;
 
 export const articleListQuerySchema = z.object({
@@ -664,7 +688,7 @@ export const articleListQuerySchema = z.object({
   recentlyRead: z.enum(["true"]).optional(),
   /**
    * Newest first when left out. Refused with `kind=event` and `recentlyRead=true`, whose order is fixed, even
-   * as `newest`. `starred` is refused without `starred=true`.
+   * as `newest`. `relevance` sorts by `rankAt`, highest first. `starred` is refused without `starred=true`.
    */
   order: listSortSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -754,6 +778,11 @@ export const articleUpdateSchema = z.object({
    * article.
    */
   missed: z.boolean().optional(),
+  /**
+   * Stops the follow-ups of a generated article, or lets them come again. Whether it is read stays as it is. Refused
+   * for a feed article.
+   */
+  followUpsStopped: z.boolean().optional(),
 });
 export type ArticleUpdate = z.infer<typeof articleUpdateSchema>;
 
@@ -1367,6 +1396,8 @@ export const topicStatsCountsSchema = z.object({
   overLimit: z.number().int(),
   /** Rejected for a date: no publication time, or an event outside the window or without a date. */
   rejectedByDate: z.number().int(),
+  /** Rejected before writing as a follow-up to an article marked as a miss or with its follow-ups stopped. */
+  rejectedByMark: z.number().int(),
   /** Generated articles of the topic made within the period. */
   created: z.number().int(),
   /** Generated articles of the topic rewritten at least once, the last time within the period. */
@@ -1407,7 +1438,7 @@ export type TopicStats = z.infer<typeof topicStatsSchema>;
 
 /** The candidates of the topic that no article came from, rejected at any step. */
 export function topicRejected(entry: TopicStatsEntry): number {
-  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate;
+  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate + entry.rejectedByMark;
 }
 
 /** The share of the topic's articles marked as misses; 0 without articles. */

@@ -1,4 +1,4 @@
-import { createRun, finishRun, insertCandidate, setRetry, startRun, type RetrySkipped } from "@smarternews/core";
+import { createRun, createTopic, finishRun, insertCandidate, recordSearchAttempt, setRetry, startRun, type RetrySkipped } from "@smarternews/core";
 import { describe, expect, it } from "vitest";
 import { testServer } from "./testing.ts";
 
@@ -291,5 +291,56 @@ describe("attention", () => {
 
     expect(response.status).toBe(400);
     expect((await response.json()).error.fields).toEqual([expect.objectContaining({ path: "key" })]);
+  });
+});
+
+describe("web search by the model cut to once a day", () => {
+  /** A topic whose web search by the model found no new candidate three times in a row. */
+  function reducedTopic(s: ReturnType<typeof testServer>) {
+    const category = s.category();
+    const topic = createTopic(s.db, category.id, { text: "Topic", sources: { llmSearch: true } }, s.clock);
+    for (let index = 0; index < 3; index += 1) {
+      const run = createRun(s.db, { categoryId: category.id, trigger: "manual", slot: null }, s.clock);
+      recordSearchAttempt(s.db, {
+        runId: run.id,
+        topicId: topic.id,
+        kind: "llm-search",
+        engine: null,
+        query: "Topic",
+        ok: true,
+        returned: 0,
+        googleAttempted: 0,
+        googleUnresolved: 0,
+        createdAt: s.clock().toISOString(),
+      });
+    }
+    return topic;
+  }
+
+  it("shows on the topic", async () => {
+    const s = testServer();
+    const topic = reducedTopic(s);
+
+    expect(await (await s.get(`/api/v1/topics/${topic.id}`)).json()).toMatchObject({ llmSearchReduced: true });
+  });
+
+  it("goes back to every run, and leaves the attention list, when the user restores it", async () => {
+    const s = testServer();
+    const topic = reducedTopic(s);
+    expect((await (await s.get("/api/v1/attention")).json()).items).toEqual([
+      expect.objectContaining({ kind: "empty-search", source: "llm-search", topicId: topic.id }),
+    ]);
+
+    const response = await s.post(`/api/v1/topics/${topic.id}/llm-search/restore`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: topic.id, llmSearchReduced: false });
+    expect((await (await s.get("/api/v1/attention")).json()).items).toEqual([]);
+  });
+
+  it("answers 404 for a topic that does not exist", async () => {
+    const s = testServer();
+
+    expect((await s.post("/api/v1/topics/999/llm-search/restore")).status).toBe(404);
   });
 });

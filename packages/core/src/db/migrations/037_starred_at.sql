@@ -9,13 +9,14 @@ UPDATE articles SET starred_at = updated_at WHERE starred = 1;
 CREATE INDEX articles_starred_at ON articles (starred_at DESC, id DESC) WHERE starred = 1;
 
 -- List views gain the order by star time, which only the entry of starred articles can keep. SQLite cannot
--- change a CHECK, so the table is made again, as in 031, and takes over its rows with their ids.
+-- change a CHECK, so the table is made again, as in 031 and in the migration to the relevance order, and takes
+-- over its rows with their ids.
 CREATE TABLE list_views_new (
   id INTEGER PRIMARY KEY,
   list TEXT NOT NULL CHECK (list IN ('unread', 'all', 'starred', 'generated', 'feeds', 'uncategorized', 'category', 'category_generated', 'feed')),
   category_id INTEGER REFERENCES categories (id) ON DELETE CASCADE,
   feed_id INTEGER REFERENCES feeds (id) ON DELETE CASCADE,
-  sort TEXT NOT NULL DEFAULT 'newest' CHECK (sort IN ('newest', 'oldest', 'starred')),
+  sort TEXT NOT NULL DEFAULT 'newest' CHECK (sort IN ('newest', 'oldest', 'relevance', 'starred')),
   CHECK (sort <> 'starred' OR list = 'starred'),
   CHECK (
     (list IN ('category', 'category_generated') AND category_id IS NOT NULL AND feed_id IS NULL)

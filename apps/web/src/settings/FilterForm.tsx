@@ -7,7 +7,8 @@ import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, messageFor } from "../ui/controls.tsx";
-import { useUnsaved } from "./unsaved.tsx";
+import { useDialogCancel } from "../ui/FormDialog.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 // The inputs of a filter, shared by the settings of filters and the dialog that makes one from a selection.
 
@@ -223,13 +224,16 @@ export function FilterForm({
   // Counts the changes to the draft, so that a count asked for before one can be told apart and dropped.
   const version = useRef(0);
   const scopeId = useId();
-  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again.
+  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again. One
+  // that starts filled in, as from a selection, counts once it differs from what it started with.
+  const start = filter ?? initial;
   useUnsaved(
     label ?? (filter ? "フィルターの編集" : "新しいフィルター"),
-    filter
-      ? contentOf(draft) !== contentOf({ ...filter, scope: scopeKey(filter.scope) })
+    start
+      ? contentOf(draft) !== contentOf({ ...start, scope: scopeKey(start.scope) })
       : draft.conditions.some((condition) => condition.value.trim() !== ""),
   );
+  const cancel = useDialogCancel(onDone ?? (() => {}));
 
   const scope = scopeOf(draft.scope);
   const complete = scope !== null && draft.conditions.every((condition) => condition.fields.length > 0 && condition.value.trim().length > 0);
@@ -425,7 +429,7 @@ export function FilterForm({
         <Button onClick={() => void check()} disabled={!complete || busy}>
           隠れる件数を確かめる
         </Button>
-        {onDone ? <Button onClick={onDone}>やめる</Button> : null}
+        {onDone ? <Button onClick={cancel}>やめる</Button> : null}
       </div>
     </form>
   );
