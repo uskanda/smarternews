@@ -723,6 +723,76 @@ describe("reading an article", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Flaw disclosed" })).toBeInTheDocument();
   });
 
+  describe("the later articles of a story", () => {
+    function story() {
+      const server = makeServer("2026-03-01T09:30:00.000Z");
+      const category = server.category();
+      const write = (title: string, previousArticleId: number | null) => {
+        const id = insertArticle(server.db, {
+          categoryId: category.id,
+          kind: "news",
+          title,
+          summary: "s",
+          body: "b",
+          impact: null,
+          importance: 3,
+          unconfirmed: false,
+          snippetOnly: false,
+          event: null,
+          now: server.clock().toISOString(),
+          previousArticleId,
+          refs: [],
+          topicIds: [],
+        });
+        server.clock.advance(7 * 24 * 60 * MINUTE);
+        return id;
+      };
+      const first = write("Flaw disclosed", null);
+      const second = write("Patch released", first);
+      const third = write("Lawsuit filed", second);
+      return { server, first, second, third };
+    }
+
+    it("lists the later articles, newest first, with the day each was first published, and opens one", async () => {
+      const { server, first } = story();
+      const { user } = renderApp({ server, route: `/all/${first}` });
+
+      const chain = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "この話題のその後の記事" });
+      const items = within(chain).getAllByRole("listitem");
+      expect(items.map((item) => within(item).getByRole("link").textContent)).toEqual(["Lawsuit filed", "Patch released"]);
+      expect(items[0]).toHaveTextContent("2026年3月15日");
+      expect(items[1]).toHaveTextContent("2026年3月8日");
+
+      await user.click(within(chain).getByRole("link", { name: "Lawsuit filed" }));
+      expect(await screen.findByRole("heading", { level: 2, name: "Lawsuit filed" })).toBeInTheDocument();
+    });
+
+    it("has no such section on the newest article of the story", async () => {
+      const { server, third } = story();
+      renderApp({ server, route: `/all/${third}` });
+
+      const article = await screen.findByRole("article", { name: "記事" });
+      expect(await within(article).findByRole("region", { name: "この話題の前の記事" })).toBeInTheDocument();
+      expect(within(article).queryByRole("region", { name: "この話題のその後の記事" })).not.toBeInTheDocument();
+    });
+
+    it("marks the row of a starred article while a later article is unread", async () => {
+      const { server, first, second, third } = story();
+      setArticleFlags(server.db, first, { starred: true, isRead: true }, server.clock().toISOString());
+      setArticleFlags(server.db, second, { isRead: true }, server.clock().toISOString());
+      const view = renderApp({ server, route: "/starred" });
+
+      const row = (await screen.findByRole("link", { name: /Flaw disclosed/ })).closest("li")!;
+      expect(within(row).getByText("続報あり")).toBeInTheDocument();
+      view.unmount();
+
+      setArticleFlags(server.db, third, { isRead: true }, server.clock().toISOString());
+      renderApp({ server, route: "/starred" });
+      const readRow = (await screen.findByRole("link", { name: /Flaw disclosed/ })).closest("li")!;
+      expect(within(readRow).queryByText("続報あり")).not.toBeInTheDocument();
+    });
+  });
+
   it("puts what the last update added after the headline and before the impact", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Flaw", impact: "Update this week.", body: "Body text here." });

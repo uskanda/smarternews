@@ -53,8 +53,18 @@ export async function runCheck(): Promise<CheckResult> {
       await setBaseline(api);
       return "nothing";
     }
-    const [list, categories] = await Promise.all([api.articles({ origin: "generated", unread: "true", minImportance: minImportanceFor(setting), limit: 50 }), api.categories()]);
-    const plan = planNotifications({ setting, articles: list.items, checkedAt, categories });
+    const minImportance = minImportanceFor(setting);
+    const [list, starredStories, categories] = await Promise.all([
+      api.articles({ origin: "generated", unread: "true", minImportance, limit: 50 }),
+      // The articles of a starred story are notified whatever their importance, so a server that narrows by
+      // importance is asked for them too. Without that narrowing the first list has them already.
+      minImportance === undefined
+        ? Promise.resolve({ items: [] })
+        : api.articles({ origin: "generated", unread: "true", starredStory: "true", limit: 50 }),
+      api.categories(),
+    ]);
+    const articles = new Map([...list.items, ...starredStories.items].map((item) => [item.id, item]));
+    const plan = planNotifications({ setting, articles: [...articles.values()], checkedAt, categories });
     for (const entry of plan.notifications) {
       await Notifications.scheduleNotificationAsync({
         // The same article replaces its own earlier notification instead of stacking up.

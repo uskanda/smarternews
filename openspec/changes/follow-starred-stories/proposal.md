@@ -21,7 +21,7 @@
 
 - `article-pipeline`: 集約に渡す既存の記事に、スター付きの話題の記事を加える。
 - `http-api`: その後の記事の連なり、スター付きの記事に続く記事かどうか、未読の続報の件数を返し、スター付きの話題での絞り込みを受け付ける。
-- `web-reader`: 「この話題のその後の記事」と、一覧の行の「続報あり」の印を表示する。
+- `web-reader`: 本文の「この話題のその後の記事」と、一覧の行の「続報あり」の印を表示する。
 - `mobile-notifications`: スター付きの話題の続報を、重要度の設定にかかわらず通知する。
 
 ## Impact
@@ -31,4 +31,5 @@
 - `packages/core/src/api.ts`（応答の型と一覧の指定）、`docs/api.md`
 - `apps/web/src/reader/ArticleView.tsx`、`apps/web/src/reader/ArticleRow.tsx`
 - `packages/client/src/notify.ts`、`apps/mobile/src/notifications/check.ts`
-- 集約の入力が最大20件分長くなる。誤った結び付けが増えるおそれは、件数の上限で抑える。
+
+集約の入力は最大20件分長くなる。誤った結び付けが増えるおそれは、件数の上限で抑える。

@@ -21,6 +21,7 @@ import {
   requestAutoSummary,
   saveAutoSummary,
   setArticleFlags,
+  starredStoryTips,
   type ArticleContent,
 } from "./articles.ts";
 import { createCategory } from "./categories.ts";
@@ -868,5 +869,160 @@ describe("what a follow-up added", () => {
 
     db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(ids[1]!, ids[0]!);
     expect(getArticle(db, ids[1]!).previousArticles.map((entry) => entry.id)).toEqual([ids[0]]);
+  });
+});
+
+describe("starred stories", () => {
+  const DAY = 86_400_000;
+  const content = { title: "t", summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null };
+  const daysAgo = (days: number) => new Date(Date.parse(NOW) - days * DAY).toISOString();
+
+  function stories() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW));
+    const add = (options: { daysAgo: number; previous?: number | null; starred?: boolean; title?: string; categoryId?: number; kind?: "news" | "event" }) => {
+      const at = daysAgo(options.daysAgo);
+      const event =
+        options.kind === "event"
+          ? { key: `e-${Math.random()}`, startsAt: NOW, endsAt: NOW, venue: null, fee: null, registration: "unknown" as const }
+          : null;
+      const id = insertArticle(db, {
+        ...content,
+        title: options.title ?? `Story ${options.daysAgo}`,
+        event,
+        categoryId: options.categoryId ?? category.id,
+        kind: options.kind ?? "news",
+        now: at,
+        previousArticleId: options.previous ?? null,
+        refs: [],
+        topicIds: [],
+      });
+      if (options.starred) setArticleFlags(db, id, { starred: true }, at);
+      return id;
+    };
+    const since = daysAgo(90);
+    const tips = (limit = 20, exclude: Set<number> = new Set()) => starredStoryTips(db, category.id, since, limit, exclude).map((entry) => entry.id);
+    return { db, category, add, tips };
+  }
+
+  describe("what the grouping step is given", () => {
+    it("gives starred news articles of the category updated in the last 90 days, newest first", () => {
+      const s = stories();
+      const atEdge = s.add({ daysAgo: 90, starred: true });
+      const recent = s.add({ daysAgo: 30, starred: true });
+      s.add({ daysAgo: 91, starred: true });
+      s.add({ daysAgo: 30 });
+      const other = createCategory(s.db, { name: "Other", kind: "news" }, fakeClock(NOW));
+      s.add({ daysAgo: 30, starred: true, categoryId: other.id });
+      s.add({ daysAgo: 30, starred: true, kind: "event" });
+      const feedArticle = seedFeedArticle(s.db, seedFeed(s.db, { categoryId: s.category.id }), { at: daysAgo(30), starred: true });
+      expect(feedArticle).toBeGreaterThan(0);
+
+      expect(s.tips()).toEqual([recent, atEdge]);
+    });
+
+    it("gives at most the given number, the most recently updated", () => {
+      const s = stories();
+      const ids = Array.from({ length: 25 }, (_, index) => s.add({ daysAgo: 60 - index, starred: true }));
+      expect(s.tips()).toEqual(ids.slice(5).reverse());
+      expect(s.tips(3)).toEqual(ids.slice(22).reverse());
+    });
+
+    it("gives the newest later article in place of a starred one, once", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 40, starred: true });
+      const later = s.add({ daysAgo: 20, previous: starred });
+      const latest = s.add({ daysAgo: 10, previous: later, starred: true });
+      expect(s.tips()).toEqual([latest]);
+    });
+
+    it("takes the newest branch where the chain forks, and stops where it comes back", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 40, starred: true });
+      s.add({ daysAgo: 30, previous: starred });
+      const newer = s.add({ daysAgo: 20, previous: starred });
+      expect(s.tips()).toEqual([newer]);
+
+      const looped = s.add({ daysAgo: 50, starred: true });
+      const back = s.add({ daysAgo: 45, previous: looped });
+      s.db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(back, looped);
+      expect(s.tips()).toEqual([newer, back]);
+    });
+
+    it("skips what it is told to leave out without counting it", () => {
+      const s = stories();
+      const older = s.add({ daysAgo: 40, starred: true });
+      const newer = s.add({ daysAgo: 5, starred: true });
+      expect(s.tips(1, new Set([newer]))).toEqual([older]);
+    });
+  });
+
+  describe("what the API gives", () => {
+    it("gives the later articles of a story, newest first, at most 20, for any generated article", () => {
+      const s = stories();
+      const first = s.add({ daysAgo: 60, title: "A" });
+      const second = s.add({ daysAgo: 40, previous: first, title: "B" });
+      const third = s.add({ daysAgo: 20, previous: second, title: "C" });
+      expect(getArticle(s.db, first).laterArticles).toEqual([
+        { id: third, title: "C", firstPublishedAt: daysAgo(20) },
+        { id: second, title: "B", firstPublishedAt: daysAgo(40) },
+      ]);
+      expect(getArticle(s.db, third).laterArticles).toEqual([]);
+
+      let previous = third;
+      for (let index = 0; index < 25; index += 1) previous = s.add({ daysAgo: 19 - index * 0.1, previous });
+      expect(getArticle(s.db, first).laterArticles).toHaveLength(20);
+      expect(getArticle(s.db, first).laterArticles[0]!.id).toBe(previous);
+
+      const looped = s.add({ daysAgo: 80, title: "X" });
+      const back = s.add({ daysAgo: 70, previous: looped, title: "Y" });
+      s.db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(back, looped);
+      expect(getArticle(s.db, looped).laterArticles.map((entry) => entry.id)).toEqual([back]);
+      expect(getArticle(s.db, back).laterArticles.map((entry) => entry.id)).toEqual([looped]);
+    });
+
+    it("says whether an article follows a starred one, up its chain", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 60, starred: true });
+      const later = s.add({ daysAgo: 40, previous: starred });
+      const latest = s.add({ daysAgo: 20, previous: later });
+      const plain = s.add({ daysAgo: 20 });
+      const plainLater = s.add({ daysAgo: 10, previous: plain });
+      const followsStarred = (id: number) => listArticles(s.db, {}, NOW).items.find((item) => item.id === id)!.followsStarred;
+
+      expect([starred, later, latest, plain, plainLater].map(followsStarred)).toEqual([false, true, true, false, false]);
+      expect(getArticle(s.db, latest).followsStarred).toBe(true);
+    });
+
+    it("counts the unread later articles of a starred article, and none for one without a star", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 60, starred: true });
+      const later = s.add({ daysAgo: 40, previous: starred });
+      const latest = s.add({ daysAgo: 20, previous: later });
+      const unreadFollowUps = (id: number) => listArticles(s.db, {}, NOW).items.find((item) => item.id === id)!.unreadFollowUps;
+
+      expect(unreadFollowUps(starred)).toBe(2);
+      expect(unreadFollowUps(later)).toBe(0);
+      setArticleFlags(s.db, later, { isRead: true }, NOW);
+      expect(unreadFollowUps(starred)).toBe(1);
+      setArticleFlags(s.db, latest, { isRead: true }, NOW);
+      expect(unreadFollowUps(starred)).toBe(0);
+      expect(getArticle(s.db, starred).unreadFollowUps).toBe(0);
+
+      const feedArticle = seedFeedArticle(s.db, seedFeed(s.db, { categoryId: s.category.id }), { at: NOW, starred: true });
+      expect(unreadFollowUps(feedArticle)).toBe(0);
+      expect(listArticles(s.db, {}, NOW).items.find((item) => item.id === feedArticle)!.followsStarred).toBe(false);
+    });
+
+    it("narrows the list to the starred articles and those that follow one", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 60, starred: true });
+      const later = s.add({ daysAgo: 40, previous: starred });
+      s.add({ daysAgo: 20 });
+      expect(listArticles(s.db, { starredStory: "true" }, NOW).items.map((item) => item.id)).toEqual([later, starred]);
+      expect(listArticles(s.db, { starredStory: "true", unread: "true" }, NOW).items.map((item) => item.id)).toEqual([later, starred]);
+      setArticleFlags(s.db, later, { isRead: true }, NOW);
+      expect(listArticles(s.db, { starredStory: "true", unread: "true" }, NOW).items.map((item) => item.id)).toEqual([starred]);
+    });
   });
 });

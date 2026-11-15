@@ -26,6 +26,8 @@ function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
     readAt: null,
     openedAt: null,
     starred: false,
+    followsStarred: false,
+    unreadFollowUps: 0,
     primaryUrl: null,
     refCount: 1,
     event: null,
@@ -51,6 +53,21 @@ describe("planNotifications", () => {
     const high = article({ title: "Zero-day", importance: 5 });
     const plan = planNotifications({ setting: "important", articles: [high, article({ importance: 3 })], checkedAt: CHECKED, categories });
     expect(plan.notifications).toEqual([{ kind: "article", articleId: high.id, title: "Zero-day", body: "Security" }]);
+  });
+
+  it("notifies a follow-up of a starred story and a rewritten starred article whatever their importance", () => {
+    const followUp = article({ title: "Later on the starred story", importance: 3, followsStarred: true, updatedAt: "2026-03-01T07:00:00.000Z" });
+    const rewritten = article({ title: "Starred, rewritten", importance: 3, starred: true, revision: 1, updatedAt: "2026-03-01T06:30:00.000Z" });
+    const plain = article({ importance: 3 });
+    const plan = planNotifications({ setting: "important", articles: [followUp, rewritten, plain], checkedAt: CHECKED, categories });
+    expect(plan.notifications.map((entry) => entry.kind === "article" && entry.articleId)).toEqual([followUp.id, rewritten.id]);
+  });
+
+  it("notifies no follow-up of a starred story when set to off, nor a starred feed article", () => {
+    const followUp = article({ importance: 3, followsStarred: true });
+    expect(planNotifications({ setting: "off", articles: [followUp], checkedAt: CHECKED, categories }).notifications).toEqual([]);
+    const delivered = article({ origin: "feed", feedId: 4, importance: null, starred: true });
+    expect(planNotifications({ setting: "important", articles: [delivered], checkedAt: CHECKED, categories }).notifications).toEqual([]);
   });
 
   it("notifies both when set to all", () => {

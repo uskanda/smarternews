@@ -91,6 +91,8 @@ export function ArticleRow({
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
           {article.starred ? <StarMark /> : null}
+          {/* A starred story moved on: shown until the reader has read every later article. */}
+          {article.starred && article.unreadFollowUps > 0 ? <Badge>続報あり</Badge> : null}
           {groups.map((group) => (
             <span key={group.id} data-term-badge className="term-badge" data-term={group.color}>
               {group.name}

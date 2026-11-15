@@ -3,7 +3,10 @@
 // device whose clock is off neither misses an article nor repeats one.
 import type { ArticleSummary } from "@smarternews/core/api";
 
-/** Importance 5 only, every new generated article, or nothing. Feed articles are never notified. */
+/**
+ * Importance 5 only, every new generated article, or nothing. Feed articles are never notified. Unless the setting
+ * is off, the articles of a starred story are notified whatever their importance.
+ */
 export type NotifySetting = "important" | "all" | "off";
 
 export const DEFAULT_NOTIFY_SETTING: NotifySetting = "important";
@@ -50,8 +53,16 @@ export function planNotifications(input: {
   if (input.setting === "off") return { notifications: [], checkedAt: input.checkedAt };
   const threshold = minImportanceFor(input.setting) ?? 1;
   const importanceOf = (item: ArticleSummary): number => item.importance ?? 0;
+  // A story the reader starred is notified whatever its importance: a later article on it, or the starred one rewritten.
+  const onStarredStory = (item: ArticleSummary): boolean => item.starred || item.followsStarred;
   const fresh = input.articles
-    .filter((item) => item.origin === "generated" && !item.isRead && importanceOf(item) >= threshold && item.updatedAt > input.checkedAt)
+    .filter(
+      (item) =>
+        item.origin === "generated" &&
+        !item.isRead &&
+        (importanceOf(item) >= threshold || onStarredStory(item)) &&
+        item.updatedAt > input.checkedAt,
+    )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id);
   const checkedAt = baselineFrom([{ updatedAt: input.checkedAt }, ...input.articles]);
   if (fresh.length >= FOLD_FROM) {

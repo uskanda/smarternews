@@ -179,6 +179,36 @@ function SourceReason({ source }: { source: ArticleRef }) {
 const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline px-lg py-sm text-left";
 
 /** The way to the article before and after this one, each with its headline on one line. */
+/** Articles of the same story, earlier or later, newest first, each with the day it was first published. */
+function StoryChain({
+  label,
+  entries,
+  articlePath,
+  timeZone,
+}: {
+  label: string;
+  entries: Article["previousArticles"];
+  articlePath: (id: number) => string;
+  timeZone: string;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <section aria-label={label} className="flex flex-col gap-xs">
+      <h3 className="type-label-sm text-on-surface-muted">{label}</h3>
+      <ul className="flex flex-col gap-xs type-body-md">
+        {entries.map((entry) => (
+          <li key={entry.id} className="min-w-0">
+            <Link to={articlePath(entry.id)} className="tap break-words text-primary underline underline-offset-4">
+              {entry.title}
+            </Link>
+            <span className="pl-sm text-on-surface-muted tabular-nums">{formatDate(entry.firstPublishedAt, timeZone)}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
   const { previous, next, more, end } = neighbors;
   if (!previous && !next && !more && !end) return null;
@@ -460,22 +490,10 @@ export function ArticleView({
         {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
         <Attachments article={article} />
         <Mentions article={article} />
-        {article.previousArticles.length > 0 ? (
-          // The earlier articles of the story, newest first, each with the day it was first published.
-          <section aria-label="この話題の前の記事" className="flex flex-col gap-xs">
-            <h3 className="type-label-sm text-on-surface-muted">この話題の前の記事</h3>
-            <ul className="flex flex-col gap-xs type-body-md">
-              {article.previousArticles.map((earlier) => (
-                <li key={earlier.id} className="min-w-0">
-                  <Link to={articlePath(earlier.id)} className="tap break-words text-primary underline underline-offset-4">
-                    {earlier.title}
-                  </Link>
-                  <span className="pl-sm text-on-surface-muted tabular-nums">{formatDate(earlier.firstPublishedAt, timeZone)}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        {/* The later articles come first: both lists run newest first, so the story reads down from its latest. */}
+        <StoryChain label="この話題のその後の記事" entries={article.laterArticles} articlePath={articlePath} timeZone={timeZone} />
+        <StoryChain label="この話題の前の記事" entries={article.previousArticles} articlePath={articlePath} timeZone={timeZone} />
+
         {delivered ? null : (
         <section aria-label="出典" className="flex flex-col gap-xs">
           <h3 className="type-label-sm text-on-surface-muted">出典</h3>
