@@ -689,6 +689,65 @@ describe("the migration to marks on follow-ups", () => {
   });
 });
 
+describe("the migration to subscribed feeds as topic sources", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+  const MIGRATION = "037_topic_sources.sql";
+
+  it("keeps the candidates and feeds, switches no feed on, and allows candidates from feed articles", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < MIGRATION)) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO topics (id, category_id, text, created_at) VALUES (7, 1, 'tools', ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (2, 'https://example.org/feed', 'f', 1, ?)").run(now);
+    const article = db.prepare(
+      `INSERT INTO articles (id, origin, category_id, feed_id, item_key, kind, title, summary, body, importance, first_published_at, updated_at, created_at)
+       VALUES (?, ?, 1, ?, ?, 'news', 't', 's', 'b', ?, ?, ?, ?)`,
+    );
+    article.run(3, "generated", null, null, 3, now, now, now);
+    article.run(4, "feed", 2, "k", null, now, now, now);
+    const candidate = db.prepare(
+      `INSERT INTO candidates (id, category_id, url, title, source_kind, status, reason, reason_code, importance, group_key, body, article_id, created_at)
+       VALUES (?, 1, ?, 't', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    candidate.run(5, "https://example.org/a", "news-search", "rejected", "件数上限", "over-limit", 2, null, null, null, now);
+    candidate.run(9, "https://example.org/b", "feed", "accepted", "new", null, 4, "1:1", "text", 3, now);
+    db.prepare("INSERT INTO candidate_topics (candidate_id, topic_id) VALUES (5, 7), (9, 7)").run();
+    const before = db.prepare("SELECT * FROM candidates ORDER BY id").all();
+
+    copyFileSync(join(SHIPPED, MIGRATION), join(dir, MIGRATION));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT * FROM candidates ORDER BY id").all()).toEqual(before.map((row) => ({ ...row, feed_article_id: null })));
+    expect(db.prepare("SELECT count(*) AS n FROM candidate_topics").get()).toEqual({ n: 2 });
+    expect(db.prepare("SELECT topic_source FROM feeds WHERE id = 2").get()).toEqual({ topic_source: 0 });
+    expect(db.prepare("SELECT id, summarized_in FROM articles ORDER BY id").all()).toEqual([
+      { id: 3, summarized_in: null },
+      { id: 4, summarized_in: null },
+    ]);
+    expect(() => db.prepare("UPDATE candidates SET source_kind = 'subscription', feed_article_id = 4 WHERE id = 5").run()).not.toThrow();
+    expect(() => db.prepare("UPDATE candidates SET source_kind = 'mail' WHERE id = 5").run()).toThrow();
+
+    // The references let their article go: the candidate and the feed article stay.
+    db.prepare("UPDATE articles SET summarized_in = 3 WHERE id = 4").run();
+    db.prepare("DELETE FROM articles WHERE id = 3").run();
+    expect(db.prepare("SELECT summarized_in FROM articles WHERE id = 4").get()).toEqual({ summarized_in: null });
+    db.prepare("DELETE FROM articles WHERE id = 4").run();
+    expect(db.prepare("SELECT feed_article_id FROM candidates WHERE id = 5").get()).toEqual({ feed_article_id: null });
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'candidates' AND sql IS NOT NULL ORDER BY name")
+        .all()
+        .map((row) => row.name),
+    ).toEqual(["candidates_category_created", "candidates_category_status", "candidates_run"]);
+  });
+});
+
 describe("removing the article that duplicates were recorded against", () => {
   function withDuplicates() {
     const db = openDatabase(":memory:");
