@@ -1,6 +1,7 @@
 import { addHighlight, insertFeed, listFilters, saveArticleTranslation, saveAutoSummary, saveFullContent, saveTranslatedTitle } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -236,6 +237,63 @@ describe("keys while the dialog for a hide filter is open", () => {
 
     expect(path()).toBe(`/f/${feed.id}/${id}`);
     expect(screen.getByRole("dialog", { name: "隠すフィルターを作る" })).toBeInTheDocument();
+  });
+});
+
+describe("closing the dialog for a hide filter", () => {
+  async function openDialog() {
+    const { server, feed, id } = shop();
+    const { user } = renderApp({ server, route: `/f/${feed.id}/${id}` });
+    const article = await opened();
+    await within(article).findByText(/春の特売/);
+    const open = async () => {
+      selectText(article.querySelector(".article-body")!, "特売");
+      await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: MAKE }));
+      return screen.findByRole("dialog", { name: "隠すフィルターを作る" });
+    };
+    return { server, user, open };
+  }
+  const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+  /** Presses the article behind the dialog, which takes no pointer events while the dialog is open. */
+  const pressBehind = () => userEvent.setup({ pointerEventsCheck: 0 }).click(screen.getByRole("article", { name: "記事", hidden: true }));
+
+  it("closes at once while it holds what it opened with, whether pressed outside, by Escape or by the cancel button", async () => {
+    const { user, open } = await openDialog();
+    await open();
+    await pressBehind();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await open();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(within(await open()).getByRole("button", { name: "やめる" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("stays open once changed when pressed outside, and asks before Escape or the cancel button throws the change away", async () => {
+    const { server, user, open } = await openDialog();
+    let dialog = await open();
+    await user.type(within(dialog).getByLabelText("条件1の値"), "の値段");
+    await pressBehind();
+    expect(screen.getByRole("dialog", { name: "隠すフィルターを作る" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "やめる" }));
+    await user.click(within(await question()).getByRole("button", { name: "編集を続ける" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(within(dialog).getByLabelText("条件1の値")).toHaveValue("特売の値段");
+
+    await user.keyboard("{Escape}");
+    await user.click(within(await question()).getByRole("button", { name: "破棄して閉じる" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(filters(server)).toEqual([]);
+
+    // A scope chosen again is a change as well.
+    dialog = await open();
+    await user.selectOptions(within(dialog).getByLabelText("範囲"), "購読フィード「Shop」");
+    await user.keyboard("{Escape}");
+    expect(await question()).toBeInTheDocument();
   });
 });
 

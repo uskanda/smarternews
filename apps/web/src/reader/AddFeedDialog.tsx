@@ -2,11 +2,12 @@ import type { Category } from "@smarternews/core/api";
 import { useState } from "react";
 import { AddFeedForm } from "../settings/AddFeedForm.tsx";
 import { Button } from "../ui/controls.tsx";
-import { FormDialog } from "../ui/FormDialog.tsx";
+import { DialogCloseButton, FormDialog } from "../ui/FormDialog.tsx";
 
 /**
  * The button above a news category's list and the dialog it opens: the fields of the page of feeds, starting in
- * that category. The list stays where it is behind it, and a new dialog starts empty.
+ * that category. The list stays where it is behind it, and a new dialog starts empty. While a URL is written,
+ * closing it asks first.
  */
 export function AddFeedDialog({ categories, category }: { categories: Category[]; category: Category }) {
   const [open, setOpen] = useState(false);
@@ -14,7 +15,7 @@ export function AddFeedDialog({ categories, category }: { categories: Category[]
     <FormDialog open={open} onOpenChange={setOpen} trigger={<Button>購読フィードを追加</Button>} title="購読フィードを追加">
       <AddFeedForm categories={categories} categoryId={category.id} onAdded={() => setOpen(false)} />
       <div className="flex justify-end">
-        <Button onClick={() => setOpen(false)}>閉じる</Button>
+        <DialogCloseButton>閉じる</DialogCloseButton>
       </div>
     </FormDialog>
   );
