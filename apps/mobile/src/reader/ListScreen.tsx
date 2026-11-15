@@ -23,7 +23,7 @@ import { SCROLL_READ_VIEWABILITY, useScrollToRead } from "./scroll-read";
 import { useBack } from "../lib/back";
 import { listParams, listRefOf, MENTION_KEY, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
 
-const SORT_LABELS = { newest: "新しい順", oldest: "古い順" } as const;
+const SORT_LABELS = { newest: "新しい順", oldest: "古い順", relevance: "関連度順" } as const;
 
 function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): string {
   if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
@@ -352,7 +352,7 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
       )}
       <Sheet title="並び順" visible={sorting} onClose={() => setSorting(false)}>
         <View style={{ gap: theme.spacing.sm }}>
-          {(["newest", "oldest"] as const).map((option) => (
+          {(["newest", "oldest", "relevance"] as const).map((option) => (
             <Button
               key={option}
               label={SORT_LABELS[option]}
