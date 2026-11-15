@@ -3,7 +3,7 @@ import { createCategory, deleteCategory, updateCategory } from "../db/categories
 import { createRun, finishRun, getRun, listRuns, recoverInterruptedRuns, setRetry, startRun } from "../db/runs.ts";
 import { updateSettings } from "../db/settings.ts";
 import { createTopic, listTopics, updateTopic } from "../db/topics.ts";
-import { createTestDb, fakeClock } from "../testing/db.ts";
+import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import { RunQueue } from "./queue.ts";
 import { Scheduler } from "./scheduler.ts";
 
@@ -506,5 +506,34 @@ describe("the purge of the records of model calls", () => {
     const { scheduler, calls } = withCallOn("2026-10-10");
     scheduler.tick();
     expect(calls()).toBe(0);
+  });
+});
+
+describe("the relevance scores", () => {
+  it("are worked out at the first check after start-up, and then once a day", () => {
+    const { db, clock, scheduler } = setup("2026-03-01T00:00:00.000Z");
+    const feed = seedFeed(db);
+    for (let index = 0; index < 10; index += 1) {
+      const id = seedFeedArticle(db, feed, { at: "2026-02-28T00:00:00.000Z", title: `Battery ${index}` });
+      db.prepare("UPDATE articles SET opened_at = ? WHERE id = ?").run("2026-02-28T00:00:00.000Z", id);
+    }
+    // A term stored without the server matching it, as right after the migration.
+    db.prepare("INSERT INTO term_groups (name, color, position, created_at) VALUES ('g', 'green', 1, ?)").run("2026-03-01T00:00:00.000Z");
+    db.prepare("INSERT INTO highlight_terms (group_id, text, normalized, created_at) VALUES (1, 'battery', 'battery', ?)").run("2026-03-01T00:00:00.000Z");
+    const scores = () =>
+      db
+        .prepare("SELECT DISTINCT f.relevance_score AS feed, a.feed_score AS article, a.term_match AS term FROM feeds f JOIN articles a ON a.feed_id = f.id")
+        .all();
+
+    scheduler.tick();
+    expect(scores()).toEqual([{ feed: 1, article: 1, term: 1 }]);
+
+    db.prepare("UPDATE articles SET opened_at = NULL").run();
+    clock.advance(23 * 60 * MINUTE);
+    scheduler.tick();
+    expect(scores()).toEqual([{ feed: 1, article: 1, term: 1 }]);
+    clock.advance(60 * MINUTE);
+    scheduler.tick();
+    expect(scores()).toEqual([{ feed: 0, article: 0, term: 1 }]);
   });
 });

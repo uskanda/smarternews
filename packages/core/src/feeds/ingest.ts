@@ -21,6 +21,7 @@ import {
 import { num, str } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyFilters } from "../db/filters.ts";
+import { refreshTermMatches } from "../db/term-matches.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
@@ -180,6 +181,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   // Only an article stored since duplicate removal exists has values to compare, and keeps having them.
   const recompare = db.prepare("UPDATE articles SET dedup_url = ?, dedup_title = ? WHERE id = ? AND (dedup_url IS NOT NULL OR dedup_title IS NOT NULL)");
   const titled: number[] = [];
+  // The articles whose titles or summary are new, matched with the highlight terms at the end.
+  const toMatch: number[] = [];
 
   const inDocument = new Set<string>();
   const fresh: Prepared[] = [];
@@ -220,6 +223,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     const rewritten = str(known.title) !== title || str(known.body) !== prepared.body || (known.author ?? null) !== prepared.author;
     if (rewritten) {
       rewrite.run(title, summaryOf(prepared.text), prepared.body, prepared.text, prepared.author, id);
+      toMatch.push(id);
       // A translation of what was rewritten no longer says what the article says.
       if (str(known.title) !== title) {
         forgetTitle.run(id);
@@ -243,9 +247,11 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const insert = db.prepare(
     `INSERT INTO articles
        (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at,
-        created_at, dedup_url, dedup_title, duplicate_of, attachments)
-     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, dedup_url, dedup_title, duplicate_of, attachments, feed_score)
+     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  // A new article sorts by the behaviour score of its feed at once, not from the next time the scores are worked out.
+  const feedScore = num(db.prepare("SELECT relevance_score FROM feeds WHERE id = ?").get(feed.id)!.relevance_score);
   // Lists show the highest id first among articles of the same time, so the first item of the document goes in last.
   for (const item of fresh.reverse()) {
     // An item sorts by when it was published; one without a date, or dated in the future, by when it was fetched.
@@ -270,12 +276,15 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
         compared.title,
         kept,
         item.attachments,
+        feedScore,
       ).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
     applyFilters(db, id);
     if (kept === null) titled.push(id);
+    toMatch.push(id);
   }
+  refreshTermMatches(db, toMatch);
   // What tells a feed that stopped delivering from one that delivers what is too old to store.
   if (foundNew) db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run(nowIso, feed.id);
   return { created: fresh.length, titled: feed.translate ? titled : [] };

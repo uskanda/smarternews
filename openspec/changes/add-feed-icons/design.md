@@ -28,7 +28,7 @@
 
 ### 記録するのは元のURLと探した時刻だけ
 
-データベースの変更 `032_feed_icons.sql` で、`feeds` に2列を足す。
+データベースの変更 `037_feed_icons.sql` で、`feeds` に2列を足す。
 
 - `icon_url TEXT`：見つけたアイコンの元のURL。見つからなければNULL
 - `icon_checked_at TEXT`：最後に探した時刻。まだ探していなければNULL

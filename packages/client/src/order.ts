@@ -63,7 +63,38 @@ export function nextEventCategory(model: NavModel, current: ListTarget | null): 
   return events[(index + 1) % events.length]!;
 }
 
-/** What a reader can move: a category among the categories, a feed among the feeds. */
+/** An entry the `g u` dialog offers: a category or "未分類", or a feed with the name of its group. */
+export interface JumpCandidate {
+  target: ListTarget;
+  label: string;
+  unread: number;
+  /** The name of the category, or "未分類", a feed belongs to; null for a category. */
+  group: string | null;
+}
+
+/** Text as the dialog compares it: full-width and half-width forms alike, capitals as small letters. */
+const comparable = (text: string) => text.normalize("NFKC").toLowerCase();
+
+/**
+ * The categories and the feeds whose names hold every word of `query`, in the order of the left pane. Give it
+ * the model before hiding: an entry the pane folds or hides is still one to go to. The generated articles of a
+ * category are left out, as their name is the same in every category. A feed is matched by its own name only.
+ */
+export function jumpCandidates(model: NavModel, query: string): JumpCandidate[] {
+  const words = comparable(query).split(/\s+/).filter((word) => word.length > 0);
+  const all = model.groups.flatMap((group): JumpCandidate[] => [
+    { target: group.entry.target, label: group.entry.label, unread: group.entry.unread, group: null },
+    ...group.children
+      .filter((child) => child.target.type === "feed")
+      .map((child) => ({ target: child.target, label: child.label, unread: child.unread, group: group.entry.label })),
+  ]);
+  return all.filter((candidate) => {
+    const name = comparable(candidate.label);
+    return words.every((word) => name.includes(word));
+  });
+}
+
+/** What a reader can move:a category among the categories, a feed among the feeds. */
 export type Movable = { kind: "category"; id: number } | { kind: "feed"; id: number };
 
 /** A move as the API takes it: before another entry, or last when `before` is null. */

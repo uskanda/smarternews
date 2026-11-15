@@ -33,7 +33,7 @@
 - `packages/core/src/sources/feed.ts`：Atomの `<icon>` とJSON Feedの `favicon` の読み取り
 - `packages/core/src/feeds/icon.ts`（新規）：アイコンを探す処理
 - `packages/core/src/feeds/ingest.ts`：登録と取得のあとにアイコンを探す
-- `032_feed_icons.sql`（新規）：`feeds` の2列
+- `037_feed_icons.sql`（新規）：`feeds` の2列
 - `packages/core/src/db/feeds.ts`：2列の読み書き
 - `packages/core/src/api.ts`：`Feed` の `iconUrl`
 - `rewrite.ts`、`apps/server/src/app.ts`：`iconUrl` を中継のパスで返す
