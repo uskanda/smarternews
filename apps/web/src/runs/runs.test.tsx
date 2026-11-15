@@ -39,6 +39,61 @@ describe("running a category now", () => {
   });
 });
 
+describe("the latest run on the category page", () => {
+  const latest = () => screen.findByRole("region", { name: "実行" });
+
+  it("shows the state, the counts and a link to the run", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const other = server.category("Tools");
+    finished(server, category.id, { status: "failed" });
+    const id = finished(server, category.id, { articlesCreated: 3, articlesUpdated: 1 });
+    finished(server, other.id, { status: "failed" });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const section = await latest();
+    await waitFor(() => expect(section).toHaveTextContent("成功"));
+    expect(section).toHaveTextContent("手動");
+    expect(section).toHaveTextContent("作成 3件・更新 1件");
+    expect(section).not.toHaveTextContent("失敗");
+    const links = within(section).getAllByRole("link").filter((link) => link.getAttribute("href") === `/runs/${id}`);
+    expect(links).toHaveLength(1);
+  });
+
+  it("says that the latest run failed", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    finished(server, category.id);
+    finished(server, category.id, { status: "failed" });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const section = await latest();
+    await waitFor(() => expect(within(section).getByText("失敗")).toHaveClass("text-error"));
+  });
+
+  it("turns to the run that was just started", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    finished(server, category.id, { articlesCreated: 2 });
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const section = await latest();
+    await waitFor(() => expect(section).toHaveTextContent("成功"));
+
+    await user.click(within(section).getByRole("button", { name: "いますぐ実行" }));
+
+    await waitFor(() => expect(section).toHaveTextContent(/待機中|実行中/));
+    expect(section).not.toHaveTextContent("成功");
+  });
+
+  it("says that the category has not run yet", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    expect(await within(await latest()).findByText("まだ実行していません。")).toBeInTheDocument();
+  });
+});
+
 describe("the run history", () => {
   afterEach(() => {
     vi.useRealTimers();
