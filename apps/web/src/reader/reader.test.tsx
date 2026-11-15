@@ -104,6 +104,49 @@ describe("choosing a view", () => {
   });
 });
 
+describe("the link to the settings of the category", () => {
+  it("is at the top of the list of a category and of its generated articles, and leads to its settings", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    server.article(category.id, { title: "Story" });
+    const first = renderApp({ server, route: "/c/security" });
+
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(within(list()).getByRole("link", { name: "カテゴリの設定" })).toHaveAttribute("href", `/settings/categories/${category.id}`);
+    first.unmount();
+
+    const { user, path } = renderApp({ server, route: "/c/security/generated" });
+    await screen.findByRole("heading", { level: 1, name: "SecurityのAI生成" });
+    await user.click(within(list()).getByRole("link", { name: "カテゴリの設定" }));
+    await waitFor(() => expect(path()).toBe(`/settings/categories/${category.id}`));
+    expect(await screen.findByRole("heading", { level: 1, name: "Security" })).toBeInTheDocument();
+  });
+
+  it("is at the top of the list of an event category", async () => {
+    const server = makeServer();
+    const category = server.category("Events", "event");
+    renderApp({ server, route: "/c/events" });
+
+    const events = await screen.findByRole("region", { name: "イベントの一覧" });
+    expect(within(events).getByRole("link", { name: "カテゴリの設定" })).toHaveAttribute("href", `/settings/categories/${category.id}`);
+  });
+
+  it("is not on the lists that are not one category", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    server.article(category.id, { title: "Story" });
+    const feed = insertFeed(server.db, { url: "https://x.example.org/feed.xml", title: "X", categoryId: category.id }, server.clock);
+    const first = renderApp({ server, route: "/all" });
+    await screen.findByRole("link", { name: /Story/ });
+    expect(screen.queryByRole("link", { name: "カテゴリの設定" })).not.toBeInTheDocument();
+    first.unmount();
+
+    renderApp({ server, route: `/f/${feed.id}` });
+    await screen.findByRole("heading", { level: 1, name: "X" });
+    expect(screen.queryByRole("link", { name: "カテゴリの設定" })).not.toBeInTheDocument();
+  });
+});
+
 describe("a row of the list", () => {
   it("shows the headline, one line of summary, the category, the time and the number of sources", async () => {
     const server = makeServer("2026-03-01T09:30:00.000Z");
