@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, configure } from "@testing-library/react";
+import { act, cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetHideReadState } from "../lib/hide-read.ts";
@@ -34,10 +34,26 @@ export function setViewport(next: number): void {
 }
 const listeners = new Set<() => void>();
 
+// The font size the browser is set to: what an em in a media query and the root element's font size measure.
+// Tests choose it through `setFontSize`; 16px is the browser's default.
+let fontSize = 16;
+export function setFontSize(next: number): void {
+  fontSize = next;
+  document.documentElement.style.fontSize = `${next}px`;
+  for (const listener of listeners) listener();
+}
+
+/** A length of a media query in pixels: `720px`, or `45em` at the font size the browser is set to. */
+function length(query: string, feature: string): number | null {
+  const match = new RegExp(`${feature}:\\s*(\\d+(?:\\.\\d+)?)(px|em)`).exec(query);
+  if (!match) return null;
+  return Number(match[1]) * (match[2] === "em" ? fontSize : 1);
+}
+
 function matches(query: string): boolean {
-  const min = /min-width:\s*(\d+)px/.exec(query);
-  const max = /max-width:\s*(\d+)px/.exec(query);
-  return (!min || width >= Number(min[1])) && (!max || width <= Number(max[1]));
+  const min = length(query, "min-width");
+  const max = length(query, "max-width");
+  return (min === null || width >= min) && (max === null || width <= max);
 }
 
 window.matchMedia = ((query: string) => {
@@ -59,6 +75,8 @@ window.matchMedia = ((query: string) => {
 afterEach(() => {
   width = 1280;
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+  fontSize = 16;
+  document.documentElement.style.fontSize = "";
   listeners.clear();
 });
 
@@ -69,5 +87,52 @@ class NoopObserver {
   unobserve() {}
   disconnect() {}
 }
-globalThis.IntersectionObserver = NoopObserver as unknown as typeof IntersectionObserver;
+
+// jsdom lays nothing out, so nothing ever comes into view by itself. Tests say what does, through `intersect`.
+// As in a browser, an observer is told of what it starts to observe: here, of what a test left in view.
+const intersectionObservers = new Set<FakeIntersectionObserver>();
+let inView = new WeakSet<Element>();
+class FakeIntersectionObserver {
+  readonly targets = new Set<Element>();
+  readonly callback: IntersectionObserverCallback;
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+  }
+  observe(target: Element) {
+    this.targets.add(target);
+    intersectionObservers.add(this);
+    if (!inView.has(target)) return;
+    setTimeout(() => {
+      if (this.targets.has(target) && inView.has(target)) act(() => this.tell(target, true));
+    }, 0);
+  }
+  tell(target: Element, isIntersecting: boolean) {
+    const entry = { target, isIntersecting, intersectionRatio: isIntersecting ? 1 : 0 } as IntersectionObserverEntry;
+    this.callback([entry], this as unknown as IntersectionObserver);
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+  disconnect() {
+    this.targets.clear();
+    intersectionObservers.delete(this);
+  }
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
+/** Tells every observer of `target` that it came into view, or went out of it. Call it inside `act`. */
+export function intersect(target: Element, isIntersecting = true, { stays = isIntersecting }: { stays?: boolean } = {}): void {
+  // `stays: false` is a target that what happens next pushes out of view: an observer that starts later hears nothing.
+  if (stays) inView.add(target);
+  else inView.delete(target);
+  for (const observer of [...intersectionObservers]) {
+    if (observer.targets.has(target)) observer.tell(target, isIntersecting);
+  }
+}
+afterEach(() => {
+  intersectionObservers.clear();
+  inView = new WeakSet();
+});
+globalThis.IntersectionObserver = FakeIntersectionObserver as unknown as typeof IntersectionObserver;
 globalThis.ResizeObserver = NoopObserver as unknown as typeof ResizeObserver;

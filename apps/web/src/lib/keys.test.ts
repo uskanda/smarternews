@@ -154,6 +154,57 @@ describe("two keys in a row", () => {
   });
 });
 
+describe("a key held down", () => {
+  it("runs a key that acts on articles or lists once, however long it is held", () => {
+    const names = ["Shift+A", "Shift+J", "Shift+K", "m", "s", "h", "o", "r", "u", "x", "w", "z", "?", "/"] as const;
+    const actions = Object.fromEntries(names.map((name) => [name, vi.fn()]));
+    renderHook(() => useHotkeys(actions));
+
+    for (const name of names) {
+      const shifted = name.startsWith("Shift+");
+      const key = shifted ? name.slice("Shift+".length) : name;
+      press(key, { shiftKey: shifted || name === "?" });
+      press(key, { shiftKey: shifted || name === "?", repeat: true });
+      press(key, { shiftKey: shifted || name === "?", repeat: true });
+    }
+
+    for (const name of names) expect(actions[name], name).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hold back the browser from a repeated key it ignores", () => {
+    renderHook(() => useHotkeys({ "Shift+A": vi.fn() }));
+
+    expect(press("A", { shiftKey: true, repeat: true })).toBe(true);
+  });
+
+  it("keeps moving with j, k, Space and Shift+Space while they are held", () => {
+    const actions = { j: vi.fn(), k: vi.fn(), Space: vi.fn(), "Shift+Space": vi.fn() };
+    renderHook(() => useHotkeys(actions));
+
+    for (const [key, shiftKey] of [["j", false], ["k", false], [" ", false], [" ", true]] as const) {
+      press(key, { shiftKey });
+      press(key, { shiftKey, repeat: true });
+      press(key, { shiftKey, repeat: true });
+    }
+
+    for (const action of Object.values(actions)) expect(action).toHaveBeenCalledTimes(3);
+  });
+
+  it("still runs a pair when g is held before the second key", () => {
+    const time = clock();
+    const pair = vi.fn();
+    const read = vi.fn();
+    renderHook(() => useHotkeys({ "g a": pair, a: read }, { now: time.now }));
+
+    press("g");
+    press("g", { repeat: true });
+    press("a");
+
+    expect(pair).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
 describe("Space on a control", () => {
   it("leaves Space and Shift+Space to a focused button, which it presses", () => {
     const down = vi.fn();

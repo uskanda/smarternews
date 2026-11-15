@@ -1,7 +1,7 @@
 import type { Category, Feed, Filter, FilterAction, FilterCondition, FilterField, FilterMatch, FilterScope } from "@smarternews/core/api";
 import { MAX_FILTER_CONDITIONS } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { ApiError, describeProblem, type FieldProblem } from "@smarternews/client";
 import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -221,6 +221,8 @@ export function FilterForm({
   const [general, setGeneral] = useState<string | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Counts the changes to the draft, so that a count asked for before one can be told apart and dropped.
+  const version = useRef(0);
   const scopeId = useId();
   // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again. One
   // that starts filled in, as from a selection, counts once it differs from what it started with.
@@ -246,6 +248,7 @@ export function FilterForm({
   };
 
   function change(next: Partial<Draft>) {
+    version.current += 1;
     setDraft((current) => ({ ...current, ...next }));
     setProblems([]);
     setGeneral(null);
@@ -265,13 +268,17 @@ export function FilterForm({
   }
 
   async function check() {
+    const asked = version.current;
     setBusy(true);
     try {
       const result = await api.previewFilter({ ...body(), ...(filter ? { id: filter.id } : {}) });
+      // An answer about conditions that have changed since would show the old count beside the new ones.
+      if (version.current !== asked) return;
       setProblems([]);
       setGeneral(null);
       setPreview(result.hiddenCount);
     } catch (error) {
+      if (version.current !== asked) return;
       setPreview(null);
       refused(error);
     } finally {
@@ -296,6 +303,7 @@ export function FilterForm({
           onCreated(saved);
           return;
         }
+        version.current += 1;
         setDraft(draftOf());
         setPreview(null);
         toast({ message: `フィルターを追加しました。${saved.hiddenCount > 0 ? `${saved.hiddenCount}件を隠しています。` : "いま隠している記事はありません。"}` });
