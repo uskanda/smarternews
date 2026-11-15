@@ -116,6 +116,24 @@ describe("what a follow-up adds", () => {
     expect(h.articles()).toMatchObject([{ revision: 2, updateNote: null }]);
   });
 
+  it("keeps the note of every rewrite since the reader last read the article", async () => {
+    const { h } = await published();
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Patch released {flaw}", link: "https://example.org/patch" }]);
+    rewriteWith(h, "修正版が公開されました。");
+    await h.run();
+    h.clock.advance(HOUR);
+    h.feed(FEED, [{ title: "Advisory updated {flaw}", link: "https://example.org/advisory" }]);
+    rewriteWith(h, "勧告が改訂されました。");
+    await h.run();
+
+    expect(h.articles()[0]!.updateNotes).toEqual([
+      { note: "修正版が公開されました。", createdAt: "2026-03-01T13:00:00.000Z" },
+      { note: "勧告が改訂されました。", createdAt: "2026-03-01T14:00:00.000Z" },
+    ]);
+    expect(h.articles()[0]!.updateNote).toBe("勧告が改訂されました。");
+  });
+
   it("keeps the rewrite when only its note is not valid, without asking again", async () => {
     const { h } = await published();
     h.clock.advance(HOUR);

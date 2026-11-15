@@ -11,6 +11,20 @@ const article = () => screen.getByRole("article", { name: "記事" });
 const rowTitles = () => within(list()).getAllByRole("listitem").map((item) => item.querySelector("[data-title]")?.textContent);
 const row = (title: RegExp) => within(list()).getByRole("link", { name: title }).closest("li")!;
 
+/**
+ * Makes a generated article one the reader read at noon and follow-ups then rewrote, the last time at `updatedAt`:
+ * each note is kept at its time, and the article's note is the one written at `updatedAt`, if any.
+ */
+function rewrite(server: TestServer, id: number, notes: Array<[string, string]>, updatedAt: string) {
+  const last = notes.find(([at]) => at === updatedAt)?.[1] ?? null;
+  server.db
+    .prepare("UPDATE articles SET revision = ?, updated_at = ?, update_note = ?, read_before_update_at = '2026-03-01T12:00:00.000Z' WHERE id = ?")
+    .run(Math.max(notes.length, 1), updatedAt, last, id);
+  for (const [at, note] of notes) {
+    server.db.prepare("INSERT INTO article_update_notes (article_id, note, created_at) VALUES (?, ?, ?)").run(id, note, at);
+  }
+}
+
 /** Adds articles one minute apart, so the last one is the newest. */
 function articles(server: TestServer, categoryId: number, specs: Array<Parameters<TestServer["article"]>[1]>): number[] {
   return specs.map((spec) => {
@@ -513,16 +527,58 @@ describe("reading an article", () => {
   it("puts what the last update added after the headline and before the impact", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Flaw", impact: "Update this week.", body: "Body text here." });
-    server.db.prepare("UPDATE articles SET revision = 1, update_note = '修正版が公開されました。' WHERE id = ?").run(id);
+    rewrite(server, id, [["2026-03-01T13:00:00.000Z", "修正版が公開されました。"]], "2026-03-01T13:00:00.000Z");
     renderApp({ server, route: `/all/${id}` });
 
     const note = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "今回の更新で加わったこと" });
     expect(note).toHaveTextContent("今回の更新で加わったこと");
     expect(note).toHaveTextContent("修正版が公開されました。");
+    expect(within(note).queryByRole("list")).not.toBeInTheDocument();
     const heading = within(article()).getByRole("heading", { level: 2, name: "Flaw" });
     const impact = within(article()).getByRole("region", { name: "読み手への影響" });
     expect(heading.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(note.compareDocumentPosition(impact) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("lists what every update since the reader last read the article added, oldest first, with its time", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw", impact: "Update this week.", body: "Body text here." });
+    rewrite(
+      server,
+      id,
+      [
+        ["2026-03-01T13:00:00.000Z", "修正版が公開されました。"],
+        ["2026-03-01T14:05:00.000Z", "勧告が改訂されました。"],
+      ],
+      "2026-03-01T14:05:00.000Z",
+    );
+    renderApp({ server, route: `/all/${id}` });
+
+    const notes = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "前回読んでから加わったこと" });
+    expect(within(notes).getByRole("heading", { level: 3 })).toHaveTextContent("前回読んでから加わったこと");
+    const items = within(notes).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("2026年3月1日 13:00");
+    expect(items[0]).toHaveTextContent("修正版が公開されました。");
+    expect(items[1]).toHaveTextContent("2026年3月1日 14:05");
+    expect(items[1]).toHaveTextContent("勧告が改訂されました。");
+    expect(items[1]!.querySelector("time")).toHaveAttribute("dateTime", "2026-03-01T14:05:00.000Z");
+    expect(within(article()).queryByRole("region", { name: "今回の更新で加わったこと" })).not.toBeInTheDocument();
+    const impact = within(article()).getByRole("region", { name: "読み手への影響" });
+    expect(notes.compareDocumentPosition(impact) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("lists with its time what an earlier update added when the last one added nothing", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Flaw" });
+    rewrite(server, id, [["2026-03-01T13:00:00.000Z", "修正版が公開されました。"]], "2026-03-01T14:00:00.000Z");
+    renderApp({ server, route: `/all/${id}` });
+
+    const notes = await within(await screen.findByRole("article", { name: "記事" })).findByRole("region", { name: "前回読んでから加わったこと" });
+    const items = within(notes).getAllByRole("listitem");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("2026年3月1日 13:00");
+    expect(items[0]).toHaveTextContent("修正版が公開されました。");
   });
 
   it("shows nothing of an update note on an article without one", async () => {
