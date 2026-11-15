@@ -2,7 +2,7 @@ import { createTopic, getArticle, insertArticle, insertFeed, listListViews, mark
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { back, gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { intersect, setFontSize } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
@@ -1138,6 +1138,49 @@ describe("read state", () => {
     await waitFor(() => expect(row(/First/)).toHaveAttribute("data-read", "true"));
     await user.click(screen.getByRole("link", { name: /First/ }));
     expect(await screen.findByRole("heading", { level: 2, name: "First" })).toBeInTheDocument();
+  });
+
+  it("keeps an unread article opened directly in the unread list, when it was read before the list arrived", async () => {
+    const server = makeServer();
+    const category = server.category();
+    const [oldest, middle, newest] = articles(server, category.id, [{ title: "Oldest" }, { title: "Middle" }, { title: "Newest" }]);
+    const held = gate();
+    const { user, path } = renderApp({
+      server,
+      route: `/unread/${middle}`,
+      hold: (request) => (request.startsWith("GET /api/v1/articles?") ? held.wait : undefined),
+    });
+    await screen.findByRole("heading", { level: 2, name: "Middle" });
+    await waitFor(() => expect(getArticle(server.db, middle!).isRead).toBe(true));
+
+    await act(async () => held.open());
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Newest", "Middle", "Oldest"]));
+    expect(row(/Middle/)).toHaveAttribute("data-read", "true");
+    await user.keyboard("j");
+    expect(await screen.findByRole("heading", { level: 2, name: "Oldest" })).toBeInTheDocument();
+    expect(path()).toBe(`/unread/${oldest}`);
+    await user.keyboard("k");
+    expect(await screen.findByRole("heading", { level: 2, name: "Middle" })).toBeInTheDocument();
+    await user.keyboard("k");
+    expect(await screen.findByRole("heading", { level: 2, name: "Newest" })).toBeInTheDocument();
+    expect(path()).toBe(`/unread/${newest}`);
+  });
+
+  it("keeps an unread article older than the first page in its place when it is opened directly", async () => {
+    const server = makeServer();
+    const ids = articles(
+      server,
+      server.category().id,
+      Array.from({ length: 51 }, (_, index) => ({ title: `Story ${index + 1}` })),
+    );
+    renderApp({ server, route: `/unread/${ids[0]}` });
+    await screen.findByRole("heading", { level: 2, name: "Story 1" });
+    await waitFor(() => expect(getArticle(server.db, ids[0]!).isRead).toBe(true));
+
+    await waitFor(() => expect(rowTitles()).toHaveLength(51));
+    expect(rowTitles().at(-1)).toBe("Story 1");
+    expect(row(/Story 1(?!\d)/)).toHaveAttribute("data-read", "true");
   });
 
   it("drops the articles that were read once the list is refreshed", async () => {
