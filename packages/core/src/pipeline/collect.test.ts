@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../config.ts";
 import { setArticleFlags } from "../db/articles.ts";
+import { createCategory } from "../db/categories.ts";
+import { blockSite } from "../db/sites.ts";
 import { listSearchAttempts } from "../db/search-attempts.ts";
 import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
 import { listTopicVersions } from "../db/versions.ts";
@@ -361,6 +363,85 @@ describe("judging", () => {
     await h.run();
 
     expect(h.articles().map((article) => article.title)).toEqual(["Story"]);
+  });
+});
+
+describe("blocked sites", () => {
+  const hosts = (h: ReturnType<typeof pipelineHarness>, runId: number) =>
+    h.db.prepare("SELECT title, site_host FROM candidates WHERE run_id = ? ORDER BY title").all(runId).map((row) => ({ ...row }));
+
+  it("rejects the candidates of a blocked site before the judge, never fetches their pages, and settles them", async () => {
+    const h = pipelineHarness({ outputLanguage: "ja" });
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [
+      { title: "Kept", link: "https://news.example.net/kept" },
+      { title: "Blocked", link: "https://www.Example.org/blocked" },
+      { title: "Blocked undated", link: "https://example.org/undated", published: null },
+      { title: "Subdomain", link: "https://blog.example.org/sub" },
+    ]);
+    blockSite(h.db, h.category.id, "example.org", h.clock());
+
+    const run = await h.run();
+
+    expect(h.reasonCodes(run.id)).toEqual([
+      { title: "Blocked", reasonCode: "blocked-site" },
+      { title: "Blocked undated", reasonCode: "blocked-site" },
+      { title: "Kept", reasonCode: null },
+      { title: "Subdomain", reasonCode: null },
+    ]);
+    expect(h.candidates(run.id, "rejected").map((candidate) => candidate.reason)).toEqual(["除外したサイト", "除外したサイト"]);
+    expect(materialLines(h.requests.judge[0]!.prompt).map((candidate) => candidate.title)).toEqual(["Kept", "Subdomain"]);
+    expect(h.urls().filter((url) => url.includes("example.org/blocked") || url.includes("example.org/undated"))).toEqual([]);
+    expect(run).toMatchObject({ collected: 4, rejected: 2 });
+
+    const second = await h.run();
+    expect(second).toMatchObject({ collected: 0 });
+  });
+
+  it("calls no model when every candidate is of a blocked site", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Blocked", link: "https://example.org/blocked" }]);
+    blockSite(h.db, h.category.id, "example.org", h.clock());
+
+    const run = await h.run();
+
+    expect(run).toMatchObject({ llmCalls: 0, rejected: 1 });
+  });
+
+  it("leaves the candidates of a site blocked in another category to the judge", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Story", link: "https://example.org/story" }]);
+    const other = createCategory(h.db, { name: "Other", kind: "news" }, () => h.clock());
+    blockSite(h.db, other.id, "example.org", h.clock());
+
+    await h.run();
+
+    expect(materialLines(h.requests.judge[0]!.prompt).map((candidate) => candidate.title)).toEqual(["Story"]);
+  });
+
+  it("knows the site of a Google News result whose redirect could not be resolved by the outlet the search named", async () => {
+    const h = pipelineHarness({ newsSearch: { engines: ["google-news"] } });
+    h.addTopic("Topic", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "Unresolved", link: "https://outlet.example.org/a" }] });
+    h.routes["https://news.google.com/_/DotsSplashUi/data/batchexecute"] = () => new Response("", { status: 500 });
+    blockSite(h.db, h.category.id, "outlet.example.org", h.clock());
+
+    const run = await h.run();
+
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Unresolved", reasonCode: "blocked-site" }]);
+    expect(hosts(h, run.id)).toEqual([{ title: "Unresolved", site_host: "outlet.example.org" }]);
+  });
+
+  it("stores the host of each candidate", async () => {
+    const h = pipelineHarness({ newsSearch: { engines: ["google-news"] } });
+    h.addTopic("Topic", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "Resolved", link: "https://www.News.example.net/a" }] });
+
+    const run = await h.run();
+
+    expect(hosts(h, run.id)).toEqual([{ title: "Resolved", site_host: "news.example.net" }]);
   });
 });
 

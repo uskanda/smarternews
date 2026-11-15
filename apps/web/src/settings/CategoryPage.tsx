@@ -28,6 +28,7 @@ import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
 import { CategoryHistory } from "./CategoryHistory.tsx";
 import { TopicHistory } from "./TopicHistory.tsx";
 import { TopicRewrite } from "./TopicRewrite.tsx";
+import { SiteStatsSection } from "./SiteStats.tsx";
 import { TopicStatsSection } from "./TopicStats.tsx";
 import { TopicTrialResults, useTopicTrial } from "./TopicTrial.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
@@ -762,6 +763,7 @@ export function CategoryPage() {
         </section>
         <Topics category={category} />
         <TopicStatsSection category={category} />
+        <SiteStatsSection category={category} />
         <RunNow category={category} />
         <DeleteCategory category={category} />
       </div>

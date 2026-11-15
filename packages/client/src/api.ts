@@ -51,6 +51,8 @@ import {
   topicSchema,
   topicRewriteResultSchema,
   topicStatsSchema,
+  siteStatsSchema,
+  blockedSiteSchema,
   topicVersionSchema,
   categoryVersionSchema,
   topicTrialSchema,
@@ -111,6 +113,8 @@ import {
   type Topic,
   type TopicCreate,
   type TopicStats,
+  type SiteStats,
+  type BlockedSite,
   type TopicUpdate,
   type TopicVersion,
   type CategoryVersion,
@@ -261,6 +265,13 @@ export function createApi(options: ApiOptions) {
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
     /** What each topic of the category brought in the last 30 days. */
     topicStats: (categoryId: number): Promise<TopicStats> => json(topicStatsSchema, `/categories/${categoryId}/topic-stats`),
+    /** What the sites of the category's candidates brought in the last 30 days, and the sites blocked in it. */
+    siteStats: (categoryId: number): Promise<SiteStats> => json(siteStatsSchema, `/categories/${categoryId}/site-stats`),
+    /** Rejects the candidates of a site in the category from the next run on, before the judge. */
+    blockSite: (categoryId: number, host: string): Promise<BlockedSite> =>
+      json(blockedSiteSchema, `/categories/${categoryId}/blocked-sites/${encodeURIComponent(host)}`, { method: "PUT" }),
+    unblockSite: async (categoryId: number, host: string): Promise<void> =>
+      void (await request(`/categories/${categoryId}/blocked-sites/${encodeURIComponent(host)}`, { method: "DELETE" })),
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),

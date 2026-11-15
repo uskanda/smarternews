@@ -614,7 +614,8 @@ describe("the migration to reason codes", () => {
       "INSERT INTO candidates (category_id, url, title, source_kind, status, reason, created_at) VALUES (1, ?, 't', 'feed', ?, ?, ?)",
     );
     const expected: Array<{ url: string; reason_code: string | null }> = [];
-    for (const code of REASON_CODES) {
+    // The kinds that existed when the migration was written; later kinds never had a text of their own before.
+    for (const code of REASON_CODES.filter((code) => code !== "blocked-site")) {
       for (const language of ["ja", "en"]) {
         const url = `https://example.org/${code}/${language}`;
         candidate.run(url, "rejected", reasonText(code, language), now);
@@ -631,6 +632,62 @@ describe("the migration to reason codes", () => {
 
     expect(db.prepare("SELECT url, reason_code FROM candidates ORDER BY id").all()).toEqual(expected);
     expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 1").run()).toThrow();
+  });
+});
+
+describe("the migration to site hosts", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("gives the kept candidates the host of their URL, none to an unresolved redirect, and keeps their topics", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "032")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO topics (id, category_id, text, created_at) VALUES (7, 1, 'Rust', ?)").run(now);
+    const candidate = db.prepare(
+      "INSERT INTO candidates (id, category_id, url, site_name, title, source_kind, status, reason, reason_code, created_at) VALUES (?, 1, ?, ?, 't', 'news-search', 'rejected', 'r', ?, ?)",
+    );
+    candidate.run(1, "https://WWW.Example.org/a", "Example", "over-limit", now);
+    candidate.run(2, "https://blog.example.org/b", "Blog", null, now);
+    candidate.run(3, "https://news.google.com/rss/articles/abc", "Example Daily", null, now);
+    db.prepare("INSERT INTO candidate_topics (candidate_id, topic_id) VALUES (1, 7), (3, 7)").run();
+
+    copyFileSync(join(SHIPPED, "032_site_hosts.sql"), join(dir, "032_site_hosts.sql"));
+    migrate(db, dir);
+
+    expect(db.prepare("SELECT id, site_host, reason_code FROM candidates ORDER BY id").all()).toEqual([
+      { id: 1, site_host: "example.org", reason_code: "over-limit" },
+      { id: 2, site_host: "blog.example.org", reason_code: null },
+      { id: 3, site_host: "", reason_code: null },
+    ]);
+    expect(db.prepare("SELECT candidate_id, topic_id FROM candidate_topics ORDER BY candidate_id").all()).toEqual([
+      { candidate_id: 1, topic_id: 7 },
+      { candidate_id: 3, topic_id: 7 },
+    ]);
+    db.prepare("UPDATE candidates SET reason_code = 'blocked-site' WHERE id = 2").run();
+    expect(() => db.prepare("UPDATE candidates SET reason_code = 'judge' WHERE id = 1").run()).toThrow();
+    // Deleting a candidate still takes its topics with it: the reference follows the table made again.
+    db.prepare("DELETE FROM candidates WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM candidate_topics").get()).toEqual({ n: 1 });
+  });
+
+  it("keeps a list of blocked sites per category, which goes with the category", () => {
+    const db = openDatabase(":memory:");
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, window_hours, created_at)
+       VALUES (1, 'tools', 'Tools', 'news', '["05:00"]', 3, 5, 24, ?)`,
+    ).run(now);
+    db.prepare("INSERT INTO blocked_sites (category_id, host, created_at) VALUES (1, 'example.org', ?)").run(now);
+    expect(() => db.prepare("INSERT INTO blocked_sites (category_id, host, created_at) VALUES (1, 'example.org', ?)").run(now)).toThrow();
+    db.prepare("DELETE FROM categories WHERE id = 1").run();
+    expect(db.prepare("SELECT count(*) AS n FROM blocked_sites").get()).toEqual({ n: 0 });
   });
 });
 

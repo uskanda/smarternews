@@ -1,7 +1,7 @@
 // Reasons the program itself gives when it rejects a candidate. The judge's reasons come from the model.
 // A rejected candidate keeps the kind of the program's reason as its reason code, beside the text; the judge's
-// rejections have none. The migration that gave the code to earlier candidates matched these texts.
-export const REASON_CODES = ["no-date", "below-minimum", "over-limit", "event-outside-window", "event-no-date"] as const;
+// rejections have none. The migration that gave the code to earlier candidates matched the texts of the first five.
+export const REASON_CODES = ["no-date", "below-minimum", "over-limit", "event-outside-window", "event-no-date", "blocked-site"] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 
 const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
@@ -11,6 +11,7 @@ const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
     "over-limit": "件数上限",
     "event-outside-window": "開催日が対象期間の外",
     "event-no-date": "開催日を確認できない",
+    "blocked-site": "除外したサイト",
   },
   en: {
     "no-date": "publication time unknown",
@@ -18,6 +19,7 @@ const REASONS: Record<"ja" | "en", Record<ReasonCode, string>> = {
     "over-limit": "over the article limit of the run",
     "event-outside-window": "event date outside the window",
     "event-no-date": "event date could not be confirmed",
+    "blocked-site": "site blocked in this category",
   },
 };
 

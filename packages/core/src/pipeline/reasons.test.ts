@@ -7,6 +7,8 @@ describe("reasonText", () => {
     expect(reasonText("over-limit", "ja-JP")).toBe("件数上限");
     expect(reasonText("no-date", "en")).toBe("publication time unknown");
     expect(reasonText("event-no-date", "fr")).toBe("event date could not be confirmed");
+    expect(reasonText("blocked-site", "ja")).toBe("除外したサイト");
+    expect(reasonText("blocked-site", "en")).toBe("site blocked in this category");
   });
 
   it("gives every kind a text of its own in each language", () => {

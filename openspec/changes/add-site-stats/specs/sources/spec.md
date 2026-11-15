@@ -4,14 +4,14 @@
 
 ### Requirement: 候補のホスト名
 
-クローラーは、候補のURLのホスト名を、小文字にして先頭の `www.` だけを取った形で、その候補のサイトとして保存しなければならない（MUST）。サブドメインは別のサイトとする。
+クローラーは、候補のURLのホスト名を、小文字にして先頭の `www.` だけを取った形で、その候補のサイトとして保存しなければならない（MUST）。`www.` 以外の部分が違うホスト名は、別のサイトとする。
 
 #### Scenario: www. を取る
 
 - **WHEN** URLが `https://WWW.Example.org/a` の候補を保存する
 - **THEN** その候補のホスト名は `example.org` になる
 
-#### Scenario: サブドメイン
+#### Scenario: 先頭の部分が違うホスト名
 
 - **WHEN** URLが `https://blog.example.org/a` の候補と `https://example.org/b` の候補を保存する
 - **THEN** 2つの候補のホスト名は、`blog.example.org` と `example.org` で異なる
@@ -22,13 +22,13 @@ Googleニュースで検索したとき、クローラーは、各結果の出�
 
 #### Scenario: 解決できない転送用のURL
 
-- **WHEN** 出典サイトのURLが `https://times.example.org` で、転送用のURLを元のページのURLに解決できない結果を候補にする
-- **THEN** その候補のURLは転送用のURLのままで、ホスト名は `times.example.org` になる
+- **WHEN** 出典サイトのURLが `https://example.org` で、転送用のURLを元のページのURLに解決できない結果を候補にする
+- **THEN** その候補のURLは転送用のURLのままで、ホスト名は `example.org` になる
 
 #### Scenario: 解決できた転送用のURL
 
-- **WHEN** 出典サイトのURLが `https://times.example.org` で、転送用のURLが `https://news.example.net/a` に解決できた結果を候補にする
-- **THEN** その候補のホスト名は、解決したURLの `news.example.net` になる
+- **WHEN** 出典サイトのURLが `https://example.org` で、転送用のURLが `https://blog.example.org/a` に解決できた結果を候補にする
+- **THEN** その候補のホスト名は、解決したURLの `blog.example.org` になる
 
 ### Requirement: LLM検索のサイト名
 

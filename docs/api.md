@@ -121,6 +121,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 |---|---|
 | `GET /api/v1/categories/:id/topics` | List the topics of a category |
 | `GET /api/v1/categories/:id/topic-stats` | What each topic of a category brought in the last 30 days |
+| `GET /api/v1/categories/:id/site-stats` | What the sites of a category's candidates brought in the last 30 days, and its blocked sites |
+| `PUT /api/v1/categories/:id/blocked-sites/:host` | Block a site in the category |
+| `DELETE /api/v1/categories/:id/blocked-sites/:host` | Stop blocking it (status 204) |
 | `POST /api/v1/categories/:id/topics` | Add a topic (status 201) |
 | `GET /api/v1/topics/:id` | Read one |
 | `PATCH /api/v1/topics/:id` | Change `text`, `enabled`, `sources`, `search`, `queries` |
@@ -142,7 +145,7 @@ A topic's response includes `interpreted`, the generated `queries` and `criteria
 
 ### Topic trials
 
-A trial shows what a new text would change before you save it. `POST /api/v1/topics/:id/trials` takes `{"text": ..., "search": ...}`, the text and the search locale being edited; `search` left out or `null` uses the settings'. The trial asks the `interpret` task once with them, then the `judge` task once per batch of `limits.judgeBatchSize` stored candidates of the topic. It takes up to that many of the newest candidates the judge accepted and as many it rejected, more of one side when the other has fewer. Candidates rejected for an unknown publication time are left out, and a candidate the program rejected after the judge accepted it (below the minimum importance, over the article limit, an event date outside the window or unconfirmed) counts as accepted. The other topics a candidate matched are judged with their saved text, and each batch is judged at the time its newest candidate was collected.
+A trial shows what a new text would change before you save it. `POST /api/v1/topics/:id/trials` takes `{"text": ..., "search": ...}`, the text and the search locale being edited; `search` left out or `null` uses the settings'. The trial asks the `interpret` task once with them, then the `judge` task once per batch of `limits.judgeBatchSize` stored candidates of the topic. It takes up to that many of the newest candidates the judge accepted and as many it rejected, more of one side when the other has fewer. Candidates rejected for an unknown publication time or a [blocked site](#site-stats-and-blocked-sites) are left out, and a candidate the program rejected after the judge accepted it (below the minimum importance, over the article limit, an event date outside the window or unconfirmed) counts as accepted. The other topics a candidate matched are judged with their saved text, and each batch is judged at the time its newest candidate was collected.
 
 The answer comes at once: 202 with `{"status": "started", "id": ...}`. When a limit leaves too few calls for the trial, nothing starts and the answer is 200 with `id` `null` and a `status` that names the limit: `limit` for `limits.topicTrialsPerDay`, `day` for `limits.llmCallsPerDay`, `budget` for the monthly budget. While another trial runs, the answer is 409. Only one trial runs at a time.
 
@@ -170,11 +173,12 @@ Nothing is stored but the record of the call, which belongs to no run. To use a 
 | `belowMinimum` | Candidates rejected because their story was below the category's `minImportance` |
 | `overLimit` | Candidates rejected because the run had written `maxArticlesPerRun` articles |
 | `rejectedByDate` | Candidates rejected for a date: news without a publication time, and events outside the window or without a date |
+| `blockedSite` | Candidates rejected before the judge because their site is [blocked](#site-stats-and-blocked-sites) in the category |
 | `created` | Generated articles of the topic made in the period. Feed articles are never counted |
 | `updated` | Generated articles of the topic rewritten by a follow-up, the last time in the period |
 | `opened`, `starred` | Of the articles in `created`: the ones opened, and the ones with a star now |
 | `missed` | Of the articles in `created`: the ones marked as a [miss](#misses) for this topic, whenever the mark was made |
-| `topRejectedSites` | Up to three sites with the most rejected candidates, as `siteName` and `count`, most first; candidates without a site name are left out |
+| `topRejectedSites` | Up to three sites with the most rejected candidates, as `host` and `count`, most first, then by host. Candidates whose host is not known and those of a blocked site are left out |
 | `boundary`, `before`, `after` | Only when the topic [changed](#topic-versions) in the period: `boundary` is the last change, as `at` and `trigger`; `before` and `after` hold the fields above from `collected` to `topRejectedSites`, counted up to it and from it on |
 
 A candidate that matched two topics counts for both. A candidate keeps only its last reason, so one the judge accepted and the program then rejected counts under the program's reason. An unknown category answers 404.
@@ -183,6 +187,29 @@ A change is a version of the topic made after its first interpretation; the vers
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/topic-stats"
+```
+
+### Site stats and blocked sites
+
+Every candidate keeps the site it came from: the host of its URL, lowercased and without a leading `www.`. Subdomains are sites of their own. For a Google News result whose redirect link could not be resolved, the site is the host of the outlet the search named; candidates stored before sites were kept have no known site in that case.
+
+`site-stats` counts the candidates the category collected in the last 30 days by site. No model is called. The answer has `since`, the start of the period; `sites`, the sites with candidates in the period, the most candidates first, then by host, with the unknown site after the named ones; and `blocked`, the sites blocked in the category, by host, as `host` and `blockedAt`. Each entry of `sites` has:
+
+| Field | Meaning |
+|---|---|
+| `host` | The site. Empty for the candidates whose site is not known |
+| `candidates`, `accepted`, `rejected` | The candidates collected, and those accepted and rejected so far |
+| `articles` | The articles written from the site's candidates |
+| `opened`, `starred`, `missed` | Of those articles: the ones opened, the ones with a star now, and the ones marked as a [miss](#misses) |
+| `blocked` | Whether the site is blocked in the category now |
+
+`PUT /api/v1/categories/:id/blocked-sites/:host` takes no body, blocks the site in the category and answers it as `host` and `blockedAt`. The host is brought to the same form first, so `WWW.Example.org` blocks `example.org`; a value that is not a host name answers 400. Blocking a site again keeps the time it was first blocked. `DELETE` with the same path stops blocking it, and answers 404 when it is not blocked. An unknown category answers 404.
+
+From the next run of the category, a candidate of a blocked site from any source is rejected right after collecting, before its date is looked at, with the program's reason for a blocked site and counted under `blockedSite` in the topic stats. It never reaches the `judge` task and its page is never fetched, and its URL is settled like any judged one, so it is not collected again after the site is unblocked. Blocking a site in one category leaves the others alone.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/site-stats"
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/blocked-sites/example.org"
 ```
 
 ### Topic versions

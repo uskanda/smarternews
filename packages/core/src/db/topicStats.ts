@@ -27,6 +27,7 @@ function zero(): TopicStatsCounts {
     belowMinimum: 0,
     overLimit: 0,
     rejectedByDate: 0,
+    blockedSite: 0,
     created: 0,
     updated: 0,
     opened: 0,
@@ -50,7 +51,8 @@ function countTopics(db: Database, categoryId: number, topicIds: number[], from:
               coalesce(sum(c.status = 'rejected' AND c.reason_code IS NULL), 0) AS by_judge,
               coalesce(sum(c.reason_code = 'below-minimum'), 0) AS below_minimum,
               coalesce(sum(c.reason_code = 'over-limit'), 0) AS over_limit,
-              coalesce(sum(c.reason_code IN ('no-date', 'event-outside-window', 'event-no-date')), 0) AS by_date
+              coalesce(sum(c.reason_code IN ('no-date', 'event-outside-window', 'event-no-date')), 0) AS by_date,
+              coalesce(sum(c.reason_code = 'blocked-site'), 0) AS blocked_site
          FROM candidates c JOIN candidate_topics ct ON ct.candidate_id = c.id
         WHERE c.category_id = ? AND c.created_at >= ? AND c.created_at < ?
           AND ct.topic_id IN (SELECT value FROM json_each(?))
@@ -66,6 +68,7 @@ function countTopics(db: Database, categoryId: number, topicIds: number[], from:
     entry.belowMinimum += num(row.below_minimum);
     entry.overLimit += num(row.over_limit);
     entry.rejectedByDate += num(row.by_date);
+    entry.blockedSite += num(row.blocked_site);
   }
 
   const articles = db
@@ -96,17 +99,17 @@ function countTopics(db: Database, categoryId: number, topicIds: number[], from:
   }
 
   const sites = db.prepare(
-    `SELECT c.site_name, count(*) AS count
+    `SELECT c.site_host, count(*) AS count
        FROM candidates c JOIN candidate_topics ct ON ct.candidate_id = c.id
       WHERE ct.topic_id = ? AND c.category_id = ? AND c.created_at >= ? AND c.created_at < ? AND c.status = 'rejected'
-        AND c.site_name <> ''
-      GROUP BY c.site_name ORDER BY count DESC, c.site_name LIMIT ?`,
+        AND c.site_host <> '' AND c.reason_code IS NOT 'blocked-site'
+      GROUP BY c.site_host ORDER BY count DESC, c.site_host LIMIT ?`,
   );
   for (const [topicId, entry] of counts) {
     if (entry.collected.total === 0) continue;
     entry.topRejectedSites = sites
       .all(topicId, categoryId, from, to, TOPIC_STATS_TOP_SITES)
-      .map((row) => ({ siteName: str(row.site_name), count: num(row.count) }));
+      .map((row) => ({ host: str(row.site_host), count: num(row.count) }));
   }
 
   return counts;

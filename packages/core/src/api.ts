@@ -1335,6 +1335,8 @@ export const topicStatsCountsSchema = z.object({
   overLimit: z.number().int(),
   /** Rejected for a date: no publication time, or an event outside the window or without a date. */
   rejectedByDate: z.number().int(),
+  /** Rejected before the judge because their site is blocked in the category. */
+  blockedSite: z.number().int(),
   /** Generated articles of the topic made within the period. */
   created: z.number().int(),
   /** Generated articles of the topic rewritten at least once, the last time within the period. */
@@ -1345,8 +1347,11 @@ export const topicStatsCountsSchema = z.object({
   starred: z.number().int(),
   /** Of the articles in `created`: the ones marked as a miss for this topic, whenever it was marked. */
   missed: z.number().int(),
-  /** The sites with the most rejected candidates, most first, `TOPIC_STATS_TOP_SITES` at most. */
-  topRejectedSites: z.array(z.object({ siteName: z.string(), count: z.number().int() })),
+  /**
+   * The sites with the most rejected candidates, by host, most first, `TOPIC_STATS_TOP_SITES` at most. Candidates
+   * without a known host and those rejected because their site is blocked are left out.
+   */
+  topRejectedSites: z.array(z.object({ host: z.string(), count: z.number().int() })),
 });
 export type TopicStatsCounts = z.infer<typeof topicStatsCountsSchema>;
 
@@ -1375,7 +1380,7 @@ export type TopicStats = z.infer<typeof topicStatsSchema>;
 
 /** The candidates of the topic that no article came from, rejected at any step. */
 export function topicRejected(entry: TopicStatsEntry): number {
-  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate;
+  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate + entry.blockedSite;
 }
 
 /** The share of the topic's articles marked as misses; 0 without articles. */
@@ -1402,6 +1407,44 @@ export function rankTopicStats(entries: TopicStatsEntry[]): TopicStatsEntry[] {
       a.topicId - b.topicId,
   );
 }
+
+// ---- site stats --------------------------------------------------------------------------------
+
+/** A site blocked in a category: its candidates are rejected right after collecting, before the judge. */
+export const blockedSiteSchema = z.object({
+  /** Lowercased, without a leading `www.`. */
+  host: z.string(),
+  blockedAt: z.string(),
+});
+export type BlockedSite = z.infer<typeof blockedSiteSchema>;
+
+/** What the candidates of one site brought to a category within the last `TOPIC_STATS_DAYS` days. */
+export const siteStatsEntrySchema = z.object({
+  /** The host of the candidates. Empty for the candidates whose site is not known. */
+  host: z.string(),
+  candidates: z.number().int(),
+  accepted: z.number().int(),
+  rejected: z.number().int(),
+  /** The articles written from the site's candidates. */
+  articles: z.number().int(),
+  /** Of the articles: the ones with an open time, with a star now, and with a miss mark. */
+  opened: z.number().int(),
+  starred: z.number().int(),
+  missed: z.number().int(),
+  /** Whether the site is blocked in the category now. */
+  blocked: z.boolean(),
+});
+export type SiteStatsEntry = z.infer<typeof siteStatsEntrySchema>;
+
+export const siteStatsSchema = z.object({
+  /** The start of the period: candidates collected at or after it are counted. */
+  since: z.string(),
+  /** The sites with candidates in the period, the most candidates first, then by host. */
+  sites: z.array(siteStatsEntrySchema),
+  /** The sites blocked in the category, by host, whether they had candidates in the period or not. */
+  blocked: z.array(blockedSiteSchema),
+});
+export type SiteStats = z.infer<typeof siteStatsSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
