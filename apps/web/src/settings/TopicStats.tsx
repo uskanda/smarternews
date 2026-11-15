@@ -37,6 +37,7 @@ function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
     ["基準未満", `${entry.belowMinimum}件`],
     ["件数上限", `${entry.overLimit}件`],
     ["日付で外れた候補", `${entry.rejectedByDate}件`],
+    ["印のある記事の続報", `${entry.rejectedByMark}件`],
     ["作った記事", `${entry.created}件`],
     ["更新した記事", `${entry.updated}件`],
     ["開いた記事", ofCreated(entry.opened, entry.created)],

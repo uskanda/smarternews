@@ -3,6 +3,7 @@ import { renderMarkdown } from "../markdown.ts";
 import { localParts } from "../time.ts";
 import type { Database } from "./database.ts";
 import { bool, json, num, str } from "./rows.ts";
+import { refreshTermMatches } from "./term-matches.ts";
 
 // What is kept about translations: how many characters went to the translation API in each month, the
 // translated title of a feed article, and its content segment by segment.
@@ -36,6 +37,8 @@ export function saveTranslatedTitle(db: Database, id: number, translation: { ori
     id,
     translation.original,
   );
+  // The translated title is matched with the highlight terms, as the list shows it.
+  refreshTermMatches(db, [id]);
 }
 
 export interface StoredSegment {

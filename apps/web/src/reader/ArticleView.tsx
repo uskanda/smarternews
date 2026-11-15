@@ -216,6 +216,44 @@ function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
   );
 }
 
+/**
+ * What the follow-ups added, in the model's words: before the impact, so that a reader who read the article before
+ * sees first what is new. The line is not the impact's mark colour, to tell the two apart. The note of the last
+ * rewrite alone is shown as it is; several notes, or one of an earlier rewrite when the last one had none, are listed
+ * oldest first, each with the time of its rewrite, as two rewrites can come on one day.
+ */
+function UpdateNotes({ article, timeZone, terms }: { article: Article; timeZone: string; terms?: readonly string[] }) {
+  const notes = article.updateNotes;
+  if (notes.length === 0) return null;
+  if (notes.length === 1 && notes[0]!.createdAt === article.updatedAt) {
+    return (
+      <section aria-label="今回の更新で加わったこと" className="border-l-4 border-outline-strong pl-md">
+        <h3 className="type-label-sm text-on-surface-muted">今回の更新で加わったこと</h3>
+        <p className="type-body-md">
+          <Highlighted text={notes[0]!.note} terms={terms} />
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section aria-label="前回読んでから加わったこと" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
+      <h3 className="type-label-sm text-on-surface-muted">前回読んでから加わったこと</h3>
+      <ol className="flex flex-col gap-sm">
+        {notes.map((entry, index) => (
+          <li key={index} className="flex flex-col">
+            <time dateTime={entry.createdAt} className="type-label-sm text-on-surface-muted tabular-nums">
+              {formatFull(entry.createdAt, timeZone)}
+            </time>
+            <p className="type-body-md">
+              <Highlighted text={entry.note} terms={terms} />
+            </p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 /** What stands in the place of the summary while there is none yet. */
 const SUMMARY_NOTES = {
   waiting: "AIによる要約を作っています。",
@@ -235,6 +273,7 @@ export function ArticleView({
   onToggleStar,
   onToggleRead,
   onToggleMiss,
+  onToggleFollowUps,
   onCopyLink,
   fullContent,
   terms,
@@ -253,6 +292,8 @@ export function ArticleView({
   onToggleRead: (article: Article) => void;
   /** Marks a generated article as a miss, or takes the mark away. Not offered for a feed article. */
   onToggleMiss: (article: Article) => void;
+  /** Stops the follow-ups of a generated article, or lets them come again. Not offered for a feed article. */
+  onToggleFollowUps: (article: Article) => void;
   /** Copies the headline and the main source as a Markdown link. Offered only for an article with a main source. */
   onCopyLink: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
@@ -366,16 +407,8 @@ export function ArticleView({
             <span>噂や非公式の情報に基づいています。</span>
           </p>
         ) : null}
-        {article.revision > 0 && article.updateNote ? (
-          // What the last follow-up added, in the model's words: before the impact, so that a reader who read the
-          // article before sees first what is new. The line is not the impact's mark colour, to tell the two apart.
-          <section aria-label="今回の更新で加わったこと" className="border-l-4 border-outline-strong pl-md">
-            <h3 className="type-label-sm text-on-surface-muted">今回の更新で加わったこと</h3>
-            <p className="type-body-md">
-              <Highlighted text={article.updateNote} terms={terms} />
-            </p>
-          </section>
-        ) : null}
+        <UpdateNotes article={article} timeZone={timeZone} terms={terms} />
+
         {article.impact ? (
           <section aria-label="読み手への影響" className="border-l-4 border-mark pl-md">
             <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
@@ -510,9 +543,14 @@ export function ArticleView({
           </Button>
           <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
           {delivered ? null : (
-            <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
-              {article.missed ? "外れの印を外す" : "外れの印を付ける"}
-            </Button>
+            <>
+              <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
+                {article.missed ? "外れの印を外す" : "外れの印を付ける"}
+              </Button>
+              <Button aria-pressed={article.followUpsStopped} onClick={() => onToggleFollowUps(article)}>
+                {article.followUpsStopped ? "続報の停止を解除する" : "この話題の続報を止める"}
+              </Button>
+            </>
           )}
           {articleLink(article) !== null ? (
             <Button aria-keyshortcuts="c" onClick={() => onCopyLink(article)}>
