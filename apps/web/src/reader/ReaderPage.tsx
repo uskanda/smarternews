@@ -59,6 +59,7 @@ import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
 import { EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
+import { MarkOlderMenu, type MarkOlderPeriod } from "./MarkOlderMenu.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
 
@@ -515,17 +516,40 @@ export function ReaderPage({ view }: { view: View }) {
     void client.invalidateQueries({ queryKey: ["counts"] });
   }
 
-  async function markAllRead() {
+  function markAllRead() {
+    return markRead((asOf) => asOf, true, "");
+  }
+  /**
+   * Marks read what is older than the period. It stays on this list, whatever the setting: what is left unread is
+   * what the reader is about to read.
+   */
+  function markOlderRead(period: MarkOlderPeriod) {
+    return markRead(
+      (asOf) => {
+        const cutoff = new Date(now().getTime() - period.ms).toISOString();
+        return cutoff < asOf ? cutoff : asOf;
+      },
+      false,
+      `${period.label}より古い未読はありません`,
+    );
+  }
+  /**
+   * Marks read the unread articles of the list updated before the time `before` gives for the time the list was
+   * read, and offers to undo it. `none` is what is said when nothing was marked; empty, the count is said.
+   */
+  async function markRead(before: (asOf: string) => string, advance: boolean, none: string) {
     if (!listControls) return;
     // When the server read the list: what arrived later stays unread, and what is on pages not loaded yet is
     // marked too, whatever the order. A refetch reads the first page again, and moves the time with it.
-    const before = list.data?.pages[0]?.asOf;
-    if (before === undefined || fetched.length === 0) return;
+    const asOf = list.data?.pages[0]?.asOf;
+    if (asOf === undefined || fetched.length === 0) return;
     try {
-      const result = await api.markRead({ before, ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
+      const result = await api.markRead({ before: before(asOf), ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
       refresh();
+      // Nothing to undo, and nothing finished to move on from.
+      if (result.updated === 0 && none.length > 0) return void toast({ message: none });
       // Moving on is an extra: when it fails, the marking has still happened and can still be undone.
-      const opened = target && settings.data?.advanceAfterMarkAll ? await openNext(target).catch(() => null) : null;
+      const opened = advance && target && settings.data?.advanceAfterMarkAll ? await openNext(target).catch(() => null) : null;
       toast({
         message: opened ? `${result.updated}件を既読にしました。「${opened}」を開きました` : `${result.updated}件を既読にしました`,
         durationMs: 10_000,
@@ -717,7 +741,14 @@ export function ReaderPage({ view }: { view: View }) {
             {title}
           </h1>
           <div className="flex shrink-0 gap-sm">
-            {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
+            {canMarkAll ? (
+              <span className="flex">
+                <Button className="rounded-r-none!" onClick={() => void markAllRead()}>
+                  すべて既読にする
+                </Button>
+                <MarkOlderMenu onChoose={(period) => void markOlderRead(period)} />
+              </span>
+            ) : null}
             <Button onClick={refresh}>読み直す</Button>
           </div>
         </div>
