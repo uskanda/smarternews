@@ -22,6 +22,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, checkText, checkTimes, checkWholeNumber, describeProblem, fieldMessage, linesOf } from "@smarternews/client";
 import { useCategories, useCounts, useFeeds, useProviders, useRuns, useTopics } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
@@ -96,14 +97,18 @@ function CategoryForm({ category }: { category: Category }) {
   const [form, setForm] = useState(initial);
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   useUnsaved("カテゴリの設定", JSON.stringify(form) !== JSON.stringify(initial));
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
   };
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const schedule = checkTimes(form.schedule, { label: SCHEDULE.label, max: SCHEDULE_MAX_TIMES, formatHint: TIME_FORMAT_HINT });
     const minImportance = checkWholeNumber(form.minImportance, MIN_IMPORTANCE);
     const maxArticlesPerRun = checkWholeNumber(form.maxArticlesPerRun, MAX_ARTICLES);
@@ -137,7 +142,7 @@ function CategoryForm({ category }: { category: Category }) {
   }
 
   return (
-    <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
+    <form noValidate onSubmit={submit} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
       <div className="sm:col-span-2">
         <Field label="名前" value={form.name} onChange={set("name")} error={problems.name ?? fieldMessage(error, "name", "名前")} />
       </div>
@@ -202,7 +207,7 @@ function CategoryForm({ category }: { category: Category }) {
       </div>
       <div className="sm:col-span-2">{generalError(error)}</div>
       <div className="sm:col-span-2">
-        <Button type="submit" variant="primary">
+        <Button type="submit" variant="primary" disabled={saving}>
           保存する
         </Button>
       </div>
@@ -253,6 +258,8 @@ function TopicEditor({
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
   const [closing, setClosing] = useState(false);
+  // Saving and deleting the topic: one waits for its answer before either can be sent again.
+  const [pending, run] = usePending();
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   useUnsaved(`トピック『${topic.text}』の編集`, dirty);
   const text = (name: "text" | "feeds" | "queries" | "language" | "region") => (event: { target: { value: string } }) => {
@@ -277,8 +284,12 @@ function TopicEditor({
     void trial.start({ text: form.text, search: searchOf() }, setError);
   };
 
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const found = problemsOf({
       text: checkText(form.text, { label: TOPIC_TEXT.label, max: TOPIC_TEXT_MAX_CHARS }),
       feeds: feedsProblem(linesOf(form.feeds)),
@@ -320,7 +331,7 @@ function TopicEditor({
   }
 
   return (
-    <form noValidate onSubmit={save} className="flex flex-col gap-md pt-sm">
+    <form noValidate onSubmit={submit} className="flex flex-col gap-md pt-sm">
       <Field
         label={TOPIC_TEXT.label}
         multiline
@@ -379,7 +390,7 @@ function TopicEditor({
       </div>
       {generalError(error)}
       <div className="flex flex-wrap gap-sm">
-        <Button type="submit" variant="primary">
+        <Button type="submit" variant="primary" disabled={pending}>
           保存する
         </Button>
         <Button onClick={tryText} disabled={trial.running}>
@@ -422,7 +433,7 @@ function TopicEditor({
         onDismiss={() => setConfirming(false)}
         actions={
           <>
-            <Button variant="danger" onClick={() => void remove()}>
+            <Button variant="danger" disabled={pending} onClick={() => void run(remove)}>
               削除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
@@ -566,10 +577,14 @@ function Topics({ category }: { category: Category }) {
   const [text, setText] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [adding, run] = usePending();
   useUnsaved("新しいトピック", text.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(text, { label: NEW_TOPIC.label, max: TOPIC_TEXT_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -593,7 +608,7 @@ function Topics({ category }: { category: Category }) {
       {topics.isError ? <ErrorNotice error={topics.error} onRetry={() => void topics.refetch()} /> : null}
       {topics.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">トピックはまだありません。</p> : null}
       <ul className="max-w-measure">{topics.data?.map((topic) => <TopicItem key={topic.id} topic={topic} canSearch={canSearch} />)}</ul>
-      <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-sm">
         <Field
           label={NEW_TOPIC.label}
           multiline
@@ -607,7 +622,7 @@ function Topics({ category }: { category: Category }) {
         />
         {generalError(error)}
         <div>
-          <Button type="submit" variant="primary" disabled={text.trim().length === 0}>
+          <Button type="submit" variant="primary" disabled={adding || text.trim().length === 0}>
             トピックを追加
           </Button>
         </div>
@@ -659,6 +674,8 @@ function DeleteCategory({ category }: { category: Category }) {
   const navigate = useNavigate();
   const toast = useToast();
   const [open, setOpen] = useState(false);
+  // Deleting and disabling: while either waits for its answer, neither can be sent.
+  const [pending, run] = usePending();
   const topicCount = useTopics(category.id).data?.length;
   // Only generated articles go with the category; the articles of its feeds stay.
   const articleCount = useCounts().data?.categories.find((entry) => entry.categoryId === category.id)?.generatedTotal;
@@ -707,10 +724,12 @@ function DeleteCategory({ category }: { category: Category }) {
         onDismiss={() => setOpen(false)}
         actions={
           <>
-            <Button variant="danger" onClick={() => void remove()}>
+            <Button variant="danger" disabled={pending} onClick={() => void run(remove)}>
               削除する
             </Button>
-            <Button onClick={() => void disable()}>無効にする</Button>
+            <Button disabled={pending} onClick={() => void run(disable)}>
+              無効にする
+            </Button>
             <Button onClick={() => setOpen(false)}>やめる</Button>
           </>
         }

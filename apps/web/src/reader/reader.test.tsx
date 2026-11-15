@@ -784,6 +784,28 @@ describe("read state", () => {
     await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false]));
   });
 
+  it("marks once while the answer waits, by the button or Shift+A, and keeps the undo of that marking", async () => {
+    const server = makeServer();
+    const ids = articles(server, server.category().id, [{ title: "One" }, { title: "Two" }]);
+    const { user, requests, hold } = renderApp({ server });
+    await screen.findByRole("link", { name: /Two/ });
+    const held = hold("POST /api/v1/articles/mark-read");
+
+    const button = screen.getByRole("button", { name: "すべて既読にする" });
+    await user.click(button);
+    await user.click(button);
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    expect(button).toBeDisabled();
+    expect(requests.filter((request) => request === "POST /api/v1/articles/mark-read")).toHaveLength(1);
+    await held.release();
+    const status = await screen.findByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent("2件を既読にしました"));
+    expect(within(status).getByRole("button", { name: "取り消す" })).toBeInTheDocument();
+    expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true]);
+  });
+
   it("offers no bulk action where it would hide what the user came to see", async () => {
     const server = makeServer();
     setArticleFlags(server.db, server.article(server.category().id, { title: "Kept" }), { starred: true }, server.clock().toISOString());

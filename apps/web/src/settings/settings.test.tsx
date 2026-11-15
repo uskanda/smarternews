@@ -1284,3 +1284,170 @@ describe("changes not saved yet", () => {
     expect(unloadStopped()).toBe(false);
   });
 });
+
+describe("a change waiting for the server's answer", () => {
+  const sent = (requests: string[], pattern: RegExp) => requests.filter((request) => pattern.test(request));
+
+  it("deletes a topic once when 削除する is pressed twice, and says it was deleted", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user, requests, hold } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const held = hold(/^DELETE \/api\/v1\/topics\//);
+
+    await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
+    await user.click(screen.getByRole("button", { name: "トピックを削除" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const remove = within(dialog).getByRole("button", { name: "削除する" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "やめる" })).toBeEnabled();
+    expect(sent(requests, /^DELETE /)).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("トピックを削除しました");
+    expect(listTopics(server.db, category.id)).toEqual([]);
+  });
+
+  it("adds a topic once when トピックを追加 is pressed twice", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, requests, hold } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const held = hold(/^POST \/api\/v1\/categories\/\d+\/topics$/);
+
+    await user.type(await screen.findByLabelText("新しいトピック"), "supply chain");
+    const add = screen.getByRole("button", { name: "トピックを追加" });
+    await user.click(add);
+    await user.click(add);
+
+    expect(add).toBeDisabled();
+    expect(sent(requests, /^POST .*\/topics$/)).toHaveLength(1);
+    await held.release();
+    await within(await section("トピック")).findByText("supply chain");
+    expect(listTopics(server.db, category.id)).toHaveLength(1);
+  });
+
+  it("holds both 削除する and 無効にする while either of them waits", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, requests, hold } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const held = hold(`PATCH /api/v1/categories/${category.id}`);
+
+    await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "無効にする" }));
+    await user.click(within(dialog).getByRole("button", { name: "無効にする" }));
+    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+
+    expect(within(dialog).getByRole("button", { name: "無効にする" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "削除する" })).toBeDisabled();
+    expect(sent(requests, /^(PATCH|DELETE) /)).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("カテゴリを無効にしました");
+    expect(listCategories(server.db)).toHaveLength(1);
+  });
+
+  it("deletes a category once when 削除する is pressed twice", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, requests, hold, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const held = hold(`DELETE /api/v1/categories/${category.id}`);
+
+    await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+    await user.click(within(dialog).getByRole("button", { name: "削除する" }));
+
+    expect(within(dialog).getByRole("button", { name: "無効にする" })).toBeDisabled();
+    expect(sent(requests, /^DELETE /)).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(path()).toBe("/settings"));
+    expect(await screen.findByRole("status")).toHaveTextContent("カテゴリを削除しました");
+  });
+
+  it("adds a category once when カテゴリを追加 is pressed twice", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings" });
+    const held = hold("POST /api/v1/categories");
+
+    await user.type(await screen.findByLabelText("カテゴリの名前"), "Security");
+    const add = screen.getByRole("button", { name: "カテゴリを追加" });
+    await user.click(add);
+    await user.click(add);
+
+    expect(add).toBeDisabled();
+    expect(sent(requests, /^POST \/api\/v1\/categories$/)).toHaveLength(1);
+    await held.release();
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(listCategories(server.db)).toHaveLength(1);
+  });
+
+  it.each([
+    { name: "the reader information", region: "読み手情報", request: /^PATCH \/api\/v1\/settings$/ },
+    { name: "the global settings", region: "全体設定", request: /^PATCH \/api\/v1\/settings$/ },
+  ])("saves $name once while the answer waits", async ({ region, request }) => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings" });
+    await waitFor(() => expect(requests.some((entry) => entry === "GET /api/v1/settings")).toBe(true));
+    const held = hold(request);
+
+    const part = await section(region);
+    const save = within(part).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(sent(requests, request)).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(save).toBeEnabled());
+  });
+
+  it("saves the settings of a category and of a topic once while the answer waits", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws", true);
+    const { user, requests, hold } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const categoryHeld = hold(`PATCH /api/v1/categories/${category.id}`);
+    const settings = await section("カテゴリの設定");
+    const saveCategory = within(settings).getByRole("button", { name: "保存する" });
+    await user.click(saveCategory);
+    await user.click(saveCategory);
+    expect(saveCategory).toBeDisabled();
+    expect(sent(requests, /^PATCH \/api\/v1\/categories\//)).toHaveLength(1);
+    await categoryHeld.release();
+    await waitFor(() => expect(saveCategory).toBeEnabled());
+
+    const topicHeld = hold(/^PATCH \/api\/v1\/topics\//);
+    await user.click(await screen.findByRole("button", { name: "exploited flaws を編集" }));
+    const saveTopic = within(await section("トピック")).getByRole("button", { name: "保存する" });
+    await user.click(saveTopic);
+    await user.click(saveTopic);
+    expect(saveTopic).toBeDisabled();
+    expect(sent(requests, /^PATCH \/api\/v1\/topics\//)).toHaveLength(1);
+    await topicHeld.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("トピックを保存しました");
+  });
+
+  it("keeps 読み込む held while a settings file is being loaded", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings" });
+    const held = hold("POST /api/v1/settings/import");
+    const file = new File(["version: 1\ncategories:\n  - slug: cars\n    name: Cars\n    kind: news\n"], "settings.yaml");
+
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), file);
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
+
+    const load = within(settingsFile).getByRole("button", { name: "読み込む" });
+    await waitFor(() => expect(load).toBeDisabled());
+    await user.click(load);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(sent(requests, /^POST \/api\/v1\/settings\/import$/)).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(settingsFile).toHaveTextContent("カテゴリを1件作成"));
+    expect(load).toBeEnabled();
+  });
+});

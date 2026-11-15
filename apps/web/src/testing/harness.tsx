@@ -47,6 +47,8 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.token !== null) window.localStorage.setItem("smarternews.token", options.token ?? API_TOKEN);
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
+  // The requests whose answers wait until the test lets them through: matched against "METHOD path".
+  const holds: { match: (request: string) => boolean; gate: Promise<void> }[] = [];
   let path = options.route ?? "/";
   let go: (delta: number) => void = () => {
     throw new Error("The app has not rendered its router yet.");
@@ -54,9 +56,11 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.browserHistory) window.history.replaceState(null, "", path);
   const view = render(
     <App
-      fetchImpl={(input, init) => {
-        requests.push(`${init?.method ?? "GET"} ${input}`);
-        if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
+      fetchImpl={async (input, init) => {
+        const request = `${init?.method ?? "GET"} ${input}`;
+        requests.push(request);
+        if (options.offline?.()) throw new TypeError("fetch failed");
+        for (const hold of holds.filter((entry) => entry.match(request))) await hold.gate;
         return server.app.request(input, init);
       }}
       initialEntries={options.browserHistory ? undefined : [path]}
@@ -79,6 +83,27 @@ export function renderApp(options: RenderOptions = {}) {
     /** Goes back one entry in the history, as the browser's back button does. */
     back: async () => {
       await act(async () => go(-1));
+    },
+    /**
+     * Keeps the answers to the matching requests ("METHOD path", such as "DELETE /api/v1/topics/3") waiting, as a
+     * slow server would, until `release` lets them through. The requests are counted in `requests` when sent.
+     */
+    hold: (match: string | RegExp) => {
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const entry = { match: (request: string) => (typeof match === "string" ? request === match : match.test(request)), gate };
+      holds.push(entry);
+      return {
+        release: async () => {
+          holds.splice(holds.indexOf(entry), 1);
+          await act(async () => {
+            open();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          });
+        },
+      };
     },
   };
 }

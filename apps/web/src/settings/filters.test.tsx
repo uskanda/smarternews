@@ -251,6 +251,40 @@ describe("changing a filter", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "一覧" })).toHaveFocus());
   });
 
+  it("removes a filter once when 削除する is pressed twice, and says it was removed", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user, requests, hold } = renderApp({ server, route: "/settings/filters" });
+    const held = hold(/^DELETE \/api\/v1\/filters\/\d+$/);
+
+    await user.click(await screen.findByRole("button", { name: "隠すフィルター（全体）を削除" }));
+    const remove = within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("フィルターを削除しました。3件が一覧に戻りました。")).toBeInTheDocument();
+    expect(screen.queryByText("削除できませんでした。もう一度試してください。")).not.toBeInTheDocument();
+  });
+
+  it("switches a filter once while the answer waits", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user, requests, hold } = renderApp({ server, route: "/settings/filters" });
+    const held = hold(/^PATCH \/api\/v1\/filters\/\d+$/);
+
+    const toggle = await screen.findByRole("button", { name: "隠すフィルター（全体）を無効にする" });
+    await user.click(toggle);
+    await user.click(toggle);
+
+    expect(toggle).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("フィルターを無効にしました。3件が一覧に戻りました。")).toBeInTheDocument();
+  });
+
   it("keeps the filter when the removal is called off", async () => {
     const { server } = withArticles();
     createFilter(server.db, hide("特売"), server.clock);

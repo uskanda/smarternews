@@ -514,6 +514,65 @@ describe("OPML", () => {
   });
 });
 
+describe("a change to feeds waiting for the server's answer", () => {
+  it("saves an edited feed once", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const held = hold(/^PATCH \/api\/v1\/feeds\/\d+$/);
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const save = within(row).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+  });
+
+  it("saves the base interval once", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("取得周期");
+    await within(form).findByLabelText("基本の取得周期（分）");
+    const held = hold("PATCH /api/v1/settings");
+
+    const save = within(form).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request === "PATCH /api/v1/settings")).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("取得周期を保存しました")).toBeInTheDocument();
+  });
+
+  it("loads an OPML file once", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const held = hold("POST /api/v1/feeds/opml");
+    const file = new File(
+      ['<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" text="A" xmlUrl="https://a.example.org/feed.xml"/></body></opml>'],
+      "feeds.opml",
+    );
+
+    const opml = await section("OPML");
+    await user.upload(within(opml).getByLabelText("読み込むOPMLファイル"), file);
+    const load = within(opml).getByRole("button", { name: "読み込む" });
+    await user.click(load);
+    await waitFor(() => expect(load).toBeDisabled());
+    await user.click(load);
+
+    expect(requests.filter((request) => request === "POST /api/v1/feeds/opml")).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(within(opml).getByRole("status")).toHaveTextContent("1件を登録し、0件を飛ばしました。"));
+    expect(listFeeds(server.db)).toHaveLength(1);
+  });
+});
+
 describe("deleting a category that has feeds", () => {
   it("says in the question that its feeds stay and move to 未分類", async () => {
     const server = makeServer();

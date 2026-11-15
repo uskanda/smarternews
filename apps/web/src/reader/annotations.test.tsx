@@ -216,6 +216,35 @@ describe("highlighting a selection", () => {
     expect(stored(server)).toMatchObject([{ quote: "最後の段落", note: null }]);
   });
 
+  it("makes one highlight while the answer waits, whether by the button, h or the menu", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    const { user, requests, hold } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await within(article).findByText(/電池の工場/);
+    const held = hold(`POST /api/v1/articles/${id}/highlights`);
+
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    const button = within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "ハイライト" });
+    await user.click(button);
+    await user.click(button);
+    expect(button).toBeDisabled();
+    // jsdom drops the selection on a click, which a browser keeps: the text is selected again for the key and the menu.
+    (document.activeElement as HTMLElement).blur();
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    await screen.findByRole("toolbar", { name: "選んだ文字列" });
+    await user.keyboard("h");
+    fireEvent.contextMenu(article.querySelector(".article-body")!, { button: 2, clientX: 40, clientY: 50 });
+    const item = within(await screen.findByRole("menu", { name: "選んだ文字列の操作" })).getByRole("menuitem", { name: "ハイライト" });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Escape}");
+
+    expect(requests.filter((request) => request === `POST /api/v1/articles/${id}/highlights`)).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(marked(article)).toEqual([QUOTE]));
+    expect(stored(server)).toHaveLength(1);
+  });
+
   it("is listed among the keys", async () => {
     const { user } = renderApp({ route: "/all" });
     await screen.findByRole("region", { name: "記事の一覧" });

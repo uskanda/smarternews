@@ -31,6 +31,7 @@ import {
 import { useCategories, useProviders, useSettings, useTopics, useUsage } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { chooseHideRead, useHideRead } from "../lib/hide-read.ts";
+import { usePending } from "../lib/pending.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -74,10 +75,14 @@ function Categories() {
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const leave = useUnsavedLeaving();
+  const [adding, run] = usePending();
   useUnsaved("新しいカテゴリの名前", name.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(name, { label: "カテゴリの名前", max: CATEGORY_NAME_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -101,7 +106,7 @@ function Categories() {
         <p className="type-body-md text-on-surface-muted">カテゴリはまだありません。下の欄から追加してください。</p>
       ) : null}
       <ul className="max-w-measure">{categories.data?.map((category) => <CategoryRow key={category.id} category={category} />)}</ul>
-      <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
         <Field
           label="カテゴリの名前"
           value={name}
@@ -125,7 +130,7 @@ function Categories() {
         </p>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
-          <Button type="submit" disabled={name.trim().length === 0}>
+          <Button type="submit" disabled={adding || name.trim().length === 0}>
             カテゴリを追加
           </Button>
         </div>
@@ -141,10 +146,14 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const [text, setText] = useState(settings.readerInfo);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   useUnsaved("読み手情報", text !== settings.readerInfo);
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const found = checkText(text, { label: "読み手情報", max: READER_INFO_MAX_CHARS, required: false });
     setProblem(found);
     if (found !== null) return;
@@ -160,7 +169,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   return (
     <section id="reader" aria-label="読み手情報" className={SECTION}>
       <h2 className="type-headline-md">読み手情報</h2>
-      <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
         <Field
           label="読み手情報"
           multiline
@@ -174,7 +183,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
         />
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
-          <Button type="submit">
+          <Button type="submit" disabled={saving}>
             保存する
           </Button>
         </div>
@@ -200,9 +209,14 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void run(save);
   };
   // Compared the way they are saved, so that nothing is left to ask about once they are.
   useUnsaved(
@@ -217,8 +231,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
       staleDays.trim() !== String(settings.staleFeedDays),
   );
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
+  async function save() {
     const stale = checkWholeNumber(staleDays, { label: "更新が止まったとみなす日数", min: 1, max: STALE_FEED_DAYS_MAX });
     const digestTimes = checkTimes(form.digestSchedule, { label: "ダイジェストを作る時刻", max: SCHEDULE_MAX_TIMES, formatHint: TIME_FORMAT_HINT });
     const found = problemsOf({
@@ -256,7 +269,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
   return (
     <section id="global" aria-label="全体設定" className={SECTION}>
       <h2 className="type-headline-md">全体設定</h2>
-      <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
+      <form noValidate onSubmit={submit} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
         <Field
           label="出力言語"
           value={form.outputLanguage}
@@ -332,7 +345,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
-          <Button type="submit">
+          <Button type="submit" disabled={saving}>
             保存する
           </Button>
         </div>
@@ -413,6 +426,8 @@ function SettingsFile() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
+  // Loading goes on after the question closes; 読み込む stays held until the server answers.
+  const [loading, run] = usePending();
 
   async function download() {
     try {
@@ -430,7 +445,7 @@ function SettingsFile() {
 
   function ask(event: FormEvent) {
     event.preventDefault();
-    if (file) setConfirming(true);
+    if (file && !loading) setConfirming(true);
   }
 
   async function upload() {
@@ -473,7 +488,7 @@ function SettingsFile() {
           識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとフィルターも消えません。語の色付けは、名前が一致するまとまりの色を変え、ない語だけを足します。ファイルにないまとまりと語は消えません。以前のストップワードの形式のファイルも読み込め、各語は全体の隠すフィルターになります。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
         </p>
         <div>
-          <Button type="submit" disabled={!file}>
+          <Button type="submit" disabled={loading || !file}>
             読み込む
           </Button>
         </div>
@@ -499,7 +514,7 @@ function SettingsFile() {
         onDismiss={() => setConfirming(false)}
         actions={
           <>
-            <Button variant="primary" onClick={() => void upload()}>
+            <Button variant="primary" disabled={loading} onClick={() => void run(upload)}>
               読み込む
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>

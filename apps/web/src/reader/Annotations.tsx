@@ -5,6 +5,7 @@ import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarterne
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
 import { useHotkeys } from "../lib/keys.ts";
+import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button } from "../ui/controls.tsx";
@@ -497,14 +498,19 @@ export function AnnotatedBody({
     }
   }
 
+  // A highlight without a note, by the button, the menu or h: the selection stays until the answer, and a second
+  // one sent meanwhile would be stored twice.
+  const [highlighting, runHighlight] = usePending();
+  const highlight = (target: HighlightAnchor) => void runHighlight(() => add(target, null));
+
   const anchor = selected?.anchor ?? null;
-  useHotkeys({ h: anchor ? () => void add(anchor, null) : undefined });
+  useHotkeys({ h: anchor ? () => highlight(anchor) : undefined });
 
   /** The actions a selection offers, the same in its menu and in the menu of a right click. */
-  const choices = (selection: Selected) => [
+  const choices = (selection: Selected): { label: string; run: () => void; disabled?: boolean }[] => [
     ...(selection.anchor
       ? [
-          { label: "ハイライト", run: () => void add(selection.anchor!, null) },
+          { label: "ハイライト", run: () => highlight(selection.anchor!), disabled: highlighting },
           { label: "メモを書く", run: () => setWritingFor(selection.anchor) },
         ]
       : []),
@@ -571,7 +577,7 @@ export function AnnotatedBody({
           onMouseDown={(event) => event.preventDefault()}
         >
           {choices(selected).map((choice) => (
-            <Button key={choice.label} onClick={choice.run}>
+            <Button key={choice.label} disabled={choice.disabled} onClick={choice.run}>
               {choice.label}
             </Button>
           ))}
@@ -586,7 +592,7 @@ export function AnnotatedBody({
             {menuFor
               ? [
                   ...choices(menuFor).map((choice) => (
-                    <ContextMenu.Item key={choice.label} className={MENU_ITEM} onSelect={choice.run}>
+                    <ContextMenu.Item key={choice.label} className={MENU_ITEM} disabled={choice.disabled} onSelect={choice.run}>
                       {choice.label}
                     </ContextMenu.Item>
                   )),

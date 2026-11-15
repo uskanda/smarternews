@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { ApiError, checkText, fieldMessage, TERM_COLOR_LABEL } from "@smarternews/client";
 import { useTermGroups } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
@@ -69,10 +70,14 @@ function AddGroup() {
   const [color, setColor] = useState<TermColor>("green");
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [adding, run] = usePending();
   useUnsaved("語のまとまりの追加", name.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(name, { label: GROUP_NAME, max: TERM_GROUP_NAME_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -88,7 +93,7 @@ function AddGroup() {
   }
 
   return (
-    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+    <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
       <Field
         label={GROUP_NAME}
         value={name}
@@ -101,7 +106,7 @@ function AddGroup() {
       <ColorChoice value={color} onChange={setColor} />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div>
-        <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
+        <Button type="submit" variant="primary" disabled={adding || name.trim().length === 0}>
           まとまりを追加
         </Button>
       </div>
@@ -117,10 +122,14 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   const [color, setColor] = useState<TermColor>(group.color);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   useUnsaved(`まとまり『${group.name}』の編集`, name !== group.name || color !== group.color);
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const found = checkText(name, { label: GROUP_NAME, max: TERM_GROUP_NAME_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -134,7 +143,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   }
 
   return (
-    <form noValidate onSubmit={save} className="flex flex-col gap-md">
+    <form noValidate onSubmit={submit} className="flex flex-col gap-md">
       <Field
         label={GROUP_NAME}
         value={name}
@@ -147,7 +156,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
       <ColorChoice value={color} onChange={setColor} />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
-        <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
+        <Button type="submit" variant="primary" disabled={saving || name.trim().length === 0}>
           保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
@@ -163,10 +172,14 @@ function AddTerm({ group }: { group: TermGroup }) {
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const label = `「${group.name}」に足す語`;
+  const [adding, run] = usePending();
   useUnsaved(`まとまり『${group.name}』への語の追加`, text.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(text, { label: "語", max: HIGHLIGHT_TERM_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -180,7 +193,7 @@ function AddTerm({ group }: { group: TermGroup }) {
   }
 
   return (
-    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
+    <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-sm">
       <Field
         label={label}
         value={text}
@@ -192,7 +205,7 @@ function AddTerm({ group }: { group: TermGroup }) {
       />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div>
-        <Button type="submit" disabled={text.trim().length === 0}>
+        <Button type="submit" disabled={adding || text.trim().length === 0}>
           語を追加
         </Button>
       </div>
@@ -205,12 +218,15 @@ function GroupRow({
   first,
   last,
   onMove,
+  moving,
   focusMove,
 }: {
   group: TermGroup;
   first: boolean;
   last: boolean;
   onMove: (group: TermGroup, direction: "up" | "down") => void;
+  /** A move of any group waits for its answer: no group moves until it comes. */
+  moving: boolean;
   /** The move button to focus once the group has moved, so that a keyboard user stays where they were. */
   focusMove: { direction: "up" | "down"; serial: number } | null;
 }) {
@@ -219,6 +235,8 @@ function GroupRow({
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Deleting the group or one of its terms: one at a time.
+  const [removing, run] = usePending();
   const focus = useInlineEditFocus(editing);
   const up = useRef<HTMLButtonElement>(null);
   const down = useRef<HTMLButtonElement>(null);
@@ -226,11 +244,13 @@ function GroupRow({
   const direction = focusMove?.direction;
   const serial = focusMove?.serial;
   useEffect(() => {
+    // The buttons are held while the move waits, and a held button takes no focus: it is focused once they are free.
+    if (moving) return;
     // A button that cannot be pressed any more passes the focus to the other one.
     if (direction === "up") (first ? down : up).current?.focus();
     if (direction === "down") (last ? up : down).current?.focus();
     // Run again for every move, also one in the same direction as the last.
-  }, [direction, serial, first, last]);
+  }, [direction, serial, first, last, moving]);
 
   async function removeGroup() {
     try {
@@ -270,7 +290,12 @@ function GroupRow({
           {group.terms.map((term) => (
             <li key={term.id} className="inline-flex min-w-0 items-center gap-xs rounded-sm border border-outline pl-sm">
               <span className="min-w-0 break-words">{term.text}</span>
-              <Button variant="quiet" aria-label={`「${term.text}」を削除`} onClick={() => void removeTerm(term.id, term.text)}>
+              <Button
+                variant="quiet"
+                aria-label={`「${term.text}」を削除`}
+                disabled={removing}
+                onClick={() => void run(() => removeTerm(term.id, term.text))}
+              >
                 削除
               </Button>
             </li>
@@ -285,10 +310,10 @@ function GroupRow({
         <>
           <AddTerm group={group} />
           <div className="flex flex-wrap gap-sm pt-xs">
-            <Button ref={up} aria-label={`${group.name}を上へ`} disabled={first} onClick={() => onMove(group, "up")}>
+            <Button ref={up} aria-label={`${group.name}を上へ`} disabled={first || moving} onClick={() => onMove(group, "up")}>
               上へ
             </Button>
-            <Button ref={down} aria-label={`${group.name}を下へ`} disabled={last} onClick={() => onMove(group, "down")}>
+            <Button ref={down} aria-label={`${group.name}を下へ`} disabled={last || moving} onClick={() => onMove(group, "down")}>
               下へ
             </Button>
             <Button ref={focus.opener} aria-label={`${group.name}を編集`} onClick={() => setEditing(true)}>
@@ -306,7 +331,7 @@ function GroupRow({
         onDismiss={() => setConfirming(false)}
         actions={
           <>
-            <Button variant="danger" onClick={() => void removeGroup()}>
+            <Button variant="danger" disabled={removing} onClick={() => void run(removeGroup)}>
               削除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
@@ -337,6 +362,7 @@ function TermHighlights() {
   const toast = useToast();
   const groups = useTermGroups();
   const [moved, setMoved] = useState<{ id: number; direction: "up" | "down"; serial: number } | null>(null);
+  const [moving, run] = usePending();
 
   async function move(group: TermGroup, direction: "up" | "down") {
     const list = groups.data ?? [];
@@ -347,6 +373,8 @@ function TermHighlights() {
       store.all(await api.moveTermGroup(group.id, before));
       setMoved((last) => ({ id: group.id, direction, serial: (last?.serial ?? 0) + 1 }));
     } catch (error) {
+      // The focus is not to jump to a group moved earlier once the buttons are free again.
+      setMoved(null);
       toast({ message: messageFor(error) });
     }
   }
@@ -381,7 +409,8 @@ function TermHighlights() {
               group={group}
               first={index === 0}
               last={index === groups.data.length - 1}
-              onMove={(target, direction) => void move(target, direction)}
+              onMove={(target, direction) => void run(() => move(target, direction))}
+              moving={moving}
               focusMove={moved?.id === group.id ? moved : null}
             />
           ))}
