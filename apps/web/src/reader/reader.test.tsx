@@ -10,6 +10,10 @@ const list = () => screen.getByRole("region", { name: "記事の一覧" });
 const article = () => screen.getByRole("article", { name: "記事" });
 const rowTitles = () => within(list()).getAllByRole("listitem").map((item) => item.querySelector("[data-title]")?.textContent);
 const row = (title: RegExp) => within(list()).getByRole("link", { name: title }).closest("li")!;
+/** The controls at the end of the article: star, read and the mark of a miss. */
+const actions = async () => within(await screen.findByRole("group", { name: "記事の操作" }));
+/** The small star and read controls on the line of details above the headline. */
+const topActions = async () => within(await screen.findByRole("group", { name: "スターと既読" }));
 
 /** Adds articles one minute apart, so the last one is the newest. */
 function articles(server: TestServer, categoryId: number, specs: Array<Parameters<TestServer["article"]>[1]>): number[] {
@@ -588,6 +592,39 @@ describe("reading an article", () => {
     expect(await screen.findByLabelText("トピックの文章")).toHaveValue("ransomware");
   });
 
+  it("puts the topics after the sources and before the controls at the end", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const topic = createTopic(server.db, category.id, { text: "ransomware" }, server.clock);
+    const id = insertArticle(server.db, {
+      categoryId: category.id,
+      kind: "news",
+      title: "Matched story",
+      summary: "s",
+      body: "b",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      previousArticleId: null,
+      refs: [{ url: "https://example.org/a", siteName: "Example", title: "Source a", publishedAt: null }],
+      topicIds: [topic.id],
+    });
+    renderApp({ server, route: `/all/${id}` });
+
+    const pane = await screen.findByRole("article", { name: "記事" });
+    const topics = await within(pane).findByRole("region", { name: "トピック" });
+    const heading = within(pane).getByRole("heading", { name: "Matched story" });
+    const sources = within(pane).getByRole("region", { name: "出典" });
+    const controls = within(pane).getByRole("group", { name: "記事の操作" });
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(heading, topics)).toBe(true);
+    expect(follows(sources, topics)).toBe(true);
+    expect(follows(topics, controls)).toBe(true);
+  });
+
   it("shows no topics on a feed article or on a generated one that matched none", async () => {
     const server = makeServer();
     const category = server.category();
@@ -716,11 +753,11 @@ describe("read state", () => {
     const { user } = renderApp({ server, route: `/unread/${id}` });
     await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
 
-    await user.click(await screen.findByRole("button", { name: "未読に戻す" }));
+    await user.click(await (await actions()).findByRole("button", { name: "未読に戻す" }));
 
     await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
-    expect(screen.getByRole("button", { name: "既読にする" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "既読にする" })).toBeInTheDocument();
   });
 
   it("marks everything in the list as read, but not an article that arrived after the list was loaded", async () => {
@@ -799,9 +836,9 @@ describe("stars", () => {
     const id = server.article(server.category().id, { title: "Keep me" });
     const { user } = renderApp({ server, route: `/all/${id}` });
 
-    await user.click(await screen.findByRole("button", { name: "スターを付ける" }));
+    await user.click(await (await actions()).findByRole("button", { name: "スターを付ける" }));
 
-    expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await (await actions()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     // The star is drawn as an icon, named for screen readers, in the row and above the article.
     await waitFor(() => expect(within(row(/Keep me/)).getByRole("img", { name: "スター" })).toBeInTheDocument());
     expect(row(/Keep me/)).not.toHaveTextContent("スター");
@@ -809,6 +846,31 @@ describe("stars", () => {
     await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
     await waitFor(() => expect(rowTitles()).toEqual(["Keep me"]));
+  });
+
+  it("switches the star and the read state from the line above the headline", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "On top" });
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    const top = await topActions();
+    const heading = within(article()).getByRole("heading", { name: "On top" });
+    expect(Boolean(top.getByRole("button", { name: "スターを付ける" }).compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(top.getByRole("button", { name: "スターを付ける" })).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(top.getByRole("button", { name: "スターを付ける" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).starred).toBe(true));
+    expect(await top.findByRole("button", { name: "スターを外す" })).toHaveAttribute("aria-pressed", "true");
+    // The controls at the end say the same.
+    expect((await actions()).getByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+
+    await user.click(top.getByRole("button", { name: "未読に戻す" }));
+
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(false));
+    expect(await top.findByRole("button", { name: "既読にする" })).toBeInTheDocument();
+    await user.click(top.getByRole("button", { name: "既読にする" }));
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
   });
 });
 
@@ -912,7 +974,7 @@ describe("a star or a read state the server cannot store", () => {
 
     const status = await toastSays("既読にできませんでした");
     expect(row(/Story/)).toHaveAttribute("data-read", "false");
-    expect(screen.getByRole("button", { name: "既読にする" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "既読にする" })).toBeInTheDocument();
     offline = false;
     await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
 
@@ -931,7 +993,7 @@ describe("a star or a read state the server cannot store", () => {
 
     await toastSays("未読に戻せませんでした");
     expect(row(/Story/)).toHaveAttribute("data-read", "true");
-    expect(screen.getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
     expect(getArticle(server.db, id).isRead).toBe(true);
   });
 
@@ -946,7 +1008,7 @@ describe("a star or a read state the server cannot store", () => {
 
     const status = await toastSays("スターを付けられませんでした");
     expect(within(row(/Story/)).queryByRole("img", { name: "スター" })).toBeNull();
-    expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
     offline = false;
     await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
 
@@ -967,7 +1029,7 @@ describe("a star or a read state the server cannot store", () => {
 
     const status = await toastSays("スターを外せませんでした");
     expect(within(row(/Story/)).getByRole("img", { name: "スター" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     offline = false;
     await user.click(within(status).getByRole("button", { name: "もう一度試す" }));
 
@@ -1226,7 +1288,7 @@ describe("the recently read articles", () => {
       await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).not.toHaveTextContent(/\d/));
 
       await user.click(row(/Tools 2/).querySelector("a")!);
-      await user.click(await screen.findByRole("button", { name: "未読に戻す" }));
+      await user.click(await (await actions()).findByRole("button", { name: "未読に戻す" }));
 
       await waitFor(() => expect(getArticle(server.db, ids[1]!).isRead).toBe(false));
       await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
@@ -1248,7 +1310,7 @@ describe("the recently read articles", () => {
   it("drops a row put back to unread once another list is chosen", async () => {
     const { server, a } = readMistakenly();
     const { user } = renderApp({ server, route: `/recently-read/${a}` });
-    await user.click(await screen.findByRole("button", { name: "未読に戻す" }));
+    await user.click(await (await actions()).findByRole("button", { name: "未読に戻す" }));
     await waitFor(() => expect(row(/Article A/)).toHaveAttribute("data-read", "false"));
 
     await user.click(within(nav()).getByRole("link", { name: /^スター/ }));
@@ -1484,10 +1546,10 @@ describe("Space through the article", () => {
     await screen.findByRole("heading", { level: 2, name: "Newer story" });
     const pane = layOut(2000);
 
-    screen.getByRole("button", { name: "スターを付ける" }).focus();
+    (await actions()).getByRole("button", { name: "スターを付ける" }).focus();
     await user.keyboard(" ");
 
-    expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await (await actions()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     expect(pane.scrollTop).toBe(0);
     expect(path()).toBe(`/all/${newer}`);
   });
@@ -2015,7 +2077,7 @@ describe("marking read what the list is scrolled past", () => {
     layOut();
     await scrollTo(0);
     await user.click(row(/Story 3/).querySelector("a")!);
-    await user.click(await screen.findByRole("button", { name: "未読に戻す" }));
+    await user.click(await (await actions()).findByRole("button", { name: "未読に戻す" }));
     await waitFor(() => expect(isRead(server, rows[0]!)).toBe(false));
 
     await scrollTo(3 * ROW);

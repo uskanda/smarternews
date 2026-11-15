@@ -142,6 +142,12 @@ components:
     typography: "{typography.body-md}"
     rounded: "{rounded.md}"
     padding: "{spacing.sm}"
+  button-small:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.on-surface}"
+    typography: "{typography.label-sm}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.sm}"
   list-row:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface}"
@@ -312,6 +318,7 @@ components:
 
 - `button-primary` は、画面ごとに1つまで置く。保存や追加のように、その画面の主な操作に使う。
 - `button-secondary` は、枠（`outline-strong`）つきの白いボタン。それ以外の操作に使う。押されている状態は、地を `selected`、枠を `primary` にする。
+- `button-small` は、`button-secondary` を `label-sm` の文字で小さくしたボタン。余白は左右を `sm` にし、上下は付けない。補足の行の高さをほとんど変えずに置くためである。本文の上部の補足の行の末尾に、スターと既読の切り替えを置くためだけに使う。押されている状態は `button-secondary` と同じく、地を `selected`、枠を `primary` にする。指で操作する端末では、ほかのボタンと同じく高さを `touch`（44px）以上にする。
 - `list-row` は記事の一覧の1行。選択中は `list-row-selected`、既読は `list-row-read` にする。重要度4は行の左に `mark` の短い線、5は見出しに `headline-mark` を重ねる。選択中の行は、地を `selected` にし、右端に `primary` の3pxの線を引く。未読の行は、見出しの前に読み上げ用の `未読。` を置く。重要度の読み上げより前に置き、既読の行には置かない。未読と既読を、太さと色だけで伝えないためである。イベントの一覧と注釈の一覧の行も、選択中の示し方は同じにする。イベントの一覧の未読の行にも `未読。` を置く。
 - `article-body` は本文。読み手への影響は、左に `mark` の線を引いた区画として本文の前に置く。
 - 配信記事の要約は、元のページを開く操作と内容の間に、左に `outline-strong` の線を引いた区画として置く。見出しは「AIによる要約」で、`label-sm` の大きさと `on-surface-muted` の色にする。要約の文は `body-md` にする。配信元が書いた内容とLLMが書いた文は、見た目で見分けられなければならないからである。線に `mark` を使わないのは、`mark` が重要度の印だからである。枠で囲まないのは、本文が角と枠を持たないからである。

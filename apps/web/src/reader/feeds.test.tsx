@@ -303,7 +303,7 @@ describe("a feed article that is opened", () => {
     expect(open).toHaveBeenCalledWith("https://blog.example.org/new", "_blank", "noopener,noreferrer");
 
     await user.keyboard("s");
-    expect(await within(await opened()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await within(await within(await opened()).findByRole("group", { name: "記事の操作" })).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     open.mockRestore();
   });
 });
