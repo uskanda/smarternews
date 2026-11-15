@@ -37,6 +37,7 @@ function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
     ["基準未満", `${entry.belowMinimum}件`],
     ["件数上限", `${entry.overLimit}件`],
     ["日付で外れた候補", `${entry.rejectedByDate}件`],
+    ["印のある記事の続報", `${entry.rejectedByMark}件`],
     ["作った記事", `${entry.created}件`],
     ["更新した記事", `${entry.updated}件`],
     ["開いた記事", ofCreated(entry.opened, entry.created)],
@@ -124,7 +125,7 @@ export function TopicStatsSection({ category }: { category: Category }) {
   const [ranked, setRanked] = useState(false);
   const entries = stats.data ? (ranked ? rankTopicStats(stats.data.topics) : stats.data.topics) : [];
   return (
-    <section aria-label="トピックの成績" className="flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl">
+    <section id="topic-stats" aria-label="トピックの成績" className="flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl">
       <div className="flex flex-wrap items-center justify-between gap-md">
         <h2 className="type-headline-md">トピックの成績</h2>
         <Checkbox label="問題のあるトピックを先頭へ" checked={ranked} onChange={(event) => setRanked(event.target.checked)} />

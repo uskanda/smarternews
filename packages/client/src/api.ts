@@ -30,6 +30,7 @@ import {
   categorySchema,
   countsSchema,
   feedDiscoveryResultSchema,
+  feedFetchAllResultSchema,
   feedFetchResultSchema,
   feedSchema,
   feedStatsSchema,
@@ -77,6 +78,7 @@ import {
   type Feed,
   type FeedCreate,
   type FeedDiscoveryResult,
+  type FeedFetchAllResult,
   type FeedFetchResult,
   type FeedMove,
   type FeedStats,
@@ -267,6 +269,8 @@ export function createApi(options: ApiOptions) {
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
     /** Has the topic interpreted again before the next run of its category. */
     interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
+    /** Puts the topic's web search by the model, cut to once a day, back to every run. */
+    restoreLlmSearch: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/llm-search/restore`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
     /** The versions of the topic, newest first. */
     topicVersions: (id: number): Promise<TopicVersion[]> => json(z.array(topicVersionSchema), `/topics/${id}/versions`),
@@ -361,6 +365,8 @@ export function createApi(options: ApiOptions) {
     /** What became of the articles the feed delivered in the last 30 days. */
     feedStats: (id: number): Promise<FeedStats> => json(feedStatsSchema, `/feeds/${id}/stats`),
     fetchFeed: (id: number): Promise<FeedFetchResult> => json(feedFetchResultSchema, `/feeds/${id}/fetch`, { method: "POST" }),
+    /** Asks for every enabled feed to be fetched now. Answers at once; `fetchRequestedAt` of the feeds says which still wait. */
+    fetchAllFeeds: (): Promise<FeedFetchAllResult> => json(feedFetchAllResultSchema, "/feeds/fetch", { method: "POST" }),
     exportOpml: async (): Promise<string> => (await request("/feeds/opml")).text(),
     importOpml: (text: string): Promise<OpmlImportResult> =>
       json(opmlImportResultSchema, "/feeds/opml", { method: "POST", headers: { "content-type": "text/x-opml" }, body: text }),

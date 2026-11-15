@@ -122,6 +122,11 @@ export interface SearchInput {
   windowHours: number | null;
   windowDays: number | null;
   now: string;
+  /**
+   * The headlines of the generated articles made for the topic, the latest written or updated first, at most
+   * ten. Empty, or left out, when there are none.
+   */
+  recentHeadlines?: string[];
 }
 
 const searchOutput = z.object({
@@ -139,23 +144,34 @@ export type SearchOutput = z.infer<typeof searchOutput>;
 
 const search: TaskDefinition<SearchInput, SearchOutput> = {
   output: searchOutput,
-  build: (input) => ({
-    system: `${SYSTEM}\nPages you open while searching are material too.`,
-    prompt: [
-      "Task: search the web and list pages that match the topic.",
-      `Current time: ${input.now}`,
-      input.kind === "event"
-        ? `Find events that take place within the next ${input.windowDays ?? 7} days, including events already under way.`
-        : `Find pages published or updated within the last ${input.windowHours ?? 24} hours.`,
-      `Topic:\n<topic>\n${input.topicText}\n</topic>`,
-      `Relevance test:\n<criteria>\n${input.criteria}\n</criteria>`,
-      "Rules:",
-      "- List at most 10 pages. Prefer official and primary sources.",
-      "- Give the URL of the page itself, exactly as you opened it. Never invent or guess a URL.",
-      "- title: the page title. snippet: one or two sentences on what the page says.",
-      "- Return an empty list when nothing matches.",
-    ].join("\n"),
-  }),
+  build: (input) => {
+    const headlines = input.recentHeadlines ?? [];
+    return {
+      system: `${SYSTEM}\nPages you open while searching are material too.`,
+      prompt: [
+        "Task: search the web and list pages that match the topic.",
+        `Current time: ${input.now}`,
+        input.kind === "event"
+          ? `Find events that take place within the next ${input.windowDays ?? 7} days, including events already under way.`
+          : `Find pages published or updated within the last ${input.windowHours ?? 24} hours.`,
+        `Topic:\n<topic>\n${input.topicText}\n</topic>`,
+        `Relevance test:\n<criteria>\n${input.criteria}\n</criteria>`,
+        ...(headlines.length > 0
+          ? [`Headlines of the articles already made for this topic, the latest first:\n${material(headlines.map((title) => `- ${title}`).join("\n"))}`]
+          : []),
+        "Rules:",
+        "- List at most 10 pages. Prefer official and primary sources.",
+        "- Give the URL of the page itself, exactly as you opened it. Never invent or guess a URL.",
+        "- title: the page title. snippet: one or two sentences on what the page says.",
+        ...(headlines.length > 0
+          ? [
+              "- Do not list the pages these articles were made from again. Do include pages on new developments and follow-ups of the same stories.",
+            ]
+          : []),
+        "- Return an empty list when nothing matches.",
+      ].join("\n"),
+    };
+  },
 };
 
 // ---- judge -------------------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 
 ## 1. 保存とタスク
 
-- [x] 1.1 `032_list_digests.sql` の移行で `digests` を作り直し、`trigger` に `list` を、列 `target` を足す。既存の行が残ることを `database.test.ts` で確かめる
+- [x] 1.1 `034_list_digests.sql` の移行で `digests` を作り直し、`trigger` に `list` を、列 `target` を足す。既存の行が残ることを `database.test.ts` で確かめる
 - [x] 1.2 `api.ts` に `list` のきっかけ、`digestTargetSchema`、ダイジェストの `target`、`POST /digests` の本文、`GET /digests` の `kind` を足す
 - [x] 1.3 `digestPeriodStart` が一覧のダイジェストを無視すること、`listDigests` の `kind=period` を `digests.test.ts` で確かめる
 - [x] 1.4 `listDigestArticles` が3種類の対象で画面と同じ条件・新しい順・200件までを返すことを確かめる
