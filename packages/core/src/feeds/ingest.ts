@@ -16,7 +16,7 @@ import {
   recordFetchFailure,
   recordFetchSuccess,
 } from "../db/feeds.ts";
-import { num, str } from "../db/rows.ts";
+import { num, str, type Row } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyFilters } from "../db/filters.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
@@ -24,7 +24,7 @@ import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { parseRetryAfter } from "../fetch/retry-after.ts";
-import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
+import { foldTitle, normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent, convertDescription, type ConvertedContent } from "./content.ts";
@@ -137,6 +137,51 @@ function findKept(db: Database, feedId: number, values: { url: string | null; ti
   return row ? num(row.id) : null;
 }
 
+/** A page without its scheme: an item whose page moved from http to https still points to the same page. */
+function withoutScheme(url: string): string {
+  return url.replace(/^https?:/, "");
+}
+
+interface Listed {
+  item: SubscriptionItem;
+  key: string;
+  url: string | null;
+}
+
+/**
+ * Gives a stored article the identifier the feed replaced its item's with, so that the item does not come
+ * back as new. An item the feed never listed is taken for one whose identifier was replaced when exactly one
+ * stored article of the feed has its page, the scheme aside, that article's identifier is gone from the
+ * document, the titles are the same once folded, and no other such item matches that article. Anything less
+ * certain is left to be stored as new. `stored` follows the new identifiers.
+ */
+function rekeyReplaced(db: Database, listed: Listed[], stored: Map<string, Row>, seenBefore: Set<string>): void {
+  const inDocument = new Set(listed.map((entry) => entry.key));
+  const byPage = new Map<string, Row[]>();
+  for (const row of stored.values()) {
+    if (row.url === null || row.url === undefined) continue;
+    const page = withoutScheme(str(row.url));
+    byPage.set(page, [...(byPage.get(page) ?? []), row]);
+  }
+  const matched = new Map<Row, string[]>();
+  for (const { item, key, url } of listed) {
+    if (url === null || stored.has(key) || seenBefore.has(key)) continue;
+    const rows = byPage.get(withoutScheme(url));
+    if (rows?.length !== 1) continue;
+    const row = rows[0]!;
+    const title = foldTitle(item.title);
+    if (inDocument.has(str(row.item_key)) || title.length === 0 || foldTitle(str(row.title)) !== title) continue;
+    matched.set(row, [...(matched.get(row) ?? []), key]);
+  }
+  const rekey = db.prepare("UPDATE articles SET item_key = ? WHERE id = ?");
+  for (const [row, keys] of matched) {
+    if (keys.length !== 1) continue;
+    rekey.run(keys[0]!, num(row.id));
+    stored.delete(str(row.item_key));
+    stored.set(keys[0]!, row);
+  }
+}
+
 /**
  * Stores the items of a fetched document. New items become unread articles; a known item whose title or
  * content changed is rewritten in place, read or unread as it was, and loses the translation of what
@@ -155,7 +200,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       .all(feed.id)
       .map((row) => str(row.item_key)),
   );
-  const stored = new Map(
+  const stored = new Map<string, Row>(
     db
       .prepare(
         `SELECT a.id, a.item_key, a.title, a.body, a.author, a.attachments, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
@@ -178,14 +223,22 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const recompare = db.prepare("UPDATE articles SET dedup_url = ?, dedup_title = ? WHERE id = ? AND (dedup_url IS NOT NULL OR dedup_title IS NOT NULL)");
   const titled: number[] = [];
 
-  const inDocument = new Set<string>();
-  const fresh: Prepared[] = [];
-  let foundNew = false;
+  // Each identifier once, as the document first lists it.
+  const listed: Listed[] = [];
+  const keys = new Set<string>();
   for (const item of parsed.items) {
     const url = pageUrl(item, feed.url);
     const key = (item.key ?? url)?.slice(0, KEY_CHARS);
-    if (!key || inDocument.has(key)) continue;
-    inDocument.add(key);
+    if (!key || keys.has(key)) continue;
+    keys.add(key);
+    listed.push({ item, key, url });
+  }
+  // Before any item is taken for new: whether an identifier is gone depends on the whole document.
+  rekeyReplaced(db, listed, stored, seenBefore);
+
+  const fresh: Prepared[] = [];
+  let foundNew = false;
+  for (const { item, key, url } of listed) {
     markSeen.run(feed.id, key, nowIso);
 
     const known = stored.get(key);

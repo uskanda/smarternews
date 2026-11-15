@@ -26,6 +26,11 @@ export const MIN_TITLE_CHARS = 10;
  * space, punctuation and symbols are ignored. Null when fewer than `MIN_TITLE_CHARS` characters remain.
  */
 export function normalizeTitle(title: string): string | null {
-  const normalized = title.normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  const normalized = foldTitle(title);
   return [...normalized].length < MIN_TITLE_CHARS ? null : normalized;
+}
+
+/** A title with full and half width, case, white space, punctuation and symbols ignored, however short. */
+export function foldTitle(title: string): string {
+  return title.normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
 }
