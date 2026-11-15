@@ -142,6 +142,14 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const [text, setText] = useState(settings.readerInfo);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  // A settings file or another device may change the value: show it rather than save the old one over it.
+  const [shown, setShown] = useState(settings.readerInfo);
+  if (shown !== settings.readerInfo) {
+    setShown(settings.readerInfo);
+    setText(settings.readerInfo);
+    setProblem(null);
+    setError(null);
+  }
   useUnsaved("読み手情報", text !== settings.readerInfo);
 
   async function save(event: FormEvent) {
@@ -184,23 +192,53 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   );
 }
 
-function GlobalSettings({ settings }: { settings: Settings }) {
-  const { api } = useApp();
-  const client = useQueryClient();
-  const toast = useToast();
-  const [form, setForm] = useState({
+function globalForm(settings: Settings) {
+  return {
     outputLanguage: settings.outputLanguage,
     timeZone: settings.timeZone,
     language: settings.search.language,
     region: settings.search.region,
     digestSchedule: settings.digestSchedule.join(", "),
-  });
+  };
+}
+
+/** The values the global settings show, as one string to compare. */
+function globalValues(settings: Settings): string {
+  return JSON.stringify([
+    settings.outputLanguage,
+    settings.timeZone,
+    settings.search.language,
+    settings.search.region,
+    settings.digestSchedule,
+    settings.advanceAfterMarkAll,
+    settings.removeDuplicates,
+    settings.staleFeedDays,
+  ]);
+}
+
+function GlobalSettings({ settings }: { settings: Settings }) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const toast = useToast();
+  const [form, setForm] = useState(() => globalForm(settings));
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
   const duplicatesHint = useId();
   const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
+  // A settings file, another device or this form's own save may change the values: show them rather than
+  // save the old ones over them.
+  const [shown, setShown] = useState(() => globalValues(settings));
+  if (shown !== globalValues(settings)) {
+    setShown(globalValues(settings));
+    setForm(globalForm(settings));
+    setAdvance(settings.advanceAfterMarkAll);
+    setRemoveDuplicates(settings.removeDuplicates);
+    setStaleDays(String(settings.staleFeedDays));
+    setProblems({});
+    setError(null);
+  }
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
@@ -243,7 +281,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         digestSchedule: digestTimes.value,
       });
       client.setQueryData(["settings"], saved);
-      // The server puts the times in order and drops the same time given twice.
+      // The server puts the times in order and drops the same time given twice. When that leaves the stored
+      // values as they were, nothing above replaces the field, so it is put in that order here.
       setForm((shown) => ({ ...shown, digestSchedule: saved.digestSchedule.join(", ") }));
       // Which feeds are stale follows the days at once.
       void client.invalidateQueries({ queryKey: ["feeds"] });
