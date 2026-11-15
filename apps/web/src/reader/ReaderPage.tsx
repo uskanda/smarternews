@@ -47,7 +47,7 @@ import {
   type ListTarget,
 } from "@smarternews/client";
 import { PANES, usePanes } from "../lib/panes.ts";
-import { listPathOf } from "../lib/paths.ts";
+import { categorySettingsPath, listPathOf } from "../lib/paths.ts";
 import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
@@ -57,7 +57,7 @@ import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
-import { EventList } from "./EventList.tsx";
+import { CategorySettingsLink, EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { MarkOlderMenu, type MarkOlderPeriod } from "./MarkOlderMenu.tsx";
@@ -886,7 +886,15 @@ export function ReaderPage({ view }: { view: View }) {
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} moveRef={annotationMove} />
   ) : isEvents ? (
-    <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
+    <EventList
+      title={title}
+      settingsPath={category ? categorySettingsPath(category.id) : null}
+      events={items}
+      selectedId={current}
+      to={articlePath}
+      timeZone={timeZone}
+      now={now()}
+    />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
@@ -952,6 +960,7 @@ export function ReaderPage({ view }: { view: View }) {
               <Checkbox label="未読だけ" checked={searchUnread} onChange={(event) => toggleParam("unread", "true", event.target.checked)} />
             </>
           ) : null}
+          {inCategory && category ? <CategorySettingsLink to={categorySettingsPath(category.id)} className="self-center" /> : null}
         </div>
       </header>
       {/* Above the scrolling rows, so that it stays in view: an empty list alone does not say that the fetches fail. */}

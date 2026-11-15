@@ -863,6 +863,10 @@ export function CategoryPage() {
             設定へ戻る
           </Link>
           <h1 className="type-headline-md">{category.name}</h1>
+          {/* Disabled or not: the articles of a disabled category stay, and this is the way to them. */}
+          <Link to={`/c/${category.slug}`} className="tap self-start type-label-sm text-primary underline underline-offset-4">
+            {category.kind === "event" ? "イベントの一覧" : "記事の一覧"}
+          </Link>
           <SectionLinks categoryId={category.id} />
         </header>
         <ScrollToSection categoryId={category.id} />

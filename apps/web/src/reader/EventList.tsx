@@ -3,9 +3,19 @@ import { Link } from "react-router";
 import { eventTime, groupEvents, registrationLabel } from "@smarternews/client";
 import { SelectedMark } from "./SelectedMark.tsx";
 
+/** The link at the top of the list of a category to the settings of that category. */
+export function CategorySettingsLink({ to, className = "" }: { to: string; className?: string }) {
+  return (
+    <Link to={to} className={`tap type-label-sm text-primary underline underline-offset-4 ${className}`}>
+      カテゴリの設定
+    </Link>
+  );
+}
+
 /** Upcoming events of one category, grouped by the day they start. */
 export function EventList({
   title,
+  settingsPath,
   events,
   selectedId,
   to,
@@ -13,6 +23,8 @@ export function EventList({
   now,
 }: {
   title: string;
+  /** The settings page of the category, linked under the heading. */
+  settingsPath: string | null;
   events: ArticleSummary[];
   selectedId: number | null;
   to: (id: number) => string;
@@ -22,8 +34,9 @@ export function EventList({
   const groups = groupEvents(events, timeZone, now);
   return (
     <section aria-label="イベントの一覧" className="flex h-full min-h-0 flex-col bg-surface">
-      <header className="border-b border-outline px-lg py-md">
+      <header className="flex flex-col items-start gap-sm border-b border-outline px-lg py-md">
         <h1 className="type-headline-md">{title}</h1>
+        {settingsPath ? <CategorySettingsLink to={settingsPath} /> : null}
       </header>
       <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {groups.length === 0 ? (

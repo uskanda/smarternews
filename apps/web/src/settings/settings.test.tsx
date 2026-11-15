@@ -301,6 +301,52 @@ describe("editing a category", () => {
   });
 });
 
+describe("the link to the list of a category", () => {
+  it("leads from a news category to its list of articles", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(screen.queryByRole("link", { name: "イベントの一覧" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "記事の一覧" }));
+
+    await waitFor(() => expect(path()).toBe("/c/security"));
+  });
+
+  it("is called the list of events for an event category", async () => {
+    const server = makeServer();
+    const category = server.category("Events", "event");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await screen.findByRole("heading", { level: 1, name: "Events" });
+    expect(screen.getByRole("link", { name: "イベントの一覧" })).toHaveAttribute("href", "/c/events");
+    expect(screen.queryByRole("link", { name: "記事の一覧" })).not.toBeInTheDocument();
+  });
+
+  it("is there for a disabled category too", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    updateCategory(server.db, category.id, { enabled: false });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(screen.getByRole("link", { name: "記事の一覧" })).toHaveAttribute("href", "/c/security");
+  });
+
+  it("asks before leaving with unsaved changes", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("名前"), " and more");
+    await user.click(screen.getByRole("link", { name: "記事の一覧" }));
+
+    await screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+  });
+});
+
 describe("deleting a category", () => {
   function seeded() {
     const server = makeServer();
