@@ -1,6 +1,6 @@
 import { HIGHLIGHT_TERM_MAX_CHARS, TERM_COLORS, TERM_GROUP_NAME_MAX_CHARS, type TermColor, type TermGroup } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type FormEvent, type Ref } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type Ref } from "react";
 import { Link } from "react-router";
 import { ApiError, checkText, fieldMessage, TERM_COLOR_LABEL } from "@smarternews/client";
 import { useTermGroups } from "../api/queries.ts";
@@ -207,6 +207,7 @@ function GroupRow({
   last,
   onMove,
   focusMove,
+  onFocused,
   afterRemoval,
 }: {
   group: TermGroup;
@@ -214,7 +215,9 @@ function GroupRow({
   last: boolean;
   onMove: (group: TermGroup, direction: "up" | "down") => void;
   /** The move button to focus once the group has moved, so that a keyboard user stays where they were. */
-  focusMove: { direction: "up" | "down"; serial: number } | null;
+  focusMove: "up" | "down" | null;
+  /** Called once the focus has moved, so that a later change of the order does not move it again. */
+  onFocused: () => void;
   /** Where the focus goes once the group is deleted and its row, with the button that asked, is gone. */
   afterRemoval: () => HTMLElement | null;
 }) {
@@ -229,14 +232,13 @@ function GroupRow({
   const removed = useRef(false);
   const termInput = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
 
-  const direction = focusMove?.direction;
-  const serial = focusMove?.serial;
   useEffect(() => {
+    if (focusMove === null) return;
     // A button that cannot be pressed any more passes the focus to the other one.
-    if (direction === "up") (first ? down : up).current?.focus();
-    if (direction === "down") (last ? up : down).current?.focus();
-    // Run again for every move, also one in the same direction as the last.
-  }, [direction, serial, first, last]);
+    if (focusMove === "up") (first ? down : up).current?.focus();
+    if (focusMove === "down") (last ? up : down).current?.focus();
+    onFocused();
+  }, [focusMove, first, last, onFocused]);
 
   async function removeGroup() {
     try {
@@ -346,7 +348,9 @@ function TermHighlights() {
   const store = useStore();
   const toast = useToast();
   const groups = useTermGroups();
-  const [moved, setMoved] = useState<{ id: number; direction: "up" | "down"; serial: number } | null>(null);
+  // Cleared once the moved group has taken the focus, so that adding or deleting a group later leaves the focus alone.
+  const [moved, setMoved] = useState<{ id: number; direction: "up" | "down" } | null>(null);
+  const focused = useCallback(() => setMoved(null), []);
   const listHeading = useRef<HTMLHeadingElement>(null);
 
   async function move(group: TermGroup, direction: "up" | "down") {
@@ -356,7 +360,7 @@ function TermHighlights() {
     const before = direction === "up" ? list[at - 1]!.id : (list[at + 2]?.id ?? null);
     try {
       store.all(await api.moveTermGroup(group.id, before));
-      setMoved((last) => ({ id: group.id, direction, serial: (last?.serial ?? 0) + 1 }));
+      setMoved({ id: group.id, direction });
     } catch (error) {
       toast({ message: messageFor(error) });
     }
@@ -395,7 +399,8 @@ function TermHighlights() {
               first={index === 0}
               last={index === groups.data.length - 1}
               onMove={(target, direction) => void move(target, direction)}
-              focusMove={moved?.id === group.id ? moved : null}
+              focusMove={moved?.id === group.id ? moved.direction : null}
+              onFocused={focused}
               afterRemoval={() => listHeading.current}
             />
           ))}
