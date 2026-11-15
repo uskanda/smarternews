@@ -87,9 +87,27 @@ describe("renderTokens", () => {
 
   it("gives each typography role one utility with size, weight and line height", () => {
     const block = css.slice(css.indexOf("@utility type-body-lg"), css.indexOf("}", css.indexOf("@utility type-body-lg")));
-    expect(block).toContain("font-size: 17px;");
+    expect(block).toContain("font-size: 1.0625rem;");
     expect(block).toContain("font-weight: 500;");
     expect(block).toContain("line-height: 1.95;");
+  });
+
+  it("writes sizes and letter spacing in rem, so that text follows the font size the browser is set to", () => {
+    const spaced = renderTokens(DESIGN.replace("    lineHeight: 1.95\n", "    lineHeight: 1.95\n    letterSpacing: 0.5px\n"));
+    const block = spaced.slice(spaced.indexOf("@utility type-body-lg"), spaced.indexOf("}", spaced.indexOf("@utility type-body-lg")));
+    expect(block).toContain("letter-spacing: 0.03125rem;");
+    expect(block).not.toContain("px");
+  });
+
+  it("leaves a size that is not in pixels as it is", () => {
+    const relative = renderTokens(DESIGN.replace("fontSize: 17px", "fontSize: 1.1em").replace("    lineHeight: 1.95\n", "    lineHeight: 1.95\n    letterSpacing: 0.02em\n"));
+    expect(relative).toContain("font-size: 1.1em;");
+    expect(relative).toContain("letter-spacing: 0.02em;");
+  });
+
+  it("gives the drawer the width of the navigation pane in rem", () => {
+    expect(css).toContain("--spacing-drawer: 12.5rem;");
+    expect(renderTokens(DESIGN.replace("  nav: 200px\n", ""))).not.toContain("--spacing-drawer");
   });
 
   it("declares spacing and radius under Tailwind's names", () => {
@@ -137,6 +155,11 @@ describe("renderNativeTokens", () => {
 
   it("names the bundled font file for the first family and the weight, and turns the line height into pixels", () => {
     expect(source).toContain('"body-lg": { fontFamily: "ShipporiMincho_500Medium", fontSize: 17, lineHeight: 33 },');
+  });
+
+  it("keeps the pixel lengths of the Android app, with no drawer width of the web app", () => {
+    expect(source).not.toContain("rem");
+    expect(source).not.toContain("drawer");
   });
 
   it("refuses a weight that has no bundled font file", () => {

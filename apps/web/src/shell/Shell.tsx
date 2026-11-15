@@ -18,6 +18,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchPa
 import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
+import { useFetchAllCompletion, useFetchAllFeedsNow } from "../lib/fetch-now.ts";
 import { useHideRead } from "../lib/hide-read.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
@@ -27,6 +28,7 @@ import { isOnList, listPathOf } from "../lib/paths.ts";
 import { FeedDeletionDialog } from "../settings/FeedDeletionDialog.tsx";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
+import { JumpDialog } from "./JumpDialog.tsx";
 import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
 
 const KEYS: Array<[string, string]> = [
@@ -51,6 +53,7 @@ const KEYS: Array<[string, string]> = [
   ["g s", "「スター」へ移る"],
   ["g e", "次のイベントのカテゴリへ移る"],
   ["g r", "「最近読んだ記事」へ移る"],
+  ["g u", "名前を打って、カテゴリか購読フィードへ移る"],
   ["Shift+F10", "フォーカスのあるカテゴリと購読フィードで、項目のメニューを開く（並べ替え、登録の解除）"],
   ["/", "検索欄へ移る"],
   ["?", "この一覧を開く"],
@@ -92,7 +95,7 @@ function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
         enterKeyHint="search"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface"
+        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface placeholder:text-on-surface-muted"
       />
     </form>
   );
@@ -214,6 +217,25 @@ function ListItem({
  * The views, the enabled categories with what is below them, the feeds without a category, and the two
  * management pages. A category that has subscribed feeds can be folded.
  */
+/**
+ * Fetches every subscribed feed now, from where the feeds are listed: the one control of a heading's row in the
+ * pane (see DESIGN.md). It says "取得中…" for as long as a feed waits, whichever screen asked.
+ */
+function FetchAllButton() {
+  const { fetching, fetchAll } = useFetchAllFeedsNow();
+  return (
+    <button
+      type="button"
+      aria-label="すべての購読フィードをいま取得"
+      onClick={() => void fetchAll()}
+      disabled={fetching}
+      className="shrink-0 cursor-pointer rounded-sm border border-outline-strong bg-surface px-sm type-label-sm text-on-surface hover:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {fetching ? "取得中…" : "いま取得"}
+    </button>
+  );
+}
+
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
   const { shown: model, pathOf: pathOfTarget } = useNavModels();
@@ -267,7 +289,10 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         </li>
       </ul>
       <div className="flex flex-col gap-px">
-        <h2 className="px-sm pb-xs type-label-sm text-on-surface-muted">カテゴリ</h2>
+        <div className="flex items-center justify-between gap-sm px-sm pb-xs">
+          <h2 className="type-label-sm text-on-surface-muted">カテゴリ</h2>
+          {feeds && feeds.length > 0 ? <FetchAllButton /> : null}
+        </div>
         <ul className="flex flex-col gap-px">
           {model.groups.map((group) => {
             const key = listKey(group.entry.target);
@@ -459,12 +484,26 @@ export function Shell() {
   const panes = usePanes(layout);
   const [navOpen, setNavOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
+  // Set once an entry is picked in the jump dialog: the dialogs that close then leave the focus on the content.
+  const jumped = useRef(false);
+  const toContent = (event: Event) => {
+    if (!jumped.current) return;
+    event.preventDefault();
+    document.getElementById("content")?.focus();
+  };
+  // A pane opened afterwards gives the focus back as usual when it closes.
+  useEffect(() => {
+    if (navOpen) jumped.current = false;
+  }, [navOpen]);
   const { now } = useApp();
   const navigate = useNavigate();
   const counts = useCounts().data;
   const collapsed = useCollapsed();
   const { full: model, shown, current, pathOf } = useNavModels();
-  const open = (target: ListTarget | null | undefined) => {
+  // Here, because the shell stays while the screens change: a fetch of all asked for on one is announced on any.
+  useFetchAllCompletion();
+  const open =(target: ListTarget | null | undefined) => {
     const path = target ? pathOf(target) : null;
     if (path !== null) void navigate(path);
   };
@@ -472,10 +511,17 @@ export function Shell() {
   useHotkeys(
     {
       "?": () => setHelpOpen(true),
-      // On a narrower screen the box is in the pane behind the button: opening it puts the focus in the box, its first field.
+      // The words left from an earlier search are selected, so that what is typed replaces them. On a narrower
+      // screen the box is in the pane behind the button: opening it focuses the box, its first field, and selects
+      // its words. A pane open already has the box at hand.
       "/": () => {
-        if (layout === "wide") document.getElementById(SEARCH_BOX)?.focus();
-        else setNavOpen(true);
+        if (layout === "wide" || navOpen) {
+          const box = document.getElementById(SEARCH_BOX);
+          if (box instanceof HTMLInputElement) {
+            box.focus();
+            box.select();
+          }
+        } else setNavOpen(true);
       },
       // Through the entries the pane shows: the hidden ones are passed by.
       "Shift+J": () => open(stepTarget(shown, current, 1, collapsed.isCollapsed)),
@@ -484,6 +530,10 @@ export function Shell() {
       "g s": () => open(view("starred")),
       "g e": () => open(nextEventCategory(model, current)),
       "g r": () => open(view("recentlyRead")),
+      "g u": () => {
+        jumped.current = false;
+        setJumpOpen(true);
+      },
     },
     { now },
   );
@@ -527,7 +577,7 @@ export function Shell() {
               <Dialog.Portal>
                 <Dialog.Overlay className={OVERLAY} />
                 {/* Over the article, the pane takes only the keys that move between entries and screens. */}
-                <Dialog.Content data-hotkeys="nav" className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-nav))] border-r border-outline bg-background">
+                <Dialog.Content data-hotkeys="nav" onCloseAutoFocus={toContent} className="fixed inset-y-0 left-0 z-50 w-[min(80vw,var(--spacing-drawer))] border-r border-outline bg-background">
                   <Dialog.Title className="sr-only">項目</Dialog.Title>
                   <Dialog.Description className="sr-only">表示する一覧を選びます。</Dialog.Description>
                   <Nav onNavigate={() => setNavOpen(false)} />
@@ -543,6 +593,20 @@ export function Shell() {
         </main>
       </div>
       <KeyHelp open={helpOpen} onOpenChange={setHelpOpen} />
+      <JumpDialog
+        open={jumpOpen}
+        onOpenChange={setJumpOpen}
+        model={model}
+        onCloseAutoFocus={toContent}
+        onPick={(target) => {
+          jumped.current = true;
+          setJumpOpen(false);
+          setNavOpen(false);
+          open(target);
+          // The list is where the keyboard goes on: j and k move through it.
+          document.getElementById("content")?.focus();
+        }}
+      />
     </div>
   );
 }

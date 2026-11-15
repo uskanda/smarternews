@@ -558,3 +558,7 @@ terms:
     definition: "ブラウザーや端末が持つ、コピーした文字列を貼り付けまで一時的に保つ場所。"
     aliases: ["クリップボード領域"]
     en: "clipboard"
+  - term: "プレースホルダー"
+    definition: "入力欄が空のときに欄の中に薄く表示する、入れるものを示す文字列。"
+    aliases: ["プレースホルダ"]
+    en: "placeholder"
