@@ -255,6 +255,33 @@ describe("the way from a row to the feed's articles", () => {
   });
 });
 
+describe("the way from a row to the feed's site", () => {
+  it("opens the site the feed belongs to in a new tab, beside the way to its articles", async () => {
+    const server = makeServer();
+    insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", siteUrl: "https://blog.example.org/" }, server.clock);
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    const site = within(row).getByRole("link", { name: "Blogのサイトを開く" });
+    expect(site).toHaveTextContent("サイトを開く");
+    expect(site).toHaveAttribute("href", "https://blog.example.org/");
+    expect(site).toHaveAttribute("target", "_blank");
+    expect(site).toHaveAttribute("rel", "noopener noreferrer");
+    const articles = within(row).getByRole("link", { name: "Blogの記事の一覧" });
+    expect(articles.compareDocumentPosition(site) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is not shown for a feed whose site is not known", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).getByRole("link", { name: "Blogの記事の一覧" })).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "Blogのサイトを開く" })).not.toBeInTheDocument();
+  });
+});
+
 describe("a feed named in the address to be edited", () => {
   it("opens that row's form with the focus in it, and scrolls to the row once the list is in", async () => {
     const server = makeServer();
