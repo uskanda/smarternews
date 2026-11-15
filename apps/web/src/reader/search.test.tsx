@@ -71,6 +71,12 @@ describe("the search box", () => {
     await screen.findByRole("heading", { level: 1, name: "「電池 工場」の検索結果" });
     expect(box()).toHaveValue("電池 工場");
   });
+
+  it("shows its placeholder in the colour of supporting text", async () => {
+    renderApp({ server: seeded().server, route: "/all" });
+    await screen.findByRole("heading", { level: 1, name: "すべて" });
+    expect(box()).toHaveClass("placeholder:text-on-surface-muted");
+  });
 });
 
 describe("the / key", () => {
@@ -93,6 +99,44 @@ describe("the / key", () => {
     await user.keyboard("/");
     const dialog = await screen.findByRole("dialog", { name: "項目" });
     await waitFor(() => expect(within(dialog).getByRole("searchbox", { name: "記事を検索" })).toHaveFocus());
+  });
+
+  it("selects the words left in the box, so that what is typed replaces them", async () => {
+    const { user } = renderApp({ server: seeded().server, route: `/search?q=${q("電池")}` });
+    await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
+    await user.click(within(nav()).getByRole("link", { name: /すべて/ }));
+    await screen.findByRole("heading", { level: 1, name: "すべて" });
+    expect(box()).toHaveValue("電池");
+
+    await user.keyboard("/");
+    await user.keyboard("x");
+
+    expect(box()).toHaveValue("x");
+  });
+
+  it("selects the words in the box of the pane it opens on a narrow screen", async () => {
+    const { user } = renderApp({ server: seeded().server, route: `/search?q=${q("電池")}`, width: 390 });
+    await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
+    await user.keyboard("/");
+    const dialog = await screen.findByRole("dialog", { name: "項目" });
+    const search = within(dialog).getByRole("searchbox", { name: "記事を検索" });
+    await waitFor(() => expect(search).toHaveFocus());
+    expect(search).toHaveValue("電池");
+    expect([(search as HTMLInputElement).selectionStart, (search as HTMLInputElement).selectionEnd]).toEqual([0, 2]);
+  });
+
+  it("selects the words in the box of a pane that is open already", async () => {
+    const { user } = renderApp({ server: seeded().server, route: `/search?q=${q("電池")}`, width: 390 });
+    await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
+    await user.click(screen.getByRole("button", { name: "項目を開く" }));
+    const dialog = await screen.findByRole("dialog", { name: "項目" });
+    within(dialog).getByRole("link", { name: /未読/ }).focus();
+
+    await user.keyboard("/");
+
+    const search = within(dialog).getByRole("searchbox", { name: "記事を検索" });
+    expect(search).toHaveFocus();
+    expect([(search as HTMLInputElement).selectionStart, (search as HTMLInputElement).selectionEnd]).toEqual([0, 2]);
   });
 
   it("is typed as a slash in a field", async () => {

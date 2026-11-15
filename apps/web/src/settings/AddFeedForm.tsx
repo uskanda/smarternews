@@ -7,7 +7,7 @@ import { useToast } from "../shell/toast.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Button, Field, messageFor } from "../ui/controls.tsx";
-import { useUnsaved } from "./unsaved.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 const SELECT = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 export const NO_CATEGORY = "";
@@ -66,7 +66,8 @@ function PageChoice({
 }
 
 /**
- * The fields for subscribing to a feed or a page, on the page of feeds and in the dialog above a category's list.
+ * The fields for subscribing to a feed or a page, on the page of feeds and in the dialog above the list of a
+ * category, of feeds or of uncategorized feeds.
  * It starts in `categoryId` when given, and tells `onAdded` once a feed is subscribed.
  */
 export function AddFeedForm({ categories, categoryId = null, onAdded }: { categories: Category[]; categoryId?: number | null; onAdded?: () => void }) {
@@ -76,7 +77,7 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
   const id = useId();
   const initialCategory = categoryId === null ? NO_CATEGORY : String(categoryId);
   const [url, setUrl] = useState("");
-  // Only on the page of feeds: the dialog above a category's list has no guard, and this does nothing there.
+  // The page of feeds asks before it is left, and the dialog above a list before it is closed.
   useUnsaved("購読フィードの追加", url.trim() !== "");
   const [category, setCategory] = useState(initialCategory);
   const [found, setFound] = useState<Array<{ url: string; title: string }> | null>(null);

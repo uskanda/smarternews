@@ -1,6 +1,6 @@
 import { HIGHLIGHT_TERM_MAX_CHARS, TERM_COLORS, TERM_GROUP_NAME_MAX_CHARS, type TermColor, type TermGroup } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type Ref } from "react";
 import { Link } from "react-router";
 import { ApiError, checkText, fieldMessage, TERM_COLOR_LABEL } from "@smarternews/client";
 import { useTermGroups } from "../api/queries.ts";
@@ -9,7 +9,7 @@ import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
-import { UnsavedGuard, useUnsaved } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -174,7 +174,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   );
 }
 
-function AddTerm({ group }: { group: TermGroup }) {
+function AddTerm({ group, inputRef }: { group: TermGroup; inputRef: Ref<HTMLInputElement & HTMLTextAreaElement> }) {
   const { api } = useApp();
   const store = useStore();
   const [text, setText] = useState("");
@@ -200,6 +200,7 @@ function AddTerm({ group }: { group: TermGroup }) {
   return (
     <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
       <Field
+        ref={inputRef}
         label={label}
         value={text}
         onChange={(event) => {
@@ -224,13 +225,19 @@ function GroupRow({
   last,
   onMove,
   focusMove,
+  onFocused,
+  afterRemoval,
 }: {
   group: TermGroup;
   first: boolean;
   last: boolean;
   onMove: (group: TermGroup, direction: "up" | "down") => void;
   /** The move button to focus once the group has moved, so that a keyboard user stays where they were. */
-  focusMove: { direction: "up" | "down"; serial: number } | null;
+  focusMove: "up" | "down" | null;
+  /** Called once the focus has moved, so that a later change of the order does not move it again. */
+  onFocused: () => void;
+  /** Where the focus goes once the group is deleted and its row, with the button that asked, is gone. */
+  afterRemoval: () => HTMLElement | null;
 }) {
   const { api } = useApp();
   const store = useStore();
@@ -240,19 +247,21 @@ function GroupRow({
   const focus = useInlineEditFocus(editing);
   const up = useRef<HTMLButtonElement>(null);
   const down = useRef<HTMLButtonElement>(null);
+  const removed = useRef(false);
+  const termInput = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
 
-  const direction = focusMove?.direction;
-  const serial = focusMove?.serial;
   useEffect(() => {
+    if (focusMove === null) return;
     // A button that cannot be pressed any more passes the focus to the other one.
-    if (direction === "up") (first ? down : up).current?.focus();
-    if (direction === "down") (last ? up : down).current?.focus();
-    // Run again for every move, also one in the same direction as the last.
-  }, [direction, serial, first, last]);
+    if (focusMove === "up") (first ? down : up).current?.focus();
+    if (focusMove === "down") (last ? up : down).current?.focus();
+    onFocused();
+  }, [focusMove, first, last, onFocused]);
 
   async function removeGroup() {
     try {
       await api.deleteTermGroup(group.id);
+      removed.current = true;
       store.without(group.id);
       setConfirming(false);
       toast({ message: `まとまり「${group.name}」を削除しました` });
@@ -265,6 +274,8 @@ function GroupRow({
     try {
       await api.deleteHighlightTerm(group.id, termId);
       store.withoutTerm(group.id, termId);
+      // The button that was pressed is gone with the term; the focus stays in the group, where terms are added.
+      termInput.current?.focus();
       toast({ message: `語「${text}」を削除しました` });
     } catch (error) {
       toast({ message: messageFor(error) });
@@ -301,7 +312,7 @@ function GroupRow({
         </div>
       ) : (
         <>
-          <AddTerm group={group} />
+          <AddTerm group={group} inputRef={termInput} />
           <div className="flex flex-wrap gap-sm pt-xs">
             <Button ref={up} aria-label={`${group.name}を上へ`} disabled={first} onClick={() => onMove(group, "up")}>
               上へ
@@ -322,6 +333,7 @@ function GroupRow({
         open={confirming}
         title="語のまとまりを削除しますか"
         onDismiss={() => setConfirming(false)}
+        returnFocus={() => (removed.current ? afterRemoval() : null)}
         actions={
           <>
             <Button variant="danger" onClick={() => void removeGroup()}>
@@ -354,7 +366,10 @@ function TermHighlights() {
   const store = useStore();
   const toast = useToast();
   const groups = useTermGroups();
-  const [moved, setMoved] = useState<{ id: number; direction: "up" | "down"; serial: number } | null>(null);
+  // Cleared once the moved group has taken the focus, so that adding or deleting a group later leaves the focus alone.
+  const [moved, setMoved] = useState<{ id: number; direction: "up" | "down" } | null>(null);
+  const focused = useCallback(() => setMoved(null), []);
+  const listHeading = useRef<HTMLHeadingElement>(null);
 
   // Moves go to the server one by one: each names the group to go before, which means what the screen shows
   // only once the server has the moves before it.
@@ -374,7 +389,7 @@ function TermHighlights() {
     const next = list.filter((each) => each.id !== group.id);
     next.splice(to, 0, list[at]!);
     store.all(next);
-    setMoved((last) => ({ id: group.id, direction, serial: (last?.serial ?? 0) + 1 }));
+    setMoved({ id: group.id, direction });
 
     pending.current += 1;
     const sent = round.current;
@@ -409,7 +424,9 @@ function TermHighlights() {
         <AddGroup />
       </section>
       <section aria-label="語のまとまりの一覧" className={SECTION}>
-        <h2 className="type-headline-md">一覧</h2>
+        <h2 ref={listHeading} tabIndex={-1} className="type-headline-md">
+          一覧
+        </h2>
         <p className="max-w-measure type-label-sm text-on-surface-muted">
           1つの箇所が複数のまとまりの語に一致したときは、上にあるまとまりの色で色付けします。「上へ」と「下へ」で順を変えられます。
         </p>
@@ -424,7 +441,9 @@ function TermHighlights() {
               first={index === 0}
               last={index === groups.data.length - 1}
               onMove={move}
-              focusMove={moved?.id === group.id ? moved : null}
+              focusMove={moved?.id === group.id ? moved.direction : null}
+              onFocused={focused}
+              afterRemoval={() => listHeading.current}
             />
           ))}
         </ul>
