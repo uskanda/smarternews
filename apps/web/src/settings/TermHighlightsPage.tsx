@@ -32,6 +32,24 @@ function useStore() {
         return groups.some((each) => each.id === group.id) ? groups.map((each) => (each.id === group.id ? group : each)) : [...groups, group];
       }),
     without: (id: number) => client.setQueryData<TermGroup[]>(["term-groups"], (groups) => groups?.filter((each) => each.id !== id)),
+    /** Takes a term out of the group as it is now, so that a removal answered late does not bring back another. */
+    withoutTerm: (groupId: number, termId: number) =>
+      client.setQueryData<TermGroup[]>(["term-groups"], (groups) =>
+        groups?.map((each) => (each.id === groupId ? { ...each, terms: each.terms.filter((term) => term.id !== termId) } : each)),
+      ),
+    /**
+     * Puts the groups in the order of `groups`, keeping what each holds now. Groups not shown any more stay
+     * away; groups the order does not know yet go last.
+     */
+    order: (groups: TermGroup[]) =>
+      client.setQueryData<TermGroup[]>(["term-groups"], (current) => {
+        if (!current) return groups;
+        const known = new Set(groups.map((each) => each.id));
+        const now = new Map(current.map((each) => [each.id, each]));
+        return [...groups.flatMap((each) => now.get(each.id) ?? []), ...current.filter((each) => !known.has(each.id))];
+      }),
+    now: () => client.getQueryData<TermGroup[]>(["term-groups"]) ?? [],
+    reload: () => void client.invalidateQueries({ queryKey: ["term-groups"] }),
   };
 }
 
@@ -246,7 +264,7 @@ function GroupRow({
   async function removeTerm(termId: number, text: string) {
     try {
       await api.deleteHighlightTerm(group.id, termId);
-      store.one({ ...group, terms: group.terms.filter((term) => term.id !== termId) });
+      store.withoutTerm(group.id, termId);
       toast({ message: `語「${text}」を削除しました` });
     } catch (error) {
       toast({ message: messageFor(error) });
@@ -338,17 +356,41 @@ function TermHighlights() {
   const groups = useTermGroups();
   const [moved, setMoved] = useState<{ id: number; direction: "up" | "down"; serial: number } | null>(null);
 
-  async function move(group: TermGroup, direction: "up" | "down") {
-    const list = groups.data ?? [];
+  // Moves go to the server one by one: each names the group to go before, which means what the screen shows
+  // only once the server has the moves before it.
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  /** Moves sent or waiting to be sent. The order an answer brings is shown only when none is left. */
+  const pending = useRef(0);
+  /** Goes up when a move fails, so that the moves pressed before it are dropped. */
+  const round = useRef(0);
+
+  function move(group: TermGroup, direction: "up" | "down") {
+    const list = store.now();
     const at = list.findIndex((each) => each.id === group.id);
+    const to = direction === "up" ? at - 1 : at + 1;
+    if (at < 0 || to < 0 || to >= list.length) return;
     // Up: before the one above. Down: before the one two below, or last.
     const before = direction === "up" ? list[at - 1]!.id : (list[at + 2]?.id ?? null);
-    try {
-      store.all(await api.moveTermGroup(group.id, before));
-      setMoved((last) => ({ id: group.id, direction, serial: (last?.serial ?? 0) + 1 }));
-    } catch (error) {
-      toast({ message: messageFor(error) });
-    }
+    const next = list.filter((each) => each.id !== group.id);
+    next.splice(to, 0, list[at]!);
+    store.all(next);
+    setMoved((last) => ({ id: group.id, direction, serial: (last?.serial ?? 0) + 1 }));
+
+    pending.current += 1;
+    const sent = round.current;
+    queue.current = queue.current.then(async () => {
+      if (sent !== round.current) return;
+      try {
+        const answer = await api.moveTermGroup(group.id, before);
+        pending.current -= 1;
+        if (pending.current === 0) store.order(answer);
+      } catch {
+        round.current += 1;
+        pending.current = 0;
+        store.reload();
+        toast({ message: "並べ替えられませんでした。もう一度試してください。" });
+      }
+    });
   }
 
   return (
@@ -381,7 +423,7 @@ function TermHighlights() {
               group={group}
               first={index === 0}
               last={index === groups.data.length - 1}
-              onMove={(target, direction) => void move(target, direction)}
+              onMove={move}
               focusMove={moved?.id === group.id ? moved : null}
             />
           ))}
