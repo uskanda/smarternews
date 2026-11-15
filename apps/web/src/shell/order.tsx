@@ -18,7 +18,9 @@ import {
 import type { Category, Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type RefObject } from "react";
+import { useNavigate } from "react-router";
 import { useApp } from "../app/context.ts";
+import { categorySettingsPath } from "../lib/paths.ts";
 import { useToast } from "./toast.tsx";
 
 /** A drag starts once the pointer has moved this far; before that the press is a click on the entry. */
@@ -275,8 +277,8 @@ export function openEntryMenu(event: KeyboardEvent<HTMLElement>): void {
 }
 
 /**
- * The menu of a category or a feed: one place up, one place down, and for a feed the way out. It is how the
- * order is changed without dragging. An entry that stays in place is returned as it is, without a menu.
+ * The menu of a category or a feed: one place up, one place down, then for a feed the way out and for a category
+ * its settings. It is how the order is changed without dragging. An entry that stays in place is returned as it is, without a menu.
  */
 export function EntryMenu({
   entry,
@@ -293,6 +295,7 @@ export function EntryMenu({
   children: ReactElement;
 }) {
   const trigger = useRef<HTMLSpanElement>(null);
+  const navigate = useNavigate();
   const item = movableOf(entry.target);
   if (!item) return children;
   const up = stepMove(model, item, -1);
@@ -328,14 +331,16 @@ export function EntryMenu({
           <ContextMenu.Item className={MENU_ITEM} disabled={!down} onSelect={() => run(down)}>
             下へ移動
           </ContextMenu.Item>
+          <ContextMenu.Separator className="my-xs border-t border-outline" />
           {item.kind === "feed" ? (
-            <>
-              <ContextMenu.Separator className="my-xs border-t border-outline" />
-              <ContextMenu.Item className={MENU_ITEM} onSelect={() => onUnsubscribe(item.id)}>
-                登録を解除
-              </ContextMenu.Item>
-            </>
-          ) : null}
+            <ContextMenu.Item className={MENU_ITEM} onSelect={() => onUnsubscribe(item.id)}>
+              登録を解除
+            </ContextMenu.Item>
+          ) : (
+            <ContextMenu.Item className={MENU_ITEM} onSelect={() => void navigate(categorySettingsPath(item.id))}>
+              カテゴリの設定
+            </ContextMenu.Item>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>

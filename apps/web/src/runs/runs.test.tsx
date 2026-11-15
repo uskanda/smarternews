@@ -1,4 +1,15 @@
-import { createRun, createTopic, finishRun, insertCandidate, resolvePricing, setRetry, startRun, type RetrySkipped, type RunOutcome } from "@smarternews/core";
+import {
+  createRun,
+  createTopic,
+  finishRun,
+  insertCandidate,
+  recordSearchAttempt,
+  resolvePricing,
+  setRetry,
+  startRun,
+  type RetrySkipped,
+  type RunOutcome,
+} from "@smarternews/core";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -23,6 +34,32 @@ function finished(server: TestServer, categoryId: number, outcome: Partial<RunOu
   return run.id;
 }
 
+/** A topic whose web search by the model found no new candidate in three runs in a row. */
+function reducedLlmSearchTopic(server: TestServer, categoryId: number) {
+  const topic = createTopic(
+    server.db,
+    categoryId,
+    { text: "Exploited bugs", sources: { llmSearch: true }, interpretation: { queries: ["q"], criteria: "c" } },
+    server.clock,
+  );
+  for (let index = 0; index < 3; index += 1) {
+    const run = finished(server, categoryId);
+    recordSearchAttempt(server.db, {
+      runId: run,
+      topicId: topic.id,
+      kind: "llm-search",
+      engine: null,
+      query: topic.text,
+      ok: true,
+      returned: 0,
+      googleAttempted: 0,
+      googleUnresolved: 0,
+      createdAt: server.clock().toISOString(),
+    });
+  }
+  return topic;
+}
+
 const rows = () => within(screen.getByRole("table", { name: "実行履歴" })).getAllByRole("row").slice(1);
 
 describe("running a category now", () => {
@@ -36,6 +73,61 @@ describe("running a category now", () => {
     expect(await screen.findByText(/実行中です/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "いますぐ実行" })).toBeDisabled());
     expect(requests.filter((request) => request === `POST /api/v1/categories/${category.id}/runs`)).toHaveLength(1);
+  });
+});
+
+describe("the latest run on the category page", () => {
+  const latest = () => screen.findByRole("region", { name: "実行" });
+
+  it("shows the state, the counts and a link to the run", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const other = server.category("Tools");
+    finished(server, category.id, { status: "failed" });
+    const id = finished(server, category.id, { articlesCreated: 3, articlesUpdated: 1 });
+    finished(server, other.id, { status: "failed" });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const section = await latest();
+    await waitFor(() => expect(section).toHaveTextContent("成功"));
+    expect(section).toHaveTextContent("手動");
+    expect(section).toHaveTextContent("作成 3件・更新 1件");
+    expect(section).not.toHaveTextContent("失敗");
+    const links = within(section).getAllByRole("link").filter((link) => link.getAttribute("href") === `/runs/${id}`);
+    expect(links).toHaveLength(1);
+  });
+
+  it("says that the latest run failed", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    finished(server, category.id);
+    finished(server, category.id, { status: "failed" });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const section = await latest();
+    await waitFor(() => expect(within(section).getByText("失敗")).toHaveClass("text-error"));
+  });
+
+  it("turns to the run that was just started", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    finished(server, category.id, { articlesCreated: 2 });
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const section = await latest();
+    await waitFor(() => expect(section).toHaveTextContent("成功"));
+
+    await user.click(within(section).getByRole("button", { name: "いますぐ実行" }));
+
+    await waitFor(() => expect(section).toHaveTextContent(/待機中|実行中/));
+    expect(section).not.toHaveTextContent("成功");
+  });
+
+  it("says that the category has not run yet", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    expect(await within(await latest()).findByText("まだ実行していません。")).toBeInTheDocument();
   });
 });
 
@@ -115,6 +207,40 @@ describe("the run history", () => {
 
     await waitFor(() => expect(rows()[0]).toHaveTextContent("成功"));
     expect(within(rows()[0]!).getAllByRole("cell")[6]).toHaveTextContent("3");
+  });
+
+  const ALL_LIMIT = "新しい100件だけを表示しています。カテゴリで絞り込むと、それより古い実行が出ます。";
+  const CATEGORY_LIMIT = "このカテゴリの新しい100件だけを表示しています。";
+
+  it("says that only the newest 100 runs are shown when the list reaches 100", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 100; i++) finished(server, category.id);
+    renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByText(ALL_LIMIT)).toBeInTheDocument();
+    expect(rows()).toHaveLength(100);
+  });
+
+  it("says nothing about the limit when the list has fewer than 100 runs", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 99; i++) finished(server, category.id);
+    renderApp({ server, route: "/runs" });
+
+    await waitFor(() => expect(rows()).toHaveLength(99));
+    expect(screen.queryByText(ALL_LIMIT)).not.toBeInTheDocument();
+    expect(screen.queryByText(CATEGORY_LIMIT)).not.toBeInTheDocument();
+  });
+
+  it("does not suggest narrowing when the list is already narrowed to a category", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    for (let i = 0; i < 100; i++) finished(server, category.id);
+    renderApp({ server, route: `/runs?category=${category.id}` });
+
+    expect(await screen.findByText(CATEGORY_LIMIT)).toBeInTheDocument();
+    expect(screen.queryByText(ALL_LIMIT)).not.toBeInTheDocument();
   });
 
   it("says that there are no runs yet", async () => {
@@ -197,6 +323,35 @@ describe("attention", () => {
     await user.click(within(section()).getByRole("button", { name: "確認した" }));
 
     expect(await screen.findByText("確認したことを保存できませんでした。もう一度試してください。")).toBeInTheDocument();
+    expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("puts a web search by the model cut to once a day back to every run, and drops its item", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const topic = reducedLlmSearchTopic(server, category.id);
+    const { user, requests } = renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByRole("region", { name: "注意" })).toHaveTextContent(
+      "Securityのトピック「Exploited bugs」で、LLM検索の新しい候補が3回続けて0件です。1日1回に減らしています。",
+    );
+    await user.click(within(section()).getByRole("button", { name: "元に戻す" }));
+
+    await waitFor(() => expect(screen.queryByRole("region", { name: "注意" })).not.toBeInTheDocument());
+    expect(requests).toContain(`POST /api/v1/topics/${topic.id}/llm-search/restore`);
+  });
+
+  it("keeps the item of a web search by the model and says so when it cannot be put back", async () => {
+    const server = makeServer();
+    reducedLlmSearchTopic(server, server.category("Security").id);
+    let down = false;
+    const { user } = renderApp({ server, route: "/runs", offline: () => down });
+    await screen.findByRole("region", { name: "注意" });
+
+    down = true;
+    await user.click(within(section()).getByRole("button", { name: "元に戻す" }));
+
+    expect(await screen.findByText("LLM検索を元に戻せませんでした。もう一度試してください。")).toBeInTheDocument();
     expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
   });
 });

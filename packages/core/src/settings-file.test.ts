@@ -866,6 +866,25 @@ describe("list views in the settings file", () => {
     expect(getListView(db, `feed-${feed.id}`).sort).toBe("newest");
   });
 
+  it("carry the relevance order to another server", () => {
+    const { db, tools } = changed();
+    updateListView(db, "all", { sort: "relevance" });
+    updateListView(db, `category-${tools.id}`, { sort: "relevance" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([
+      { list: "all", sort: "relevance" },
+      { list: { category: "tools" }, sort: "relevance" },
+    ]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(2);
+    const otherTools = listCategories(other).find((category) => category.slug === "tools")!;
+    expect(views(other)).toEqual([
+      { key: "all", sort: "relevance" },
+      { key: `category-${otherTools.id}`, sort: "relevance" },
+    ]);
+  });
+
   it("are not written by a server where nothing was changed", () => {
     expect(parse(exportSettings(changed().db))).not.toHaveProperty("listViews");
   });

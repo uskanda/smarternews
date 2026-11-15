@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setArticleFlags } from "../db/articles.ts";
 import type { WriteOutput } from "../llm/tasks.ts";
 import { defaultHandlers, pipelineHarness } from "../testing/pipeline.ts";
 
@@ -130,6 +131,41 @@ describe("event categories", () => {
     expect(articles).toHaveLength(1);
     expect(articles[0]!.refs.map((ref) => ref.url)).toEqual(["https://example.org/fair", "https://example.net/weekend"]);
     expect(run).toMatchObject({ articlesCreated: 0, articlesUpdated: 1 });
+  });
+
+  it("rejects a page grouped with a marked event without writing", async () => {
+    const h = harness({ "Spring Maker Fair {fair}": { startsAt: "2026-03-07" } });
+    h.feed(FEED, [{ title: "Spring Maker Fair {fair}", link: "https://example.org/fair" }]);
+    await h.run();
+    setArticleFlags(h.db, h.articles()[0]!.id, { missed: true }, "2026-03-01T12:30:00.000Z");
+    h.feed(FEED, [{ title: "Fair timetable {fair}", link: "https://example.org/timetable" }]);
+
+    const run = await h.run();
+
+    expect(h.requests.write).toHaveLength(1);
+    expect(h.articles()).toMatchObject([{ revision: 0 }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Fair timetable {fair}", reasonCode: "missed-follow-up" }]);
+  });
+
+  it("does not rewrite a marked event found again under another headline only after writing", async () => {
+    const h = harness({
+      "Spring Maker Fair": { startsAt: "2026-03-07T10:00", venue: "City Hall" },
+      "Maker fair this weekend": { name: "Spring  Maker Fair!", startsAt: "2026-03-07" },
+    });
+    h.feed(FEED, [{ title: "Spring Maker Fair", link: "https://example.org/fair" }]);
+    await h.run();
+    const [article] = h.articles();
+    setArticleFlags(h.db, article!.id, { isRead: true, followUpsStopped: true }, "2026-03-01T12:30:00.000Z");
+    h.clock.advance(24 * 3_600_000);
+    h.feed(FEED, [{ title: "Maker fair this weekend", link: "https://example.net/weekend" }]);
+
+    const run = await h.run();
+
+    expect(h.articles()).toMatchObject([{ id: article!.id, revision: 0, isRead: true }]);
+    expect(h.articles()[0]!.refs.map((ref) => ref.url)).toEqual(["https://example.org/fair"]);
+    expect(h.candidates(run.id, "rejected")).toMatchObject([{ title: "Maker fair this weekend", reason: "続報を止めた記事「Spring Maker Fair」の続報" }]);
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Maker fair this weekend", reasonCode: "stopped-follow-up" }]);
+    expect(run).toMatchObject({ articlesCreated: 0, articlesUpdated: 0, rejected: 1 });
   });
 
   it("offers the events that have not ended to the grouping step", async () => {

@@ -287,7 +287,9 @@ describe("the names and the keyboard", () => {
     await user.keyboard("?");
     const dialog = await screen.findByRole("dialog", { name: "キー操作" });
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    expect(keys).toEqual(["j", "k", "s", "m", "x", "o", "w", "h", "Space", "Shift+Space", "Shift+A", "z", "r", "u", "Shift+J", "Shift+K", "g a", "g s", "g e", "g r", "Shift+F10", "/", "?"]);
-    expect(dialog.textContent).not.toContain("名前");
+    expect(keys).toEqual(["j", "k", "s", "m", "x", "o", "w", "h", "Space", "Shift+Space", "Shift+A", "z", "r", "u", "Shift+J", "Shift+K", "g a", "g s", "g e", "g r", "g u", "Shift+F10", "/", "?"]);
+    // The names in an article add no key. `g u` takes the name of an entry, not of an article.
+    const actions = within(dialog).getAllByRole("definition").map((action) => action.textContent);
+    expect(actions.filter((action) => action !== "名前を打って、カテゴリか購読フィードへ移る").join("")).not.toContain("名前");
   });
 });

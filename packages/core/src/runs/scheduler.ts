@@ -1,7 +1,9 @@
 import type { Clock } from "../clock.ts";
 import { findCategory, listCategories } from "../db/categories.ts";
 import { transaction, type Database } from "../db/database.ts";
+import { refreshFeedScores } from "../db/relevance.ts";
 import { hasLaterScheduledRun, hasRunForSlot, listDueRetries, setRetry } from "../db/runs.ts";
+import { refreshAllTermMatches } from "../db/term-matches.ts";
 import { getSettings } from "../db/settings.ts";
 import { listTopics } from "../db/topics.ts";
 import { addDays, budgetPeriod, localParts, zonedToUtc } from "../time.ts";
@@ -12,6 +14,8 @@ const HOUR = 3_600_000;
 /** A scheduled time missed while the server was down is made up for when it lies this close in the past. */
 export const CATCH_UP_MS = 6 * HOUR;
 const PURGE_INTERVAL_MS = HOUR;
+/** The behaviour scores of feeds are worked out at the first check after start-up, and then this often. */
+const RELEVANCE_INTERVAL_MS = 24 * HOUR;
 
 export interface DueSlot {
   /** The scheduled time as local date and time, for example 2026-03-02T05:00. One run exists per slot. */
@@ -38,6 +42,7 @@ export class Scheduler {
   readonly #queue: RunQueue;
   #lastCheck: Date | null = null;
   #lastPurge = 0;
+  #lastRelevance = 0;
   #timer: NodeJS.Timeout | undefined;
   readonly #purgeImages: () => void;
   readonly #log: (message: string, error: unknown) => void;
@@ -98,6 +103,17 @@ export class Scheduler {
       }
       const keepCallsSince = this.#budgetResetDay === undefined ? undefined : budgetPeriod(now, this.#budgetResetDay).start;
       purgeExpired(this.#db, this.#clock, { keepCallsSince });
+    }
+    if (now.getTime() - this.#lastRelevance >= RELEVANCE_INTERVAL_MS) {
+      this.#lastRelevance = now.getTime();
+      try {
+        // Once a day, so that the relevance order does not shift while it is read. The terms are matched again
+        // too: right after the migration nothing has been matched, and a match missed anywhere is put right.
+        refreshFeedScores(this.#db, now);
+        refreshAllTermMatches(this.#db);
+      } catch (error) {
+        this.#log("scheduler: working out the relevance scores failed:", error);
+      }
     }
   }
 
