@@ -313,6 +313,8 @@ export function ArticleView({
             <>
               <span>{feedName(article.feedId)}</span>
               {article.author ? <span>{article.author}</span> : null}
+              {/* What the feed files the article under, not a category of this app. */}
+              {article.feedCategories.length > 0 ? <span>{article.feedCategories.join("、")}</span> : null}
               <span>{formatFull(article.updatedAt, timeZone)} に公開</span>
             </>
           ) : (

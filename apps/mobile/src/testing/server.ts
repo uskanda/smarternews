@@ -54,7 +54,7 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
     /** An article of a subscribed feed. `at` is the time it sorts by; `body` is Markdown, as the server stores it. */
     feedArticle: (
       feedId: number,
-      options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string; storedAt?: string; duplicateOf?: number } = {},
+      options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string; storedAt?: string; duplicateOf?: number; feedCategories?: string[] } = {},
     ) =>
       core<number>("seedFeedArticle", feedId, options),
     /** A digest made now, covering the six hours before. */

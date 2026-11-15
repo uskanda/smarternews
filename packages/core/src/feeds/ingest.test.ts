@@ -651,6 +651,23 @@ describe("translating titles when a feed is fetched", () => {
     expect(article).toMatchObject({ translatedTitle: "訳:Title", translation: { segments: [{ translated: "訳:Same content." }] } });
   });
 
+  it("keeps the translations when only the feed categories changed", async () => {
+    const s = translating();
+    s.serve([{ title: "Title", key: "a", content: "<p>Same content.</p>", extra: "<category>Old</category>" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, translate: true });
+    const id = s.list()[0]!.id;
+    await s.service.translateArticle(id);
+
+    s.serve([{ title: "Title", key: "a", content: "<p>Same content.</p>", extra: "<category>New</category>" }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id)).toMatchObject({
+      feedCategories: ["New"],
+      translatedTitle: "訳:Title",
+      translation: { segments: [{ translated: "訳:Same content." }] },
+    });
+  });
+
   it("drops the translation of an empty body once the media description fills it", async () => {
     const s = translating();
     s.serve([{ title: "Video", key: "v", content: "" }]);
@@ -730,6 +747,65 @@ https://example.com/x</media:description>`;
     const id = s.list()[0]!.id;
     s.db.prepare("UPDATE articles SET attachments = 'not json' WHERE id = ?").run(id);
     expect(getArticle(s.db, id).attachments).toEqual([]);
+  });
+});
+
+describe("feed categories", () => {
+  const categories = (...names: string[]) => names.map((name) => `<category>${esc(name)}</category>`).join("");
+  const hideCategory = (value: string): Parameters<typeof createFilter>[1] => ({
+    action: "hide",
+    scope: { type: "all" },
+    conditions: [{ fields: ["feedCategories"], match: "regex", value }],
+  });
+
+  it("stores the feed categories of a new article, and hides it when a filter on them matches", async () => {
+    const s = setup([]);
+    createFilter(s.db, hideCategory("^Sports$"), s.clock);
+    s.serve([
+      { title: "Match report", key: "a", extra: categories("Sports", "Local") },
+      { title: "New chip", key: "b", extra: categories("Tech", "Sportswear") },
+      { title: "Plain", key: "c" },
+    ]);
+    await subscribe(s.deps, { url: FEED_URL });
+
+    expect(s.list().map((article) => article.title)).toEqual(["New chip", "Plain"]);
+    const stored = s.db.prepare("SELECT title, feed_categories FROM articles ORDER BY title").all();
+    expect(stored).toEqual([
+      { title: "Match report", feed_categories: '["Sports","Local"]' },
+      { title: "New chip", feed_categories: '["Tech","Sportswear"]' },
+      { title: "Plain", feed_categories: null },
+    ]);
+    expect(getArticle(s.db, s.list()[0]!.id).feedCategories).toEqual(["Tech", "Sportswear"]);
+    expect(getArticle(s.db, s.list()[1]!.id).feedCategories).toEqual([]);
+  });
+
+  it("fills the categories of an article stored before them on the next fetch, and judges it again", async () => {
+    const s = setup([{ title: "Advert", key: "a" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const id = s.list()[0]!.id;
+    createFilter(s.db, hideCategory("^PR$"), s.clock);
+    expect(s.list()).toHaveLength(1);
+
+    s.serve([{ title: "Advert", key: "a", extra: categories("PR") }]);
+    await fetchFeed(s.deps, feed.id);
+
+    expect(getArticle(s.db, id).feedCategories).toEqual(["PR"]);
+    expect(s.list()).toEqual([]);
+
+    s.serve([{ title: "Advert", key: "a" }]);
+    await fetchFeed(s.deps, feed.id);
+    expect(getArticle(s.db, id).feedCategories).toEqual([]);
+    expect(s.list()).toHaveLength(1);
+  });
+
+  it("gives no feed categories for an article whose stored list cannot be read", async () => {
+    const s = setup([{ title: "Post", key: "a" }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    const id = s.list()[0]!.id;
+    for (const stored of ["not json", '{"a":1}', '["Tech",7,null]']) {
+      s.db.prepare("UPDATE articles SET feed_categories = ? WHERE id = ?").run(stored, id);
+      expect(getArticle(s.db, id).feedCategories).toEqual(stored.startsWith("[") ? ["Tech"] : []);
+    }
   });
 });
 

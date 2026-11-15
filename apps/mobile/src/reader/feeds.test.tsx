@@ -229,6 +229,18 @@ describe("a feed article that is opened", () => {
     expect(WebBrowser.openBrowserAsync).toHaveBeenCalledWith("https://blog.example.org/new");
   });
 
+  it("shows the feed categories beside the author", async () => {
+    const server = await makeServer();
+    const blog = await server.feed("Blog");
+    await server.feedArticle(blog.id, { title: "Tagged", at: at(60), author: "山田", feedCategories: ["Tech", "AI"] });
+    await server.feedArticle(blog.id, { title: "Plain", at: at(0), author: "山田" });
+    await renderApp({ server, url: `/list/feed-${blog.id}` });
+
+    await press(/^Tagged/);
+    expect(await screen.findByLabelText("Blog、山田、Tech、AI、2026年3月1日 11:00 に公開")).toBeOnTheScreen();
+    expect(screen.getByText("Tech、AI")).toBeOnTheScreen();
+  });
+
   it("is marked as read", async () => {
     const { server, blog, newPost } = await seeded();
     await renderApp({ server, url: `/list/feed-${blog.id}` });

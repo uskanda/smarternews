@@ -20,13 +20,15 @@ type Node = Record<string, unknown>;
 
 /** Elements of attached files that an item may hold more than one of. */
 const ARRAY_MEDIA = new Set(["enclosure", "media:content", "media:thumbnail", "media:group"]);
+/** Elements that name what the feed files an item under, more than one of them as often as not. */
+const ARRAY_CATEGORIES = new Set(["category", "dc:subject"]);
 
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   textNodeName: "#text",
   parseTagValue: false,
-  isArray: (name) => name === "item" || name === "entry" || name === "link" || ARRAY_MEDIA.has(name),
+  isArray: (name) => name === "item" || name === "entry" || name === "link" || ARRAY_MEDIA.has(name) || ARRAY_CATEGORIES.has(name),
 });
 
 export function parseXml(xml: string): Node {
@@ -116,6 +118,10 @@ export interface FeedDescription {
 export const MAX_ATTACHMENTS = 20;
 /** An attachment whose address is longer than this is left out. */
 export const MAX_ATTACHMENT_URL_CHARS = 2000;
+/** At most this many feed categories are kept for one item. A bound against a feed that lists without end. */
+export const MAX_CATEGORIES = 20;
+/** A feed category is cut to this many characters. */
+export const MAX_CATEGORY_CHARS = 100;
 
 export interface SubscriptionItem extends FeedItem {
   /** What the feed says identifies the item: an RSS guid, an Atom id, an rdf:about. Null when it has none. */
@@ -127,6 +133,11 @@ export interface SubscriptionItem extends FeedItem {
   attachments: FeedAttachment[];
   /** The Media RSS description, given only when the item has no content. Untrusted, like the content. */
   description: FeedDescription | null;
+  /**
+   * The feed categories: what the feed files the item under, as plain text, without repeats, in the order the
+   * feed lists them. Not the categories of this product.
+   */
+  categories: string[];
 }
 
 export interface ParsedSubscription {
@@ -260,6 +271,39 @@ function descriptionOf(item: Node): FeedDescription | null {
   return null;
 }
 
+// ---- feed categories ----
+
+function listOf(value: unknown): unknown[] {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/** Feed categories as kept: plain text without empty values and repeats, bounded in number and length. */
+function tidyCategories(raw: string[]): string[] {
+  const categories: string[] = [];
+  for (const value of raw) {
+    if (categories.length >= MAX_CATEGORIES) break;
+    const text = plainText(value, MAX_CATEGORY_CHARS);
+    if (text.length > 0 && !categories.includes(text)) categories.push(text);
+  }
+  return categories;
+}
+
+/** The text of the RSS category and dc:subject elements of an item. */
+function rssCategories(item: Node): string[] {
+  return tidyCategories([...listOf(item.category), ...listOf(item["dc:subject"])].map(textOf));
+}
+
+/** An Atom category names itself by its label, which people read, or else by its term. */
+function atomCategories(entry: Node): string[] {
+  return tidyCategories(
+    nodesOf(entry.category).map((category) => {
+      const label = attributeOf(category, "label");
+      return label.length > 0 ? label : attributeOf(category, "term");
+    }),
+  );
+}
+
 /** The attachments of an item, and its description when it has no content. */
 function mediaOf(item: Node, url: string, contentHtml: string, feedUrl: string | null) {
   const base = absoluteUrl(url, feedUrl) ?? feedUrl;
@@ -275,6 +319,7 @@ function rssSubscriptionItem(item: Node, feedUrl: string | null): SubscriptionIt
     author: rssAuthor(item),
     contentHtml,
     ...mediaOf(item, read.url, contentHtml, feedUrl),
+    categories: rssCategories(item),
   };
 }
 
@@ -343,6 +388,9 @@ function jsonItem(item: Node): SubscriptionItem {
     // The attachments of JSON Feed are not read (add-json-feed); it has no Media RSS description.
     attachments: [],
     description: null,
+    // Its tags are what the feed files the item under, as the categories of RSS and Atom are (add-feed-categories).
+    // They are plain text: escaped, a "<" in them stays a character.
+    categories: tidyCategories(listOf(item.tags).filter((tag): tag is string => typeof tag === "string").map(escapeHtml)),
   };
 }
 
@@ -366,8 +414,8 @@ export function parseJsonFeed(text: string): ParsedSubscription | null {
 }
 
 /**
- * Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author, content
- * and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the relative
+ * Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author, content,
+ * feed categories and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the relative
  * pages of items.
  */
 export function parseSubscription(xml: string, feedUrl: string | null = null): ParsedSubscription {
@@ -408,6 +456,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
           author: atomAuthor(entry),
           contentHtml,
           ...mediaOf(entry, read.url, contentHtml, feedUrl),
+          categories: atomCategories(entry),
         };
       }),
     };

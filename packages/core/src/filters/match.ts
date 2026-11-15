@@ -20,18 +20,24 @@ export interface MatchableArticle {
   author: string | null;
   /** The article's page. */
   url: string | null;
+  /** The feed categories: what the feed files the article under. Each is matched alone. */
+  feedCategories: string[];
 }
 
 export interface CompiledCondition {
   fields: FilterField[];
-  /** Whether the text of one field matches. */
+  /** Whether the text of one field matches: for a field of several values, any one of them. */
   test(text: Texts, field: FilterField): boolean;
 }
 
-/** The fields of one article in the forms the two methods compare, each computed once when first asked. */
+/**
+ * The fields of one article in the forms the two methods compare, each computed once when first asked. Every
+ * field is a list of values: one for a field of text, none for a field the article lacks, and one for each
+ * feed category.
+ */
 export class Texts {
-  private readonly nfkc = new Map<FilterField, string | null>();
-  private readonly lower = new Map<FilterField, string | null>();
+  private readonly nfkc = new Map<FilterField, string[]>();
+  private readonly lower = new Map<FilterField, string[]>();
 
   private readonly article: MatchableArticle;
 
@@ -39,26 +45,29 @@ export class Texts {
     this.article = article;
   }
 
-  private raw(field: FilterField): string | null {
+  private raw(field: FilterField): string[] {
+    const one = (text: string | null) => (text === null ? [] : [text]);
     switch (field) {
       case "title":
-        return this.article.title;
+        return one(this.article.title);
       case "content":
-        return this.article.contentText;
+        return one(this.article.contentText);
       case "author":
-        return this.article.author;
+        return one(this.article.author);
       case "url":
-        return this.article.url;
+        return one(this.article.url);
+      case "feedCategories":
+        return this.article.feedCategories;
     }
   }
 
-  normalized(field: FilterField): string | null {
-    if (!this.nfkc.has(field)) this.nfkc.set(field, this.raw(field)?.normalize("NFKC") ?? null);
+  normalized(field: FilterField): string[] {
+    if (!this.nfkc.has(field)) this.nfkc.set(field, this.raw(field).map((text) => text.normalize("NFKC")));
     return this.nfkc.get(field)!;
   }
 
-  lowered(field: FilterField): string | null {
-    if (!this.lower.has(field)) this.lower.set(field, this.normalized(field)?.toLowerCase() ?? null);
+  lowered(field: FilterField): string[] {
+    if (!this.lower.has(field)) this.lower.set(field, this.normalized(field).map((text) => text.toLowerCase()));
     return this.lower.get(field)!;
   }
 }
@@ -74,16 +83,13 @@ export function compileConditions(conditions: Array<Pick<FilterCondition, "field
       const pattern = new RegExp(normalizedValue(condition), "iu");
       return {
         fields: condition.fields,
-        test: (texts, field) => {
-          const text = texts.normalized(field);
-          return text !== null && pattern.test(text);
-        },
+        test: (texts, field) => texts.normalized(field).some((text) => pattern.test(text)),
       };
     }
     const value = normalizedValue(condition);
     return {
       fields: condition.fields,
-      test: (texts, field) => texts.lowered(field)?.includes(value) ?? false,
+      test: (texts, field) => texts.lowered(field).some((text) => text.includes(value)),
     };
   });
 }

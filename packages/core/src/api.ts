@@ -629,6 +629,11 @@ export const articleSchema = articleSummarySchema.extend({
    * highlights, translations, search and filters never see them. Empty for a generated article.
    */
   attachments: z.array(articleAttachmentSchema),
+  /**
+   * The feed categories of a feed article: what the feed files it under, in the order it listed them. Not the
+   * categories of this product. Empty for a generated article and for a feed article without them.
+   */
+  feedCategories: z.array(z.string()),
   /** True when the reader marked the generated article as a miss. Always false for a feed article. */
   missed: z.boolean(),
 });
@@ -1053,7 +1058,8 @@ export type OpmlImportResult = z.infer<typeof opmlImportResultSchema>;
 export const filterActionSchema = z.enum(["hide", "keep"]);
 export type FilterAction = z.infer<typeof filterActionSchema>;
 
-export const filterFieldSchema = z.enum(["title", "content", "author", "url"]);
+/** `feedCategories` is the feed categories of a feed article, each matched alone. */
+export const filterFieldSchema = z.enum(["title", "content", "author", "url", "feedCategories"]);
 export type FilterField = z.infer<typeof filterFieldSchema>;
 
 export const filterMatchSchema = z.enum(["contains", "regex"]);

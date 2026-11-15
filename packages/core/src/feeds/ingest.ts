@@ -90,11 +90,18 @@ interface Prepared {
   publishedAt: Date | null;
   /** The attachments as stored: JSON, or null for none. */
   attachments: string | null;
+  /** The feed categories as stored: JSON, or null for none. */
+  feedCategories: string | null;
 }
 
 /** The attachments of an item as the column stores them. */
 function storedAttachments(item: SubscriptionItem): string | null {
   return item.attachments.length > 0 ? JSON.stringify(item.attachments) : null;
+}
+
+/** The feed categories of an item as the column stores them. */
+function storedCategories(item: SubscriptionItem): string | null {
+  return item.categories.length > 0 ? JSON.stringify(item.categories) : null;
 }
 
 /** The content of an item, or its Media RSS description when the feed gives no content. */
@@ -158,7 +165,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const stored = new Map(
     db
       .prepare(
-        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.attachments, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
+        `SELECT a.id, a.item_key, a.title, a.body, a.author, a.attachments, a.feed_categories, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
                 (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
            FROM articles a WHERE a.feed_id = ?`,
       )
@@ -172,6 +179,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   const rewrite = db.prepare("UPDATE articles SET title = ?, summary = ?, body = ?, content_text = ?, author = ? WHERE id = ?");
   // Neither filters nor translations look at attachments: a change of them alone is no rewrite.
   const reattach = db.prepare("UPDATE articles SET attachments = ? WHERE id = ?");
+  // Filters look at the feed categories, translations do not: a change of them is judged again, and translations stay.
+  const recategorize = db.prepare("UPDATE articles SET feed_categories = ? WHERE id = ?");
 
   const forgetTitle = db.prepare("UPDATE articles SET translated_title = NULL WHERE id = ?");
   // Only an article stored since duplicate removal exists has values to compare, and keeps having them.
@@ -208,6 +217,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       text: content.text,
       publishedAt: item.publishedAt,
       attachments: storedAttachments(item),
+      feedCategories: storedCategories(item),
     };
     if (!known) {
       fresh.push(prepared);
@@ -227,6 +237,8 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       if (str(known.body) !== prepared.body && known.full_content_status !== "fetched") deleteArticleTranslation(db, id);
     }
     if ((known.attachments ?? null) !== prepared.attachments) reattach.run(prepared.attachments, id);
+    const recategorized = (known.feed_categories ?? null) !== prepared.feedCategories;
+    if (recategorized) recategorize.run(prepared.feedCategories, id);
     const moved = (known.url ?? null) !== url;
     if (moved || str(known.title) !== title) {
       setReference(db, id, url, feedTitle, title);
@@ -234,14 +246,14 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       recompare.run(url, normalizeTitle(title), id);
     }
     // Matched after the reference is set: a condition may look at the URL.
-    if (rewritten || moved) applyFilters(db, id);
+    if (rewritten || moved || recategorized) applyFilters(db, id);
   }
 
   const insert = db.prepare(
     `INSERT INTO articles
        (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at,
-        created_at, dedup_url, dedup_title, duplicate_of, attachments)
-     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, dedup_url, dedup_title, duplicate_of, attachments, feed_categories)
+     VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Lists show the highest id first among articles of the same time, so the first item of the document goes in last.
   for (const item of fresh.reverse()) {
@@ -267,6 +279,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
         compared.title,
         kept,
         item.attachments,
+        item.feedCategories,
       ).lastInsertRowid,
     );
     setReference(db, id, item.url, feedTitle, item.title);
