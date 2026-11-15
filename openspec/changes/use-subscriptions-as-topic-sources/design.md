@@ -2,16 +2,16 @@
 
 ## Context
 
-実行（`packages/core/src/pipeline/run.ts`）は、トピックごとに取得元を回して候補を `found`（URLごとの表）に集める。そのあと、判定済みのURL（`seen_urls`）を除き、公開日時のない候補を除いてから判定に渡す。
+実行（`packages/core/src/pipeline/run.ts`）は、トピックごとに取得元を順に呼び、候補を`found`（URLごとの表）に集める。そのあと、判定済みのURL（`seen_urls`）を除き、公開日時のない候補を除いてから判定に渡す。
 判定（judge）は候補ごとの採否と重要度だけを返す。候補のトピックは、候補を見つけた取得元のトピックで決まる。
 
-配信記事は生成記事と同じ `articles` 表に入っていて、`origin='feed'` で区別される。
-元のページのURLは `article_refs` の先頭にあり、重複の判定のために正規化したURLが `dedup_url` に入る。重複は `duplicate_of`、フィルターで隠した状態は `filtered` の列にある。どちらも「隠す」と判断する式（`hiddenDuplicate`、`hiddenByFilters`）がすでにある。
+配信記事は生成記事と同じ`articles`表に入っていて、`origin='feed'`で区別される。
+元のページのURLは`article_refs`の先頭にあり、重複の判定のために正規化したURLが`dedup_url`に入る。重複は`duplicate_of`、フィルターで隠した状態は`filtered`の列にある。どちらも「隠す」と判断する式（`hiddenDuplicate`、`hiddenByFilters`）がすでにある。
 購読フィードはニュースのカテゴリにだけ属せる。イベントのカテゴリへの所属は、登録と変更で拒否される。
 
-`candidates.source_kind` はCHECK制約で3つの値に限られている。値を足すには表を作り直す。
+`candidates`の`source_kind`はCHECK制約で3つの値に限られている。値を足すには表を作り直す。
 
-動機は proposal.md の Why を参照。
+動機はproposal.mdのWhyを参照。
 
 ## Goals / Non-Goals
 
@@ -29,83 +29,83 @@
 
 ## Decisions
 
-### 1. 設定は `feeds.topic_source` に持つ
+### 1. 設定は`feeds`の`topic_source`に持つ
 
-`feeds` に `topic_source INTEGER NOT NULL DEFAULT 0` を足す。APIでは `topicSource` とする。
-`autoSummarize` と同じ扱いで、登録、変更、一覧、設定ファイルの書き出しと読み込みに通す。
+`feeds`に`topic_source INTEGER NOT NULL DEFAULT 0`を足す。APIでは`topicSource`とする。
+`autoSummarize`と同じ扱いで、登録、変更、一覧、設定ファイルの書き出しと読み込みに通す。
 カテゴリに属さない購読フィードで有効にする要求は拒む。購読フィードはニュースのカテゴリにしか属せないので、「ニュースのカテゴリでない」場合はカテゴリがない場合だけである。
 有効のままカテゴリを外したときは、値を残す。読み出しはカテゴリで絞るので、カテゴリのない購読フィードの記事は候補にならない。値を消すと、同じカテゴリへ戻したときに設定し直しが要る。
 
 ### 2. 読み出しは配信記事の表から直接行う
 
-`listTopicSourceArticles(db, categoryId, since, isSeen, limit)` を `db/articles.ts` に足す。条件は次のとおり。
+`listTopicSourceArticles(db, categoryId, since, isSeen, limit)`を`db/topic-sources.ts`に足す。条件は次のとおり。
 
 - `a.origin = 'feed'`、`f.topic_source = 1`、`f.enabled = 1`、`f.category_id = カテゴリ`
 - `a.created_at >= since`（対象期間は保存した時刻で数える。配信元の公開日時が古い記事も、保存が期間内なら対象にする）
 - `NOT hiddenDuplicate(a)`、`NOT hiddenByFilters(a)`
-- 元のページのURL（`article_refs` の先頭）があること
+- 元のページのURL（`article_refs`の先頭）があること
 
-`created_at` の新しい順に読み、URLを `normalizeUrl` で正規化する。判定済みのURLを除いてから、上限の数まで取る。
+`created_at`の新しい順に読み、URLを`normalizeUrl`で正規化する。判定済みのURLを除いてから、上限の数まで取る。
 フィードを取得し直さないので、実行あたりのHTTPの取得は増えない。
 
-`enabled = 1` も条件にする。止めた購読フィードは、利用者が読むのをやめたものとみなす。
+`enabled = 1`も条件にする。止めた購読フィードは、利用者が読むのをやめたものとみなす。
 
 ### 3. 候補はカテゴリの有効なトピックすべてに結び付ける
 
-トピックのループのあとに、読み出した配信記事を `found` に合わせる。トピックは、解釈が済んだ有効なトピックすべてにする。
+トピックのループのあとに、読み出した配信記事を`found`に合わせる。トピックは、解釈が済んだ有効なトピックすべてにする。
 同じURLがほかの取得元で見つかっていれば、既存のマージで1件にまとまり、トピックが合わさる。由来は先に見つけた取得元のものが残る。
 まとまったときも、元の配信記事への参照（`feed_article_id`）は残す。書く処理の代わりの本文と、まとめた先の記録に使うためである。
-解釈が済んだトピックが1つもないときは、配信記事を候補にしない。判定に渡す基準がないためである。
+解釈済みのトピックが1つもないときは、配信記事を候補にしない。判定に渡す基準がないためである。
 
 公開日時のない配信記事は、保存した時刻を公開日時にする。配信記事は保存の時点で並びの時刻を持っているので、「公開日時のない候補」の除外に当てない。
 
-### 4. 由来 `subscription` と `candidates.feed_article_id`
+### 4. 由来`subscription`と`candidates`の`feed_article_id`
 
-`candidates` を作り直し、`source_kind` のCHECK制約に `subscription` を加える。あわせて `feed_article_id INTEGER REFERENCES articles (id) ON DELETE SET NULL` を足す。
-作り直しは、033の作り直しと同じく `-- foreign_keys: off` のマイグレーションで行い、既存の行は識別子ごと移す。
+`candidates`を作り直し、`source_kind`のCHECK制約に`subscription`を加える。あわせて`feed_article_id INTEGER REFERENCES articles (id) ON DELETE SET NULL`を足す。
+作り直しは、036の作り直しと同じく`-- foreign_keys: off`の移行で行い、既存の行は識別子ごと移す。
 
-### 5. まとめた先は `articles.summarized_in` に記録する
+### 5. まとめた先は`articles`の`summarized_in`に記録する
 
-`articles` に `summarized_in INTEGER REFERENCES articles (id) ON DELETE SET NULL` を足す。生成記事を保存するのと同じトランザクションで、採用した候補の `feed_article_id` が指す配信記事に記録する。
+`articles`に`summarized_in INTEGER REFERENCES articles (id) ON DELETE SET NULL`を足す。生成記事を保存するのと同じトランザクションで、採用した候補の`feed_article_id`が指す配信記事に記録する。
 続報で書き直した生成記事に新しい配信記事を足したときも、その生成記事を記録する。
 1つの配信記事が複数の生成記事にまとめられることはほぼない。同じURLは同じカテゴリで2回判定されないためである。記録は最後に書いた生成記事で上書きする。
 
-逆向き（生成記事からまとめた配信記事）は、`summarized_in` を引いて求める。表を足さずに済む。
+逆向き（生成記事からまとめた配信記事）は、`summarized_in`を引いて求める。表を足さずに済む。
 
 ### 6. 記事の詳細の項目
 
-- `summarizedIn`：配信記事のとき、まとめた先の生成記事の `{ id, title }`。ないときと生成記事では `null`。
-- `feedArticles`：生成記事のとき、まとめた配信記事の `{ articleId, feedId, feedTitle, title }` の並び。保存した順。フィルターで隠した配信記事は含めない。購読フィードの一覧に出ない記事へ移らないためで、`otherFeeds` と同じ扱いである。
+- `summarizedIn`：配信記事のとき、まとめた先の生成記事の`{ id, title }`。ないときと生成記事では`null`。
+- `feedArticles`：生成記事のとき、まとめた配信記事の`{ articleId, feedId, feedTitle, title }`の並び。保存した順。フィルターで隠した配信記事は含めない。購読フィードの一覧に出ない記事へ移らないためで、`otherFeeds`と同じ扱いである。
 
 ### 7. 書く処理の代わりの本文
 
-`listPending` が `feed_article_id` を返し、`loadSources` は、ページから本文を取れなかったときに配信記事の `content_text` を使う。
+`listPending`が`feed_article_id`を返し、`loadSources`は、ページから本文を取れなかったときに配信記事の`content_text`を使う。
 配信された内容を使ったときは、抜粋だけで書いた印（`snippetOnly`）を付けない。配信された内容は抜粋より長く、記事の材料として扱えるためである。
 
-### 8. 上限は `limits.subscriptionCandidatesPerRun`
+### 8. 上限は`limits.subscriptionCandidatesPerRun`
 
-config.yamlの `limits` に `subscriptionCandidatesPerRun`（既定60、0以上）を足す。0にすると、設定を有効にしていても配信記事を候補にしない。
+config.yamlの`limits`に`subscriptionCandidatesPerRun`（既定60、0以上）を足す。0にすると、設定を有効にしていても配信記事を候補にしない。
 
 ### 9. 画面
 
 - Web：購読フィードの設定の画面（`FeedOptionsDialog`）に切り替えを足す。カテゴリのない購読フィードでは出さない。説明は、配信記事をカテゴリのトピックの候補にすることと、判定にLLMを使うこと。
-- Web：実行の詳細の除外した候補で、由来が `subscription` の候補に「購読フィード」の印を出す。トピックの集計の内訳にも「購読フィード」を足す。
-- WebとAndroidアプリ：本文の画面に「この記事をまとめた生成記事」と「まとめた配信記事」を出す。配信記事へのリンクは、`otherFeeds` と同じく、その購読フィードの一覧を開いて記事を選ぶ。
+- Web：実行の詳細の除外した候補で、由来が`subscription`の候補に「購読フィード」の印を出す。トピックの集計の内訳にも「購読フィード」を足す。
+- WebとAndroidアプリ：本文の画面に「この記事をまとめた生成記事」と「まとめた配信記事」を出す。配信記事へのリンクは、`otherFeeds`と同じく、その購読フィードの一覧を開いて記事を選ぶ。
 
 ### 10. AGENTS.mdの規則
 
 AGENTS.mdの「購読フィードの取得、…ではLLMを呼ばない」の規則に、実行が「トピックの取得元にする」を有効にした購読フィードの配信記事を候補として読むことを書き足す必要がある。
-この変更を作った自動の実行は AGENTS.md を変更できないため、追記は利用者が行う。
+この変更を作った自動の実行はAGENTS.mdを変更できないため、追記は利用者が行う。
 
 ## Risks / Trade-offs
 
-- [判定の回数が配信の件数に比例して増える] → 既定は無効で、購読フィードごとに選ぶ。実行あたりの上限（既定60件、判定2回分）で抑える。
-- [判定済みの記事が上限の枠を埋める] → 判定済みのURLを除いてから上限をかける。
-- [上限を超えた記事が取り残される] → 判定済みにならないので、対象期間内なら次の実行で候補になる。
-- [配信記事が一覧に未読で残り、生成記事と同じ話題が2回並ぶ] → grillingのQ1で受け入れた。互いへのリンクでたどれるようにし、隠すか既読にするかは別のissueで決める。
-- [`candidates` の作り直しで、行の多いデータベースのマイグレーションが長くなる] → 033と同じ方法で、作り直しの前にデータベースの写しを取る。
+- 判定の回数が配信の件数に比例して増える。→ 既定は無効で、購読フィードごとに選ぶ。実行あたりの上限（既定60件、判定2回分）で抑える。
+- 判定済みの記事が上限の枠を埋める。→ 判定済みのURLを除いてから上限をかける。
+- 上限を超えた記事が取り残される。→ 判定済みにならないので、対象期間内なら次の実行で候補になる。
+- 配信記事が一覧に未読で残り、生成記事と同じ話題が2回並ぶ。→ grillingのQ1で受け入れた。互いへのリンクでたどれるようにし、隠すか既読にするかは別のissueで決める。
+- `candidates`の作り直しで、行の多いデータベースの移行が長くなる。→ 036と同じ方法で、作り直しの前にデータベースの写しを取る。
 
 ## Migration Plan
 
-- マイグレーションで3つの列と、`candidates` の作り直しを行う。既存の購読フィードは無効のまま、既存の候補は由来ごと残る。
+- 移行で3つの列と、`candidates`の作り直しを行う。既存の購読フィードは無効のまま、既存の候補は由来ごと残る。
 - 戻すときは、作り直しの前に取った写し（`*.before-NNN`）を使う。

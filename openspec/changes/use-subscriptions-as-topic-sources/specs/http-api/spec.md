@@ -6,8 +6,8 @@ APIは、購読フィードの登録と変更で「トピックの取得元に�
 
 #### Scenario: 変更で有効にする
 
-- **WHEN** ニュースのカテゴリに属する購読フィードの変更で、`topicSource` に `true` を送る
-- **THEN** APIは変更した購読フィードを `topicSource` が `true` の状態で返す
+- **WHEN** ニュースのカテゴリに属する購読フィードの変更で、`topicSource`に`true`を送る
+- **THEN** APIは変更した購読フィードを`topicSource`が`true`の状態で返す
 
 ### Requirement: まとめた先の生成記事の提供
 

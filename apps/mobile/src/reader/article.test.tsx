@@ -399,10 +399,9 @@ describe("a feed article and the generated article it was written into", () => {
     const tools = await server.category("Tools");
     const feed = await server.feed("Lang News", tools.id);
     const delivered = await server.feedArticle(feed.id, { title: "Rust 2.0 is out", at: "2026-03-01T10:00:00.000Z", url: "https://news.example.org/rust-2" });
-    const alone = await server.feedArticle(feed.id, { title: "Alone", at: "2026-03-01T09:00:00.000Z", url: "https://news.example.org/alone" });
     const story = await server.article(tools.id, { title: "Rust 2.0 released" });
     await server.sql("UPDATE articles SET summarized_in = ? WHERE id = ?", story, delivered);
-    return { server, tools, feed, delivered, alone, story };
+    return { server, tools, feed, delivered, story };
   }
 
   it("leads from the feed article to the generated article", async () => {
@@ -430,7 +429,12 @@ describe("a feed article and the generated article it was written into", () => {
   });
 
   it("shows neither for a feed article no run wrote into a generated article", async () => {
-    const { server, feed, alone } = await summarized();
+    // A feed of its own: the pager also lays out the articles next to the open one.
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const feed = await server.feed("Lang News", tools.id);
+    const alone = await server.feedArticle(feed.id, { title: "Alone", at: "2026-03-01T09:00:00.000Z", url: "https://news.example.org/alone" });
+    await server.article(tools.id, { title: "Rust 2.0 released" });
     await renderApp({ server, url: `/article/${alone}?list=feed-${feed.id}` });
     await screen.findByRole("header", { name: "Alone" });
     expect(screen.queryByText("この記事をまとめた生成記事")).toBeNull();
