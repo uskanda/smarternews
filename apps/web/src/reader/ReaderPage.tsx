@@ -274,11 +274,35 @@ export function ReaderPage({ view }: { view: View }) {
 
   // Articles read during this visit stay in an unread list until the user changes the list or refreshes. A
   // change of order is the same list: what was kept moves to its place in the new order.
-  const listKey = JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
+  // Until the category or the feed the path names is known, the list has a key of its own: what is read in the
+  // meantime is kept under it, and carried over once the list turns out to be an unread or recently read one.
+  const pendingKey = inCategory || view === "feed" ? `pending:${view}:${params.slug ?? params.feedId ?? ""}` : null;
+  const pending = target === null && pendingKey !== null;
+  const listKey =
+    target === null && pendingKey !== null
+      ? pendingKey
+      : JSON.stringify(isSearch ? searchQuery : isMention ? { mention: mentionName } : { ...filter, order: undefined });
   const [kept, setKept] = useState<{ key: string; items: ArticleSummary[] }>({ key: listKey, items: [] });
-  if (kept.key !== listKey) setKept({ key: listKey, items: [] });
+  if (kept.key !== listKey) {
+    const settled = !pending && kept.key === pendingKey && (unreadOnly || recentlyRead);
+    setKept({ key: listKey, items: settled ? kept.items : [] });
+  }
   const sortKey = target ? sortKeyFor(target) : undefined;
-  const items = useMemo(() => mergeKept(fetched, kept.key === listKey ? kept.items : [], sortKey, sort), [fetched, kept, listKey, sortKey, sort]);
+  // The article open now, as the server last gave it. A row of it may be made from it before the list arrives.
+  const opened = useArticle(articleId).data;
+  // What is kept joins the list once it has arrived, so that a row read before then does not stand alone meanwhile.
+  // A kept row shows what arrived since it was kept, such as a translated title, with the flags it was kept with.
+  const arrived = active.data !== undefined;
+  const items = useMemo(() => {
+    if (!arrived) return fetched;
+    const fresh = new Map(fetched.map((item) => [item.id, item]));
+    if (opened) fresh.set(opened.id, opened);
+    const rows = (kept.key === listKey ? kept.items : []).map((item) => {
+      const latest = fresh.get(item.id);
+      return latest ? { ...latest, isRead: item.isRead, starred: item.starred, readAt: item.readAt } : item;
+    });
+    return mergeKept(fetched, rows, sortKey, sort);
+  }, [arrived, fetched, opened, kept, listKey, sortKey, sort]);
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
   // not in the recently read articles, which is where a mistake is put right, nor in search results, the
@@ -359,12 +383,15 @@ export function ReaderPage({ view }: { view: View }) {
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
-  /** Shows a change of the read state in the list: an unread or recently read list keeps the row. */
+  /**
+   * Shows a change of the read state in the list: an unread or recently read list keeps the row. An article opened
+   * before the list arrived, or from beyond the pages loaded, is not in the list: its row is made from the article.
+   */
   function showRead(id: number, isRead: boolean) {
     // Put back to unread by the user: scrolling past it does not read it again until the list is read anew.
     if (!isRead) scrollRead.exclude(id);
-    const summary = items.find((item) => item.id === id);
-    if ((unreadOnly || recentlyRead) && summary) {
+    const summary = items.find((item) => item.id === id) ?? (opened?.id === id ? opened : undefined);
+    if ((unreadOnly || recentlyRead || pending) && summary) {
       setKept((current) => ({
         key: listKey,
         items: [...current.items.filter((item) => item.id !== id), { ...summary, isRead }],
@@ -451,7 +478,6 @@ export function ReaderPage({ view }: { view: View }) {
   // Opening an unread article marks it as read, once per visit to that article. An article that waits for its
   // full content has it asked for: once read, it would no longer be fetched by itself. Its body is shown now, so
   // the server records the opening; marking read anywhere else does not.
-  const opened = useArticle(articleId).data;
   const recordOpened = useRecordOpened();
   const autoMarked = useRef<number | null>(null);
   useEffect(() => {
