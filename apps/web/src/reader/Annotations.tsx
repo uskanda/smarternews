@@ -1,5 +1,5 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { anchorOf, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
+import { anchorOf, checkHighlightQuote, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
 import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
@@ -541,15 +541,31 @@ export function AnnotatedBody({
     }
   }
 
+  /**
+   * Whether a selection can be highlighted at all. A quote the server refuses is not sent, nor written a note for:
+   * the reason is told, and the selection is kept to be narrowed.
+   */
+  function fits(anchor: HighlightAnchor): boolean {
+    const tooLong = checkHighlightQuote(anchor.quote);
+    if (tooLong !== null) toast({ message: tooLong });
+    return tooLong === null;
+  }
+  const highlightSelection = (anchor: HighlightAnchor) => {
+    if (fits(anchor)) void add(anchor, null);
+  };
+  const writeNote = (anchor: HighlightAnchor) => {
+    if (fits(anchor)) setWritingFor(anchor);
+  };
+
   const anchor = selected?.anchor ?? null;
-  useHotkeys({ h: anchor ? () => void add(anchor, null) : undefined });
+  useHotkeys({ h: anchor ? () => highlightSelection(anchor) : undefined });
 
   /** The actions a selection offers, the same in its menu and in the menu of a right click. */
   const choices = (selection: Selected) => [
     ...(selection.anchor
       ? [
-          { label: "ハイライト", run: () => void add(selection.anchor!, null) },
-          { label: "メモを書く", run: () => setWritingFor(selection.anchor) },
+          { label: "ハイライト", run: () => highlightSelection(selection.anchor!) },
+          { label: "メモを書く", run: () => writeNote(selection.anchor!) },
         ]
       : []),
     ...(selection.filterable ? [{ label: "隠すフィルターを作る…", run: () => setFilteringFor(selection.value) }] : []),

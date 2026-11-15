@@ -241,6 +241,67 @@ describe("highlighting a selection", () => {
     expect(stored(server)).toMatchObject([{ quote: "最後の段落", note: null }]);
   });
 
+  describe("a selection longer than a highlight can be", () => {
+    const TOO_LONG = "ハイライトする文字列は5000文字以内にしてください。選ぶ範囲を狭めてください。";
+    const LONG = "長".repeat(5001);
+
+    /** An article with a paragraph of 5001 characters, all of them selected. */
+    async function selectedTooLong() {
+      const server = makeServer();
+      const id = generated(server, `最初の段落です。\n\n${LONG}\n\n最後の段落です。`);
+      const view = renderApp({ server, route: `/all/${id}` });
+      const article = await opened();
+      const paragraph = await within(article).findByText(LONG);
+      selectText(article.querySelector(".article-body")!, LONG);
+      const toolbar = await screen.findByRole("toolbar", { name: "選んだ文字列" });
+      return { ...view, article, paragraph, toolbar };
+    }
+    const toldWhy = async () => expect(await screen.findByRole("status")).toHaveTextContent(TOO_LONG);
+    const sent = (requests: string[]) => requests.filter((request) => request.endsWith("/highlights"));
+
+    it("is not sent from the menu, and the reason is told", async () => {
+      const { server, user, requests, toolbar } = await selectedTooLong();
+      await user.click(within(toolbar).getByRole("button", { name: "ハイライト" }));
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("is not sent with h", async () => {
+      const { server, user, requests } = await selectedTooLong();
+      await user.keyboard("h");
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("is not sent from the menu of a right click", async () => {
+      const { server, user, requests, paragraph } = await selectedTooLong();
+      expect(fireEvent.contextMenu(paragraph, { button: 2, clientX: 40, clientY: 50 })).toBe(false);
+      await user.click(within(await screen.findByRole("menu", { name: "選んだ文字列の操作" })).getByRole("menuitem", { name: "ハイライト" }));
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("opens no dialog for a note, so that no note is written for nothing", async () => {
+      const { user, requests, toolbar } = await selectedTooLong();
+      await user.click(within(toolbar).getByRole("button", { name: "メモを書く" }));
+      await toldWhy();
+      expect(screen.queryByRole("dialog", { name: "メモを書いてハイライトする" })).toBeNull();
+      expect(sent(requests)).toEqual([]);
+    });
+
+    it("can be narrowed to as many characters as a highlight takes, and highlighted", async () => {
+      const { server, user, article } = await selectedTooLong();
+      selectText(article.querySelector(".article-body")!, LONG.slice(1));
+      await waitFor(() => expect(document.getSelection()?.toString()).toBe(LONG.slice(1)));
+      await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "ハイライト" }));
+      await waitFor(() => expect(stored(server)).toMatchObject([{ quote: LONG.slice(1) }]));
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
   it("is listed among the keys", async () => {
     const { user } = renderApp({ route: "/all" });
     await screen.findByRole("region", { name: "記事の一覧" });

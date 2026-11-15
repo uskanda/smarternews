@@ -96,10 +96,11 @@ export function messageFor(error: unknown): string {
   return sharedMessageFor(error, "表示できませんでした。ページを読み込み直してください。");
 }
 
-export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+/** A failure, said from its error or, for one the screen found before sending, in the `message` given. */
+export function ErrorNotice({ error, message, onRetry }: { error?: unknown; message?: string; onRetry?: () => void }) {
   return (
     <div role="alert" className="m-lg flex flex-wrap items-center gap-md rounded-md border border-error px-lg py-sm type-body-md text-error">
-      <span>{messageFor(error)}</span>
+      <span>{message ?? messageFor(error)}</span>
       {onRetry ? (
         <Button onClick={onRetry} className="text-on-surface">
           再試行
