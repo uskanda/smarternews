@@ -183,6 +183,81 @@ describe("the menu of an entry", () => {
   });
 });
 
+describe("moves in a row", () => {
+  const MOVES = (request: string) => request.startsWith("POST ") && request.endsWith("/move");
+  const feedsOfA = (server: TestServer, categoryId: number) =>
+    listFeeds(server.db)
+      .filter((feed) => feed.categoryId === categoryId)
+      .map((feed) => feed.title);
+
+  async function moveUp(user: ReturnType<typeof renderApp>["user"], name: string) {
+    fireEvent.contextMenu(link(name));
+    await user.click(await screen.findByRole("menuitem", { name: "上へ移動" }));
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  }
+
+  it("keeps the order after the last move when the answers arrive the other way round", async () => {
+    const { server, a } = seeded();
+    const { user, held, release } = await ready({ server, route: "/all", hold: MOVES });
+
+    await moveUp(user, "Z");
+    await moveUp(user, "Z");
+    expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  Z", "  X", "  Y"]);
+
+    // The newest answer first, as the network may hand them over.
+    for (let round = 0; round < 10 && held().length > 0; round += 1) {
+      await release(held().length - 1);
+      await wait(10);
+    }
+
+    expect(held()).toEqual([]);
+    expect(feedsOfA(server, a.id)).toEqual(["Z", "X", "Y"]);
+    expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  Z", "  X", "  Y"]);
+  });
+
+  it("keeps the order when a fetch of the feeds that started before the move answers after it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => void vi.useRealTimers());
+    const { server, a } = seeded();
+    let holding = false;
+    const { user, held, release } = await ready({
+      server,
+      route: "/all",
+      hold: (request) => holding && request === "GET /api/v1/feeds",
+      advanceTimers: (ms) => vi.advanceTimersByTimeAsync(ms).then(() => {}),
+    });
+
+    holding = true;
+    await act(() => vi.advanceTimersByTimeAsync(61_000));
+    await waitFor(() => expect(held()).toContain("GET /api/v1/feeds"));
+    holding = false;
+
+    await moveUp(user, "Z");
+    await waitFor(() => expect(feedsOfA(server, a.id)).toEqual(["X", "Z", "Y"]));
+    while (held().length > 0) await release(0);
+    await wait(10);
+
+    expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  X", "  Z", "  Y"]);
+  });
+
+  it("drops the moves after one that fails, shows the stored order and says so", async () => {
+    const { server, a } = seeded();
+    const { user, held, release, requests } = await ready({ server, route: "/all", hold: MOVES });
+
+    await moveUp(user, "Z");
+    await moveUp(user, "Z");
+    await release(0, "fail");
+
+    expect(await screen.findByText("並べ替えられませんでした。もう一度試してください。")).toBeInTheDocument();
+    await wait(10);
+    expect(held()).toEqual([]);
+    expect(requests.filter(MOVES)).toHaveLength(1);
+    // The server stored the first move before the connection broke; the second one was never sent.
+    expect(feedsOfA(server, a.id)).toEqual(["X", "Z", "Y"]);
+    await waitFor(() => expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  X", "  Z", "  Y"]));
+  });
+});
+
 describe("unsubscribing from the menu", () => {
   it("asks first, and removes the feed on yes", async () => {
     const { server, y } = seeded();

@@ -21,12 +21,13 @@
 
 ### Modified Capabilities
 
-- `web-shell`: 「並べ替えの失敗の扱い」に、続けた移動の応答の逆転、再取得との競合、続けた移動の失敗のシナリオを足す。
-- `mobile-shell`: 「並べ替えの失敗の扱い」に、続けた移動の失敗のシナリオを足す。
+- `web-shell`：要件「並べ替えの失敗の扱い」に、続けた移動の応答の逆転、再取得との競合、続けた移動の失敗のシナリオを足す。
+- `mobile-shell`：要件「並べ替えの失敗の扱い」に、続けた移動の失敗のシナリオを足す。
 
 ## Impact
 
 - `packages/client/src/order.ts`（移動の列）
 - `apps/web/src/shell/order.tsx`、`apps/mobile/src/shell/order.tsx`（`useNavMoves`）
-- Webのテストの土台（`apps/web/src/testing/harness.tsx`）に、応答を止めておく手段を足す
-- テスト：`packages/client/src/order.test.ts`、`apps/web/src/shell/order.test.tsx`、`apps/mobile/src/shell/order.test.tsx`
+- Webとアプリのテストの土台（`apps/web/src/testing/harness.tsx`、`apps/mobile/src/testing/app.tsx`）に、応答を止めておく手段を足す
+- 共有のパッケージのテスト：`packages/client/src/order.test.ts`
+- 画面のテスト：`apps/web/src/shell/order.test.tsx`、`apps/mobile/src/shell/order.test.tsx`
