@@ -216,6 +216,25 @@ function otherFeedsOf(db: Database, articleId: number): Article["otherFeeds"] {
     .map((row) => ({ articleId: num(row.id), feedId: num(row.feed_id), feedTitle: str(row.title) }));
 }
 
+/** The generated article a run wrote a feed article into; null when none did. */
+function summarizedInOf(db: Database, row: Row): Article["summarizedIn"] {
+  const id = numOrNull(row.summarized_in);
+  if (id === null) return null;
+  const target = db.prepare("SELECT title FROM articles WHERE id = ?").get(id);
+  return target ? { id, title: str(target.title) } : null;
+}
+
+/** The feed articles a run wrote into a generated article, in the order they were stored, without hidden ones. */
+function feedArticlesOf(db: Database, articleId: number): Article["feedArticles"] {
+  return db
+    .prepare(
+      `SELECT d.id, d.feed_id, d.title, f.title AS feed_title FROM articles d JOIN feeds f ON f.id = d.feed_id
+        WHERE d.summarized_in = ? AND NOT ${hiddenByFilters("d")} ORDER BY d.created_at, d.id`,
+    )
+    .all(articleId)
+    .map((row) => ({ articleId: num(row.id), feedId: num(row.feed_id), feedTitle: str(row.feed_title), title: str(row.title) }));
+}
+
 function fullContentOf(row: Row): FullContent | null {
   const body = strOrNull(row.full_content);
   if (body === null || str(row.full_content_status) !== "fetched") return null;
@@ -291,6 +310,8 @@ function toArticle(db: Database, row: Row): Article {
     previousArticleId: numOrNull(row.previous_article_id),
     previousArticles: previousArticlesOf(db, row),
     otherFeeds: otherFeedsOf(db, id),
+    summarizedIn: summarizedInOf(db, row),
+    feedArticles: str(row.origin) === "generated" ? feedArticlesOf(db, id) : [],
     refs: refsOf(db, id),
     updateNotes: updateNotesOf(db, row),
     topics: db

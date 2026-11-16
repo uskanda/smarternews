@@ -1911,6 +1911,61 @@ describe("an article that other feeds delivered too", () => {
   });
 });
 
+describe("a feed article and the generated article it was written into", () => {
+  function summarized() {
+    const server = makeServer();
+    const category = server.category("Tools");
+    const feed = insertFeed(server.db, { url: "https://lang.example.org/feed.xml", title: "Lang News", categoryId: category.id }, server.clock);
+    const delivered = seedFeedArticle(server.db, feed.id, { title: "Rust 2.0 is out", url: "https://news.example.org/rust-2" });
+    const alone = seedFeedArticle(server.db, feed.id, { title: "Alone", url: "https://news.example.org/alone" });
+    const story = server.article(category.id, { title: "Rust 2.0 released" });
+    const other = server.article(category.id, { title: "Unrelated story" });
+    server.db.prepare("UPDATE articles SET summarized_in = ? WHERE id = ?").run(story, delivered);
+    return { server, category, feed, delivered, alone, story, other };
+  }
+
+  it("leads from the feed article to the generated article", async () => {
+    const { server, delivered, story } = summarized();
+    const { user, path } = renderApp({ server, route: `/all/${delivered}` });
+    const pane = await screen.findByRole("article", { name: "記事" });
+    const section = await within(pane).findByRole("region", { name: "この記事をまとめた生成記事" });
+
+    await user.click(within(section).getByRole("link", { name: "Rust 2.0 released" }));
+
+    await waitFor(() => expect(path()).toBe(`/all/${story}`));
+    expect(await within(screen.getByRole("article", { name: "記事" })).findByRole("heading", { level: 2, name: "Rust 2.0 released" })).toBeInTheDocument();
+  });
+
+  it("leads from the generated article to the feed article, in the list of its feed", async () => {
+    const { server, feed, delivered, story } = summarized();
+    const { user, path } = renderApp({ server, route: `/all/${story}` });
+    const pane = await screen.findByRole("article", { name: "記事" });
+    const section = await within(pane).findByRole("region", { name: "まとめた配信記事" });
+    expect(section).toHaveTextContent("Lang News");
+
+    await user.click(within(section).getByRole("link", { name: "Rust 2.0 is out" }));
+
+    await waitFor(() => expect(path()).toBe(`/f/${feed.id}/${delivered}?read=1`));
+    expect(await within(screen.getByRole("article", { name: "記事" })).findByRole("heading", { level: 2, name: "Rust 2.0 is out" })).toBeInTheDocument();
+  });
+
+  it("shows no generated article for a feed article no run wrote into one", async () => {
+    const { server, alone } = summarized();
+    renderApp({ server, route: `/all/${alone}` });
+    const pane = await screen.findByRole("article", { name: "記事" });
+    await within(pane).findByRole("heading", { level: 2, name: "Alone" });
+    expect(within(pane).queryByRole("region", { name: "この記事をまとめた生成記事" })).toBeNull();
+  });
+
+  it("shows no feed articles for a generated article written without one", async () => {
+    const { server, other } = summarized();
+    renderApp({ server, route: `/all/${other}` });
+    const pane = await screen.findByRole("article", { name: "記事" });
+    await within(pane).findByRole("heading", { level: 2, name: "Unrelated story" });
+    expect(within(pane).queryByRole("region", { name: "まとめた配信記事" })).toBeNull();
+  });
+});
+
 describe("the recently read articles", () => {
   const at = (server: TestServer) => server.clock().toISOString();
 
