@@ -222,4 +222,29 @@ describe("dragging in the drawer after a long press", () => {
     offline = false;
     await waitFor(() => expect(rows()[0]).toBe(`category-${a.id}`));
   });
+
+  it("drops the moves after one that fails, shows the stored order and says so once", async () => {
+    const { server, a, b, c } = await seeded();
+    const moves = (request: string) => request.startsWith("POST ") && request.endsWith("/move");
+    const { requests, held, release } = await renderApp({ server, hold: moves });
+    await openDrawer();
+    await waitFor(() => expect(rows()).toHaveLength(12));
+    await layOut();
+
+    await (await drag(`category-${c.id}`, [mid(`category-${a.id}`) - 10]))();
+    await waitFor(() => expect(rows()[0]).toBe(`category-${c.id}`));
+    await layOut();
+    await (await drag(`category-${b.id}`, [mid(`category-${c.id}`) - 10]))();
+    await waitFor(() => expect(rows()[0]).toBe(`category-${b.id}`));
+
+    await release(0, "fail");
+
+    expect(await screen.findAllByText("並べ替えられませんでした。もう一度試してください。")).toHaveLength(1);
+    await act(async () => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+    expect(held()).toEqual([]);
+    expect(requests.filter(moves)).toHaveLength(1);
+    // The server stored the first move before the connection broke; the second one was never sent.
+    await eventually(async () => expect(await names(server)).toEqual(["C", "A", "B", "Events"]));
+    await waitFor(() => expect(rows()[0]).toBe(`category-${c.id}`));
+  });
 });
