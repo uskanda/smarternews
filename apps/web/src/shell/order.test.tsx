@@ -119,7 +119,7 @@ describe("the menu of an entry", () => {
     expect(path()).toBe(`/all/${newer}`);
     expect(screen.getByRole("menu")).toBeInTheDocument();
     // The open menu hides the rest of the page from the accessibility tree.
-    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "記事の操作", hidden: true })).getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
   });
 
   it("cannot move the first entry up or the last one down", async () => {

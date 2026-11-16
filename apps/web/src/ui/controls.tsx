@@ -11,16 +11,25 @@ const BUTTON: Record<Variant, string> = {
   quiet: "border-transparent text-primary underline underline-offset-4",
 };
 
+/** `sm` is `button-small` in DESIGN.md: the star and read switches on the line of details above an article. */
+type Size = "md" | "sm";
+
+const SIZE: Record<Size, string> = {
+  md: "px-md py-xs type-body-md",
+  sm: "px-sm py-0 type-label-sm",
+};
+
 export function Button({
   variant = "secondary",
+  size = "md",
   className = "",
   type = "button",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; ref?: Ref<HTMLButtonElement> }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; ref?: Ref<HTMLButtonElement> }) {
   return (
     <button
       type={type}
-      className={`inline-flex shrink-0 cursor-pointer items-center justify-center gap-xs rounded-md border px-md py-xs type-body-md disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON[variant]} ${className}`}
+      className={`inline-flex shrink-0 cursor-pointer items-center justify-center gap-xs rounded-md border disabled:cursor-not-allowed disabled:opacity-50 ${SIZE[size]} ${BUTTON[variant]} ${className}`}
       {...props}
     />
   );

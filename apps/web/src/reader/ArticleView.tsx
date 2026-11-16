@@ -290,6 +290,10 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
+/** The words of the star and read switches, the same above the headline and at the end of the article. */
+const starLabel = (article: Article) => (article.starred ? "スターを外す" : "スターを付ける");
+const readLabel = (article: Article) => (article.isRead ? "未読に戻す" : "既読にする");
+
 /** The article pane: what the story is, what it means for the reader, the text, and where it came from. */
 export function ArticleView({
   id,
@@ -405,27 +409,16 @@ export function ArticleView({
           )}
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
           {article.starred ? <StarMark /> : null}
+          {/* The star and the read state, within reach without scrolling to the end; the same switches stay there. */}
+          <span role="group" aria-label="スターと既読" className="flex flex-wrap items-center gap-xs">
+            <Button size="sm" aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
+              {starLabel(article)}
+            </Button>
+            <Button size="sm" onClick={() => onToggleRead(article)}>
+              {readLabel(article)}
+            </Button>
+          </span>
         </div>
-        {!delivered && article.categoryId !== null && article.topics.length > 0 ? (
-          // The topics that chose this article, each a way to the editor of that topic: where a miss is fixed.
-          // A long topic is cut to two lines on the screen; the whole of it stays in the link, to be read out.
-          <section aria-label="トピック" className="flex flex-col gap-xs">
-            <h3 className="type-label-sm text-on-surface-muted">トピック</h3>
-            <ul className="flex flex-col gap-xs type-body-md">
-              {article.topics.map((topic) => (
-                <li key={topic.id} className="min-w-0">
-                  <Link
-                    to={topicEditPath(article.categoryId!, topic.id)}
-                    title={topic.text}
-                    className="tap line-clamp-2 break-words text-primary underline underline-offset-4"
-                  >
-                    {topic.text}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none" {...filterSource(!originalTitleShown)}>
             <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
@@ -592,11 +585,31 @@ export function ArticleView({
             </ul>
           </section>
         ) : null}
-        <div className="flex flex-wrap gap-sm">
-          <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
-            {article.starred ? "スターを外す" : "スターを付ける"}
+        {!delivered && article.categoryId !== null && article.topics.length > 0 ? (
+          // The topics that chose this article, each a way to the editor of that topic: where a miss is fixed. They
+          // stand right before the mark of a miss, so that marking a miss and fixing its topic are side by side.
+          // A long topic is cut to two lines on the screen; the whole of it stays in the link, to be read out.
+          <section aria-label="トピック" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">トピック</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.topics.map((topic) => (
+                <li key={topic.id} className="min-w-0">
+                  <Link
+                    to={topicEditPath(article.categoryId!, topic.id)}
+                    title={topic.text}
+                    className="tap line-clamp-2 break-words text-primary underline underline-offset-4"
+                  >
+                    {topic.text}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <div role="group" aria-label="記事の操作" className="flex flex-wrap gap-sm">          <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
+            {starLabel(article)}
           </Button>
-          <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
+          <Button onClick={() => onToggleRead(article)}>{readLabel(article)}</Button>
           {delivered ? null : (
             <>
               <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>

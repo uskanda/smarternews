@@ -237,7 +237,7 @@ describe("the menu of a right click on the article", () => {
     expect(path()).toBe(`/f/${feed.id}/${id}`);
     expect(screen.getByRole("menu", { name: "選んだ文字列の操作" })).toBeInTheDocument();
     // The open menu hides the rest of the page from the accessibility tree.
-    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "記事の操作", hidden: true })).getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
   });
 });
 
