@@ -188,7 +188,7 @@ describe("adding a feed from the list of a category", () => {
     const { server, tools } = seeded();
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
-    await view.user.click(within(view.dialog).getByRole("button", { name: "閉じる" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "やめる" }));
     await view.user.click(within(await unsavedQuestion()).getByRole("button", { name: "編集を続ける" }));
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
@@ -202,7 +202,7 @@ describe("adding a feed from the list of a category", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     await view.user.click(within(list()).getByRole("button", { name: "購読フィードを追加" }));
-    await view.user.click(within(await screen.findByRole("dialog", { name: "購読フィードを追加" })).getByRole("button", { name: "閉じる" }));
+    await view.user.click(within(await screen.findByRole("dialog", { name: "購読フィードを追加" })).getByRole("button", { name: "やめる" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
@@ -464,7 +464,7 @@ describe("keys while a dialog is open", () => {
   it("does not move through the list behind the dialog for adding a feed", async () => {
     const { server, tools } = seeded();
     const view = await openAddDialog(`/c/${tools.slug}`, server);
-    within(view.dialog).getByRole("button", { name: "閉じる" }).focus();
+    within(view.dialog).getByRole("button", { name: "やめる" }).focus();
     await view.user.keyboard("j");
 
     expect(view.path()).toBe(`/c/${tools.slug}`);

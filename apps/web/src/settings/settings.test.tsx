@@ -38,9 +38,9 @@ function topic(server: TestServer, categoryId: number, text: string, interpreted
 }
 
 describe("the links to the sections", () => {
-  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "利用量", "トークン"];
+  const SECTIONS = ["カテゴリ", "購読フィード", "語の色付け", "読み手情報", "全体設定", "この端末の設定", "設定ファイル", "プロバイダー", "利用量", "アプリの接続", "トークン"];
 
-  it("lists the ten sections at the top, each pointing at its section", async () => {
+  it("lists the eleven sections at the top, each pointing at its section", async () => {
     renderApp({ route: "/settings" });
     await section("全体設定");
     await section("プロバイダー");
@@ -217,7 +217,7 @@ describe("editing a category", () => {
     await first.user.type(schedule, "05:00, 12:00, 18:00");
     await first.user.click(within(await section("カテゴリの設定")).getByRole("button", { name: "保存する" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("保存しました");
+    expect(await screen.findByRole("status")).toHaveTextContent("カテゴリを保存しました");
     expect(getCategory(server.db, category.id).schedule).toEqual(["05:00", "12:00", "18:00"]);
     first.unmount();
     renderApp({ server, route: `/settings/categories/${category.id}` });
@@ -497,7 +497,7 @@ describe("topics", () => {
 
     expect(listTopics(server.db, category.id).map((entry) => entry.text)).toEqual(["first topic", "second topic", "third topic"]);
     expect(await screen.findByRole("status")).toHaveTextContent("次の実行で解釈されます");
-    expect(screen.getByRole("button", { name: "いますぐ実行" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "いま実行" })).toBeEnabled();
     expect(requests.filter((request) => request.startsWith("POST") && request.endsWith("/runs"))).toEqual([]);
   });
 
@@ -1150,6 +1150,8 @@ describe("connecting the Android app", () => {
     renderApp({ route: "/settings" });
 
     expect(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" })).toBeInTheDocument();
+    expect(within(await section("アプリの接続")).getByRole("button", { name: "アプリ接続用のQRコードを表示する" })).toBeInTheDocument();
+    expect(within(await section("トークン")).queryByRole("button", { name: "アプリ接続用のQRコードを表示する" })).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "接続用のQRコード" })).not.toBeInTheDocument();
     expect(screen.getByText(/QRコードにはトークンが含まれます/)).toBeInTheDocument();
   });

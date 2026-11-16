@@ -68,10 +68,10 @@ describe("running a category now", () => {
     const category = server.category("Security");
     const { user, requests } = renderApp({ server, route: `/settings/categories/${category.id}` });
 
-    await user.click(await screen.findByRole("button", { name: "いますぐ実行" }));
+    await user.click(await screen.findByRole("button", { name: "いま実行" }));
 
     expect(await screen.findByText(/実行中です/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "いますぐ実行" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "いま実行" })).toBeDisabled());
     expect(requests.filter((request) => request === `POST /api/v1/categories/${category.id}/runs`)).toHaveLength(1);
   });
 });
@@ -116,7 +116,7 @@ describe("the latest run on the category page", () => {
     const section = await latest();
     await waitFor(() => expect(section).toHaveTextContent("成功"));
 
-    await user.click(within(section).getByRole("button", { name: "いますぐ実行" }));
+    await user.click(within(section).getByRole("button", { name: "いま実行" }));
 
     await waitFor(() => expect(section).toHaveTextContent(/待機中|実行中/));
     expect(section).not.toHaveTextContent("成功");

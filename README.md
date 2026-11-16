@@ -184,7 +184,7 @@ Duplicate removal is on by default. Switch it off in the global settings to see 
 
 ### Digests
 
-A digest sums up what arrived since the last one: an executive summary of up to 800 characters, then about three lines for each category with something worth telling. Each line links to the articles it is drawn from. Digests are made at the times of "ダイジェストを作る時刻" in the global settings, 7:00 and 19:00 by default in the configured time zone; an empty list makes them by hand only, with "今すぐ作る" on the page "ダイジェスト".
+A digest sums up what arrived since the last one: an executive summary of up to 800 characters, then about three lines for each category with something worth telling. Each line links to the articles it is drawn from. Digests are made at the times of "ダイジェストを作る時刻" in the global settings, 7:00 and 19:00 by default in the configured time zone; an empty list makes them by hand only, with "いま作る" on the page "ダイジェスト".
 
 - One digest is one call of the `digest` task. It reads at most 200 articles of the period: generated articles by importance, then feed articles newest first. Of a feed article only its title and its summary, or the first 300 characters of what the feed delivered, are given to the model; the full content never is. Feed articles of a feed without a category feed the executive summary only.
 - A period runs from the end of the last digest to now, and never more than 24 hours back. A period without an article makes no digest and calls no model. A digest that fails is not tried again by itself; the next one covers its period.
