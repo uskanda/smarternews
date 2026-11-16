@@ -19,6 +19,7 @@ export * from "./db/digests.ts";
 export * from "./digests/worker.ts";
 export * from "./db/term-highlights.ts";
 export * from "./db/filters.ts";
+export * from "./db/rules.ts";
 export * from "./db/list-views.ts";
 export * from "./db/mentions.ts";
 export * from "./db/misses.ts";

@@ -49,6 +49,7 @@ import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { ScopedRulesNote } from "./ScopedRulesNote.tsx";
 import { CategoryHistory } from "./CategoryHistory.tsx";
 import { TopicHistory } from "./TopicHistory.tsx";
 import { TopicRewrite } from "./TopicRewrite.tsx";
@@ -767,6 +768,7 @@ function DeleteCategory({ category }: { category: Category }) {
     void client.invalidateQueries({ queryKey: ["articles"] });
     void client.invalidateQueries({ queryKey: ["feeds"] });
     void client.invalidateQueries({ queryKey: ["filters"] });
+    void client.invalidateQueries({ queryKey: ["rules"] });
     // The annotations of the generated articles go with them.
     void client.invalidateQueries({ queryKey: ["annotations"] });
   }
@@ -821,6 +823,7 @@ function DeleteCategory({ category }: { category: Category }) {
         </p>
         {feedCount > 0 ? <p>購読フィード{feedCount}件は消えず、「未分類」へ移ります。その配信記事も残ります。</p> : null}
         <ScopedFiltersNote target={{ categoryId: category.id }} />
+        <ScopedRulesNote target={{ categoryId: category.id }} />
         <p>記事を残したまま収集だけを止めるには、無効にしてください。</p>
       </ConfirmDialog>
     </section>

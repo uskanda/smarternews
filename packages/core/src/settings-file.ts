@@ -12,6 +12,7 @@ import {
   type SettingsFileFilter,
   type SettingsFileFilterScope,
   type SettingsFileInput,
+  type SettingsFileRule,
   type ListViewTarget,
   type SettingsFileListView,
   type SettingsFileListViewTarget,
@@ -22,6 +23,7 @@ import { createCategory, findCategory, findCategoryBySlug, listCategories, order
 import { transaction, type Database } from "./db/database.ts";
 import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
 import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
+import { createRule, findSameRule, listRules, updateRule } from "./db/rules.ts";
 import { checkListViewTarget, listViewEntries, setListView } from "./db/list-views.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
@@ -106,6 +108,16 @@ function toFileFilters(db: Database): SettingsFileFilter[] {
   }));
 }
 
+function toFileRules(db: Database): SettingsFileRule[] {
+  return listRules(db).map((rule) => ({
+    scope: toFileScope(db, rule.scope),
+    // Written only when it is off: a rule is enabled unless the file says otherwise.
+    ...(rule.enabled ? {} : { enabled: false }),
+    conditions: rule.conditions,
+    actions: rule.actions,
+  }));
+}
+
 /** The list views that differ from the defaults, each entry named as the file names it, the defaults left out. */
 function toFileListViews(db: Database): SettingsFileListView[] {
   return listViewEntries(db).map(({ target, sort }) => {
@@ -132,6 +144,7 @@ export function exportSettings(db: Database): string {
     return list.length > 0 ? { subscriptions: list } : {};
   };
   const filters = toFileFilters(db);
+  const rules = toFileRules(db);
   const termGroups = listTermGroups(db).map((group) => ({ name: group.name, color: group.color, terms: group.terms.map((term) => term.text) }));
   const listViews = toFileListViews(db);
   const file: SettingsFileInput = {
@@ -159,6 +172,7 @@ export function exportSettings(db: Database): string {
     })),
     ...subscriptionsOf(null),
     ...(filters.length > 0 ? { filters } : {}),
+    ...(rules.length > 0 ? { rules } : {}),
     ...(termGroups.length > 0 ? { termGroups } : {}),
     ...(listViews.length > 0 ? { listViews } : {}),
   };
@@ -271,6 +285,39 @@ function refuseAt(path: string, message: string, code: FieldErrorCode = "no_such
   return new DomainError("invalid", `${path}: ${message}`, [{ path, message, code }]);
 }
 
+/** The scope of a filter or a rule of the file, tied to the category of that slug or the feed of that URL. */
+function fromFileScope(db: Database, scope: SettingsFileFilterScope, path: string): FilterScope {
+  if (scope === "all") return { type: "all" };
+  if ("category" in scope) {
+    const category = findCategoryBySlug(db, scope.category);
+    if (!category) throw refuseAt(`${path}.scope.category`, `no category "${scope.category}" in the file or on the server`);
+    return { type: "category", categoryId: category.id };
+  }
+  const feed = findFeedByUrl(db, scope.feed);
+  if (!feed) throw refuseAt(`${path}.scope.feed`, `no feed ${scope.feed} in the file or on the server`);
+  return { type: "feed", feedId: feed.id };
+}
+
+/**
+ * Stores the rules of the file, once its categories and feeds are stored. A rule that is registered already,
+ * with the same scope, conditions and actions, only takes the file's switch.
+ */
+function importRules(db: Database, file: SettingsFile, result: ImportResult, clock: Clock): void {
+  file.rules.forEach((rule, index) => {
+    const path = `rules.${index}`;
+    const problems = conditionProblems(rule.conditions, `${path}.conditions`);
+    if (problems.length > 0) throw new DomainError("invalid", `${problems[0]!.path}: ${problems[0]!.message}`, problems);
+    const input = { scope: fromFileScope(db, rule.scope, path), conditions: rule.conditions, actions: rule.actions, enabled: rule.enabled ?? true };
+    const same = findSameRule(db, input);
+    if (same) {
+      if (same.enabled !== input.enabled) updateRule(db, same.id, { enabled: input.enabled });
+      return;
+    }
+    createRule(db, input, clock);
+    result.rulesCreated += 1;
+  });
+}
+
 /**
  * Stores the filters of the file, once its categories and feeds are stored. A scope is tied to the category
  * of that slug, or the feed of that URL, on the server. A filter that is registered already only takes the
@@ -284,16 +331,7 @@ function importFilters(db: Database, file: SettingsFile, result: ImportResult, c
   for (const { filter, path, switchable } of entries) {
     const problems = conditionProblems(filter.conditions, `${path}.conditions`);
     if (problems.length > 0) throw new DomainError("invalid", `${problems[0]!.path}: ${problems[0]!.message}`, problems);
-    let scope: FilterScope = { type: "all" };
-    if (filter.scope !== "all" && "category" in filter.scope) {
-      const category = findCategoryBySlug(db, filter.scope.category);
-      if (!category) throw refuseAt(`${path}.scope.category`, `no category "${filter.scope.category}" in the file or on the server`);
-      scope = { type: "category", categoryId: category.id };
-    } else if (filter.scope !== "all") {
-      const feed = findFeedByUrl(db, filter.scope.feed);
-      if (!feed) throw refuseAt(`${path}.scope.feed`, `no feed ${filter.scope.feed} in the file or on the server`);
-      scope = { type: "feed", feedId: feed.id };
-    }
+    const scope = fromFileScope(db, filter.scope, path);
     const input: FilterCreate = { action: filter.action, scope, conditions: filter.conditions, enabled: filter.enabled ?? true };
     const same = findSameFilter(db, input);
     if (same) {
@@ -377,6 +415,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     feedsCreated: 0,
     feedsUpdated: 0,
     filtersCreated: 0,
+    rulesCreated: 0,
     termGroupsCreated: 0,
     highlightTermsCreated: 0,
     listViewsUpdated: 0,
@@ -431,6 +470,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     importSubscriptions(db, file.subscriptions, null, "subscriptions", result, clock);
 
     importFilters(db, file, result, clock);
+    importRules(db, file, result, clock);
     importTermGroups(db, file, result, clock);
     importListViews(db, file, result);
   });

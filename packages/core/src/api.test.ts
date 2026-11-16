@@ -115,6 +115,8 @@ describe("the shape of a search", () => {
     readAt: null,
     openedAt: null,
     starred: false,
+    followsStarred: false,
+    unreadFollowUps: 0,
     primaryUrl: null,
     refCount: 0,
     event: null,
