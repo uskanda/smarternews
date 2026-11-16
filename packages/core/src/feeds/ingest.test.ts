@@ -125,6 +125,15 @@ describe("subscribe", () => {
     expect(row.content_text).toBe("It is out.");
   });
 
+  it("keeps an embedded video as a link to it, and leaves the link out of the text for matching", async () => {
+    const s = setup([{ title: "Clip", key: "clip", content: '<p>Watch this.</p><video controls><source src="https://media.example.org/clip.mp4"></video>' }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, categoryId: createCategory(s.db, { name: "Tools", kind: "news" }, s.clock).id });
+    const [article] = s.list({ feed: feed.id });
+    const row = s.db.prepare("SELECT body, content_text FROM articles WHERE id = ?").get(article!.id)!;
+    expect(row.body).toBe("Watch this.\n\n[埋め込み（media.example.org）](https://media.example.org/clip.mp4)");
+    expect(row.content_text).toBe("Watch this.");
+  });
+
   it("refuses a page that is not a feed, and stores nothing", async () => {
     const s = setup(() => html("<html><body>Hello</body></html>"));
     await expect(subscribe(s.deps, { url: FEED_URL })).rejects.toMatchObject({ code: "invalid", message: expect.stringMatching(/not a feed/) });
