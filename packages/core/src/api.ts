@@ -563,6 +563,16 @@ export const articleSummarySchema = z.object({
    */
   openedAt: z.string().nullable(),
   starred: z.boolean(),
+  /**
+   * True for a generated article whose chain of earlier articles, at most 20, has a starred one: a follow-up of a
+   * story the reader starred. False for a feed article.
+   */
+  followsStarred: z.boolean(),
+  /**
+   * For a starred generated article, how many of the later articles of its story, followed at most 20 steps, are
+   * unread. Zero for any other article.
+   */
+  unreadFollowUps: z.number().int(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
   event: articleEventSchema.nullable(),
@@ -622,6 +632,11 @@ export const articleSchema = articleSummarySchema.extend({
    */
   previousArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
   /**
+   * The later articles on the story, newest first, at most 20: the articles that follow this one up, the ones that
+   * follow those up, and so on. It ends where the chain comes back on itself. Empty for an article without one.
+   */
+  laterArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
+  /**
    * The other feeds that delivered a feed article, in the order their copies were stored: one entry per
    * copy recorded as a duplicate of this article. Empty for an article without duplicates.
    */
@@ -680,6 +695,8 @@ export const articleListQuerySchema = z.object({
   kind: kindSchema.optional(),
   unread: z.enum(["true", "false"]).optional(),
   starred: z.enum(["true", "false"]).optional(),
+  /** Only the starred articles and those that follow a starred one up (`followsStarred`). */
+  starredStory: z.enum(["true"]).optional(),
   includeEnded: z.enum(["true", "false"]).optional(),
   minImportance: z.coerce.number().int().min(1).max(5).optional(),
   /**
@@ -1198,6 +1215,66 @@ export const filterArticlesQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 export type FilterArticlesQuery = z.infer<typeof filterArticlesQuerySchema>;
+
+// ---- rules -------------------------------------------------------------------------------------
+
+/** What a rule does to a feed article when it is first stored. */
+export const ruleActionSchema = z.enum(["star", "read", "notify", "summarize"]);
+export type RuleAction = z.infer<typeof ruleActionSchema>;
+export const RULE_ACTIONS = ruleActionSchema.options;
+
+/** The conditions and scope have the form of a filter's. */
+export const ruleSchema = z.object({
+  id: z.number().int(),
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema),
+  /** In the order of `RULE_ACTIONS`. */
+  actions: z.array(ruleActionSchema),
+  enabled: z.boolean(),
+  createdAt: z.string(),
+});
+export type Rule = z.infer<typeof ruleSchema>;
+
+const ruleFields = {
+  scope: filterScopeSchema,
+  conditions: filterFields.conditions,
+  actions: z
+    .array(ruleActionSchema)
+    .min(1, "a rule needs at least one action")
+    .refine((actions) => new Set(actions).size === actions.length, "an action is chosen twice"),
+  enabled: z.boolean(),
+};
+
+export const ruleCreateSchema = z.object({ ...ruleFields, enabled: ruleFields.enabled.optional() });
+export type RuleCreate = z.infer<typeof ruleCreateSchema>;
+
+export const ruleUpdateSchema = z.object(ruleFields).partial();
+export type RuleUpdate = z.infer<typeof ruleUpdateSchema>;
+
+/** A rule to count against the stored feed articles, without saving it. */
+export const rulePreviewSchema = z.object({ scope: ruleFields.scope, conditions: ruleFields.conditions });
+export type RulePreview = z.infer<typeof rulePreviewSchema>;
+
+export const rulePreviewResultSchema = z.object({ matchCount: z.number().int() });
+export type RulePreviewResult = z.infer<typeof rulePreviewResultSchema>;
+
+/** The feed articles a rule made ones to notify, after a time, newest first. */
+export const ruleNotificationsQuerySchema = z.object({
+  after: z.iso.datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+export type RuleNotificationsQuery = z.infer<typeof ruleNotificationsQuerySchema>;
+
+export const ruleNotificationSchema = z.object({
+  /** When a rule made the article one to notify. */
+  notifiedAt: z.string(),
+  feedTitle: z.string(),
+  article: articleSummarySchema,
+});
+export type RuleNotification = z.infer<typeof ruleNotificationSchema>;
+
+export const ruleNotificationListSchema = z.object({ items: z.array(ruleNotificationSchema) });
+export type RuleNotificationList = z.infer<typeof ruleNotificationListSchema>;
 
 // ---- term highlights ---------------------------------------------------------------------------
 
@@ -1728,6 +1805,16 @@ const settingsFileFilterSchema = z
   .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
 
+/** A rule in the file. Its scope is named as a filter's. */
+const settingsFileRuleSchema = z.object({
+  scope: settingsFileFilterScopeSchema,
+  /** Left out when the rule is enabled. */
+  enabled: z.boolean().optional(),
+  conditions: filterFields.conditions,
+  actions: ruleFields.actions,
+});
+export type SettingsFileRule = z.infer<typeof settingsFileRuleSchema>;
+
 /** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
 const settingsFileStopWordSchema = z.object({
   text: z.string().trim().min(1).max(100),
@@ -1767,6 +1854,8 @@ export const settingsFileSchema = z.object({
   /** Subscribed feeds that belong to no category. */
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
   filters: z.array(settingsFileFilterSchema).default([]),
+  /** Left out when there are none. */
+  rules: z.array(settingsFileRuleSchema).default([]),
   /** Read for files written before filters, and turned into hide filters over everything. Never written. */
   stopWords: z.array(settingsFileStopWordSchema).default([]),
   /** In the order of the groups. Left out when there are none. */
@@ -1786,6 +1875,7 @@ export const importResultSchema = z.object({
   feedsCreated: z.number().int(),
   feedsUpdated: z.number().int(),
   filtersCreated: z.number().int(),
+  rulesCreated: z.number().int(),
   termGroupsCreated: z.number().int(),
   highlightTermsCreated: z.number().int(),
   /** The entries of `listViews` that were applied. */

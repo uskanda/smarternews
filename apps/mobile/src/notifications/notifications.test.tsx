@@ -127,6 +127,22 @@ describe("the periodic check", () => {
     expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "Zero-day", body: "Security", data: { articleId: urgent } }]);
   });
 
+  it("notifies a follow-up of a starred story of importance 3 when set to importance 5 only", async () => {
+    const server = await makeServer();
+    const category = await server.category("Security");
+    const starred = await server.article(category.id, { title: "Breach disclosed", importance: 3 });
+    await server.sql("UPDATE articles SET starred = 1, is_read = 1 WHERE id = ?", starred);
+    await watching(server);
+    await server.advance(MINUTE);
+    const later = await server.article(category.id, { title: "Breach: lawsuit filed", importance: 3 });
+    await server.sql("UPDATE articles SET previous_article_id = ? WHERE id = ?", starred, later);
+    await server.article(category.id, { title: "Routine", importance: 3 });
+
+    expect(await runCheck()).toBe("notified");
+
+    expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "Breach: lawsuit filed", body: "Security", data: { articleId: later } }]);
+  });
+
   it("notifies both when set to everything", async () => {
     const server = await makeServer();
     const category = await server.category();
@@ -140,7 +156,50 @@ describe("the periodic check", () => {
     expect(notifications().shown.map((entry) => entry.content.title).sort()).toEqual(["Routine", "Zero-day"]);
   });
 
-  it("never notifies an article of a subscribed feed, even when set to everything", async () => {
+  it("notifies a feed article a rule chose, with its feed's name, even when set to importance 5 only", async () => {
+    const server = await makeServer();
+    const feed = await server.feed("Status");
+    await server.core("createRule", { scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "障害" }], actions: ["notify"] }, "$clock");
+    await watching(server, "important");
+    await server.advance(MINUTE);
+    // Dated long before the last check: what counts is when the rule chose it.
+    const chosen = await server.feedArticle(feed.id, { title: "障害のお知らせ", at: "2026-01-01T00:00:00.000Z" });
+    await server.core("applyRules", chosen, server.now().toISOString());
+    const other = await server.feedArticle(feed.id, { title: "メンテナンス" });
+    await server.core("applyRules", other, server.now().toISOString());
+
+    expect(await runCheck()).toBe("notified");
+
+    expect(notifications().shown.map((entry) => [entry.content.title, entry.content.body, entry.content.data])).toEqual([["障害のお知らせ", "Status", { articleId: chosen }]]);
+    notifications().shown.length = 0;
+    await runCheck();
+    expect(notifications().shown).toEqual([]);
+  });
+
+  it("does not notify the feed articles a rule chose before the device first looked at them", async () => {
+    const server = await makeServer();
+    const feed = await server.feed("Status");
+    await server.core("createRule", { scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "障害" }], actions: ["notify"] }, "$clock");
+    for (const title of ["障害 1", "障害 2"]) {
+      const id = await server.feedArticle(feed.id, { title });
+      await server.core("applyRules", id, server.now().toISOString());
+    }
+    await prepareDevice({ server });
+    await saveNotifySetting("important");
+    // A device that looked at generated articles before rules existed.
+    await saveCheckedAt(BEGINNING);
+
+    await runCheck();
+    expect(notifications().shown).toEqual([]);
+
+    await server.advance(MINUTE);
+    const later = await server.feedArticle(feed.id, { title: "障害 3" });
+    await server.core("applyRules", later, server.now().toISOString());
+    await runCheck();
+    expect(notifications().shown.map((entry) => entry.content.title)).toEqual(["障害 3"]);
+  });
+
+  it("never notifies an article of a subscribed feed that no rule chose, even when set to everything", async () => {
     const server = await makeServer();
     const category = await server.category();
     const feed = await server.feed("Blog", category.id);
