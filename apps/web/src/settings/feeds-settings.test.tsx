@@ -1044,7 +1044,9 @@ describe("fetching every feed now", () => {
 
     expect(await screen.findByText("1件の取得に失敗しました。サイトの指定で待っている1件は飛ばしました。")).toBeInTheDocument();
     expect(await rowOf("Down")).toHaveTextContent("取得に失敗");
-    expect(server.site.requests.slice(before).map((request) => request.url).sort()).toEqual(["https://blog.example.org/feed.xml", "https://down.example.org/feed.xml"]);
+    // Only the feeds themselves: the icon of the feed fetched first is looked for too.
+    const feedsFetched = server.site.requests.slice(before).map((request) => request.url).filter((url) => url.endsWith("/feed.xml"));
+    expect(feedsFetched.sort()).toEqual(["https://blog.example.org/feed.xml", "https://down.example.org/feed.xml"]);
   });
 
   it("starts nothing and says so when every feed is paused", async () => {

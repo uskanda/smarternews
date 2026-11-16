@@ -10,7 +10,8 @@ import { addHighlightTerm, createTermGroup } from "../db/term-highlights.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { purgeExpired } from "../runs/retention.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
-import { fakeFetch, html, xml } from "../testing/http.ts";
+import { fakeFetch, html, xml, type Route } from "../testing/http.ts";
+import { icoBytes, imageResponse, pngBytes } from "../testing/images.ts";
 import { fakeLlm } from "../testing/llm.ts";
 import { fakeTranslator } from "../testing/translation.ts";
 import type { Translator } from "../translation/adapter.ts";
@@ -57,11 +58,12 @@ function rss(items: Item[], title = "Example Feed"): string {
   return `<?xml version="1.0"?><rss version="2.0"><channel><title>${esc(title)}</title><link>https://example.org/</link>${body}</channel></rss>`;
 }
 
-function setup(initial: Item[] | (() => Response) = []) {
+/** `others` answers the requests besides the feed, such as those for its icon; the rest answer 404. */
+function setup(initial: Item[] | (() => Response) = [], others: Record<string, Route> = {}) {
   const db = createTestDb();
   const clock = fakeClock(START);
   let answer: () => Response = typeof initial === "function" ? initial : () => xml(rss(initial));
-  const fake = fakeFetch({ [FEED_URL]: () => answer() }, clock);
+  const fake = fakeFetch({ ...others, [FEED_URL]: () => answer() }, clock);
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
   const deps = { db, clock, fetcher };
   return {
@@ -450,6 +452,78 @@ describe("conditional requests", () => {
     const s = setup([{ title: "A" }]);
     await subscribe(s.deps, { url: FEED_URL });
     expect(Object.keys(s.requests[0]!.headers)).not.toContain("if-none-match");
+  });
+});
+
+describe("the feed's icon", () => {
+  const FAVICON = "https://example.org/favicon.ico";
+  const ico = () => imageResponse(icoBytes(), "image/x-icon");
+  const iconRequests = (s: ReturnType<typeof setup>) => s.requests.filter((request) => request.url === FAVICON).length;
+  const iconState = (s: ReturnType<typeof setup>, id: number) =>
+    s.db.prepare("SELECT icon_url, icon_checked_at FROM feeds WHERE id = ?").get(id) as { icon_url: string | null; icon_checked_at: string | null };
+
+  it("is looked for when the feed is subscribed, after its articles are stored", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(feed.iconUrl).toBe(FAVICON);
+    expect(feed.articleCount).toBe(1);
+    expect(iconState(s, feed.id)).toEqual({ icon_url: FAVICON, icon_checked_at: START });
+  });
+
+  it("takes the icon an Atom feed names before the site's", async () => {
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>A</title>
+      <link href="https://example.org/"/><icon>/icon.png</icon></feed>`;
+    const s = setup(() => xml(atom), { [FAVICON]: ico, "https://example.org/icon.png": () => imageResponse(pngBytes()) });
+    expect((await subscribe(s.deps, { url: FEED_URL })).iconUrl).toBe("https://example.org/icon.png");
+    expect(iconRequests(s)).toBe(0);
+  });
+
+  it("is not looked for again within 30 days, and is looked for again after them", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(10 * DAY);
+    await fetchFeed(s.deps, feed.id);
+    expect(iconRequests(s)).toBe(1);
+
+    s.clock.advance(21 * DAY);
+    await fetchFeed(s.deps, feed.id);
+    expect(iconRequests(s)).toBe(2);
+    expect(iconState(s, feed.id).icon_checked_at).toBe(s.clock().toISOString());
+  });
+
+  it("is looked for on the first fetch of a feed stored before icons existed", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = insertFeed(s.db, { url: FEED_URL, title: "Old", categoryId: null }, s.clock);
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).iconUrl).toBe(FAVICON);
+  });
+
+  it("is looked for on a not-modified answer once 30 days passed, trying the icon it had first", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(31 * DAY);
+    s.serve(() => new Response(null, { status: 304 }));
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "not_modified" });
+    expect(iconRequests(s)).toBe(2);
+    expect(iconState(s, feed.id)).toEqual({ icon_url: FAVICON, icon_checked_at: s.clock().toISOString() });
+  });
+
+  it("is forgotten when a later search finds none", async () => {
+    let icon = true;
+    const s = setup([{ title: "A" }], { [FAVICON]: () => (icon ? ico() : new Response("gone", { status: 404 })) });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    icon = false;
+    s.clock.advance(31 * DAY);
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).iconUrl).toBeNull();
+  });
+
+  it("never fails the fetch when every place fails", async () => {
+    const fail = () => new Response("down", { status: 500 });
+    const s = setup([{ title: "A" }], { "https://example.org/robots.txt": () => new Response("", { status: 404 }), "https://example.org/": fail, [FAVICON]: fail });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(feed).toMatchObject({ iconUrl: null, articleCount: 1, lastError: null });
+    expect(iconState(s, feed.id).icon_checked_at).toBe(START);
   });
 });
 
@@ -1064,6 +1138,8 @@ describe("full content when a feed is fetched", () => {
     const s = await withFullContent();
     s.clock.advance(HOUR);
     s.serve([{ title: "A (corrected)", key: "a", content: "<p>Better words.</p>" }]);
+    // What the subscription asked for its icon is not the point here.
+    const before = s.requests.length;
 
     await fetchFeed(s.deps, s.feed.id);
 
@@ -1073,7 +1149,7 @@ describe("full content when a feed is fetched", () => {
       fullContentStatus: "fetched",
       fullContent: { body: FULL_MARKDOWN, fetchedAt: START },
     });
-    expect(s.requests.map((request) => request.url).filter((url) => url !== FEED_URL)).toEqual([]);
+    expect(s.requests.slice(before).map((request) => request.url).filter((url) => url !== FEED_URL)).toEqual([]);
   });
 
   it("matches filters against what the feed delivered, never against the full content", async () => {
@@ -1321,6 +1397,14 @@ describe("a web feed", () => {
       expect(request.headers["if-modified-since"]).toBeUndefined();
     }
     expect(s.pageRequests()).toHaveLength(2);
+  });
+
+  it("looks for the icon in the page it fetched, without asking for it again", async () => {
+    const s = pageSetup(page([post(1)]).replace("</head>", '<link rel="icon" href="/fav.png"></head>'));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    expect(s.pageRequests()).toHaveLength(1);
+    expect(s.requests.map((request) => request.url)).toContain("https://news.example.org/fav.png");
+    expect(feed.iconUrl).toBeNull();
   });
 
   it("calls no model to subscribe, to fetch, or to store, for three web feeds", async () => {

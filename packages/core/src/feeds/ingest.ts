@@ -9,11 +9,13 @@ import {
   checkFeedCategory,
   checkTopicSource,
   FEED_RETENTION_DAYS,
+  feedIconState,
   fetchConditions,
   findFeed,
   findFeedByUrl,
   getFeed,
   insertFeed,
+  recordFeedIcon,
   recordFetchFailure,
   recordFetchSuccess,
 } from "../db/feeds.ts";
@@ -31,6 +33,7 @@ import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent, convertDescription, type ConvertedContent } from "./content.ts";
+import { findFeedIcon, ICON_RECHECK_DAYS, type IconSearch } from "./icon.ts";
 import { extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
@@ -294,6 +297,34 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   return { created: fresh.length, titled: feed.translate ? titled : [] };
 }
 
+/**
+ * Looks for the feed's icon when it was never looked for or was last looked for `ICON_RECHECK_DAYS` ago, and
+ * records what is found, none included. `fetched` is what the fetch brought: the icon the document names, and
+ * the page of a web feed. Without it (a not-modified answer) the icon found last time is tried first instead.
+ * Never throws: a search that breaks records nothing and is tried again on the next fetch. A feed deleted
+ * meanwhile records nothing either.
+ */
+async function refreshIcon(
+  deps: FeedDeps,
+  feedId: number,
+  now: Date,
+  fetched?: { named: string | null; page: IconSearch["page"] },
+): Promise<void> {
+  try {
+    const { iconUrl, checkedAt } = feedIconState(deps.db, feedId);
+    if (checkedAt !== null && now.getTime() - new Date(checkedAt).getTime() < ICON_RECHECK_DAYS * DAY) return;
+    const feed = findFeed(deps.db, feedId, now);
+    if (!feed) return;
+    const found = await findFeedIcon(
+      { fetcher: deps.fetcher, pages: pageFetcherOf(deps) },
+      { feedUrl: feed.url, siteUrl: feed.siteUrl, named: fetched ? fetched.named : iconUrl, page: fetched?.page },
+    );
+    recordFeedIcon(deps.db, feedId, { iconUrl: found, checkedAt: now.toISOString() });
+  } catch {
+    // The icon is no part of the fetch: the feed is shown without one until a later search finds it.
+  }
+}
+
 /** The site answered with an HTTP failure. The message is the reason recorded on the feed. */
 class FeedHttpError extends Error {
   readonly status: number;
@@ -326,7 +357,7 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   const response = await deps.fetcher.get(url, { headers });
   if (response.status === 304) return null;
   if (response.status < 200 || response.status >= 300) throw new FeedHttpError(response.status, url, response.headers["retry-after"]);
-  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
+  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null, page: undefined };
 }
 
 /**
@@ -338,7 +369,7 @@ async function downloadPage(deps: FeedDeps, url: string, selectors: PageSelector
   const page = await pageFetcherOf(deps).fetchPage(url);
   if (!page.ok && page.reason === "http") throw new FeedHttpError(page.status, url, page.retryAfter);
   if (!page.ok) throw new Error(pageFailureReason(page, url));
-  return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined };
+  return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined, page: { html: page.html, url: page.url } };
 }
 
 /** Fetches one subscribed feed and stores what is new. A failure is recorded on the feed, never thrown. */
@@ -355,6 +386,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
     if (!findFeed(db, feedId)) return { status: "failed", created: 0, error: "the feed was deleted" };
     if (result === null) {
       recordFetchSuccess(db, feedId, { now: now.toISOString() });
+      await refreshIcon(deps, feedId, now);
       return { status: "not_modified", created: 0 };
     }
     const stored = transaction(db, () => {
@@ -372,6 +404,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
     // After the articles are stored, and never failing the fetch: an article without a translated title is
     // translated when it is opened.
     if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
+    await refreshIcon(deps, feedId, now, { named: result.parsed.iconUrl, page: result.page });
     return { status: "updated", created: stored.created };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -403,7 +436,7 @@ async function firstPage(deps: FeedDeps, url: string, selectors: PageSelectors) 
     const message = "no article could be taken out of the page with these selectors";
     throw new DomainError("invalid", message, [{ path: "selectors.item", message, code: "no_items" }]);
   }
-  return { parsed: { title: extracted.title, siteUrl: page.url, items: extracted.items }, etag: undefined, lastModified: undefined };
+  return { parsed: { title: extracted.title, siteUrl: page.url, iconUrl: null, items: extracted.items }, etag: undefined, lastModified: undefined, page: { html: page.html, url: page.url } };
 }
 
 /**
@@ -445,5 +478,6 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
     return { feed: getFeed(db, feed.id, now), titled };
   });
   if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
-  return stored.feed;
+  await refreshIcon(deps, stored.feed.id, now, { named: result.parsed.iconUrl, page: result.page });
+  return findFeed(db, stored.feed.id, now) ?? stored.feed;
 }

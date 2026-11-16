@@ -270,7 +270,7 @@ describe("subscribed feeds", () => {
     }
     await s.post(`/api/v1/feeds/${feed.id}/fetch`);
 
-    expect(s.site.requests.length).toBe(12);
+    expect(s.site.requests.filter((request) => request.url === FEED)).toHaveLength(12);
     expect(await (await s.get("/api/v1/runs")).json()).toEqual([]);
     expect((await (await s.get("/api/v1/providers")).json()).llmCallsToday).toBe(0);
   });
