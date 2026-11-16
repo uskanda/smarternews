@@ -711,6 +711,44 @@ describe("full content of feeds in the settings file", () => {
   });
 });
 
+describe("feeds as topic sources in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) =>
+    `version: 1\ncategories:\n  - slug: tools\n    name: Tools\n    kind: news\n    subscriptions:\n      - url: ${A}\n${line}`;
+
+  it("writes the setting for the feeds that are topic sources only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    const news = createCategory(db, { name: "Tools", kind: "news" }, clock);
+    insertFeed(db, { url: A, title: "A", categoryId: news.id, topicSource: true }, clock);
+    insertFeed(db, { url: B, title: "B", categoryId: news.id }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { categories: Array<{ subscriptions: Array<Record<string, unknown>> }> };
+    expect(written.categories[0]!.subscriptions.map((entry) => entry.topicSource)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.topicSource])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without the setting as no topic source, and leaves a known feed as it is", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.topicSource).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { topicSource: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.topicSource).toBe(true);
+    importSettings(db, file("        topicSource: false\n"), clock);
+    expect(listFeeds(db)[0]!.topicSource).toBe(false);
+  });
+
+  it("refuses a feed of no category that is a topic source", () => {
+    expect(() => importSettings(createTestDb(), `version: 1\nsubscriptions:\n  - url: ${A}\n    topicSource: true\n`, clock)).toThrow(/topic source/);
+  });
+});
+
 describe("translation of a feed in the settings file", () => {
   const clock = fakeClock("2026-03-01T00:00:00.000Z");
   const A = "https://a.example.org/feed.xml";
@@ -864,6 +902,25 @@ describe("list views in the settings file", () => {
     expect(importSettings(other, written, clock).listViewsUpdated).toBe(1);
     expect(views(other)).toEqual([{ key: "feeds", sort: "oldest" }]);
     expect(getListView(db, `feed-${feed.id}`).sort).toBe("newest");
+  });
+
+  it("carry the relevance order to another server", () => {
+    const { db, tools } = changed();
+    updateListView(db, "all", { sort: "relevance" });
+    updateListView(db, `category-${tools.id}`, { sort: "relevance" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([
+      { list: "all", sort: "relevance" },
+      { list: { category: "tools" }, sort: "relevance" },
+    ]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(2);
+    const otherTools = listCategories(other).find((category) => category.slug === "tools")!;
+    expect(views(other)).toEqual([
+      { key: "all", sort: "relevance" },
+      { key: `category-${otherTools.id}`, sort: "relevance" },
+    ]);
   });
 
   it("are not written by a server where nothing was changed", () => {

@@ -1,4 +1,4 @@
-import { FEED_STATS_DAYS, pageSelectorsSchema, type Feed, type FeedFormat, type FeedMove, type FeedStats, type FeedUpdate, type PageSelectors } from "../api.ts";
+import { FEED_STATS_DAYS, pageSelectorsSchema, type Feed, type FeedFetchAllResult, type FeedFormat, type FeedMove, type FeedStats, type FeedUpdate, type PageSelectors } from "../api.ts";
 import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
@@ -7,6 +7,7 @@ import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { refreshFiltered } from "./filters.ts";
+import { feedRelevanceScores } from "./relevance.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 import { getSettings } from "./settings.ts";
 
@@ -51,8 +52,13 @@ function waitMs(intervalMinutes: number | null, failureCount: number, baseMinute
   return Math.min(interval * 2 ** Math.min(failureCount, 20), MAX_WAIT_MS);
 }
 
-/** After the wait, and no earlier than the time a Retry-After of the last failure asked for. */
+/**
+ * After the wait, and no earlier than the time a Retry-After of the last failure asked for. A request to fetch
+ * every feed stands above both: the feed is due since the request was made.
+ */
 function nextFetchFrom(row: Row, baseMinutes: number): Date {
+  const requested = strOrNull(row.fetch_requested_at);
+  if (requested !== null) return new Date(requested);
   const last = strOrNull(row.last_fetched_at);
   if (last === null) return new Date(str(row.created_at));
   const waited = new Date(last).getTime() + waitMs(numOrNull(row.interval_minutes), num(row.failure_count), baseMinutes);
@@ -94,12 +100,14 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     autoSummarize: bool(row.auto_summarize),
     translate: bool(row.translate),
     fetchFullContent: bool(row.fetch_full_content),
+    topicSource: bool(row.topic_source),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
     failureCount: num(row.failure_count),
     goneAt: strOrNull(row.gone_at),
     nextFetchAt: enabled ? nextFetchFrom(row, baseMinutes).toISOString() : null,
+    fetchRequestedAt: strOrNull(row.fetch_requested_at),
     articleCount: num(row.article_count),
     starredCount: num(row.starred_count),
     annotatedCount: num(row.annotated_count),
@@ -177,6 +185,23 @@ export function dueFeeds(db: Database, now: Date): Feed[] {
     .sort((a, b) => a.nextFetchAt!.localeCompare(b.nextFetchAt!) || a.id - b.id);
 }
 
+/**
+ * Asks for every enabled feed to be fetched now, without fetching anything: each becomes due at `now`, whatever
+ * its interval and its failures in a row say, and the poller fetches them one at a time. A feed that waits for
+ * the time a Retry-After gave is passed by and counted as skipped: the site said when to come back. Disabled
+ * feeds are in neither count.
+ */
+export function requestFetchAll(db: Database, now: Date): FeedFetchAllResult {
+  const requestedAt = now.toISOString();
+  // Both are times written by `toISOString`, so they compare as text.
+  const waiting = "retry_after_until IS NOT NULL AND retry_after_until > ?";
+  return transaction(db, () => {
+    const skipped = num(db.prepare(`SELECT count(*) AS skipped FROM feeds WHERE enabled = 1 AND ${waiting}`).get(requestedAt)!.skipped);
+    const requested = num(db.prepare(`UPDATE feeds SET fetch_requested_at = ? WHERE enabled = 1 AND NOT (${waiting})`).run(requestedAt, requestedAt).changes);
+    return { requested, skipped, requestedAt };
+  });
+}
+
 /** A feed may belong to a news category or to none: an event category lists events by day. */
 export function checkFeedCategory(db: Database, categoryId: number | null | undefined): void {
   if (categoryId === null || categoryId === undefined) return;
@@ -189,6 +214,17 @@ export function checkFeedCategory(db: Database, categoryId: number | null | unde
       { path: "categoryId", message: "must be a news category or none", code: "not_allowed" },
     ]);
   }
+}
+
+/**
+ * Only a feed of a category can be a source of its topics; a feed belongs to a news category or to none, so the
+ * one to refuse is a feed of none.
+ */
+export function checkTopicSource(topicSource: boolean | undefined, categoryId: number | null | undefined): void {
+  if (topicSource !== true || (categoryId !== null && categoryId !== undefined)) return;
+  throw new DomainError("invalid", "only a feed of a news category can be a topic source", [
+    { path: "topicSource", message: "the feed must belong to a news category", code: "not_allowed" },
+  ]);
 }
 
 function lastPosition(db: Database, categoryId: number | null): number {
@@ -257,6 +293,8 @@ export interface NewFeed {
   translate?: boolean;
   /** Fetch the full content of the articles this feed delivers from now on. */
   fetchFullContent?: boolean;
+  /** Offer the feed's articles to the runs of its category as candidates. Only for a feed of a category. */
+  topicSource?: boolean;
 }
 
 /** Stores a feed without fetching it. Refuses a URL that is already subscribed. */
@@ -266,6 +304,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   }
   checkFeedCategory(db, input.categoryId);
+  checkTopicSource(input.topicSource, input.categoryId);
   const format = input.format ?? "feed";
   checkSelectorsFit(format, input.selectors);
   if (format === "page" && input.selectors === undefined) {
@@ -276,8 +315,9 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
-          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors,
+          relevance_score, topic_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -296,6 +336,9 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.fetchFullContent ? now : null,
       format,
       input.selectors ? JSON.stringify(input.selectors) : null,
+      // A new feed has too few articles of its own: it takes the average of the others until the next count.
+      feedRelevanceScores(db, clock()).fallback,
+      input.topicSource ? 1 : 0,
     );
   return getFeed(db, num(result.lastInsertRowid), clock());
 }
@@ -317,6 +360,8 @@ function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefi
 export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
+  // A feed that leaves its category keeps the switch: it counts again once the feed is in a category.
+  checkTopicSource(patch.topicSource, patch.categoryId !== undefined ? patch.categoryId : current.categoryId);
   checkSelectorsFit(current.format, patch.selectors);
   transaction(db, () => {
     // Used from the next fetch on; the articles stored before stay as they are.
@@ -324,6 +369,8 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
     if (patch.title !== undefined) db.prepare("UPDATE feeds SET title = ?, title_set_by_user = 1 WHERE id = ?").run(patch.title, id);
     if (patch.intervalMinutes !== undefined) db.prepare("UPDATE feeds SET interval_minutes = ? WHERE id = ?").run(patch.intervalMinutes, id);
     if (patch.enabled !== undefined) db.prepare("UPDATE feeds SET enabled = ? WHERE id = ?").run(patch.enabled ? 1 : 0, id);
+    // A paused feed is not fetched, so a request to fetch every feed no longer stands for it.
+    if (patch.enabled === false) db.prepare("UPDATE feeds SET fetch_requested_at = NULL WHERE id = ?").run(id);
     if (patch.autoSummarize !== undefined && patch.autoSummarize !== current.autoSummarize) {
       db.prepare("UPDATE feeds SET auto_summarize = ?, auto_summarize_since = ? WHERE id = ?").run(
         patch.autoSummarize ? 1 : 0,
@@ -341,6 +388,7 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
     }
     // Nothing is translated here: the articles the feed already has are translated when they are opened.
     if (patch.translate !== undefined) db.prepare("UPDATE feeds SET translate = ? WHERE id = ?").run(patch.translate ? 1 : 0, id);
+    if (patch.topicSource !== undefined) db.prepare("UPDATE feeds SET topic_source = ? WHERE id = ?").run(patch.topicSource ? 1 : 0, id);
     if (patch.categoryId !== undefined && patch.categoryId !== current.categoryId) {
       // It goes last among the feeds it joins.
       db.prepare("UPDATE feeds SET position = ? WHERE id = ?").run(lastPosition(db, patch.categoryId) + 1, id);
@@ -382,6 +430,7 @@ export function recordFetchSuccess(db: Database, id: number, result: FetchSucces
   db.prepare(
     `UPDATE feeds
         SET last_fetched_at = ?, last_succeeded_at = ?, last_error = NULL, failure_count = 0, retry_after_until = NULL, gone_at = NULL,
+            fetch_requested_at = NULL,
             etag = CASE WHEN ? THEN ? ELSE etag END,
             last_modified = CASE WHEN ? THEN ? ELSE last_modified END,
             title = CASE WHEN title_set_by_user = 0 AND ? <> '' THEN ? ELSE title END,
@@ -413,7 +462,7 @@ export interface FetchFailure {
 export function recordFetchFailure(db: Database, id: number, result: FetchFailure): void {
   db.prepare(
     `UPDATE feeds
-        SET last_fetched_at = ?, last_error = ?, failure_count = failure_count + 1, retry_after_until = ?,
+        SET last_fetched_at = ?, last_error = ?, failure_count = failure_count + 1, retry_after_until = ?, fetch_requested_at = NULL,
             gone_at = CASE WHEN ? THEN coalesce(gone_at, ?) ELSE NULL END
       WHERE id = ?`,
   ).run(result.now, result.error.slice(0, 500), result.retryAfterUntil ?? null, result.gone ? 1 : 0, result.now, id);
