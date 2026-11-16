@@ -36,6 +36,9 @@ import {
   feedUpdateSchema,
   feedStats,
   topicStats,
+  siteStats,
+  blockSite,
+  unblockSite,
   findCategoryBySlug,
   getArticle,
   getDigest,
@@ -323,6 +326,13 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(listTopics(db, category.id));
   });
   api.get("/categories/:id/topic-stats", (c) => c.json(topicStats(db, idParam(c, "category"), clock())));
+  // The sites of the category's candidates, and the sites whose candidates are rejected before the judge. No model.
+  api.get("/categories/:id/site-stats", (c) => c.json(siteStats(db, idParam(c, "category"), clock())));
+  api.put("/categories/:id/blocked-sites/:host", (c) => c.json(blockSite(db, idParam(c, "category"), c.req.param("host") ?? "", clock())));
+  api.delete("/categories/:id/blocked-sites/:host", (c) => {
+    unblockSite(db, idParam(c, "category"), c.req.param("host") ?? "");
+    return c.body(null, 204);
+  });
   api.post("/categories/:id/topics", async (c) =>
     c.json(createTopic(db, idParam(c, "category"), parse(topicCreateSchema, await jsonBody(c)), clock), 201),
   );

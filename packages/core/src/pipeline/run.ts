@@ -24,6 +24,7 @@ import {
   type PendingCandidate,
 } from "../db/candidates.ts";
 import { getCategory } from "../db/categories.ts";
+import { blockedHosts } from "../db/sites.ts";
 import { transaction, type Database } from "../db/database.ts";
 import { replaceMentions } from "../db/mentions.ts";
 import { recentMissTitles } from "../db/misses.ts";
@@ -33,6 +34,7 @@ import { getSettings } from "../db/settings.ts";
 import { deliveredText, listTopicSourceArticles, recordSummarizedIn } from "../db/topic-sources.ts";
 import { applyInterpretation, listTopics } from "../db/topics.ts";
 import type { Fetcher } from "../fetch/http.ts";
+import { candidateHost } from "../fetch/url.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { LlmLimitError, type CallBudget, type TaskRunner } from "../llm/runner.ts";
 import { llmSearchedSince } from "../runs/llm-search-reduction.ts";
@@ -224,8 +226,16 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
   }
   if (isNews) collectTopicSources(ctx, topics, window.since!, found, isSeen);
 
-  const fresh = [...found.values()].filter((entry) => !isSeen(entry.candidate.url) && ![...entry.aliases].some(isSeen));
-  ctx.stats.collected = fresh.length;
+  const unseen = [...found.values()].filter((entry) => !isSeen(entry.candidate.url) && ![...entry.aliases].some(isSeen));
+  ctx.stats.collected = unseen.length;
+
+  // The sites the reader blocked in the category: rejected before the date is looked at and before any model sees them.
+  const blocked = blockedHosts(ctx.db, ctx.category.id);
+  const fresh: Found[] = [];
+  for (const entry of unseen) {
+    if (blocked.has(hostOf(entry.candidate))) store(ctx, entry, "rejected", reasonText("blocked-site", ctx.settings.outputLanguage), null, "blocked-site");
+    else fresh.push(entry);
+  }
   if (!isNews) return fresh;
 
   // News without a publication time cannot be placed in the window: rejected before any model sees it.
@@ -235,6 +245,11 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     else store(ctx, entry, "rejected", reasonText("no-date", ctx.settings.outputLanguage), null, "no-date");
   }
   return dated;
+}
+
+/** The site of a candidate, as it is stored and blocked. */
+function hostOf(candidate: RawCandidate): string {
+  return candidateHost(candidate.url, candidate.siteUrl);
 }
 
 /**
@@ -289,6 +304,7 @@ function store(
     title: candidate.title,
     snippet: candidate.snippet,
     siteName: candidate.siteName,
+    siteHost: hostOf(candidate),
     publishedAt: candidate.publishedAt?.toISOString() ?? null,
     sourceKind: candidate.sourceKind,
     status,

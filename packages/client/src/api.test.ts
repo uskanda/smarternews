@@ -283,6 +283,21 @@ describe("the API client", () => {
     await expect(api.topicStats(999)).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("reads the sites of a category, blocks one and stops blocking it", async () => {
+    const { api, server, seen } = setup();
+    const category = server.category();
+
+    expect(await api.blockSite(category.id, "www.example.org")).toMatchObject({ host: "example.org" });
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/blocked-sites/www.example.org`);
+    expect((await api.siteStats(category.id)).blocked.map((site) => site.host)).toEqual(["example.org"]);
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/site-stats`);
+
+    await api.unblockSite(category.id, "example.org");
+    expect(seen.at(-1)!.url).toBe(`/api/v1/categories/${category.id}/blocked-sites/example.org`);
+    expect((await api.siteStats(category.id)).blocked).toEqual([]);
+    await expect(api.unblockSite(category.id, "example.org")).rejects.toMatchObject({ kind: "not_found" });
+  });
+
   it("reads the versions of a topic and of a category, and goes back to a version of a topic", async () => {
     const { api, server, seen } = setup();
     const category = server.category();

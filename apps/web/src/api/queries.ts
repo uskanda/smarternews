@@ -515,8 +515,11 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
       markStale(["counts"]);
       // A miss changes how many misses a topic has had since its interpretation.
       if (variables.missed !== undefined) markStale(["topics"]);
-      // Misses and stars are counted in the stats of the topics.
-      if (variables.missed !== undefined || variables.starred !== undefined) markStale(["topic-stats"]);
+      // Misses and stars are counted in the stats of the topics and of the sites.
+      if (variables.missed !== undefined || variables.starred !== undefined) {
+        markStale(["topic-stats"]);
+        markStale(["site-stats"]);
+      }
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) markStale(["articles"]);
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
@@ -546,6 +549,12 @@ export function useTopics(categoryId: number | null) {
 export function useTopicStats(categoryId: number) {
   const { api } = useApp();
   return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
+}
+
+/** What the sites of the category's candidates brought in the last 30 days, and the sites blocked in it. */
+export function useSiteStats(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["site-stats", categoryId], queryFn: () => api.siteStats(categoryId) });
 }
 
 /** The versions of a topic, newest first. Stale once the topic is saved or goes back to a version. */

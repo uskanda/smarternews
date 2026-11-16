@@ -686,7 +686,17 @@ describe("topics", () => {
 
 describe("the stats of the topics", () => {
   /** Stores a candidate of the topic collected now: rejected by the judge unless it says otherwise. */
-  function candidate(server: TestServer, categoryId: number, topicId: number, options: { siteName?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | "missed-follow-up" | "stopped-follow-up" | null; sourceKind?: "news-search" | "subscription" } = {}) {
+  function candidate(
+    server: TestServer,
+    categoryId: number,
+    topicId: number,
+    options: {
+      host?: string;
+      status?: "pending" | "rejected";
+      reasonCode?: "below-minimum" | "over-limit" | "no-date" | "blocked-site" | "missed-follow-up" | "stopped-follow-up" | null;
+      sourceKind?: "news-search" | "subscription";
+    } = {},
+  ) {
     const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
     insertCandidate(server.db, {
       categoryId,
@@ -695,7 +705,8 @@ describe("the stats of the topics", () => {
       fetchable: true,
       title: "A page",
       snippet: "",
-      siteName: options.siteName ?? "",
+      siteName: "A site",
+      siteHost: options.host ?? "",
       publishedAt: null,
       sourceKind: options.sourceKind ?? "news-search",
       status: options.status ?? "rejected",
@@ -711,8 +722,9 @@ describe("the stats of the topics", () => {
     const server = makeServer();
     const category = server.category("Security");
     const flaws = topic(server, category.id, "exploited flaws", true);
-    candidate(server, category.id, flaws.id, { siteName: "ads.example" });
-    candidate(server, category.id, flaws.id, { siteName: "ads.example", reasonCode: "below-minimum" });
+    candidate(server, category.id, flaws.id, { host: "ads.example" });
+    candidate(server, category.id, flaws.id, { host: "ads.example", reasonCode: "below-minimum" });
+    candidate(server, category.id, flaws.id, { host: "blocked.example", reasonCode: "blocked-site" });
     candidate(server, category.id, flaws.id, { status: "pending", sourceKind: "subscription" });
     candidate(server, category.id, flaws.id, { reasonCode: "missed-follow-up" });
     candidate(server, category.id, flaws.id, { reasonCode: "stopped-follow-up" });
@@ -726,9 +738,10 @@ describe("the stats of the topics", () => {
     expect(regions.indexOf("トピックの成績")).toBe(regions.indexOf("トピック") + 1);
     const row = await within(stats).findByRole("listitem");
     expect(row).toHaveAttribute("id", `topic-stats-${flaws.id}`);
-    await waitFor(() => expect(row).toHaveTextContent("集めた候補5件（ニュース検索 4、購読フィード 1）"));
+    await waitFor(() => expect(row).toHaveTextContent("集めた候補6件（ニュース検索 5、購読フィード 1）"));
     expect(row).toHaveTextContent("判定での除外1件");
     expect(row).toHaveTextContent("基準未満1件");
+    expect(row).toHaveTextContent("サイトの除外1件");
     expect(row).toHaveTextContent("印のある記事の続報2件");
     expect(row).toHaveTextContent("作った記事2件");
     expect(row).toHaveTextContent("外れ1/2件（50%）");
