@@ -7,4 +7,4 @@
 
 ## 2. 全体の確認
 
-- [x] 2.1 `make verify` と `openspec validate discard-stale-filter-preview --strict` が通ることを確かめる。`make verify` のうち、この変更の外にある失敗（ほかの変更の文書のtextlintと用語、サンドボックスが置く読めないファイルでの `check:private`）は、この変更の対象にしない
+- [x] 2.1 `make verify` と `openspec validate discard-stale-filter-preview --strict` が通ることを確かめる。`make verify` のうち、この変更の外にある失敗（ほかの変更の文書のtextlintと用語、sandboxが置く読めないファイルでの `check:private`）は、この変更の対象にしない

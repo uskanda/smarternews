@@ -92,9 +92,9 @@ function NoDigest() {
     <div className="flex flex-col gap-xs type-body-md">
       <p>ダイジェストはまだありません。</p>
       {schedule === undefined ? null : schedule.length > 0 ? (
-        <p className="text-on-surface-muted">毎日 {schedule.join("、")} に作ります。「今すぐ作る」でも作れます。</p>
+        <p className="text-on-surface-muted">毎日 {schedule.join("、")} に作ります。「いま作る」でも作れます。</p>
       ) : (
-        <p className="text-on-surface-muted">時刻では作りません。「今すぐ作る」で作ってください。作る時刻は設定の全体設定で決めます。</p>
+        <p className="text-on-surface-muted">時刻では作りません。「いま作る」で作ってください。作る時刻は設定の全体設定で決めます。</p>
       )}
     </div>
   );
@@ -135,7 +135,7 @@ function BuildNow({ building }: { building: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-md">
       <Button onClick={() => void build()} disabled={building || asking}>
-        今すぐ作る
+        いま作る
       </Button>
       <p role="status" className="type-body-md">
         {message ?? (building ? "作っています。できあがると表示されます。" : null)}
