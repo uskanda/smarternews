@@ -36,6 +36,8 @@ function CandidateItem({ candidate, showTopics, categoryId = null }: { candidate
       <span className="type-body-md">{candidate.reason}</span>
       <span className="flex flex-wrap gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
         {candidate.siteName ? <span>{candidate.siteName}</span> : null}
+        {/* A page a subscribed feed delivered, not one a topic's own sources found. */}
+        {candidate.sourceKind === "subscription" ? <span>購読フィード</span> : null}
         {showTopics
           ? candidate.topics.map((topic) =>
               categoryId === null ? (

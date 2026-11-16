@@ -186,10 +186,10 @@ describe("the digests page", () => {
     const { user, requests } = renderApp({ server, route: "/digests" });
     await screen.findByText("ダイジェストはまだありません。");
 
-    await user.click(screen.getByRole("button", { name: "今すぐ作る" }));
+    await user.click(screen.getByRole("button", { name: "いま作る" }));
 
     expect(await screen.findByText(/作っています/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "今すぐ作る" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "いま作る" })).toBeDisabled());
     expect(requests.filter((request) => request === "POST /api/v1/digests")).toHaveLength(1);
 
     release();
@@ -197,7 +197,7 @@ describe("the digests page", () => {
     await vi.advanceTimersByTimeAsync(5_500);
 
     expect(await within(await screen.findByRole("region", { name: "ダイジェスト" })).findByText("Fresh summary")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "今すぐ作る" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "いま作る" })).toBeEnabled());
     expect(screen.queryByText(/作っています/)).not.toBeInTheDocument();
   });
 
@@ -206,7 +206,7 @@ describe("the digests page", () => {
     const { user } = renderApp({ server, route: "/digests" });
     await screen.findByText("ダイジェストはまだありません。");
 
-    await user.click(screen.getByRole("button", { name: "今すぐ作る" }));
+    await user.click(screen.getByRole("button", { name: "いま作る" }));
 
     expect(await screen.findByText(/期間内に記事がない/)).toBeInTheDocument();
     expect(server.llmRequests.digest).toHaveLength(0);
@@ -218,7 +218,7 @@ describe("the digests page", () => {
     const { user } = renderApp({ server, route: "/digests" });
     await screen.findByText("ダイジェストはまだありません。");
 
-    await user.click(screen.getByRole("button", { name: "今すぐ作る" }));
+    await user.click(screen.getByRole("button", { name: "いま作る" }));
 
     expect(await screen.findByText(/1日の上限/)).toBeInTheDocument();
   });
@@ -237,7 +237,7 @@ describe("the digests page", () => {
     await screen.findByText("ダイジェストはまだありません。");
     server.digests.buildNow();
 
-    await user.click(screen.getByRole("button", { name: "今すぐ作る" }));
+    await user.click(screen.getByRole("button", { name: "いま作る" }));
 
     expect(await screen.findByText(/すでに作っています/)).toBeInTheDocument();
     release();

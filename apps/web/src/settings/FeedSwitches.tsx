@@ -25,6 +25,21 @@ export function Translate({ id, checked, onChange }: { id: string; checked: bool
 }
 
 /**
+ * The switch that makes a feed a source of its category's topics. Where its articles go, and that judging them takes
+ * the model, is said beside it, before it is chosen. Shown only for a feed of a category.
+ */
+export function TopicSource({ id, checked, onChange }: { id: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <div className="flex flex-col gap-xs">
+      <Checkbox label="トピックの取得元にする" checked={checked} onChange={(event) => onChange(event.target.checked)} aria-describedby={id} />
+      <p id={id} className="type-label-sm text-on-surface-muted">
+        実行のたびに、対象期間内に届いた記事を、カテゴリのトピックの候補にします。判定にLLMを使います。記事は一覧にそのまま残ります。
+      </p>
+    </div>
+  );
+}
+
+/**
  * The switch for full content. That the page of every article is fetched, and only for articles still to come,
  * is said beside it, before it is chosen.
  */
