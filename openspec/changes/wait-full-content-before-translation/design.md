@@ -2,7 +2,7 @@
 
 ## Context
 
-- サーバーの`TranslationService.translateArticle`は、進行中の翻訳を記事ごとに`#underWay`で共有する。2つ目の依頼は1つ目のPromiseを受け取る。
+- サーバーの`TranslationService`の`translateArticle`は、進行中の翻訳を記事ごとに`#underWay`で共有する。2つ目の依頼は1つ目のPromiseを受け取る。
 - `#translateArticle`は、保存のトランザクションの中で題と元の文を読み直し、翻訳を始めたときと違えば`unavailable`で失敗する。元の文は、全文が`fetched`なら全文、それ以外は配信された内容である。
 - 画面の`useArticleTranslation`の問い合わせのキーには全文の`fetchedAt`が入る。全文が届くとキーが変わり、2つ目の翻訳が送られる。
 - 記事を開いた直後は、子の`ArticleView`のeffectが、全文の取得を始める親の`ReaderPage`のeffectより先に走る。このため、`fullContent.fetching`だけを見ると、取得中の印が立つ前に翻訳が始まる。
