@@ -28,6 +28,8 @@ export interface NewCandidate {
   reasonCode: ReasonCode | null;
   importance: number | null;
   topicIds: number[];
+  /** The feed article of a topic source the candidate was found as, whatever source found it first. */
+  feedArticleId?: number | null;
   now: string;
 }
 
@@ -36,8 +38,8 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
     .prepare(
       `INSERT INTO candidates
          (category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-          reason_code, importance, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reason_code, importance, created_at, feed_article_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       candidate.categoryId,
@@ -54,6 +56,7 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
       candidate.reasonCode,
       candidate.importance,
       candidate.now,
+      candidate.feedArticleId ?? null,
     );
   const id = num(result.lastInsertRowid);
   const link = db.prepare("INSERT OR IGNORE INTO candidate_topics (candidate_id, topic_id) VALUES (?, ?)");
@@ -76,6 +79,8 @@ export interface PendingCandidate {
   reason: string;
   judgedImportance: number | null;
   topicIds: number[];
+  /** The feed article the candidate was found as; null when no topic source delivered it, or once it is gone. */
+  feedArticleId: number | null;
 }
 
 function topicIdsOf(db: Database, candidateId: number): number[] {
@@ -101,16 +106,25 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
       reason: str(row.reason),
       judgedImportance: numOrNull(row.importance),
       topicIds: topicIdsOf(db, num(row.id)),
+      feedArticleId: numOrNull(row.feed_article_id),
     }));
 }
 
 /**
  * Closes pending candidates as rejected for one of the program's reasons, written in the output language, and files
- * them under the run that decided it.
+ * them under the run that decided it. A follow-up to a marked article names that article by `title` in its reason.
  */
-export function rejectCandidates(db: Database, ids: number[], code: ReasonCode, outputLanguage: string, runId: number): void {
+export function rejectCandidates(
+  db: Database,
+  ids: number[],
+  code: ReasonCode,
+  outputLanguage: string,
+  runId: number,
+  title = "",
+): void {
   const statement = db.prepare("UPDATE candidates SET status = 'rejected', reason = ?, reason_code = ?, run_id = ? WHERE id = ?");
-  for (const id of ids) statement.run(reasonText(code, outputLanguage), code, runId, id);
+  const reason = reasonText(code, outputLanguage, title);
+  for (const id of ids) statement.run(reason, code, runId, id);
 }
 
 export function acceptCandidates(db: Database, ids: number[], articleId: number, groupKey: string, runId: number): void {

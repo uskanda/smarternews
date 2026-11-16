@@ -159,6 +159,11 @@ export interface ArticleNeighbors {
   next: ArticleNeighbor | null;
   /** Past the last article loaded while the list has more: loads the next page and opens its first article. */
   more: (() => void) | null;
+  /**
+   * The last article of a list with nothing more to load: the end of the body says so. `openNext` opens the
+   * next list that has unread articles, and is null when there is none.
+   */
+  end: { openNext: (() => void) | null } | null;
 }
 
 /**
@@ -175,8 +180,8 @@ const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline 
 
 /** The way to the article before and after this one, each with its headline on one line. */
 function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
-  const { previous, next, more } = neighbors;
-  if (!previous && !next && !more) return null;
+  const { previous, next, more, end } = neighbors;
+  if (!previous && !next && !more && !end) return null;
   const line = (title: string) => (
     <span className="truncate type-body-md text-primary" title={title}>
       {title}
@@ -200,8 +205,51 @@ function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
           <span className="type-label-sm text-on-surface-muted">次の記事</span>
           <span className="type-body-md text-primary">続きを読み込んで開きます</span>
         </button>
+      ) : end ? (
+        <div data-list-end className="flex flex-col items-start gap-sm rounded-md border border-outline px-lg py-sm">
+          <p className="type-body-md text-on-surface-muted">一覧の最後です</p>
+          {end.openNext ? <Button onClick={end.openNext}>未読のある次の項目を開く</Button> : null}
+        </div>
       ) : null}
     </nav>
+  );
+}
+
+/**
+ * What the follow-ups added, in the model's words: before the impact, so that a reader who read the article before
+ * sees first what is new. The line is not the impact's mark colour, to tell the two apart. The note of the last
+ * rewrite alone is shown as it is; several notes, or one of an earlier rewrite when the last one had none, are listed
+ * oldest first, each with the time of its rewrite, as two rewrites can come on one day.
+ */
+function UpdateNotes({ article, timeZone, terms }: { article: Article; timeZone: string; terms?: readonly string[] }) {
+  const notes = article.updateNotes;
+  if (notes.length === 0) return null;
+  if (notes.length === 1 && notes[0]!.createdAt === article.updatedAt) {
+    return (
+      <section aria-label="今回の更新で加わったこと" className="border-l-4 border-outline-strong pl-md">
+        <h3 className="type-label-sm text-on-surface-muted">今回の更新で加わったこと</h3>
+        <p className="type-body-md">
+          <Highlighted text={notes[0]!.note} terms={terms} />
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section aria-label="前回読んでから加わったこと" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
+      <h3 className="type-label-sm text-on-surface-muted">前回読んでから加わったこと</h3>
+      <ol className="flex flex-col gap-sm">
+        {notes.map((entry, index) => (
+          <li key={index} className="flex flex-col">
+            <time dateTime={entry.createdAt} className="type-label-sm text-on-surface-muted tabular-nums">
+              {formatFull(entry.createdAt, timeZone)}
+            </time>
+            <p className="type-body-md">
+              <Highlighted text={entry.note} terms={terms} />
+            </p>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -217,6 +265,7 @@ export function ArticleView({
   id,
   categoryName,
   feedName,
+  feedListPath = () => null,
   timeZone,
   backTo,
   articlePath,
@@ -224,6 +273,7 @@ export function ArticleView({
   onToggleStar,
   onToggleRead,
   onToggleMiss,
+  onToggleFollowUps,
   fullContent,
   terms,
   focusAnnotation = null,
@@ -231,6 +281,8 @@ export function ArticleView({
   id: number;
   categoryName: (categoryId: number | null) => string;
   feedName: (feedId: number | null) => string;
+  /** Where the feed's name in a feed article leads: the list of that feed. Null leaves the name as text. */
+  feedListPath?: (article: Article) => string | null;
   timeZone: string;
   /** Set on a narrow screen, where the list is on another pane. */
   backTo: string | null;
@@ -241,6 +293,8 @@ export function ArticleView({
   onToggleRead: (article: Article) => void;
   /** Marks a generated article as a miss, or takes the mark away. Not offered for a feed article. */
   onToggleMiss: (article: Article) => void;
+  /** Stops the follow-ups of a generated article, or lets them come again. Not offered for a feed article. */
+  onToggleFollowUps: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
@@ -292,6 +346,7 @@ export function ArticleView({
   // The title as the site wrote it, which a filter matches: the line under a translated title, or the headline.
   const originalTitleShown = article.translatedTitle !== null && article.translatedTitle !== article.title;
   const filterSource = (original: boolean) => (delivered && original ? { [FILTER_SOURCE_ATTRIBUTE]: "" } : {});
+  const feedPath = delivered ? feedListPath(article) : null;
 
   return (
     <article ref={pane} aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
@@ -301,7 +356,13 @@ export function ArticleView({
         <div className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
           {delivered ? (
             <>
-              <span>{feedName(article.feedId)}</span>
+              {feedPath !== null ? (
+                <Link to={feedPath} className="tap text-primary underline underline-offset-4">
+                  {feedName(article.feedId)}
+                </Link>
+              ) : (
+                <span>{feedName(article.feedId)}</span>
+              )}
               {article.author ? <span>{article.author}</span> : null}
               <span>{formatFull(article.updatedAt, timeZone)} に公開</span>
             </>
@@ -352,16 +413,8 @@ export function ArticleView({
             <span>噂や非公式の情報に基づいています。</span>
           </p>
         ) : null}
-        {article.revision > 0 && article.updateNote ? (
-          // What the last follow-up added, in the model's words: before the impact, so that a reader who read the
-          // article before sees first what is new. The line is not the impact's mark colour, to tell the two apart.
-          <section aria-label="今回の更新で加わったこと" className="border-l-4 border-outline-strong pl-md">
-            <h3 className="type-label-sm text-on-surface-muted">今回の更新で加わったこと</h3>
-            <p className="type-body-md">
-              <Highlighted text={article.updateNote} terms={terms} />
-            </p>
-          </section>
-        ) : null}
+        <UpdateNotes article={article} timeZone={timeZone} terms={terms} />
+
         {article.impact ? (
           <section aria-label="読み手への影響" className="border-l-4 border-mark pl-md">
             <h3 className="type-label-sm text-on-surface-muted">読み手への影響</h3>
@@ -394,6 +447,17 @@ export function ArticleView({
             </ul>
           </section>
         ) : null}
+        {article.summarizedIn ? (
+          // The generated article a run wrote this feed article into: the same story, gathered from more pages.
+          <section aria-label="この記事をまとめた生成記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">この記事をまとめた生成記事</h3>
+            <p className="type-body-md">
+              <Link to={articlePath(article.summarizedIn.id)} className="tap break-words text-primary underline underline-offset-4">
+                {article.summarizedIn.title}
+              </Link>
+            </p>
+          </section>
+        ) : null}
         {article.autoSummary ? (
           // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
           <section aria-label="AIによる要約" className="flex flex-col gap-xs border-l-4 border-outline-strong pl-md">
@@ -424,7 +488,7 @@ export function ArticleView({
         <ArticleNoteSection article={article} />
         {/* Highlights are on the full content when there is one: while what the feed delivered is shown instead, none is. */}
         <AnnotatedBody
-          key={`${fullShown}-${translated ? "translated" : "original"}`}
+          bodyKey={`${fullShown}-${translated ? "translated" : "original"}`}
           article={article}
           count={translated ? article.translation!.segments.length : 1}
           enabled={article.fullContent === null || fullShown}
@@ -490,15 +554,40 @@ export function ArticleView({
           </ul>
         </section>
         )}
+        {article.feedArticles.length > 0 ? (
+          // The articles of subscribed feeds this article was written from; each opens in the list of its feed, which
+          // includes read articles, as the other feeds of a feed article do.
+          <section aria-label="まとめた配信記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">まとめた配信記事</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.feedArticles.map((delivered) => (
+                <li key={delivered.articleId} className="min-w-0">
+                  <Link
+                    to={`${listPathOf({ type: "feed", feedId: delivered.feedId }, () => undefined)}/${delivered.articleId}?read=1`}
+                    className="tap break-words text-primary underline underline-offset-4"
+                  >
+                    {delivered.title}
+                  </Link>
+                  <span className="pl-sm text-on-surface-muted">{delivered.feedTitle}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <div className="flex flex-wrap gap-sm">
           <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
             {article.starred ? "スターを外す" : "スターを付ける"}
           </Button>
           <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
           {delivered ? null : (
-            <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
-              {article.missed ? "外れの印を外す" : "外れの印を付ける"}
-            </Button>
+            <>
+              <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
+                {article.missed ? "外れの印を外す" : "外れの印を付ける"}
+              </Button>
+              <Button aria-pressed={article.followUpsStopped} onClick={() => onToggleFollowUps(article)}>
+                {article.followUpsStopped ? "続報の停止を解除する" : "この話題の続報を止める"}
+              </Button>
+            </>
           )}
         </div>
         {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}
