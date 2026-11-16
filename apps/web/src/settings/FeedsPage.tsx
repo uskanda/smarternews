@@ -365,6 +365,17 @@ function FeedRow({
           <Link to={`/f/${feed.id}`} aria-label={`${feed.title}の記事の一覧`} className="tap text-primary underline underline-offset-4">
             記事の一覧
           </Link>
+          {feed.siteUrl ? (
+            <a
+              href={feed.siteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${feed.title}のサイトを開く`}
+              className="tap text-primary underline underline-offset-4"
+            >
+              サイトを開く
+            </a>
+          ) : null}
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>
