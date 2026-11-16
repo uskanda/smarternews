@@ -1,4 +1,4 @@
-import { buildNav, groupEvents, listKey, nextTarget, parseListKey } from "@smarternews/client";
+import { buildNav, groupEvents, listKey, nextTarget, parseListKey, SORT_LABELS } from "@smarternews/client";
 import type { ArticleSummary } from "@smarternews/core/api";
 import { DrawerActions } from "@react-navigation/native";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,8 +22,6 @@ import { EventRow } from "./EventRow";
 import { SCROLL_READ_VIEWABILITY, useScrollToRead } from "./scroll-read";
 import { useBack } from "../lib/back";
 import { listParams, listRefOf, MENTION_KEY, SEARCH_KEY, useReaderList, type View as ListView } from "./useReaderList";
-
-const SORT_LABELS = { newest: "新しい順", oldest: "古い順", relevance: "関連度順" } as const;
 
 function emptyText(view: ListView, hasSources: boolean, isEvents: boolean): string {
   if (!hasSources) return "カテゴリがまだありません。設定からWebの画面を開いて、カテゴリを追加してください。";
@@ -66,7 +64,17 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
   const feeds = useFeeds();
   const groups = useTermMatcher();
   const client = useQueryClient();
-  const params = useLocalSearchParams<{ key: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; name?: string }>();
+  const params = useLocalSearchParams<{
+    key: string;
+    read?: string;
+    min?: string;
+    q?: string;
+    category?: string;
+    feed?: string;
+    unread?: string;
+    starred?: string;
+    name?: string;
+  }>();
   const ref = listRefOf(search ? SEARCH_KEY : mention ? MENTION_KEY : (params.key ?? "unread"), params);
   const back = useBack({ pathname: "/list/[key]", params: { key: "unread" } });
   const reader = useReaderList(ref);
@@ -130,7 +138,7 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
   // The last row must be able to scroll clear of the system's navigation bar.
   const listPadding = { paddingBottom: insets.bottom };
 
-  const setFilter = (name: "read" | "min" | "unread", value: string, on: boolean) => router.setParams({ [name]: on ? value : undefined });
+  const setFilter = (name: "read" | "min" | "unread" | "starred", value: string, on: boolean) => router.setParams({ [name]: on ? value : undefined });
   /** Narrows the search results to a category or a feed, or to nothing. */
   const narrow = (to: { category?: number; feed?: number }) => {
     setNarrowing(false);
@@ -143,7 +151,7 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
       : searchRef?.feed !== undefined
         ? (feeds.data?.find((entry) => entry.id === searchRef.feed)?.title ?? "")
         : "すべて";
-  const narrowed = searchRef !== undefined && (searchRef.category !== undefined || searchRef.feed !== undefined || searchRef.unread);
+  const narrowed = searchRef !== undefined && (searchRef.category !== undefined || searchRef.feed !== undefined || searchRef.unread || searchRef.starred);
 
   async function pulled() {
     setRefreshing(true);
@@ -236,7 +244,9 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
               <Txt variant="body-md" color="on-surface-muted">
                 語を減らすと、見つかることがあります。
               </Txt>
-              {narrowed ? <Button label="絞り込みを外す" onPress={() => router.setParams({ category: undefined, feed: undefined, unread: undefined })} /> : null}
+              {narrowed ? (
+                <Button label="絞り込みを外す" onPress={() => router.setParams({ category: undefined, feed: undefined, unread: undefined, starred: undefined })} />
+              ) : null}
             </>
           )}
         </View>
@@ -329,6 +339,7 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
                   <>
                     <Button label={`絞り込み：${narrowedTo}`} variant="quiet" onPress={() => setNarrowing(true)} />
                     <Toggle label="未読だけ" value={searchRef.unread} onChange={(on) => setFilter("unread", "true", on)} />
+                    <Toggle label="スターだけ" value={searchRef.starred} onChange={(on) => setFilter("starred", "true", on)} />
                   </>
                 ) : null}
               </View>
@@ -352,7 +363,7 @@ export function ListScreen({ search = false, mention = false }: { search?: boole
       )}
       <Sheet title="並び順" visible={sorting} onClose={() => setSorting(false)}>
         <View style={{ gap: theme.spacing.sm }}>
-          {(["newest", "oldest", "relevance"] as const).map((option) => (
+          {reader.sortOptions.map((option) => (
             <Button
               key={option}
               label={SORT_LABELS[option]}

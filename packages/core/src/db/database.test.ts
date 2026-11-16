@@ -1062,6 +1062,75 @@ describe("the migration that lets the feed articles of every feed keep a list vi
   });
 });
 
+describe("the migration to star times", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+  const MIGRATION = "040_starred_at.sql";
+
+  /** A database migrated up to the one before the migration, with a category, a feed and two articles. */
+  function before() {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < MIGRATION)) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const now = "2026-01-01T00:00:00.000Z";
+    db.prepare("INSERT INTO categories (id, slug, name, kind, schedule, min_importance, max_articles_per_run, created_at) VALUES (3, 'tools', 'Tools', 'news', '[]', 3, 10, ?)").run(now);
+    db.prepare("INSERT INTO feeds (id, url, title, category_id, created_at) VALUES (5, 'https://example.org/5', 'five', 3, ?)").run(now);
+    const article = db.prepare(
+      `INSERT INTO articles (id, origin, feed_id, category_id, item_key, kind, title, summary, body, first_published_at, updated_at, created_at, starred)
+       VALUES (?, 'feed', 5, 3, ?, 'news', 't', 's', 'b', ?, ?, ?, ?)`,
+    );
+    article.run(1, "k1", "2025-12-01T00:00:00.000Z", "2025-12-10T00:00:00.000Z", now, 1);
+    article.run(2, "k2", now, now, now, 0);
+    const migrateTo = () => {
+      copyFileSync(join(SHIPPED, MIGRATION), join(dir, MIGRATION));
+      migrate(db, dir);
+    };
+    return { db, migrateTo };
+  }
+  const insert = (db: ReturnType<typeof openDatabase>, list: string, categoryId: number | null, feedId: number | null, sort: string) =>
+    db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, ?, ?, ?)").run(list, categoryId, feedId, sort);
+
+  it("gives the starred articles their last update as the time they were starred, and the others none", () => {
+    const { db, migrateTo } = before();
+    migrateTo();
+    expect(db.prepare("SELECT id, starred, starred_at FROM articles ORDER BY id").all()).toEqual([
+      { id: 1, starred: 1, starred_at: "2025-12-10T00:00:00.000Z" },
+      { id: 2, starred: 0, starred_at: null },
+    ]);
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'articles_search_%'").get()).toEqual({ n: 3 });
+  });
+
+  it("lets only the starred entry keep the order by star time, and leaves the rows that exist as they were", () => {
+    const { db, migrateTo } = before();
+    insert(db, "starred", null, null, "oldest");
+    insert(db, "category", 3, null, "oldest");
+    insert(db, "feeds", null, null, "oldest");
+    insert(db, "all", null, null, "relevance");
+    expect(() => insert(db, "unread", null, null, "starred")).toThrow();
+    const rows = () => db.prepare("SELECT * FROM list_views ORDER BY id").all();
+    const kept = rows();
+
+    migrateTo();
+
+    expect(rows()).toEqual(kept);
+    db.prepare("UPDATE list_views SET sort = 'starred' WHERE list = 'starred'").run();
+    expect(db.prepare("SELECT sort FROM list_views WHERE list = 'starred'").get()).toEqual({ sort: "starred" });
+    expect(() => db.prepare("UPDATE list_views SET sort = 'starred' WHERE list = 'category'").run()).toThrow();
+    expect(() => insert(db, "generated", null, null, "starred")).toThrow();
+    expect(() => insert(db, "feed", null, 5, "starred")).toThrow();
+    insert(db, "generated", null, null, "relevance");
+    // What the table held to before, it still holds to: one row per entry, sensible pairs, and the cascades.
+    expect(() => insert(db, "starred", null, null, "oldest")).toThrow();
+    expect(() => insert(db, "unread", 3, null, "oldest")).toThrow();
+    expect(() => insert(db, "uncategorized", null, null, "random")).toThrow();
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name IN ('list_views', 'list_views_target', 'list_views_new')").get()).toEqual({ n: 2 });
+    db.prepare("DELETE FROM feeds WHERE id = 5").run();
+    db.prepare("DELETE FROM articles").run();
+    db.prepare("DELETE FROM categories WHERE id = 3").run();
+    expect(db.prepare("SELECT list FROM list_views ORDER BY id").all()).toEqual([{ list: "starred" }, { list: "feeds" }, { list: "all" }, { list: "generated" }]);
+  });
+});
+
 describe("the migration to the relevance order", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 

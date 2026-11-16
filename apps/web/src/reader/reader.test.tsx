@@ -2774,6 +2774,47 @@ describe("the order of a list", () => {
     await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog new", "Blog old"]));
     expect(listListViews(server.db).items).toEqual([]);
   });
+
+  it("offers the order by star time in the starred articles alone, lists them last starred first, and stores the choice", async () => {
+    const { server, tools, ids } = seeded();
+    // First is the oldest article and is starred last: by star time it comes first.
+    setArticleFlags(server.db, ids[2]!, { starred: true }, server.clock().toISOString());
+    server.clock.advance(MINUTE);
+    setArticleFlags(server.db, ids[0]!, { starred: true }, server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/c/tools" });
+    await screen.findByRole("link", { name: /Third/ });
+    await user.click(sortButton());
+    expect(within(screen.getByRole("menu", { name: "並び順" })).getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
+      "✓新しい順",
+      "古い順",
+      "関連度順",
+    ]);
+    await user.keyboard("{Escape}");
+
+    await user.click(within(nav()).getByRole("link", { name: /スター/ }));
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "First"]));
+    await user.click(sortButton());
+    const menu = screen.getByRole("menu", { name: "並び順" });
+    expect(within(menu).getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["✓新しい順", "古い順", "関連度順", "スターを付けた順"]);
+    await user.click(within(menu).getByRole("menuitemradio", { name: "スターを付けた順" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Third"]));
+    expect(sortButton()).toHaveAccessibleName("並び順：スターを付けた順");
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "starred", sort: "starred" }]));
+    void tools;
+  });
+
+  it("opens the starred articles by star time when the other app stored that order", async () => {
+    const { server, ids } = seeded();
+    setArticleFlags(server.db, ids[2]!, { starred: true }, server.clock().toISOString());
+    server.clock.advance(MINUTE);
+    setArticleFlags(server.db, ids[0]!, { starred: true }, server.clock().toISOString());
+    updateListView(server.db, "starred", { sort: "starred" });
+    renderApp({ server, route: "/starred" });
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Third"]));
+    expect(sortButton()).toHaveAccessibleName("並び順：スターを付けた順");
+  });
 });
 
 describe("marking read what the list is scrolled past", () => {

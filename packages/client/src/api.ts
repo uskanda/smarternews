@@ -301,7 +301,15 @@ export function createApi(options: ApiOptions) {
     search: (params: ArticleSearchQuery): Promise<ArticleSearchResult> =>
       json(
         articleSearchResultSchema,
-        `/search${query({ q: params.q, category: params.category, feed: params.feed, unread: params.unread, cursor: params.cursor, limit: params.limit })}`,
+        `/search${query({
+          q: params.q,
+          category: params.category,
+          feed: params.feed,
+          unread: params.unread,
+          starred: params.starred,
+          cursor: params.cursor,
+          limit: params.limit,
+        })}`,
       ),
     /** The articles that have the name among the names found in them, newest first, read ones included, a page at a time. */
     mentionArticles: (params: MentionArticlesQuery): Promise<ArticleList> =>

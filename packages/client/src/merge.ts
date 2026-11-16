@@ -6,19 +6,25 @@ export type SortKey = (item: ArticleSummary) => string;
 
 const byUpdate: SortKey = (item) => item.updatedAt;
 const byReadTime: SortKey = (item) => item.readAt ?? "";
+const byStarTime: SortKey = (item) => item.starredAt ?? "";
 const byRank: SortKey = (item) => item.rankAt;
 
-/** What the list of the target is ordered by: read time for the recently read articles, else last update. */
-export function sortKeyFor(target: ListTarget): SortKey {
-  return target.type === "recentlyRead" ? byReadTime : byUpdate;
+/**
+ * What the list of the target is ordered by: read time for the recently read articles, star time for the
+ * starred articles in that order, else last update.
+ */
+export function sortKeyFor(target: ListTarget, sort: ListSort = "newest"): SortKey {
+  if (target.type === "recentlyRead") return byReadTime;
+  return sort === "starred" ? byStarTime : byUpdate;
 }
 
 /**
  * The list to show: what the server returned, plus the articles the user read during this visit to the list.
  * An unread list stops returning an article once it is read; keeping it lets the user go back to it. The
  * list of recently read articles orders by read time, and keeps an article put back to unread with the read
- * time it had, so that it stays where it was. A list oldest first puts what it keeps in the same order, and a
- * list by relevance orders by `rankAt`, highest first, as the server does.
+ * time it had, so that it stays where it was. A list oldest first puts what it keeps in the same order; one by
+ * star time puts it last starred first, as newest first does. A list by relevance orders by `rankAt`, highest
+ * first, as the server does.
  *
  * An article the list still returns shows as the list returns it, title and read time included, with the read
  * state and the star of the kept copy: a list fetched before the change reached the server does not undo it. When

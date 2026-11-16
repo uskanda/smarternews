@@ -94,7 +94,7 @@ Settings fields:
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, [rules](#rules) by their scope, conditions and actions, and term groups by `name`. A filter and a rule name a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
-`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
 ## Categories
 
@@ -236,7 +236,7 @@ Query parameters of the list:
 | `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
 | `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred`, `starredStory`, `minImportance` or `order` |
-| `order` | `newest` (the default), `oldest` or `relevance`. See below. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
+| `order` | `newest` (the default), `oldest` or `relevance`, see below; or `starred`: by `starredAt`, last starred first, allowed with `starred=true` only. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
@@ -306,6 +306,7 @@ Fields of an article in the list:
 | `followsStarred` | True for a generated article that follows a starred one up: one of its earlier articles (`previousArticles`, at most 20) has a star. False for a feed article |
 | `unreadFollowUps` | For a starred generated article, how many of its later articles, followed at most 20 steps, are unread. `0` for any other article |
 | `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
+| `starredAt` | When the article was starred, by the server's clock. Starring an article that is already starred keeps the time, and taking the star away clears it. `null` for an article without a star. A star given before star times were recorded has the article's `updatedAt` of that time |
 | `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
 | `rankAt` | What `order=relevance` sorts by: `updatedAt` moved later by 48 hours times the article's relevance. For ordering, not for showing |
@@ -377,7 +378,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 
 ### Search
 
-`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs, the targets of links or the names found in articles (see [Mentions](#mentions)). Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
+`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs, the targets of links or the names found in articles (see [Mentions](#mentions)). Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed or `starred=true` is given. The search calls neither a model nor the translation API.
 
 | Parameter | Effect |
 |---|---|
@@ -385,6 +386,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 | `category` | Category id: its generated articles and the articles of its feeds |
 | `feed` | Feed id; only the articles of that subscribed feed |
 | `unread` | `true` for unread articles only |
+| `starred` | `true` for starred articles only: what the starred list holds, hidden duplicates included. The results stay newest first by last update |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
@@ -765,7 +767,7 @@ Status 400 answers a rule without an action, a wrong regular expression, and a s
 
 ## List views
 
-Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)). An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
+Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
 
 | Operation | Purpose |
 |---|---|
@@ -779,7 +781,7 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application
 
 A key names an entry: `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed), `uncategorized`, `category-3` (a category), `category-3-generated` (the generated articles of a category) or `feed-12` (a subscribed feed). An entry set back to all its defaults is no longer listed. Deleting a category deletes the views of the category and of its generated articles; its feeds keep theirs when they move to no category. Deleting a feed deletes its view.
 
-Status 404 answers a category or feed that does not exist. Status 400 answers an event category, whose list is ordered by start; `recently-read`, which is ordered by read time; a key it cannot read; and a `sort` other than the three.
+Status 404 answers a category or feed that does not exist. Status 400 answers an event category, whose list is ordered by start; `recently-read`, which is ordered by read time; a key it cannot read; a `sort` it does not know; and `starred` as the `sort` of any entry but `starred`.
 
 ## Term highlights
 

@@ -176,6 +176,7 @@ export function toSummary(row: Row): ArticleSummary {
     readAt: strOrNull(row.read_at),
     openedAt: strOrNull(row.opened_at),
     starred: bool(row.starred),
+    starredAt: strOrNull(row.starred_at),
     followsStarred: bool(row.follows_starred),
     unreadFollowUps: num(row.unread_follow_ups),
     primaryUrl: strOrNull(row.primary_url),
@@ -799,9 +800,10 @@ export function recordFullContentFailure(db: Database, id: number, failure: { re
 type CursorValue = [string, number];
 
 /**
- * A cursor holds the time and id of the last article of a page and, for a list oldest first or by relevance,
- * that order; by relevance the time is `rank_at`. A cursor without an order is of a list newest first, as every
- * cursor was before lists had an order, or of a list whose order is fixed.
+ * A cursor holds the time and id of the last article of a page and, for a list oldest first, by relevance or by
+ * star time, that order; by relevance the time is `rank_at`, by star time `starred_at`. A cursor without an
+ * order is of a list newest first, as every cursor was before lists had an order, or of a list whose order is
+ * fixed.
  */
 function encodeCursor(value: CursorValue, order: ListSort = "newest"): string {
   return Buffer.from(JSON.stringify(order === "newest" ? value : [...value, order])).toString("base64url");
@@ -823,7 +825,7 @@ function decodeCursor(cursor: string, order: ListSort = "newest"): CursorValue {
   ) {
     const given = (value[2] as ListSort | undefined) ?? "newest";
     if (given !== order) {
-      throw new DomainError("invalid", `the cursor is of a list ${given} first, and the list asked for is ${order} first`, [
+      throw new DomainError("invalid", `the cursor is of a list in the order ${given}, and the list asked for is in the order ${order}`, [
         { path: "cursor", message: "the cursor is of a list in another order" },
       ]);
     }
@@ -886,20 +888,34 @@ function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): A
   };
 }
 
+/** How a list in an order other than by event start is sorted and paged: by which column, in which direction. */
+const ORDERS: Record<ListSort, { column: string; direction: "ASC" | "DESC" }> = {
+  newest: { column: "updated_at", direction: "DESC" },
+  oldest: { column: "updated_at", direction: "ASC" },
+  // By `rank_at`: the time moved later by the relevance. Its value changes only when the scores are worked out
+  // again or the terms match differently, so a cursor keeps its place as any other does.
+  relevance: { column: "rank_at", direction: "DESC" },
+  starred: { column: "starred_at", direction: "DESC" },
+};
+
 /**
  * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
  * by start time, soonest first; every other list by last update, newest first unless oldest first or relevance
- * is asked for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
+ * is asked for. The starred articles may be ordered by star time instead, last starred first. The recently
+ * read articles are a list of their own. `asOf` is `now`, when the list was read.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   if (query.recentlyRead === "true") return listRecentlyRead(db, query, now);
   const limit = query.limit ?? 50;
   const byEventStart = query.kind === "event";
   if (byEventStart) refuseOrder(query, "kind=event");
-  const oldestFirst = query.order === "oldest";
-  // By `rank_at`: the time moved later by the relevance. Its value changes only when the scores are worked out
-  // again or the terms match differently, so a cursor keeps its place as any other does.
-  const byRelevance = query.order === "relevance";
+  if (query.order === "starred" && query.starred !== "true") {
+    throw new DomainError("invalid", "only the starred articles can be listed by star time", [
+      { path: "order", message: "starred is allowed with starred=true only" },
+    ]);
+  }
+  const sorting = ORDERS[query.order ?? "newest"];
+  const before = sorting.direction === "DESC" ? "<" : ">";
   const params: Array<string | number> = [];
   // A feed article that filters hide is in no list.
   const where: string[] = [`NOT ${hiddenByFilters("a")}`];
@@ -939,21 +955,13 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
     where.push(
       byEventStart
         ? "(a.event_starts_at > ? OR (a.event_starts_at = ? AND a.id > ?))"
-        : oldestFirst
-          ? "(a.updated_at > ? OR (a.updated_at = ? AND a.id > ?))"
-          : byRelevance
-            ? "(a.rank_at < ? OR (a.rank_at = ? AND a.id < ?))"
-            : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
+        : `(a.${sorting.column} ${before} ? OR (a.${sorting.column} = ? AND a.id ${before} ?))`,
     );
     params.push(value, value, id);
   }
   const order = byEventStart
     ? "a.event_starts_at ASC, a.id ASC"
-    : oldestFirst
-      ? "a.updated_at ASC, a.id ASC"
-      : byRelevance
-        ? "a.rank_at DESC, a.id DESC"
-        : "a.updated_at DESC, a.id DESC";
+    : `a.${sorting.column} ${sorting.direction}, a.id ${sorting.direction}`;
   const rows = db
     .prepare(
       `SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")}
@@ -964,7 +972,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const last = page.at(-1);
   const nextCursor =
     rows.length > limit && last
-      ? encodeCursor([str(byEventStart ? last.event_starts_at : byRelevance ? last.rank_at : last.updated_at), num(last.id)], query.order)
+      ? encodeCursor([str(byEventStart ? last.event_starts_at : last[sorting.column]), num(last.id)], query.order)
       : null;
   return { items: page.map(toSummary), nextCursor, asOf: now };
 }
@@ -1006,7 +1014,8 @@ function likePattern(term: string): string {
  * A page of the articles that have every term of the query, newest first by last update, generated and
  * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
  * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
- * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt, taken
+ * hidden duplicates unless a feed is named or only starred articles are asked for, as in the article list.
+ * Starred articles are found newest first by last update too. Each article comes with an excerpt, taken
  * from the reader's notes when no field of the article has the terms. The index holds the highlighted texts
  * and notes of every article, so they are matched like the fields.
  * `asOf` is `now`, when the result was read, as in the article list.
@@ -1026,7 +1035,8 @@ export function searchArticles(db: Database, query: ArticleSearchQuery, now: str
     params.push(likePattern(term));
   }
   where.push(`NOT ${hiddenByFilters("a")}`);
-  if (query.feed === undefined) where.push(`NOT ${hiddenDuplicate("a")}`);
+  // A duplicate is found with its own feed and among the starred, as it is listed.
+  if (query.feed === undefined && query.starred !== "true") where.push(`NOT ${hiddenDuplicate("a")}`);
   if (query.category !== undefined) {
     where.push("a.category_id = ?");
     params.push(query.category);
@@ -1036,6 +1046,7 @@ export function searchArticles(db: Database, query: ArticleSearchQuery, now: str
     params.push(query.feed);
   }
   if (query.unread === "true") where.push("a.is_read = 0");
+  if (query.starred === "true") where.push("a.starred = 1");
   const page = pageArticles(db, where.join(" AND "), params, query);
   const ids = page.items.map((item) => item.id);
   const fields = new Map(
@@ -1099,7 +1110,8 @@ function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[
 
 /**
  * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
- * one that was read already keeps its time, and one put back to unread loses it. Marking a generated article as a
+ * one that was read already keeps its time, and one put back to unread loses it. Stars keep their time the same
+ * way: given now, kept when given again, lost when taken away. Marking a generated article as a
  * miss marks it read too, unless the same patch says whether it is read; taking the mark away leaves that alone.
  * Stopping the follow-ups of a generated article, or taking that back, leaves whether it is read alone.
  */
@@ -1135,7 +1147,10 @@ export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, 
       );
       if (isRead && changed > 0) readDuplicatesOf(db, [id], now);
     }
-    if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
+    if (patch.starred === true) {
+      db.prepare("UPDATE articles SET starred = 1, starred_at = CASE WHEN starred = 1 THEN starred_at ELSE ? END WHERE id = ?").run(now, id);
+    }
+    if (patch.starred === false) db.prepare("UPDATE articles SET starred = 0, starred_at = NULL WHERE id = ?").run(id);
   });
   return getArticle(db, id);
 }

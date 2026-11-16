@@ -710,6 +710,137 @@ describe("the list oldest first", () => {
   });
 });
 
+describe("star times", () => {
+  const TEN = "2026-03-01T10:00:00.000Z";
+  const ELEVEN = "2026-03-01T11:00:00.000Z";
+  const NOON = "2026-03-01T12:00:00.000Z";
+
+  function oneArticle() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    return { db, id: generated(db, category, {}, "2026-02-01T00:00:00.000Z") };
+  }
+
+  it("records when an article is starred, and answers it in the article and the list", () => {
+    const { db, id } = oneArticle();
+    expect(getArticle(db, id).starredAt).toBeNull();
+    expect(setArticleFlags(db, id, { starred: true }, TEN).starredAt).toBe(TEN);
+    expect(getArticle(db, id).starredAt).toBe(TEN);
+    expect(listArticles(db, { starred: "true" }, NOW).items[0]!.starredAt).toBe(TEN);
+  });
+
+  it("keeps the time when an article already starred is starred again", () => {
+    const { db, id } = oneArticle();
+    setArticleFlags(db, id, { starred: true }, TEN);
+    expect(setArticleFlags(db, id, { starred: true }, ELEVEN).starredAt).toBe(TEN);
+  });
+
+  it("clears the time when the star is taken away, and takes the new time when it is given back", () => {
+    const { db, id } = oneArticle();
+    setArticleFlags(db, id, { starred: true }, TEN);
+    expect(setArticleFlags(db, id, { starred: false }, ELEVEN).starredAt).toBeNull();
+    expect(setArticleFlags(db, id, { starred: false }, ELEVEN).starredAt).toBeNull();
+    expect(setArticleFlags(db, id, { starred: true }, NOON).starredAt).toBe(NOON);
+  });
+
+  it("leaves the time alone when only whether the article is read changes", () => {
+    const { db, id } = oneArticle();
+    setArticleFlags(db, id, { starred: true }, TEN);
+    expect(setArticleFlags(db, id, { isRead: true }, ELEVEN).starredAt).toBe(TEN);
+  });
+});
+
+describe("the list of starred articles by star time", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function listing() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    /** An article last updated at `at`, starred at `starredAt` unless that is left out. */
+    const article = (title: string, at: string, starredAt?: string) => {
+      const id = generated(db, category, { title }, at);
+      if (starredAt !== undefined) setArticleFlags(db, id, { starred: true }, starredAt);
+      return id;
+    };
+    const titles = (query: ArticleListQuery) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, article, titles };
+  }
+
+  it("lists the starred articles last starred first, whatever their last update", () => {
+    const s = listing();
+    s.article("Fresh, starred yesterday", ago(HOUR), ago(24 * HOUR));
+    s.article("Three weeks old, starred now", ago(21 * 24 * HOUR), NOW);
+    s.article("Not starred", ago(HOUR / 2));
+    expect(s.titles({ starred: "true", order: "starred" })).toEqual(["Three weeks old, starred now", "Fresh, starred yesterday"]);
+    expect(s.titles({ starred: "true" })).toEqual(["Fresh, starred yesterday", "Three weeks old, starred now"]);
+  });
+
+  it("lists a hidden duplicate that has a star, as the newest first list of starred articles does", () => {
+    const s = listing();
+    const feed = seedFeed(s.db, { categoryId: s.category });
+    const other = seedFeed(s.db, { categoryId: s.category });
+    const kept = seedFeedArticle(s.db, feed, { title: "Kept", at: ago(2 * HOUR) });
+    const duplicate = seedFeedArticle(s.db, other, { title: "Duplicate", at: ago(HOUR), duplicateOf: kept });
+    setArticleFlags(s.db, duplicate, { starred: true }, NOW);
+    expect(s.titles({ starred: "true", order: "starred" })).toEqual(["Duplicate"]);
+  });
+
+  it("pages by star time without repeating or skipping articles starred at the same time", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) s.article(`#${index}`, ago(index * HOUR), ago(index < 60 ? 200 * 60_000 : index * 60_000));
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    const times: string[] = [];
+    let cursor: string | undefined;
+    let last: ReturnType<typeof listArticles> | undefined;
+    do {
+      last = listArticles(s.db, { starred: "true", order: "starred", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(last.items.length);
+      seen.push(...last.items.map((item) => item.title));
+      times.push(...last.items.map((item) => item.starredAt!));
+      cursor = last.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    expect(times).toEqual([...times].sort().reverse());
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it("refuses a cursor of another order, and a cursor by star time in another order", () => {
+    const s = listing();
+    for (let index = 0; index < 5; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR), ago(index * HOUR));
+    const byStar = listArticles(s.db, { starred: "true", order: "starred", limit: 2 }, NOW);
+    const newest = listArticles(s.db, { starred: "true", limit: 2 }, NOW);
+    const oldest = listArticles(s.db, { starred: "true", order: "oldest", limit: 2 }, NOW);
+    expect(listArticles(s.db, { starred: "true", order: "starred", limit: 2, cursor: byStar.nextCursor! }, NOW).items.map((item) => item.title)).toEqual([
+      "#2",
+      "#3",
+    ]);
+    for (const query of [
+      { starred: "true", order: "starred", cursor: newest.nextCursor! },
+      { starred: "true", order: "starred", cursor: oldest.nextCursor! },
+      { starred: "true", cursor: byStar.nextCursor! },
+      { starred: "true", order: "oldest", cursor: byStar.nextCursor! },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid" }));
+    }
+  });
+
+  it("refuses the order by star time for a list that is not of starred articles", () => {
+    const s = listing();
+    for (const query of [
+      { order: "starred" },
+      { category: s.category, order: "starred" },
+      { starred: "false", order: "starred" },
+      { kind: "event", starred: "true", order: "starred" },
+      { recentlyRead: "true", order: "starred" },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "order" })] }));
+    }
+  });
+});
+
 describe("the list by relevance", () => {
   const HOUR = 3_600_000;
   const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
