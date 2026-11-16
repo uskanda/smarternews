@@ -9,7 +9,7 @@
 
 ## 2. 購読フィードとトピックのダイアログ
 
-- [x] 2.1 `AddFeedDialog` の「閉じる」と、`FeedOptionsDialog` の「やめる」で確認を出す。購読フィードの設定は、切り替えと保存の待ちを知らせる。「登録を解除」と「ほかの設定」が確認を出さないことも含め、`reader/feed-dialogs.test.tsx` で確かめる。既存の「Escapeで閉じる」場面を新しい仕様に合わせる
+- [x] 2.1 `AddFeedDialog` の「やめる」と、`FeedOptionsDialog` の「やめる」で確認を出す。購読フィードの設定は、切り替えと保存の待ちを知らせる。「登録を解除」と「ほかの設定」が確認を出さないことも含め、`reader/feed-dialogs.test.tsx` で確かめる。既存の「Escapeで閉じる」場面を新しい仕様に合わせる
 - [x] 2.2 `AddTopicDialog` で、文章とカテゴリの変更と追加の待ちを知らせ、「やめる」で確認を出す。`reader/add-topic.test.tsx` で確かめる
 
 ## 3. 隠すフィルターを作るダイアログ

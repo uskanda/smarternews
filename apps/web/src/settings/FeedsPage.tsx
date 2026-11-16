@@ -12,7 +12,7 @@ import { FeedDeletionDialog } from "./FeedDeletionDialog.tsx";
 import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
 import { ContentSelectorField, contentSelectorOf } from "./ContentSelector.tsx";
-import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
+import { AutoSummarize, FetchFullContent, TopicSource, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { UnsavedGuard, useUnsaved } from "../ui/unsaved.tsx";
@@ -120,6 +120,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [translate, setTranslate] = useState(feed.translate);
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
   const [contentSelector, setContentSelector] = useState(feed.contentSelector ?? "");
+  const [topicSource, setTopicSource] = useState(feed.topicSource);
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [titleProblem, setTitleProblem] = useState<string | null>(null);
@@ -135,6 +136,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       translate !== feed.translate ||
       fetchFullContent !== feed.fetchFullContent ||
       contentSelectorOf(contentSelector) !== feed.contentSelector ||
+      topicSource !== feed.topicSource ||
       JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
   );
 
@@ -160,6 +162,8 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
         fetchFullContent,
         // Sent only when it changed: a change forgets the full content of the feed's unread articles.
         ...(chosenContentSelector !== feed.contentSelector ? { contentSelector: chosenContentSelector } : {}),
+        // Only a feed of a category can be a source of its topics: a feed moved to none keeps what it had.
+        ...(category !== NO_CATEGORY ? { topicSource } : {}),
       });
       refresh("feeds", "counts", "articles", "filters");
       toast({ message: "購読フィードを保存しました" });
@@ -222,6 +226,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
       <ContentSelectorField feedId={feed.id} value={contentSelector} onChange={setContentSelector} error={error} />
+      {category !== NO_CATEGORY ? <TopicSource id={`${id}-topic-source-hint`} checked={topicSource} onChange={setTopicSource} /> : null}
       {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
       {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
@@ -294,6 +299,7 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.autoSummarize ? <Badge>自動で要約</Badge> : null}
       {feed.translate ? <Badge>翻訳</Badge> : null}
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
+      {feed.topicSource && feed.categoryId !== null ? <Badge>トピックの取得元</Badge> : null}
       {/* A feed the site answers is gone is told apart from a failing one: unsubscribing is what fixes it. */}
       {feed.goneAt ? <Badge tone="error">配信終了</Badge> : feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
       {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}
@@ -366,6 +372,17 @@ function FeedRow({
           <Link to={`/f/${feed.id}`} aria-label={`${feed.title}の記事の一覧`} className="tap text-primary underline underline-offset-4">
             記事の一覧
           </Link>
+          {feed.siteUrl ? (
+            <a
+              href={feed.siteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${feed.title}のサイトを開く`}
+              className="tap text-primary underline underline-offset-4"
+            >
+              サイトを開く
+            </a>
+          ) : null}
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>

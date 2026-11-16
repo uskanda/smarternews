@@ -30,6 +30,49 @@ describe("convertContent", () => {
     expect(result).not.toMatch(/alert|iframe|onclick|video\.example/);
   });
 
+  describe("with embeds kept as links", () => {
+    const embeds = (html: string, language = "en") => convertContent(html, BASE, language, { embeds: true });
+
+    it("makes a frame, a video and an audio a paragraph with a link to their address", () => {
+      const html = `<p>Before.</p><iframe src="https://video.example/1"></iframe><video src="/v.mp4" controls></video><audio src="http://audio.example/a.mp3"></audio><p>After.</p>`;
+      expect(embeds(html).markdown).toBe(
+        [
+          "Before.",
+          "[Embedded content (video.example)](https://video.example/1)",
+          "[Embedded content (example.org)](https://example.org/v.mp4)",
+          "[Embedded content (audio.example)](http://audio.example/a.mp3)",
+          "After.",
+        ].join("\n\n"),
+      );
+    });
+
+    it("writes the link in the output language", () => {
+      expect(embeds(`<iframe src="https://video.example/1"></iframe>`, "ja").markdown).toBe("[埋め込み（video.example）](https://video.example/1)");
+    });
+
+    it("takes the first web source of a video or an audio without an address", () => {
+      const html = `<audio controls><source src="data:audio/mpeg;base64,AAAA"><source src="https://audio.example/a.ogg" type="audio/ogg"><source src="https://audio.example/a.mp3"></audio>`;
+      expect(embeds(html).markdown).toBe("[Embedded content (audio.example)](https://audio.example/a.ogg)");
+    });
+
+    it("sets an embed in a paragraph apart from the words around it", () => {
+      expect(embeds(`<p>Watch <iframe src="https://video.example/1"></iframe> now.</p>`).markdown).toBe(
+        "Watch\n\n[Embedded content (video.example)](https://video.example/1)\n\nnow.",
+      );
+    });
+
+    it("drops an embed without a web address, a one-pixel frame, objects and embeds", () => {
+      const html = `<p>Text.</p><iframe src="javascript:alert(1)"></iframe><video></video><iframe src="https://t.example/p" width="1" height="1"></iframe><iframe src="https://t.example/q" height="0px"></iframe><object data="https://x.example/a.swf"></object><embed src="https://x.example/b.swf">`;
+      const result = embeds(html).markdown;
+      expect(result).toBe("Text.");
+    });
+
+    it("leaves the words of the link and its address out of the text for matching", () => {
+      const { text } = embeds(`<p>Before.</p><iframe src="https://video.example/campaign"></iframe><p>After.</p>`);
+      expect(text).toBe("Before. After.");
+    });
+  });
+
   it("keeps web links, resolved against the item, and drops other schemes", () => {
     const html = `<p><a href="/about">About</a> <a href="javascript:alert(1)">Bad</a> <a href="mailto:a@example.org">Mail</a></p>`;
     expect(md(html)).toBe("[About](https://example.org/about) Bad Mail");

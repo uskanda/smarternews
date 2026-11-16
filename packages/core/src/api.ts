@@ -626,6 +626,13 @@ export const articleSchema = articleSummarySchema.extend({
    * copy recorded as a duplicate of this article. Empty for an article without duplicates.
    */
   otherFeeds: z.array(z.object({ articleId: z.number().int(), feedId: z.number().int(), feedTitle: z.string() })),
+  /** The generated article a run wrote this feed article into. Null when none did, and for a generated article. */
+  summarizedIn: z.object({ id: z.number().int(), title: z.string() }).nullable(),
+  /**
+   * The feed articles a run wrote into this generated article, in the order they were stored. Articles the filters
+   * hide are left out. Empty for a feed article.
+   */
+  feedArticles: z.array(z.object({ articleId: z.number().int(), feedId: z.number().int(), feedTitle: z.string(), title: z.string() })),
   refs: z.array(articleRefSchema),
   /**
    * What the rewrites since the reader last read the article added, oldest first: each note with the time of its
@@ -945,6 +952,11 @@ export const feedSchema = z.object({
    * page. Null means Readability finds it; so it does on a page where the selector matches nothing.
    */
   contentSelector: z.string().nullable(),
+  /**
+   * Whether runs of the feed's category offer its articles to the judge as candidates of the category's topics.
+   * Only a feed of a category can have it on.
+   */
+  topicSource: z.boolean(),
   lastFetchedAt: z.string().nullable(),
   lastSucceededAt: z.string().nullable(),
   lastError: z.string().nullable(),
@@ -1010,6 +1022,7 @@ const feedFields = z.object({
   fetchFullContent: z.boolean().optional(),
   /** Null takes it away. A change of it forgets the full content of the feed's unread articles. */
   contentSelector: cssSelectorSchema.nullable().optional(),
+  topicSource: z.boolean().optional(),
 });
 
 /** A subscription. Without `format` it is a feed; a web feed (`format: "page"`) comes with its selectors. */
@@ -1337,7 +1350,8 @@ export const runSchema = z.object({
 });
 export type Run = z.infer<typeof runSchema>;
 
-export const sourceKindSchema = z.enum(["feed", "news-search", "llm-search"]);
+/** Where a candidate came from. `subscription`: an article a subscribed feed delivered, offered as a topic source. */
+export const sourceKindSchema = z.enum(["feed", "news-search", "llm-search", "subscription"]);
 export type SourceKind = z.infer<typeof sourceKindSchema>;
 
 export const candidateSchema = z.object({
@@ -1669,6 +1683,8 @@ const settingsFileSubscriptionSchema = z.object({
   fetchFullContent: z.boolean().optional(),
   /** Left out, a new feed has none and a known one keeps what it has. */
   contentSelector: cssSelectorSchema.optional(),
+  /** Left out, a new feed is no topic source and a known one keeps what it has. */
+  topicSource: z.boolean().optional(),
   /** The selectors of a web feed. Written for a web feed only: a subscription without them is a feed. */
   selectors: pageSelectorsSchema.optional(),
 });
