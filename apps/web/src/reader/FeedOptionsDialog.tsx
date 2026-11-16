@@ -7,11 +7,13 @@ import { FeedDeletionDialog } from "../settings/FeedDeletionDialog.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "../settings/FeedSwitches.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice } from "../ui/controls.tsx";
-import { FormDialog } from "../ui/FormDialog.tsx";
+import { FormDialog, useDialogCancel } from "../ui/FormDialog.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 /**
  * The three switches of a feed, from its own list. They start from the feed each time the dialog opens, and only
- * they are sent, so the name, the category, the interval and the rest stay as they are.
+ * they are sent, so the name, the category, the interval and the rest stay as they are. Once one is switched,
+ * cancelling asks first; the rest of the settings and unsubscribing drop it without asking.
  */
 function FeedOptionsForm({ feed, onDone, onUnsubscribe }: { feed: Feed; onDone: () => void; onUnsubscribe: () => void }) {
   const { api } = useApp();
@@ -23,6 +25,9 @@ function FeedOptionsForm({ feed, onDone, onUnsubscribe }: { feed: Feed; onDone: 
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const changed = autoSummarize !== feed.autoSummarize || translate !== feed.translate || fetchFullContent !== feed.fetchFullContent;
+  useUnsaved("購読フィードの設定", changed || busy);
+  const cancel = useDialogCancel(onDone);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -58,7 +63,7 @@ function FeedOptionsForm({ feed, onDone, onUnsubscribe }: { feed: Feed; onDone: 
         <Button type="submit" variant="primary" disabled={busy}>
           保存する
         </Button>
-        <Button onClick={onDone}>やめる</Button>
+        <Button onClick={cancel}>やめる</Button>
       </div>
     </form>
   );

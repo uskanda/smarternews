@@ -23,8 +23,10 @@ CREATE TABLE candidates_new (
   article_id INTEGER REFERENCES articles (id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   -- Which of the program's reasons rejected the candidate; NULL for the judge's verdicts.
-  reason_code TEXT
-    CHECK (reason_code IN ('no-date', 'below-minimum', 'over-limit', 'event-outside-window', 'event-no-date', 'blocked-site')),
+  reason_code TEXT CHECK (reason_code IN (
+    'no-date', 'below-minimum', 'over-limit', 'event-outside-window', 'event-no-date',
+    'missed-follow-up', 'stopped-follow-up', 'blocked-site'
+  )),
   -- The host of the URL, lowercased and without a leading "www.". For a Google News redirect that could not be
   -- resolved, the host of the outlet the search named. Empty when neither is known.
   site_host TEXT NOT NULL DEFAULT ''

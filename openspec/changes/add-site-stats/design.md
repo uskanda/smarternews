@@ -43,7 +43,7 @@ APIのパスで受けたホスト名は `normalizeHost(value)` でそろえる�
 `RawCandidate` に任意の `siteUrl` を足す。ニュース検索のGoogleの結果は、`item.source` の `@_url` を入れる。Bingの結果は、元のURLがそのまま候補のURLになるので入れない。
 `siteUrl` は保存しない。保存するのは、そこから求めたホスト名だけである。
 
-### 移行 `032_site_hosts.sql`
+### 移行 `034_site_hosts.sql`
 
 先頭に `-- foreign_keys: off` を書き、表を作り直す移行として動かす。
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rankTopicStats, type SourceKind, type TopicStatsEntry } from "../api.ts";
+import { rankTopicStats, topicRejected, type SourceKind, type TopicStatsEntry } from "../api.ts";
 import type { ReasonCode } from "../pipeline/reasons.ts";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import { insertArticle, recordArticleOpened, reviseArticle, setArticleFlags } from "./articles.ts";
@@ -94,6 +94,7 @@ describe("topicStats", () => {
       belowMinimum: 0,
       overLimit: 0,
       rejectedByDate: 0,
+      rejectedByMark: 0,
       blockedSite: 0,
       created: 0,
       updated: 0,
@@ -130,7 +131,19 @@ describe("topicStats", () => {
     s.candidate({ reasonCode: "blocked-site" });
     s.candidate({ status: "pending" });
 
-    expect(s.of(s.topic.id)).toMatchObject({ rejectedByJudge: 2, belowMinimum: 1, overLimit: 2, rejectedByDate: 3, blockedSite: 2 });
+    expect(s.of(s.topic.id)).toMatchObject({ rejectedByJudge: 2, belowMinimum: 1, overLimit: 2, rejectedByDate: 3, rejectedByMark: 0, blockedSite: 2 });
+  });
+
+  it("counts the follow-ups to marked articles together, as candidates no article came from", () => {
+    const s = setup();
+    s.candidate({ reasonCode: "missed-follow-up" });
+    s.candidate({ reasonCode: "missed-follow-up" });
+    s.candidate({ reasonCode: "stopped-follow-up" });
+    s.candidate({ reasonCode: "below-minimum" });
+
+    const entry = s.of(s.topic.id);
+    expect(entry).toMatchObject({ rejectedByJudge: 0, belowMinimum: 1, rejectedByMark: 3 });
+    expect(topicRejected(entry)).toBe(4);
   });
 
   it("counts the candidates of the last 30 days only, and those of the category only", () => {
@@ -270,6 +283,7 @@ describe("topicStats around the last version", () => {
       belowMinimum: 1,
       overLimit: 0,
       rejectedByDate: 0,
+      rejectedByMark: 0,
       blockedSite: 0,
       created: 2,
       updated: 0,
@@ -323,6 +337,7 @@ function entry(topicId: number, values: { collected?: number; rejected?: number;
     belowMinimum: 0,
     overLimit: 0,
     rejectedByDate: 0,
+    rejectedByMark: 0,
     blockedSite: 0,
     created: values.created ?? 0,
     updated: 0,

@@ -6,7 +6,7 @@ import { useCategories, useSiteStats, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
-import { FormDialog } from "../ui/FormDialog.tsx";
+import { DialogCloseButton, FormDialog } from "../ui/FormDialog.tsx";
 import { AddFeedForm } from "./AddFeedForm.tsx";
 
 /** What the rows call the candidates whose site is not known. */
@@ -48,7 +48,7 @@ function FindFeedsDialog({ host, category, onClose }: { host: string; category: 
         onAdded={onClose}
       />
       <div className="flex justify-end">
-        <Button onClick={onClose}>閉じる</Button>
+        <DialogCloseButton>閉じる</DialogCloseButton>
       </div>
     </FormDialog>
   );

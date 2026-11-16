@@ -9,11 +9,13 @@ import {
   insertFeed,
   listCategories,
   listTopics,
+  recordSearchAttempt,
+  saveArticleNote,
   setArticleFlags,
   updateCategory,
 } from "@smarternews/core";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildConnectLink } from "@smarternews/client";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -87,6 +89,60 @@ describe("the links to the sections", () => {
     await user.click(within(screen.getByRole("navigation", { name: "設定の区画" })).getByRole("link", { name: "トークン" }));
 
     await waitFor(() => expect(scroll.mock.contexts).toContain(tokens));
+    scroll.mockRestore();
+    // The next Tab goes on from the section, not from the links at the top.
+    await waitFor(() => expect(within(tokens).getByRole("heading", { name: "トークン" })).toHaveFocus());
+  });
+
+  it("moves the focus to the heading of the section the address names", async () => {
+    renderApp({ route: "/settings#providers" });
+
+    const providers = await section("プロバイダー");
+    await waitFor(() => expect(within(providers).getByRole("heading", { name: "プロバイダー" })).toHaveFocus());
+  });
+});
+
+describe("the links to the sections of a category", () => {
+  const SECTIONS = ["カテゴリの設定", "トピック", "トピックの成績", "実行", "削除"];
+  const nav = () => screen.getByRole("navigation", { name: "カテゴリの区画" });
+
+  it("lists the five sections under the heading, each pointing at its section", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+    await section("実行");
+
+    const links = within(nav()).getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(SECTIONS);
+    for (const [index, link] of links.entries()) {
+      const [path, id] = link.getAttribute("href")!.split("#");
+      expect(path).toBe(`/settings/categories/${category.id}`);
+      expect(document.getElementById(id!)).toHaveAccessibleName(SECTIONS[index]);
+    }
+  });
+
+  it("scrolls to the section the address names once the topics and their stats are in", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    topic(server, category.id, "exploited flaws");
+    renderApp({ server, route: `/settings/categories/${category.id}#run` });
+
+    const run = await section("実行");
+    await waitFor(() => expect(scroll.mock.contexts).toContain(run));
+    scroll.mockRestore();
+  });
+
+  it("moves to the section a link names", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+    const remove = await section("削除");
+
+    await user.click(within(nav()).getByRole("link", { name: "削除" }));
+
+    await waitFor(() => expect(scroll.mock.contexts).toContain(remove));
     scroll.mockRestore();
   });
 });
@@ -254,6 +310,52 @@ describe("editing a category", () => {
   });
 });
 
+describe("the link to the list of a category", () => {
+  it("leads from a news category to its list of articles", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(screen.queryByRole("link", { name: "イベントの一覧" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "記事の一覧" }));
+
+    await waitFor(() => expect(path()).toBe("/c/security"));
+  });
+
+  it("is called the list of events for an event category", async () => {
+    const server = makeServer();
+    const category = server.category("Events", "event");
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await screen.findByRole("heading", { level: 1, name: "Events" });
+    expect(screen.getByRole("link", { name: "イベントの一覧" })).toHaveAttribute("href", "/c/events");
+    expect(screen.queryByRole("link", { name: "記事の一覧" })).not.toBeInTheDocument();
+  });
+
+  it("is there for a disabled category too", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    updateCategory(server.db, category.id, { enabled: false });
+    renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(screen.getByRole("link", { name: "記事の一覧" })).toHaveAttribute("href", "/c/security");
+  });
+
+  it("asks before leaving with unsaved changes", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.type(await screen.findByLabelText("名前"), " and more");
+    await user.click(screen.getByRole("link", { name: "記事の一覧" }));
+
+    await screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+  });
+});
+
 describe("deleting a category", () => {
   function seeded() {
     const server = makeServer();
@@ -284,6 +386,27 @@ describe("deleting a category", () => {
 
     await waitFor(() => expect(listCategories(server.db)).toEqual([]));
     await waitFor(() => expect(path()).toBe("/settings"));
+  });
+
+  it("takes the annotations of its generated articles out of the list of annotations", async () => {
+    const { server, category } = seeded();
+    const other = server.category("Other");
+    saveArticleNote(server.db, server.article(category.id), "消えるメモ", server.clock().toISOString());
+    saveArticleNote(server.db, server.article(other.id), "残るメモ", server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: "/annotations" });
+    expect(await screen.findByText("消えるメモ")).toBeInTheDocument();
+
+    const nav = () => screen.getByRole("navigation", { name: "項目" });
+    await user.click(within(nav()).getByRole("link", { name: "設定" }));
+    await user.click(await screen.findByRole("link", { name: "Security" }));
+    await user.click(await screen.findByRole("button", { name: "カテゴリを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await waitFor(() => expect(path()).toBe("/settings"));
+
+    await user.click(within(nav()).getByRole("link", { name: /^注釈/ }));
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    expect(await within(list).findByText("残るメモ")).toBeInTheDocument();
+    expect(within(list).queryByText("消えるメモ")).toBeNull();
   });
 
   it("disables instead when the user chooses that", async () => {
@@ -451,6 +574,74 @@ describe("topics", () => {
     expect(screen.getByRole("checkbox", { name: "LLM検索" })).not.toHaveAccessibleDescription(/使われません/);
   });
 
+  describe("web search by the model cut to once a day", () => {
+    const NOTE = "新しい候補が続けて見つからないため、1日1回に減らしています。";
+
+    /** A topic whose web search by the model found no new candidate in three runs in a row. */
+    function reduced(server: TestServer, categoryId: number) {
+      const created = createTopic(server.db, categoryId, { text: "local events", sources: { llmSearch: true } }, server.clock);
+      for (let index = 0; index < 3; index += 1) {
+        const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
+        recordSearchAttempt(server.db, {
+          runId: run.id,
+          topicId: created.id,
+          kind: "llm-search",
+          engine: null,
+          query: created.text,
+          ok: true,
+          returned: 0,
+          googleAttempted: 0,
+          googleUnresolved: 0,
+          createdAt: server.clock().toISOString(),
+        });
+      }
+      return created;
+    }
+
+    it("says so next to the choice, and puts it back to every run", async () => {
+      const server = makeServer();
+      const category = server.category("Security");
+      const created = reduced(server, category.id);
+      const { user, requests } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+      await user.click(await screen.findByRole("button", { name: "local events を編集" }));
+      expect(await screen.findByText(NOTE)).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "元に戻す" }));
+
+      await waitFor(() => expect(screen.queryByText(NOTE)).not.toBeInTheDocument());
+      expect(requests).toContain(`POST /api/v1/topics/${created.id}/llm-search/restore`);
+      expect(getTopic(server.db, created.id).llmSearchReduced).toBe(false);
+    });
+
+    it("keeps the note and says so when it cannot be put back", async () => {
+      const server = makeServer();
+      const category = server.category("Security");
+      reduced(server, category.id);
+      let down = false;
+      const { user } = renderApp({ server, route: `/settings/categories/${category.id}`, offline: () => down });
+
+      await user.click(await screen.findByRole("button", { name: "local events を編集" }));
+      await screen.findByText(NOTE);
+      down = true;
+      await user.click(screen.getByRole("button", { name: "元に戻す" }));
+
+      expect(await screen.findByText("LLM検索を元に戻せませんでした。もう一度試してください。")).toBeInTheDocument();
+      expect(screen.getByText(NOTE)).toBeInTheDocument();
+    });
+
+    it("says nothing for a topic whose search is not cut", async () => {
+      const server = makeServer();
+      const category = server.category("Security");
+      topic(server, category.id, "local events", true);
+      const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+      await user.click(await screen.findByRole("button", { name: "local events を編集" }));
+      await screen.findByRole("checkbox", { name: "LLM検索" });
+
+      expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+    });
+  });
+
   it("moves the focus into the editor that opens, and back to the button when it closes", async () => {
     const server = makeServer();
     const category = server.category("Security");
@@ -489,12 +680,22 @@ describe("topics", () => {
 
     await waitFor(() => expect(listTopics(server.db, category.id)).toEqual([]));
     expect(server.db.prepare("SELECT count(*) AS n FROM articles").get()).toEqual({ n: 1 });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "トピック" })).toHaveFocus());
   });
 });
 
 describe("the stats of the topics", () => {
   /** Stores a candidate of the topic collected now: rejected by the judge unless it says otherwise. */
-  function candidate(server: TestServer, categoryId: number, topicId: number, options: { host?: string; status?: "pending" | "rejected"; reasonCode?: "below-minimum" | "over-limit" | "no-date" | "blocked-site" | null } = {}) {
+  function candidate(
+    server: TestServer,
+    categoryId: number,
+    topicId: number,
+    options: {
+      host?: string;
+      status?: "pending" | "rejected";
+      reasonCode?: "below-minimum" | "over-limit" | "no-date" | "blocked-site" | "missed-follow-up" | "stopped-follow-up" | null;
+    } = {},
+  ) {
     const run = createRun(server.db, { categoryId, trigger: "manual", slot: null }, server.clock);
     insertCandidate(server.db, {
       categoryId,
@@ -524,6 +725,8 @@ describe("the stats of the topics", () => {
     candidate(server, category.id, flaws.id, { host: "ads.example", reasonCode: "below-minimum" });
     candidate(server, category.id, flaws.id, { host: "blocked.example", reasonCode: "blocked-site" });
     candidate(server, category.id, flaws.id, { status: "pending" });
+    candidate(server, category.id, flaws.id, { reasonCode: "missed-follow-up" });
+    candidate(server, category.id, flaws.id, { reasonCode: "stopped-follow-up" });
     const missed = server.article(category.id, { topicIds: [flaws.id] });
     server.article(category.id, { topicIds: [flaws.id] });
     setArticleFlags(server.db, missed, { missed: true }, server.clock().toISOString());
@@ -534,10 +737,11 @@ describe("the stats of the topics", () => {
     expect(regions.indexOf("トピックの成績")).toBe(regions.indexOf("トピック") + 1);
     const row = await within(stats).findByRole("listitem");
     expect(row).toHaveAttribute("id", `topic-stats-${flaws.id}`);
-    await waitFor(() => expect(row).toHaveTextContent("集めた候補4件（ニュース検索 4）"));
+    await waitFor(() => expect(row).toHaveTextContent("集めた候補6件（ニュース検索 6）"));
     expect(row).toHaveTextContent("判定での除外1件");
     expect(row).toHaveTextContent("基準未満1件");
     expect(row).toHaveTextContent("サイトの除外1件");
+    expect(row).toHaveTextContent("印のある記事の続報2件");
     expect(row).toHaveTextContent("作った記事2件");
     expect(row).toHaveTextContent("外れ1/2件（50%）");
     expect(row).toHaveTextContent("よく除外されるサイトads.example 2件");
@@ -576,6 +780,56 @@ describe("the stats of the topics", () => {
     await user.click(await within(stats).findByRole("link", { name: "exploited flaws" }));
 
     expect(await screen.findByLabelText("トピックの文章")).toHaveValue("exploited flaws");
+  });
+
+  it("opens the editor again when the same topic is followed a second time", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    await screen.findByLabelText("トピックの文章");
+    await user.click(within(item).getByRole("button", { name: "閉じる" }));
+    expect(screen.queryByLabelText("トピックの文章")).not.toBeInTheDocument();
+    scroll.mockClear();
+
+    await user.click(link);
+
+    const text = await screen.findByLabelText("トピックの文章");
+    expect(text).toHaveValue("exploited flaws");
+    expect(text).toHaveFocus();
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
+  });
+
+  it("keeps what is typed in an open editor when its topic is followed again, and moves the focus to its text", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const server = makeServer();
+    const category = server.category("Security");
+    const flaws = topic(server, category.id, "exploited flaws", true);
+    const { user } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    const stats = await section("トピックの成績");
+    const link = await within(stats).findByRole("link", { name: "exploited flaws" });
+    await user.click(link);
+    const text = await screen.findByLabelText("トピックの文章");
+    await user.clear(text);
+    await user.type(text, "zero-days");
+    const item = document.getElementById(`topic-${flaws.id}`)!;
+    scroll.mockClear();
+
+    await user.click(link);
+
+    expect(screen.getByLabelText("トピックの文章")).toBe(text);
+    expect(text).toHaveValue("zero-days");
+    await waitFor(() => expect(text).toHaveFocus());
+    await waitFor(() => expect(scroll.mock.contexts).toContain(item));
+    scroll.mockRestore();
   });
 
   it("counts a topic added on the page", async () => {
@@ -817,6 +1071,92 @@ describe("the settings file", () => {
   });
 });
 
+describe("the fields after the settings change elsewhere", () => {
+  const moved = "version: 1\nsettings:\n  timeZone: Asia/Tokyo\n  readerInfo: Maintains web services.\n";
+
+  async function load(user: ReturnType<typeof renderApp>["user"], text: string) {
+    const settingsFile = await section("設定ファイル");
+    await user.upload(within(settingsFile).getByLabelText("読み込む設定ファイル"), new File([text], "moved.yaml"));
+    await user.click(within(settingsFile).getByRole("button", { name: "読み込む" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "読み込む" }));
+  }
+
+  it("shows the loaded values, and saving the global settings keeps them", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const zone = within(global).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(zone).toHaveValue("UTC"));
+
+    await load(user, moved);
+
+    await waitFor(() => expect(zone).toHaveValue("Asia/Tokyo"));
+    expect(within(await section("読み手情報")).getByLabelText("読み手情報")).toHaveValue("Maintains web services.");
+    const days = within(global).getByLabelText("更新が止まったとみなす日数");
+    await user.clear(days);
+    await user.type(days, "45");
+    await user.click(within(global).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(45));
+    expect(getSettings(server.db)).toMatchObject({ timeZone: "Asia/Tokyo", readerInfo: "Maintains web services." });
+  });
+
+  it("replaces what was not saved with the loaded values, and leaves nothing unsaved", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const unloadStopped = () => !fireEvent(window, new Event("beforeunload", { cancelable: true }));
+    const global = await section("全体設定");
+    const zone = within(global).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(zone).toHaveValue("UTC"));
+    await user.clear(zone);
+    await user.type(zone, "Europe/Berlin");
+    expect(unloadStopped()).toBe(true);
+
+    await load(user, moved);
+
+    await waitFor(() => expect(zone).toHaveValue("Asia/Tokyo"));
+    await waitFor(() => expect(unloadStopped()).toBe(false));
+  });
+
+  it("keeps what was not saved in the global settings when only the reader information changes", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const zone = within(global).getByLabelText("タイムゾーン");
+    await waitFor(() => expect(zone).toHaveValue("UTC"));
+    await user.clear(zone);
+    await user.type(zone, "Europe/Berlin");
+
+    const reader = await section("読み手情報");
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    await user.click(within(reader).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
+    expect(zone).toHaveValue("Europe/Berlin");
+  });
+
+  it("keeps the focus on the save buttons after saving", async () => {
+    const server = makeServer();
+    const { user } = renderApp({ server, route: "/settings" });
+    const global = await section("全体設定");
+    const days = within(global).getByLabelText("更新が止まったとみなす日数");
+    await waitFor(() => expect(days).not.toHaveValue(""));
+    await user.clear(days);
+    await user.type(days, "45");
+    const saveGlobal = within(global).getByRole("button", { name: "保存する" });
+    await user.click(saveGlobal);
+    await waitFor(() => expect(getSettings(server.db).staleFeedDays).toBe(45));
+    expect(saveGlobal).toHaveFocus();
+
+    const reader = await section("読み手情報");
+    await user.type(within(reader).getByLabelText("読み手情報"), "Maintains web services.");
+    const saveReader = within(reader).getByRole("button", { name: "保存する" });
+    await user.click(saveReader);
+    await waitFor(() => expect(getSettings(server.db).readerInfo).toBe("Maintains web services."));
+    expect(saveReader).toHaveFocus();
+  });
+});
+
 describe("connecting the Android app", () => {
   it("shows no connection code until the user asks for it, and says that the code holds the token", async () => {
     renderApp({ route: "/settings" });
@@ -835,6 +1175,26 @@ describe("connecting the Android app", () => {
     const expected = qrPath(buildConnectLink(window.location.origin, API_TOKEN));
     expect(code.querySelector("path")?.getAttribute("d")).toBe(expected.d);
     expect(expected.d.length).toBeGreaterThan(100);
+  });
+
+  it("shows a code with the entered token where the browser keeps no site data", async () => {
+    const denied = () => {
+      throw new DOMException("The site data is blocked.", "SecurityError");
+    };
+    const spies = [
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(denied),
+      vi.spyOn(Storage.prototype, "removeItem").mockImplementation(denied),
+    ];
+    onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+    const { user } = renderApp({ route: "/settings", token: null });
+
+    await user.type(await screen.findByLabelText("APIのトークン"), API_TOKEN);
+    await user.click(screen.getByRole("button", { name: "接続する" }));
+    await user.click(await screen.findByRole("button", { name: "アプリ接続用のQRコードを表示する" }));
+
+    const code = await screen.findByRole("img", { name: "接続用のQRコード" });
+    expect(code.querySelector("path")?.getAttribute("d")).toBe(qrPath(buildConnectLink(window.location.origin, API_TOKEN)).d);
   });
 
   it("draws the code black on white in the dark scheme too", async () => {
@@ -1126,6 +1486,20 @@ describe("changes not saved yet", () => {
     await user.type(screen.getByLabelText("トピックの文章"), " gangs");
     (document.activeElement as HTMLElement).blur();
     await user.keyboard("{Shift>}J{/Shift}");
+
+    expect(await question()).toHaveTextContent("トピック『ransomware』の編集");
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+  });
+
+  it("asks before an entry picked by its name with g u leaves an edited topic", async () => {
+    const { server, category } = withTopic();
+    const { user, path } = renderApp({ server, route: `/settings/categories/${category.id}` });
+
+    await user.click(await screen.findByRole("button", { name: "ransomware を編集" }));
+    await user.type(screen.getByLabelText("トピックの文章"), " gangs");
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard("gu");
+    await user.type(await screen.findByRole("combobox", { name: "項目の名前" }), "secu{Enter}");
 
     expect(await question()).toHaveTextContent("トピック『ransomware』の編集");
     expect(path()).toBe(`/settings/categories/${category.id}`);

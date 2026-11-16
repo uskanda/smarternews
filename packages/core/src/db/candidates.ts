@@ -110,11 +110,19 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
 
 /**
  * Closes pending candidates as rejected for one of the program's reasons, written in the output language, and files
- * them under the run that decided it.
+ * them under the run that decided it. A follow-up to a marked article names that article by `title` in its reason.
  */
-export function rejectCandidates(db: Database, ids: number[], code: ReasonCode, outputLanguage: string, runId: number): void {
+export function rejectCandidates(
+  db: Database,
+  ids: number[],
+  code: ReasonCode,
+  outputLanguage: string,
+  runId: number,
+  title = "",
+): void {
   const statement = db.prepare("UPDATE candidates SET status = 'rejected', reason = ?, reason_code = ?, run_id = ? WHERE id = ?");
-  for (const id of ids) statement.run(reasonText(code, outputLanguage), code, runId, id);
+  const reason = reasonText(code, outputLanguage, title);
+  for (const id of ids) statement.run(reason, code, runId, id);
 }
 
 export function acceptCandidates(db: Database, ids: number[], articleId: number, groupKey: string, runId: number): void {
