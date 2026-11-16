@@ -86,6 +86,23 @@ export function useScopedFilterCount(target: { feedId: number } | { categoryId: 
   ).length;
 }
 
+export function useRules() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["rules"], queryFn: () => api.rules() });
+}
+
+/**
+ * How many rules have the given feed or category as their scope, enabled or not: what goes with it when it is
+ * deleted. Undefined until the rules have arrived.
+ */
+export function useScopedRuleCount(target: { feedId: number } | { categoryId: number }): number | undefined {
+  const rules = useRules().data;
+  if (!rules) return undefined;
+  return rules.filter((rule) =>
+    "feedId" in target ? rule.scope.type === "feed" && rule.scope.feedId === target.feedId : rule.scope.type === "category" && rule.scope.categoryId === target.categoryId,
+  ).length;
+}
+
 /**
  * The term groups in their order. Changing them on the settings page sets this anew, so lists and articles
  * take the new colours without a reload.
@@ -197,10 +214,13 @@ export function useArticle(id: number | null) {
   });
 }
 
-/** Applies a change to one article wherever it is cached: in every list and in its own entry. */
+/** Hears every change `patchArticle` makes to an article, as a list row has it. */
+export type ArticlePatchListener = (id: number, patch: Partial<ArticleSummary>) => void;
+const patchListeners = new WeakMap<QueryClient, Set<ArticlePatchListener>>();
+
 /**
- * Changes an article in every list and in its own entry. A miss and stopped follow-ups are only on the article: the
- * lists do not show them.
+ * Changes an article in every list and in its own entry, and tells those listening: the rows a list keeps outside
+ * the cache. A miss and stopped follow-ups are only on the article: the lists do not show them.
  */
 function patchArticle(
   client: QueryClient,
@@ -222,6 +242,25 @@ function patchArticle(
         }
       : article,
   );
+  if (Object.keys(patch).length === 0) return;
+  for (const listener of patchListeners.get(client) ?? []) listener(id, patch);
+}
+
+/**
+ * Hears every change made to a cached article: a translated title, an open time, a read state or a star, and
+ * such a change undone when the server could not store it. For the rows a list keeps outside the cache.
+ */
+export function useArticlePatchListener(listener: ArticlePatchListener): void {
+  const client = useQueryClient();
+  const latest = useRef(listener);
+  latest.current = listener;
+  useEffect(() => {
+    let listeners = patchListeners.get(client);
+    if (!listeners) patchListeners.set(client, (listeners = new Set()));
+    const heard: ArticlePatchListener = (id, patch) => latest.current(id, patch);
+    listeners.add(heard);
+    return () => void listeners.delete(heard);
+  }, [client]);
 }
 
 /**

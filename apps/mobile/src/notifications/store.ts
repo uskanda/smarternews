@@ -1,11 +1,12 @@
-// What the device remembers about notifications: the user's choice, and how far it has looked at articles and
-// at digests.
+// What the device remembers about notifications: the user's choice, and how far it has looked at articles, at
+// the feed articles rules chose, and at digests.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DEFAULT_NOTIFY_SETTING, type NotifySetting } from "@smarternews/client";
 
 const SETTING_KEY = "smarternews.notify.setting";
 const CHECKED_KEY = "smarternews.notify.checkedAt";
 const DIGEST_KEY = "smarternews.notify.digestId";
+const RULE_CHECKED_KEY = "smarternews.notify.ruleCheckedAt";
 
 /** The user's choice, or the default while none was made. */
 export async function loadNotifySetting(): Promise<NotifySetting> {
@@ -37,6 +38,20 @@ export async function advanceCheckedAt(seenUpTo: string): Promise<void> {
   if (current === null || seenUpTo > current) await saveCheckedAt(seenUpTo);
 }
 
+/**
+ * When the newest of the feed articles a rule chose to notify was chosen, of those looked at so far, or null
+ * before the device first looked at them.
+ */
+export async function loadRuleCheckedAt(): Promise<string | null> {
+  return AsyncStorage.getItem(RULE_CHECKED_KEY);
+}
+
+/** Null forgets it: the next check then records where the feed articles stand without notifying. */
+export async function saveRuleCheckedAt(checkedAt: string | null): Promise<void> {
+  if (checkedAt === null) await AsyncStorage.removeItem(RULE_CHECKED_KEY);
+  else await AsyncStorage.setItem(RULE_CHECKED_KEY, checkedAt);
+}
+
 /** The id of the newest digest the device knows of, or null before it first looked at digests. */
 export async function loadDigestNotifiedId(): Promise<number | null> {
   const stored = await AsyncStorage.getItem(DIGEST_KEY);
@@ -50,5 +65,5 @@ export async function saveDigestNotifiedId(id: number | null): Promise<void> {
 }
 
 export async function clearNotifyState(): Promise<void> {
-  await AsyncStorage.multiRemove([SETTING_KEY, CHECKED_KEY, DIGEST_KEY]);
+  await AsyncStorage.multiRemove([SETTING_KEY, CHECKED_KEY, DIGEST_KEY, RULE_CHECKED_KEY]);
 }

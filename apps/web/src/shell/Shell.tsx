@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   budgetWarningLabel,
   buildNav,
+  checkSearchWords,
   FEED_STATE_LABEL,
   hideEmptyEntries,
   listKey,
@@ -74,6 +75,9 @@ function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
   const onResults = pathname === "/search" || pathname.startsWith("/search/");
   const shown = onResults ? (params.get("q") ?? "") : null;
   const [value, setValue] = useState(shown ?? "");
+  // Why the words were not searched; gone once they change.
+  const [problem, setProblem] = useState<string | null>(null);
+  const problemId = useId();
   useEffect(() => {
     if (shown !== null) setValue(shown);
   }, [shown]);
@@ -81,23 +85,37 @@ function SearchBox({ onNavigate }: { onNavigate?: () => void }) {
     event.preventDefault();
     const words = value.trim();
     if (words.length === 0) return;
+    // Words the server refuses are refused here, where they can be put right.
+    const tooLong = checkSearchWords(words);
+    setProblem(tooLong);
+    if (tooLong !== null) return;
     void navigate(`/search?q=${encodeURIComponent(words)}`);
     onNavigate?.();
     // The results are where the keyboard goes on: j and k move through them.
     document.getElementById("content")?.focus();
   }
   return (
-    <form role="search" onSubmit={submit} className="flex px-xs">
+    <form role="search" onSubmit={submit} className="flex flex-col gap-xs px-xs">
       <input
         id={SEARCH_BOX}
         type="search"
         aria-label="記事を検索"
+        aria-invalid={problem !== null ? true : undefined}
+        aria-describedby={problem !== null ? problemId : undefined}
         placeholder="記事を検索"
         enterKeyHint="search"
         value={value}
-        onChange={(event) => setValue(event.target.value)}
-        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface placeholder:text-on-surface-muted"
+        onChange={(event) => {
+          setValue(event.target.value);
+          setProblem(null);
+        }}
+        className="tap w-full min-w-0 rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface placeholder:text-on-surface-muted aria-invalid:border-error"
       />
+      {problem !== null ? (
+        <p id={problemId} className="type-label-sm text-error">
+          {problem}
+        </p>
+      ) : null}
     </form>
   );
 }

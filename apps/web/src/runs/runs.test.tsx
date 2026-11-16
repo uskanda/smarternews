@@ -10,7 +10,7 @@ import {
   type RetrySkipped,
   type RunOutcome,
 } from "@smarternews/core";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -520,6 +520,54 @@ describe("one run", () => {
     const region = await screen.findByRole("region", { name: "トピックの成績" });
     await waitFor(() => expect(scroll.mock.contexts).toContain(region.querySelector(`#topic-stats-${flaws.id}`)));
     scroll.mockRestore();
+  });
+
+  it("comes back grouped and where it was left after fixing a topic", async () => {
+    const { server, category, id } = withRejections();
+    const { user, path, back } = renderApp({ server, route: `/runs/${id}` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    await within(rejected).findByRole("link", { name: "Rejected 0" });
+    await user.click(within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" }));
+    expect(path()).toBe(`/runs/${id}?group=topic`);
+    const page = rejected.parentElement!;
+    page.scrollTop = 420;
+    fireEvent.scroll(page);
+
+    await user.click(within(rejected).getByRole("link", { name: "exploited flaws を直す" }));
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    await back();
+
+    const again = await screen.findByRole("region", { name: "除外した候補" });
+    await within(again).findByRole("link", { name: "Rejected 0" });
+    expect(within(again).getByRole("checkbox", { name: "トピックごとにまとめる" })).toBeChecked();
+    expect(within(again).getAllByRole("group")).toHaveLength(2);
+    expect(again.parentElement!.scrollTop).toBe(420);
+  });
+
+  it("does not add to the history when grouping is switched", async () => {
+    const { server, id } = withRejections();
+    const { user, path, back } = renderApp({ server, route: "/runs" });
+    const table = await screen.findByRole("table");
+    await user.click(await within(table).findByRole("link", { name: /\d{2}:\d{2}/ }));
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    await within(rejected).findByRole("link", { name: "Rejected 0" });
+    const checkbox = within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" });
+
+    await user.click(checkbox);
+    await user.click(checkbox);
+    expect(path()).toBe(`/runs/${id}`);
+    await back();
+
+    expect(path()).toBe("/runs");
+  });
+
+  it("opens grouped from the address", async () => {
+    const { server, id } = withRejections();
+    renderApp({ server, route: `/runs/${id}?group=topic` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+
+    await waitFor(() => expect(within(rejected).getAllByRole("group")).toHaveLength(2));
+    expect(within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" })).toBeChecked();
   });
 
   it("says that a run does not exist", async () => {

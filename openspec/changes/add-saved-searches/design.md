@@ -27,7 +27,7 @@
 
 ### 表
 
-`038_saved_searches.sql` で表 `saved_searches` を作る。列は `id`、`name`、`query`、`category_id`、`feed_id`、`position`、`created_at` である。
+`039_saved_searches.sql` で表 `saved_searches` を作る。列は `id`、`name`、`query`、`category_id`、`feed_id`、`position`、`created_at` である。
 `category_id` と `feed_id` は、それぞれ `categories` と `feeds` を `ON DELETE CASCADE` で参照し、CHECK制約でどちらか1つまでにする。絞り込みの対象を消したとき、絞り込みだけを外すと名前と中身が食い違うため、保存した検索ごと消す。
 名前の一意は求めない。同じ条件の二重の保存も拒まない。
 
