@@ -27,8 +27,9 @@ export interface RenderOptions {
   /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
   browserHistory?: boolean;
   /**
-   * Holds back a request, given as "GET /api/v1/articles?…", until the promise returned for it settles. The server
-   * answers it then, as it stands at that moment. Returning undefined lets the request through at once.
+   * Holds back a request, given as "METHOD /api/v1/path?…", until the promise returned for it settles. The server
+   * answers it then, as it stands at that moment; a rejected promise makes the request fail as if the server were
+   * down. Returning undefined lets the request through at once.
    */
   hold?: (request: string) => Promise<void> | undefined;
 }
@@ -80,7 +81,12 @@ export function renderApp(options: RenderOptions = {}) {
         requests.push(request);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
         const gated = options.hold?.(request);
-        if (gated) return gated.then(() => server.app.request(input, init));
+        if (gated) {
+          return gated.then(
+            () => server.app.request(input, init),
+            () => Promise.reject(new TypeError("fetch failed")),
+          );
+        }
         const response = Promise.resolve(server.app.request(input, init));
         if (options.holdAnswer?.(request)) {
           return new Promise<Response>((resolve, reject) => {

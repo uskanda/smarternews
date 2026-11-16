@@ -100,6 +100,7 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     autoSummarize: bool(row.auto_summarize),
     translate: bool(row.translate),
     fetchFullContent: bool(row.fetch_full_content),
+    topicSource: bool(row.topic_source),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
@@ -215,6 +216,17 @@ export function checkFeedCategory(db: Database, categoryId: number | null | unde
   }
 }
 
+/**
+ * Only a feed of a category can be a source of its topics; a feed belongs to a news category or to none, so the
+ * one to refuse is a feed of none.
+ */
+export function checkTopicSource(topicSource: boolean | undefined, categoryId: number | null | undefined): void {
+  if (topicSource !== true || (categoryId !== null && categoryId !== undefined)) return;
+  throw new DomainError("invalid", "only a feed of a news category can be a topic source", [
+    { path: "topicSource", message: "the feed must belong to a news category", code: "not_allowed" },
+  ]);
+}
+
 function lastPosition(db: Database, categoryId: number | null): number {
   return num(db.prepare("SELECT coalesce(max(position), 0) AS last FROM feeds WHERE category_id IS ?").get(categoryId)!.last);
 }
@@ -281,6 +293,8 @@ export interface NewFeed {
   translate?: boolean;
   /** Fetch the full content of the articles this feed delivers from now on. */
   fetchFullContent?: boolean;
+  /** Offer the feed's articles to the runs of its category as candidates. Only for a feed of a category. */
+  topicSource?: boolean;
 }
 
 /** Stores a feed without fetching it. Refuses a URL that is already subscribed. */
@@ -290,6 +304,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
     throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   }
   checkFeedCategory(db, input.categoryId);
+  checkTopicSource(input.topicSource, input.categoryId);
   const format = input.format ?? "feed";
   checkSelectorsFit(format, input.selectors);
   if (format === "page" && input.selectors === undefined) {
@@ -301,8 +316,8 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
           auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors,
-          relevance_score)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          relevance_score, topic_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -323,6 +338,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.selectors ? JSON.stringify(input.selectors) : null,
       // A new feed has too few articles of its own: it takes the average of the others until the next count.
       feedRelevanceScores(db, clock()).fallback,
+      input.topicSource ? 1 : 0,
     );
   return getFeed(db, num(result.lastInsertRowid), clock());
 }
@@ -344,6 +360,8 @@ function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefi
 export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
+  // A feed that leaves its category keeps the switch: it counts again once the feed is in a category.
+  checkTopicSource(patch.topicSource, patch.categoryId !== undefined ? patch.categoryId : current.categoryId);
   checkSelectorsFit(current.format, patch.selectors);
   transaction(db, () => {
     // Used from the next fetch on; the articles stored before stay as they are.
@@ -370,6 +388,7 @@ export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: C
     }
     // Nothing is translated here: the articles the feed already has are translated when they are opened.
     if (patch.translate !== undefined) db.prepare("UPDATE feeds SET translate = ? WHERE id = ?").run(patch.translate ? 1 : 0, id);
+    if (patch.topicSource !== undefined) db.prepare("UPDATE feeds SET topic_source = ? WHERE id = ?").run(patch.topicSource ? 1 : 0, id);
     if (patch.categoryId !== undefined && patch.categoryId !== current.categoryId) {
       // It goes last among the feeds it joins.
       db.prepare("UPDATE feeds SET position = ? WHERE id = ?").run(lastPosition(db, patch.categoryId) + 1, id);
