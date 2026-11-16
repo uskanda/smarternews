@@ -92,7 +92,7 @@ Settings fields:
 | `digestSchedule` | The times of day, as `HH:MM` in `timeZone`, at which a [digest](#digests) is made. At most 24; stored once each and in the order of the day. `["07:00","19:00"]` by default; `[]` makes digests by hand only |
 | `staleFeedDays` | After how many days without a new item an enabled subscribed feed counts as stale, a whole number from 1 to 365. `60` by default; see [Stale feeds and feed stats](#stale-feeds-and-feed-stats) |
 
-Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, and term groups by `name`. A filter names a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
+Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, [rules](#rules) by their scope, conditions and actions, and term groups by `name`. A filter and a rule name a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
 `listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
@@ -321,7 +321,7 @@ The detail adds these:
 | `topics` | The topics the story matched |
 | `snippetOnly` | True when no source page could be read |
 | `autoSummary` | The summary a model wrote of a feed article: `text`, `source` and `createdAt`. `source` is `page` when it was written from the article's page, and `feed` when that page could not be read and only what the feed delivered was used. `null` when there is no summary, and always for a generated article |
-| `autoSummaryPending` | True while a feed article waits for its summary. It stops waiting when it is read |
+| `autoSummaryPending` | True while a feed article waits for its summary. It stops waiting when it is read, unless a reader or a [rule](#rules) asked for the summary |
 | `translatedTitle` | The title of a feed article in the output language, also in the list. `title` stays the original. `null` when there is no translation |
 | `translatable` | True for an article of a subscribed feed that has `translate` switched on. Only such an article can be translated |
 | `sourceLanguage` | The language of the original as the translation API found it, such as `en`. `null` when a model translated or nothing did |
@@ -724,6 +724,44 @@ New filters and changed ones apply to the articles already stored. The scope of 
 Status 400 answers a wrong regular expression, a keep filter over everything, and a scope that names a missing category or feed. Its `fields` name the problem, for example `conditions.1.value`. A filter with the same action, scope and conditions as a registered one gets status 409.
 
 `POST /api/v1/filters/preview` takes the body of `POST /api/v1/filters` and answers with a count such as `{"hiddenCount":3}`. It counts like `hiddenCount`, as if the filter were saved and on. With `id` in the body, that registered filter is left out of the count, which shows what a change would do. Nothing is stored.
+
+## Rules
+
+Rules act on a feed article once, when it is first stored. They take the conditions and scope of [filters](#filters) and do one or more of four things: `star` stars the article, `read` marks it read, `notify` makes it one the Android app notifies, and `summarize` asks for its automatic summary. An article that meets several enabled rules gets the actions of them all. An article marked read is not notified.
+
+A rule never applies to what is stored already: not when it is added, changed or switched on, and not when a feed rewrites an item it delivered before. It leaves alone an article that a filter hides when it is stored, a hidden [duplicate](#duplicates-across-feeds), and generated articles. No model is called to match a rule.
+
+A summary a rule asks for is written even when the article's feed has `autoSummarize` off, and after the article is read. It comes after the summaries a reader asked for by opening an article, and before the others, the latest request first. It counts towards `summariesPerDay`; what the day cannot take waits for the next day.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/rules` | List the rules |
+| `POST /api/v1/rules` | Add one (status 201) |
+| `PATCH /api/v1/rules/:id` | Change its scope, conditions or actions, or switch it on or off |
+| `DELETE /api/v1/rules/:id` | Remove it (status 204). What it did to articles stays |
+| `POST /api/v1/rules/preview` | Count the stored feed articles a rule meets, without saving it |
+| `GET /api/v1/rule-notifications` | The unread feed articles a rule made ones to notify, for the app's periodic check |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"scope":{"type":"all"},"conditions":[{"fields":["title"],"match":"contains","value":"outage"}],"actions":["star","notify"]}' \
+  "$API/api/v1/rules"
+```
+
+Rule fields:
+
+| Field | Content |
+|---|---|
+| `scope` | As a filter's: `{"type":"all"}`, `{"type":"category","categoryId":1}` or `{"type":"feed","feedId":2}` |
+| `conditions` | As a filter's: 1 to 10 conditions; an article must meet all of them |
+| `actions` | One or more of `star`, `read`, `notify` and `summarize`, each once. Answered in that order |
+| `enabled` | `false` keeps the rule without applying it. `true` by default |
+
+Status 400 answers a rule without an action, a wrong regular expression, and a scope that names a missing category or feed. A rule with the same scope, conditions and actions as a registered one gets status 409. Deleting a category or a feed deletes the rules of that scope.
+
+`POST /api/v1/rules/preview` takes `scope` and `conditions` and answers with a count such as `{"matchCount":3}`: the stored feed articles of the scope that meet the conditions, without those a filter hides and hidden duplicates. Nothing is stored and no article changes.
+
+`GET /api/v1/rule-notifications` answers `items`, newest first by `notifiedAt`, the time a rule made the article one to notify. Each item has `notifiedAt`, `feedTitle` and `article`, which has the fields of an article in the list. Only unread articles that no filter hides are listed. `after` takes a time and keeps the articles made ones to notify after it; `limit` takes 1 to 200 and is 50 by default.
 
 ## List views
 

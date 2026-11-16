@@ -531,3 +531,87 @@ describe("marking read without opening", () => {
     expect(opens(requests)).toEqual([]);
   });
 });
+
+describe("a row kept in the unread list", () => {
+  const isRead = (name: RegExp) => expect(label(name)).toMatch(/既読$/);
+  const isUnread = (name: RegExp) => expect(label(name)).toMatch(/未読$/);
+
+  async function readBySwipe(offline: () => boolean = () => false) {
+    const server = await makeServer();
+    const id = await server.article((await server.category()).id, { title: "Story" });
+    await renderApp({ server, offline });
+    await screen.findByText("Story");
+    await fireEvent(screen.getByTestId(`row-${id}`), "swipeableOpen", "right");
+    await eventually(async () => expect((await article(server, id)).isRead).toBe(true));
+    await waitFor(() => isRead(/Story/));
+    return { server, id };
+  }
+
+  it("shows a follow-up with its new title and unread once the list is fetched again", async () => {
+    const { server, id } = await readBySwipe();
+
+    await server.advance(MINUTE);
+    await server.core("reviseArticle", id, {
+      title: "Story, patched",
+      summary: "Now patched.",
+      body: "Second version.",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.now().toISOString(),
+      refs: [],
+      topicIds: [],
+    });
+    // A star fetches the lists again.
+    const user = userEvent.setup();
+    await user.longPress(screen.getByRole("button", { name: /Story/ }));
+    await user.press(await screen.findByRole("button", { name: "スターを付ける" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Story, patched"]));
+    await waitFor(() => isUnread(/Story, patched/));
+  });
+
+  it("shows unread again when reading it by a swipe fails, though the article was never opened", async () => {
+    const server = await makeServer();
+    const id = await server.article((await server.category()).id, { title: "Story" });
+    let offline = false;
+    const { requests } = await renderApp({ server, offline: () => offline });
+    await screen.findByText("Story");
+
+    offline = true;
+    await fireEvent(screen.getByTestId(`row-${id}`), "swipeableOpen", "right");
+
+    await waitFor(() => expect(requests).toContain(`PATCH /api/v1/articles/${id}`));
+    await waitFor(() => isUnread(/Story/));
+    expect((await article(server, id)).isRead).toBe(false);
+  });
+
+  it("takes the star off again when adding it from the long press menu fails", async () => {
+    let offline = false;
+    const { server, id } = await readBySwipe(() => offline);
+
+    offline = true;
+    const user = userEvent.setup();
+    await user.longPress(screen.getByRole("button", { name: /Story/ }));
+    await user.press(await screen.findByRole("button", { name: "スターを付ける" }));
+
+    await waitFor(() => expect(label(/Story/)).not.toContain("スター"));
+    isRead(/Story/);
+    expect((await article(server, id)).starred).toBe(false);
+  });
+
+  it("shows unread again when putting it back to unread from the long press menu fails", async () => {
+    let offline = false;
+    const { server, id } = await readBySwipe(() => offline);
+
+    offline = true;
+    const user = userEvent.setup();
+    await user.longPress(screen.getByRole("button", { name: /Story/ }));
+    await user.press(await screen.findByRole("button", { name: "未読に戻す" }));
+
+    await waitFor(() => isRead(/Story/));
+    expect((await article(server, id)).isRead).toBe(true);
+  });
+});

@@ -1,6 +1,6 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
-import { baselineFrom, minImportanceFor, NOTIFY_SETTING_LABEL, planDigestNotification, planNotifications } from "./notify.ts";
+import { baselineFrom, BEGINNING, minImportanceFor, NOTIFY_SETTING_LABEL, planDigestNotification, planNotifications } from "./notify.ts";
 
 let serial = 0;
 function article(overrides: Partial<ArticleSummary> = {}): ArticleSummary {
@@ -76,7 +76,7 @@ describe("planNotifications", () => {
     expect(plan.notifications.map((entry) => entry.body).sort()).toEqual(["Cars", "Security"]);
   });
 
-  it("never notifies a feed article, even when set to all", () => {
+  it("does not notify a feed article that no rule made one to notify, even when set to all", () => {
     const generated = article({ updatedAt: "2026-03-01T07:00:00.000Z", importance: 2 });
     const delivered = article({ origin: "feed", feedId: 4, importance: null, updatedAt: "2026-03-01T08:00:00.000Z" });
 
@@ -93,7 +93,7 @@ describe("planNotifications", () => {
 
   it("notifies nothing when set to off, and leaves the checked time alone", () => {
     const plan = planNotifications({ setting: "off", articles: [article()], checkedAt: CHECKED, categories });
-    expect(plan).toEqual({ notifications: [], checkedAt: CHECKED });
+    expect(plan).toEqual({ notifications: [], checkedAt: CHECKED, ruleCheckedAt: null });
   });
 
   it("leaves out an article that was read elsewhere", () => {
@@ -165,6 +165,67 @@ describe("planNotifications", () => {
   it("names a category it does not know by nothing rather than failing", () => {
     const plan = planNotifications({ setting: "all", articles: [article({ categoryId: 99 })], checkedAt: CHECKED, categories });
     expect(plan.notifications[0]).toMatchObject({ body: "" });
+  });
+});
+
+describe("planNotifications with feed articles a rule made ones to notify", () => {
+  const RULE_CHECKED = "2026-03-01T06:00:00.000Z";
+  const ruled = (notifiedAt: string, overrides: Partial<ArticleSummary> = {}, feedTitle = "Status") => ({
+    notifiedAt,
+    feedTitle,
+    // A feed article dated long before: what counts is when the rule made it one to notify.
+    article: article({ origin: "feed", feedId: 4, importance: null, categoryId: null, updatedAt: "2026-01-01T00:00:00.000Z", ...overrides }),
+  });
+
+  it("notifies them with their feed's name even when set to importance 5 only", () => {
+    const entry = ruled("2026-03-01T07:00:00.000Z", { title: "障害" });
+    const plan = planNotifications({ setting: "important", articles: [], checkedAt: CHECKED, categories, ruled: [entry], ruleCheckedAt: RULE_CHECKED });
+    expect(plan.notifications).toEqual([{ kind: "article", articleId: entry.article.id, title: "障害", body: "Status" }]);
+    expect(plan.ruleCheckedAt).toBe("2026-03-01T07:00:00.000Z");
+  });
+
+  it("leaves out the ones made before the last check and the read ones", () => {
+    const plan = planNotifications({
+      setting: "all",
+      articles: [],
+      checkedAt: CHECKED,
+      categories,
+      ruled: [ruled("2026-03-01T05:00:00.000Z"), ruled("2026-03-01T07:00:00.000Z", { isRead: true })],
+      ruleCheckedAt: RULE_CHECKED,
+    });
+    expect(plan.notifications).toEqual([]);
+    expect(plan.ruleCheckedAt).toBe("2026-03-01T07:00:00.000Z");
+  });
+
+  it("only records where they stand on a device that never looked at them", () => {
+    const plan = planNotifications({ setting: "important", articles: [], checkedAt: CHECKED, categories, ruled: [ruled("2026-03-01T07:00:00.000Z")], ruleCheckedAt: null });
+    expect(plan.notifications).toEqual([]);
+    expect(plan.ruleCheckedAt).toBe("2026-03-01T07:00:00.000Z");
+    expect(planNotifications({ setting: "important", articles: [], checkedAt: CHECKED, categories, ruled: [], ruleCheckedAt: null }).ruleCheckedAt).toBe(BEGINNING);
+  });
+
+  it("counts them with the generated articles, and folds four together", () => {
+    const generated = [article({ title: "Critical", importance: 5, updatedAt: "2026-03-01T06:00:00.000Z" }), article({ importance: 4 })];
+    const plan = planNotifications({
+      setting: "all",
+      articles: generated,
+      checkedAt: CHECKED,
+      categories,
+      ruled: [ruled("2026-03-01T07:00:00.000Z"), ruled("2026-03-01T07:10:00.000Z")],
+      ruleCheckedAt: RULE_CHECKED,
+    });
+    expect(plan.notifications).toEqual([{ kind: "summary", count: 4, title: "新着の記事が4件あります", body: "Critical" }]);
+  });
+
+  it("heads a fold of feed articles alone with the latest of them", () => {
+    const entries = ["一", "二", "三", "四"].map((title, index) => ruled(`2026-03-01T07:0${index}:00.000Z`, { title }));
+    const plan = planNotifications({ setting: "important", articles: [], checkedAt: CHECKED, categories, ruled: entries, ruleCheckedAt: RULE_CHECKED });
+    expect(plan.notifications).toEqual([{ kind: "summary", count: 4, title: "新着の記事が4件あります", body: "四" }]);
+  });
+
+  it("notifies nothing when set to off, and leaves both marks alone", () => {
+    const plan = planNotifications({ setting: "off", articles: [], checkedAt: CHECKED, categories, ruled: [ruled("2026-03-01T07:00:00.000Z")], ruleCheckedAt: RULE_CHECKED });
+    expect(plan).toEqual({ notifications: [], checkedAt: CHECKED, ruleCheckedAt: RULE_CHECKED });
   });
 });
 

@@ -12,6 +12,7 @@ import { RunsPage } from "./runs/RunsPage.tsx";
 import { CategoryPage } from "./settings/CategoryPage.tsx";
 import { FeedsPage } from "./settings/FeedsPage.tsx";
 import { FiltersPage } from "./settings/FiltersPage.tsx";
+import { RulesPage } from "./settings/RulesPage.tsx";
 import { TermHighlightsPage } from "./settings/TermHighlightsPage.tsx";
 import { SettingsPage } from "./settings/SettingsPage.tsx";
 import { NotFound, Shell } from "./shell/Shell.tsx";
@@ -53,6 +54,7 @@ const routes: RouteObject[] = [
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
       { path: "settings/feeds", element: <FeedsPage /> },
       { path: "settings/filters", element: <FiltersPage /> },
+      { path: "settings/rules", element: <RulesPage /> },
       { path: "settings/term-highlights", element: <TermHighlightsPage /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId", element: <RunPage /> },

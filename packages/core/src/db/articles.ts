@@ -80,15 +80,19 @@ export const SUMMARY_ATTEMPTS = 2;
  * A feed article `a` that waits for a summary: its feed summarises, it was stored after the feed began to,
  * and it is unread, visible, without a summary and not given up on.
  */
-/** Everything that makes a feed article one that gets a summary, apart from whether it has been read. */
+/**
+ * Everything that makes a feed article one that gets a summary, apart from whether it has been read. A rule
+ * that asked for the summary makes it one whatever its feed says.
+ */
 const CAN_BE_SUMMARIZED = `a.origin = 'feed' AND a.auto_summary IS NULL AND a.auto_summary_skipped = 0
   AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT ${hiddenByFilters("a")}
-  AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since)`;
+  AND (a.rule_summary_requested_at IS NOT NULL
+    OR EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since))`;
 
 // An article that was read is left out, and so is a hidden duplicate, whose summary the kept article has;
-// either is in, though, when a reader opened it while its summary was waited for.
+// either is in, though, when a reader opened it while its summary was waited for, or a rule asked for it.
 const WAITING_FOR_SUMMARY = `${CAN_BE_SUMMARIZED}
-  AND ((a.is_read = 0 AND NOT ${hiddenDuplicate("a")}) OR a.auto_summary_requested_at IS NOT NULL)`;
+  AND ((a.is_read = 0 AND NOT ${hiddenDuplicate("a")}) OR a.auto_summary_requested_at IS NOT NULL OR a.rule_summary_requested_at IS NOT NULL)`;
 
 /**
  * A feed article `a` that waits for its full content: its feed fetches full content, it was stored after the
@@ -130,7 +134,7 @@ const UNREAD_FOLLOW_UPS = `CASE WHEN a.origin = 'generated' AND a.starred = 1 TH
     SELECT count(DISTINCT d.id) FROM down d JOIN articles r ON r.id = d.id WHERE r.is_read = 0 AND d.id <> a.id
   ) ELSE 0 END`;
 
-const SUMMARY_COLUMNS = `a.*,
+export const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
   (SELECT count(*) FROM article_refs r WHERE r.article_id = a.id) AS ref_count,
   ${followsStarred("a")} AS follows_starred,
@@ -149,7 +153,7 @@ function toEvent(row: Row): ArticleEvent | null {
   };
 }
 
-function toSummary(row: Row): ArticleSummary {
+export function toSummary(row: Row): ArticleSummary {
   return {
     id: num(row.id),
     categoryId: numOrNull(row.category_id),
@@ -668,14 +672,18 @@ export interface ArticleToSummarize {
   contentText: string;
 }
 
-/** The feed article that is summarised next: of those that wait, the newest by the time the lists sort by. */
+/**
+ * The feed article that is summarised next: of those that wait, what a reader asked for last, then what a rule
+ * asked for last, then the newest by the time the lists sort by.
+ */
 export function nextArticleToSummarize(db: Database): ArticleToSummarize | null {
   const row = db
     .prepare(
       `SELECT a.id, a.title, a.content_text,
               (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
          FROM articles a WHERE ${WAITING_FOR_SUMMARY}
-        ORDER BY a.auto_summary_requested_at IS NULL, a.auto_summary_requested_at DESC, a.updated_at DESC, a.id DESC LIMIT 1`,
+        ORDER BY a.auto_summary_requested_at IS NULL, a.auto_summary_requested_at DESC,
+                 a.rule_summary_requested_at IS NULL, a.rule_summary_requested_at DESC, a.updated_at DESC, a.id DESC LIMIT 1`,
     )
     .get();
   return row ? { id: num(row.id), title: str(row.title), url: strOrNull(row.url), contentText: str(row.content_text) } : null;

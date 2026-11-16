@@ -1,4 +1,14 @@
-import { createTopic, getArticle, insertArticle, insertFeed, listListViews, markArticlesRead, setArticleFlags, updateListView } from "@smarternews/core";
+import {
+  createTopic,
+  getArticle,
+  insertArticle,
+  insertFeed,
+  listListViews,
+  markArticlesRead,
+  reviseArticle,
+  setArticleFlags,
+  updateListView,
+} from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -1251,6 +1261,36 @@ describe("read state", () => {
     await waitFor(() => expect(row(/First/)).toHaveAttribute("data-read", "true"));
     await user.click(screen.getByRole("link", { name: /First/ }));
     expect(await screen.findByRole("heading", { level: 2, name: "First" })).toBeInTheDocument();
+  });
+
+  it("shows a follow-up to an article read in the unread list with its new title and unread once the list is fetched again", async () => {
+    const server = makeServer();
+    const id = server.article(server.category().id, { title: "Story" });
+    const { user } = renderApp({ server });
+    await user.click(await screen.findByRole("link", { name: /Story/ }));
+    await screen.findByRole("heading", { level: 2, name: "Story" });
+    await waitFor(() => expect(getArticle(server.db, id).isRead).toBe(true));
+    await waitFor(() => expect(row(/Story/)).toHaveAttribute("data-read", "true"));
+
+    server.clock.advance(MINUTE);
+    reviseArticle(server.db, id, {
+      title: "Story, patched",
+      summary: "Now patched.",
+      body: "Second version.",
+      impact: null,
+      importance: 3,
+      unconfirmed: false,
+      snippetOnly: false,
+      event: null,
+      now: server.clock().toISOString(),
+      refs: [],
+      topicIds: [],
+    });
+    // A star fetches the lists again.
+    await user.keyboard("s");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Story, patched"]));
+    expect(row(/Story, patched/)).toHaveAttribute("data-read", "false");
   });
 
   it("keeps an unread article opened directly in the unread list, when it was read before the list arrived", async () => {

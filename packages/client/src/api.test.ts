@@ -144,7 +144,7 @@ describe("the API client", () => {
     server.category("Security");
     const text = await api.exportSettings();
     expect(text).toContain("slug: security");
-    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
+    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
   });
 
   it("subscribes to a feed, changes it, fetches it now and deletes it", async () => {

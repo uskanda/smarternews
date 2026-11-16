@@ -7,6 +7,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button } from "../ui/controls.tsx";
 import { feedDeletionText } from "./feed-deletion.ts";
 import { ScopedFiltersNote } from "./ScopedFiltersNote.tsx";
+import { ScopedRulesNote } from "./ScopedRulesNote.tsx";
 
 /**
  * The question before unsubscribing from a feed, and the unsubscribing itself. The menu of the left pane, the
@@ -40,7 +41,7 @@ export function FeedDeletionDialog({
     try {
       await api.deleteFeed(target.id);
       // The annotations of the feed's articles go with them.
-      for (const key of ["feeds", "counts", "articles", "filters", "annotations"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["feeds", "counts", "articles", "filters", "rules", "annotations"]) void client.invalidateQueries({ queryKey: [key] });
       toast({ message: "購読フィードの登録を解除しました" });
       onDeleted?.(target);
     } catch {
@@ -69,6 +70,7 @@ export function FeedDeletionDialog({
         <>
           <p>{feedDeletionText(feed)}</p>
           <ScopedFiltersNote target={{ feedId: feed.id }} />
+          <ScopedRulesNote target={{ feedId: feed.id }} />
           <p>記事を残したまま取得だけを止めるには、{pauseWhere}で一時停止にしてください。</p>
         </>
       ) : null}

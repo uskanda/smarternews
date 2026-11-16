@@ -20,6 +20,7 @@ import {
 import { num, str } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyFilters } from "../db/filters.ts";
+import { applyRules } from "../db/rules.ts";
 import { refreshTermMatches } from "../db/term-matches.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
@@ -280,7 +281,11 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     );
     setReference(db, id, item.url, feedTitle, item.title);
     applyFilters(db, id);
-    if (kept === null) titled.push(id);
+    if (kept === null) {
+      titled.push(id);
+      // Once, here, after the filters: a hidden duplicate and what a filter hides are left alone.
+      applyRules(db, id, nowIso);
+    }
     toMatch.push(id);
   }
   refreshTermMatches(db, toMatch);
