@@ -564,6 +564,16 @@ export const articleSummarySchema = z.object({
    */
   openedAt: z.string().nullable(),
   starred: z.boolean(),
+  /**
+   * True for a generated article whose chain of earlier articles, at most 20, has a starred one: a follow-up of a
+   * story the reader starred. False for a feed article.
+   */
+  followsStarred: z.boolean(),
+  /**
+   * For a starred generated article, how many of the later articles of its story, followed at most 20 steps, are
+   * unread. Zero for any other article.
+   */
+  unreadFollowUps: z.number().int(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
   event: articleEventSchema.nullable(),
@@ -623,6 +633,11 @@ export const articleSchema = articleSummarySchema.extend({
    */
   previousArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
   /**
+   * The later articles on the story, newest first, at most 20: the articles that follow this one up, the ones that
+   * follow those up, and so on. It ends where the chain comes back on itself. Empty for an article without one.
+   */
+  laterArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
+  /**
    * The other feeds that delivered a feed article, in the order their copies were stored: one entry per
    * copy recorded as a duplicate of this article. Empty for an article without duplicates.
    */
@@ -681,6 +696,8 @@ export const articleListQuerySchema = z.object({
   kind: kindSchema.optional(),
   unread: z.enum(["true", "false"]).optional(),
   starred: z.enum(["true", "false"]).optional(),
+  /** Only the starred articles and those that follow a starred one up (`followsStarred`). */
+  starredStory: z.enum(["true"]).optional(),
   includeEnded: z.enum(["true", "false"]).optional(),
   minImportance: z.coerce.number().int().min(1).max(5).optional(),
   /**

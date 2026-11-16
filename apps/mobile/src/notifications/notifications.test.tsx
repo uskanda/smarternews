@@ -127,6 +127,22 @@ describe("the periodic check", () => {
     expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "Zero-day", body: "Security", data: { articleId: urgent } }]);
   });
 
+  it("notifies a follow-up of a starred story of importance 3 when set to importance 5 only", async () => {
+    const server = await makeServer();
+    const category = await server.category("Security");
+    const starred = await server.article(category.id, { title: "Breach disclosed", importance: 3 });
+    await server.sql("UPDATE articles SET starred = 1, is_read = 1 WHERE id = ?", starred);
+    await watching(server);
+    await server.advance(MINUTE);
+    const later = await server.article(category.id, { title: "Breach: lawsuit filed", importance: 3 });
+    await server.sql("UPDATE articles SET previous_article_id = ? WHERE id = ?", starred, later);
+    await server.article(category.id, { title: "Routine", importance: 3 });
+
+    expect(await runCheck()).toBe("notified");
+
+    expect(notifications().shown.map((entry) => entry.content)).toEqual([{ title: "Breach: lawsuit filed", body: "Security", data: { articleId: later } }]);
+  });
+
   it("notifies both when set to everything", async () => {
     const server = await makeServer();
     const category = await server.category();

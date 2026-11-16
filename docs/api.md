@@ -234,9 +234,10 @@ Query parameters of the list:
 | `kind` | `news` or `event` |
 | `unread` | `true` or `false` |
 | `starred` | `true` or `false` |
+| `starredStory` | `true` for the starred articles and the articles that follow a starred one up (`followsStarred`) |
 | `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
-| `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred`, `minImportance` or `order` |
+| `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred`, `starredStory`, `minImportance` or `order` |
 | `order` | `newest` (the default), `oldest` or `relevance`. See below. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
@@ -305,6 +306,8 @@ Fields of an article in the list:
 | `revision` | How many times a follow-up rewrote it |
 | `updateNote` | One or two sentences on what the last rewrite by a follow-up added, in the output language. `null` for an article never rewritten, when the model gave none, after a rewrite whose writer did not read the earlier article (the same event found under another headline), and for a feed article |
 | `isRead`, `starred` | The reader's marks |
+| `followsStarred` | True for a generated article that follows a starred one up: one of its earlier articles (`previousArticles`, at most 20) has a star. False for a feed article |
+| `unreadFollowUps` | For a starred generated article, how many of its later articles, followed at most 20 steps, are unread. `0` for any other article |
 | `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
 | `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
@@ -328,6 +331,7 @@ The detail adds these:
 | `translation` | The stored translation of the content, in the shape `POST /api/v1/articles/:id/translation` returns. `null` until the article is translated |
 | `previousArticleId` | The earlier article of the same story, when the follow-up came more than 72 hours later |
 | `previousArticles` | The chain of earlier articles of the same story, newest first, at most 20: the article of `previousArticleId`, the article that one follows up, and so on. Each has `id`, `title` and `firstPublishedAt`. The chain ends where an article was deleted or where it comes back on itself. Empty without `previousArticleId` |
+| `laterArticles` | The later articles of the same story, newest first by `firstPublishedAt`, at most 20: the articles whose `previousArticleId` is this one, the articles that follow those up, and so on, in the same shape as `previousArticles`. Given for every generated article, starred or not. Empty when nothing follows the article up |
 | `otherFeeds` | The other feeds that delivered a feed article: one entry per copy recorded as its duplicate, with `articleId` (the copy), `feedId` and `feedTitle`, in the order the copies were stored. Empty for an article without duplicates |
 | `summarizedIn` | The generated article a run wrote a feed article into, as `id` and `title`. `null` when no run did, and for a generated article |
 | `feedArticles` | The feed articles a run wrote into a generated article, in the order they were stored: `articleId`, `feedId`, `feedTitle` and `title` each. Articles the filters hide are left out. Empty for a feed article |
