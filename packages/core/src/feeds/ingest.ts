@@ -7,6 +7,7 @@ import type { Clock } from "../clock.ts";
 import { transaction, type Database } from "../db/database.ts";
 import {
   checkFeedCategory,
+  checkTopicSource,
   FEED_RETENTION_DAYS,
   fetchConditions,
   findFeed,
@@ -408,6 +409,8 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
   const url = normalizeUrl(input.url);
   if (findFeedByUrl(db, url)) throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   checkFeedCategory(db, input.categoryId);
+  // Refused before anything is fetched.
+  checkTopicSource(input.topicSource, input.categoryId);
 
   const result = input.format === "page" && input.selectors !== undefined ? await firstPage(deps, url, input.selectors) : await firstFeed(deps, url);
   const now = clock();
@@ -427,6 +430,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         autoSummarize: input.autoSummarize,
         translate: input.translate,
         fetchFullContent: input.fetchFullContent,
+        topicSource: input.topicSource,
       },
       clock,
     );
