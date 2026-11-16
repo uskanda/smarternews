@@ -28,7 +28,7 @@ GitHubのissueの233番は、Webの一覧からその一覧の記事をまとめ
 
 ## Impact
 
-- `packages/core`: 移行 `034_list_digests.sql` で `digests` を作り直し、`trigger` に `list` を、列 `target` を足す。
+- `packages/core`: 移行 `037_list_digests.sql` で `digests` を作り直し、`trigger` に `list` を、列 `target` を足す。
 - `packages/core`: APIの型、`digestPeriodStart`、`listDigests`、`saveDigest` を変え、対象の記事を集める `listDigestArticles` を足す。ダイジェストのタスクの入力、`makeDigest` を変え、`DigestWorker` に `buildFromList` を足す。
 - `apps/server`: `POST /digests` の本文の `target` と、`GET /digests` の絞り込み `kind=period` を受ける。
 - `packages/client`: APIの呼び出しの型を合わせる。

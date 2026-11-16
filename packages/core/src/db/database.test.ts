@@ -1397,7 +1397,7 @@ describe("the migration to list digests", () => {
 
   it("allows the trigger list with a target, and keeps the digests and their constraints", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "034")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "037")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const insert = db.prepare(
@@ -1409,7 +1409,7 @@ describe("the migration to list digests", () => {
     const rows = () => db.prepare("SELECT * FROM digests ORDER BY id").all();
     const before = rows();
 
-    const file = readdirSync(SHIPPED).find((name) => name.startsWith("034_"))!;
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("037_"))!;
     copyFileSync(join(SHIPPED, file), join(dir, file));
     migrate(db, dir);
 

@@ -25,7 +25,7 @@
 ### 対象を列 `target` に持つ
 
 `digests` に `target`（JSON、NULL可）を足す。中身は種類（`mention` / `search` / `starred`）、名前または検索語と絞り込み（`category`・`feed`・`unread`）、表示用の説明 `label` である。`trigger` には `list` を足す。
-SQLiteはCHECK制約を変えられないので、移行 `034_list_digests.sql` で表を作り直し、行をidごと移す。期間の列はNOT NULLのままにし、一覧のダイジェストには入力の記事の時刻の最古と最新を入れる。
+SQLiteはCHECK制約を変えられないので、移行 `037_list_digests.sql` で表を作り直し、行をidごと移す。期間の列はNOT NULLのままにし、一覧のダイジェストには入力の記事の時刻の最古と最新を入れる。
 `digestPeriodStart` は `target IS NULL` の行だけを見る。`trigger = 'list'` で見分けることもできるが、対象の有無で見分けるほうが、対象を持つきっかけが増えても正しい。
 
 ### 説明はサーバーが作る
