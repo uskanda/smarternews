@@ -12,7 +12,7 @@ smarternews calls a language model for ten tasks. A provider is a model you conf
 | `summarize` | Summarises one article of a subscribed feed | Once per article of a feed that has summaries switched on |
 | `translate` | Translates the title and the content of one article of a subscribed feed | When an article of a feed that translates is opened and the translation API cannot be used; once per 8,000 characters |
 | `proposeSelectors` | Proposes CSS selectors that take the articles out of a page without a feed | When you ask for candidates while adding a web feed, or choose "候補を出し直す" while editing one |
-| `digest` | Writes the digest of a period: an executive summary and a few lines per category | At the times of the digest schedule in the settings, 7:00 and 19:00 by default, and when you choose "今すぐ作る" |
+| `digest` | Writes the digest of a period: an executive summary and a few lines per category | At the times of the digest schedule in the settings, 7:00 and 19:00 by default, and when you choose "いま作る" |
 | `proposeTopicRewrite` | Proposes one or two new wordings of a topic, with what changed | When you choose "書き直しの案を出す" in the editor of a topic |
 
 Providers and assignments live in `~/.config/smarternews/config.yaml`. The server reads the file at start-up and refuses to start when an assignment names a provider that is not configured. [examples/config.example.yaml](../examples/config.example.yaml) lists every key.

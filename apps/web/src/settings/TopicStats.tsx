@@ -20,6 +20,7 @@ const SOURCE_LABEL: Record<SourceKind, string> = {
   feed: "フィード",
   "news-search": "ニュース検索",
   "llm-search": "LLM検索",
+  subscription: "購読フィード",
 };
 
 /** "1/4件（25%）": a part of the articles the topic made, and its share rounded to a whole percent. */
