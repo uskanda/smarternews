@@ -25,5 +25,5 @@
 
 ## 5. 全体の確かめ
 
-- [ ] 5.1 `make verify` が通ることを確かめる
+- [x] 5.1 `make verify` が通ることを確かめる
 - [x] 5.2 `openspec validate check-search-and-highlight-limits --strict` が通ることを確かめる
