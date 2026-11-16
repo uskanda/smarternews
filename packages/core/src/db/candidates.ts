@@ -31,6 +31,8 @@ export interface NewCandidate {
   reasonCode: ReasonCode | null;
   importance: number | null;
   topicIds: number[];
+  /** The feed article of a topic source the candidate was found as, whatever source found it first. */
+  feedArticleId?: number | null;
   now: string;
 }
 
@@ -39,8 +41,8 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
     .prepare(
       `INSERT INTO candidates
          (category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-          reason_code, importance, created_at, site_host)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reason_code, importance, created_at, feed_article_id, site_host)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       candidate.categoryId,
@@ -57,6 +59,7 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
       candidate.reasonCode,
       candidate.importance,
       candidate.now,
+      candidate.feedArticleId ?? null,
       candidate.siteHost ?? candidateHost(candidate.url, null),
     );
   const id = num(result.lastInsertRowid);
@@ -80,6 +83,8 @@ export interface PendingCandidate {
   reason: string;
   judgedImportance: number | null;
   topicIds: number[];
+  /** The feed article the candidate was found as; null when no topic source delivered it, or once it is gone. */
+  feedArticleId: number | null;
 }
 
 function topicIdsOf(db: Database, candidateId: number): number[] {
@@ -105,6 +110,7 @@ export function listPending(db: Database, categoryId: number): PendingCandidate[
       reason: str(row.reason),
       judgedImportance: numOrNull(row.importance),
       topicIds: topicIdsOf(db, num(row.id)),
+      feedArticleId: numOrNull(row.feed_article_id),
     }));
 }
 

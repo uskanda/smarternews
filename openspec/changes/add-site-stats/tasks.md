@@ -11,7 +11,7 @@
 ## 2. データ
 
 - [x] 2.1 `pipeline/reasons.ts` に `blocked-site` を足し、`reasons.test.ts` で文を確かめる。`028` の移行のテストを、`028` の時点の種類に絞る
-- [x] 2.2 `034_site_hosts.sql` と `sn_candidate_host` を足す。`database.test.ts` で、保存済みの候補のホスト名、未解決の候補の空のホスト名、`blocked-site` を許すCHECK、`candidate_topics` が残ることを確かめる
+- [x] 2.2 `038_site_hosts.sql` と `sn_candidate_host` を足す。`database.test.ts` で、保存済みの候補のホスト名、未解決の候補の空のホスト名、`blocked-site` を許すCHECK、`candidate_topics` が残ることを確かめる
 - [x] 2.3 `insertCandidate` が `site_host` を保存するようにする
 
 ## 3. 実行

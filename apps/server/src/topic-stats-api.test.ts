@@ -34,7 +34,7 @@ describe("the topic stats API", () => {
     const body = topicStatsSchema.parse(await response.json());
     expect(body.topics.map((entry) => entry.topicId)).toEqual([topic.id, quiet.id]);
     expect(body.topics[0]).toMatchObject({
-      collected: { total: 1, bySource: { feed: 0, "news-search": 1, "llm-search": 0 } },
+      collected: { total: 1, bySource: { feed: 0, "news-search": 1, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 1,
       created: 1,
       topRejectedSites: [{ host: "example.org", count: 1 }],

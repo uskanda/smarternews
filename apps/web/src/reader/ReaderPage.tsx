@@ -421,6 +421,17 @@ export function ReaderPage({ view }: { view: View }) {
   const listPath = `${basePath}${query}`;
   const categoryName = (categoryId: number | null) => categories.data?.find((entry) => entry.id === categoryId)?.name ?? "";
   const feedName = (feedId: number | null) => feeds.data?.find((entry) => entry.id === feedId)?.title ?? "";
+  /**
+   * Where the feed's name in the article leads: the unread list of that feed, as the left pane opens it. A wide
+   * screen keeps the article open beside it; a narrow one shows the list alone. None in the list of that feed.
+   */
+  const feedListPath = (article: Article): string | null => {
+    const feedId = article.feedId;
+    if (feedId === null || !feeds.data?.some((entry) => entry.id === feedId)) return null;
+    if (view === "feed" && feed?.id === feedId) return null;
+    const path = listPathOf({ type: "feed", feedId }, () => undefined)!;
+    return layout === "narrow" ? path : `${path}/${article.id}`;
+  };
   /** What a row shows beside the time: the feed of a feed article, the category of a generated one. */
   const sourceName = (item: ArticleSummary) => (item.origin === "feed" ? feedName(item.feedId) : categoryName(item.categoryId));
 
@@ -934,6 +945,12 @@ export function ReaderPage({ view }: { view: View }) {
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
           {(view === "feeds" || view === "uncategorized") && categories.data ? <AddFeedDialog categories={categories.data} /> : null}
           {view === "feed" && feed ? <FeedOptionsDialog feed={feed} /> : null}
+          {/* The site the feed belongs to, known once a fetch has told it; never guessed from the feed's address. */}
+          {view === "feed" && feed?.siteUrl ? (
+            <a href={feed.siteUrl} target="_blank" rel="noopener noreferrer" className="tap self-center type-body-md text-primary underline underline-offset-4">
+              サイトを開く
+            </a>
+          ) : null}
           {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
           {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}
           {isSearch ? (
@@ -1067,6 +1084,7 @@ export function ReaderPage({ view }: { view: View }) {
               id={articleId}
               categoryName={categoryName}
               feedName={feedName}
+              feedListPath={feedListPath}
               timeZone={timeZone}
               backTo={layout === "narrow" ? listPath : null}
               articlePath={articlePath}

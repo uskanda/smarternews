@@ -30,6 +30,7 @@ import { recentMissTitles } from "../db/misses.ts";
 import { finishRun, getRun, startRun } from "../db/runs.ts";
 import { recordSearchAttempt, type SearchAttempt } from "../db/search-attempts.ts";
 import { getSettings } from "../db/settings.ts";
+import { deliveredText, listTopicSourceArticles, recordSummarizedIn } from "../db/topic-sources.ts";
 import { applyInterpretation, listTopics } from "../db/topics.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { candidateHost } from "../fetch/url.ts";
@@ -46,7 +47,7 @@ import { resolveEvent } from "./events.ts";
 import { reasonText, type MarkReasonCode, type ReasonCode } from "./reasons.ts";
 
 export interface PipelineConfig {
-  limits: { judgeBatchSize: number; pagesPerRun: number };
+  limits: { judgeBatchSize: number; pagesPerRun: number; subscriptionCandidatesPerRun: number };
   newsSearch: { engines: NewsEngine[]; maxResultsPerQuery: number };
 }
 
@@ -85,6 +86,8 @@ interface Found {
   candidate: RawCandidate;
   topicIds: Set<number>;
   aliases: Set<string>;
+  /** The feed article of a topic source that delivered the page, whichever source found it first. */
+  feedArticleId: number | null;
 }
 
 function message(error: unknown): string {
@@ -159,7 +162,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     try {
       const loaded = await load();
       for (const candidate of loaded.candidates) {
-        const entry = found.get(candidate.url) ?? { candidate, topicIds: new Set<number>(), aliases: new Set<string>() };
+        const entry = found.get(candidate.url) ?? { candidate, topicIds: new Set<number>(), aliases: new Set<string>(), feedArticleId: null };
         entry.topicIds.add(topic.id);
         for (const alias of candidate.aliases) entry.aliases.add(alias);
         found.set(candidate.url, entry);
@@ -216,6 +219,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
       }, { kind: "llm-search", engine: null, query: topic.text });
     }
   }
+  if (isNews) collectTopicSources(ctx, topics, window.since!, found, isSeen);
 
   const unseen = [...found.values()].filter((entry) => !isSeen(entry.candidate.url) && ![...entry.aliases].some(isSeen));
   ctx.stats.collected = unseen.length;
@@ -241,6 +245,36 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
 /** The site of a candidate, as it is stored and blocked. */
 function hostOf(candidate: RawCandidate): string {
   return candidateHost(candidate.url, candidate.siteUrl);
+}
+
+/**
+ * Adds the articles the category's topic sources delivered within the window, as candidates of every topic that is
+ * ready: the judge has no way to say which topic a page fits. A page another source found already stays one
+ * candidate, which gains the topics and remembers the feed article. Nothing is fetched, so no source is counted.
+ */
+function collectTopicSources(ctx: Context, topics: Topic[], since: Date, found: Map<string, Found>, isSeen: (url: string) => boolean): void {
+  if (topics.length === 0) return;
+  const articles = listTopicSourceArticles(ctx.db, ctx.category.id, since.toISOString(), isSeen, ctx.config.limits.subscriptionCandidatesPerRun);
+  for (const article of articles) {
+    const entry = found.get(article.url) ?? {
+      candidate: {
+        url: article.url,
+        aliases: [],
+        fetchable: true,
+        title: article.title,
+        snippet: article.snippet,
+        siteName: article.siteName,
+        publishedAt: new Date(article.publishedAt),
+        sourceKind: "subscription",
+      },
+      topicIds: new Set<number>(),
+      aliases: new Set<string>(),
+      feedArticleId: null,
+    };
+    for (const topic of topics) entry.topicIds.add(topic.id);
+    entry.feedArticleId = article.articleId;
+    found.set(article.url, entry);
+  }
 }
 
 /**
@@ -273,6 +307,7 @@ function store(
     reasonCode,
     importance,
     topicIds: [...entry.topicIds],
+    feedArticleId: entry.feedArticleId,
     now,
   });
   markSeen(ctx.db, ctx.category.id, [candidate.url, ...entry.aliases], now);
@@ -429,7 +464,10 @@ function rejectMarkedFollowUp(ctx: Context, story: Story, article: ArticleDigest
 
 // ---- 7 and 8. fetch pages and write ------------------------------------------------------------
 
-/** The text given to the writer for each page: the extracted body when it can be had, else the snippet. */
+/**
+ * The text given to the writer for each page: the extracted body when it can be had; else, for a page a topic source
+ * delivered, the content the feed delivered; else the snippet.
+ */
 async function loadSources(ctx: Context, story: Story) {
   let anyBody = false;
   const sources = [];
@@ -442,6 +480,10 @@ async function loadSources(ctx: Context, story: Story) {
     if (text.length > 0) {
       anyBody = true;
       setCandidateBody(ctx.db, candidate.id, text);
+    } else if (candidate.feedArticleId !== null) {
+      // Longer than a snippet, and what the reader can read too: the article is not marked as written from snippets.
+      text = deliveredText(ctx.db, candidate.feedArticleId).trim();
+      if (text.length > 0) anyBody = true;
     }
     sources.push({
       title: candidate.title,
@@ -546,6 +588,7 @@ async function writeStories(ctx: Context): Promise<void> {
       topicIds: [...new Set(story.candidates.flatMap((candidate) => candidate.topicIds))],
     };
     const candidateIds = story.candidates.map((candidate) => candidate.id);
+    const feedArticleIds = story.candidates.flatMap((candidate) => (candidate.feedArticleId === null ? [] : [candidate.feedArticleId]));
     const groupKey = `${ctx.run.id}:${storyNumber}`;
     // Names that are not valid are left out: a new article has none, and a rewritten one keeps its earlier names.
     const mentions = output.mentions;
@@ -555,6 +598,7 @@ async function writeStories(ctx: Context): Promise<void> {
         reviseArticle(ctx.db, story.existing.id, { ...content, updateNote: existingArticle ? output.updateNote : null });
         if (mentions !== null) replaceMentions(ctx.db, story.existing.id, mentions);
         acceptCandidates(ctx.db, candidateIds, story.existing.id, groupKey, ctx.run.id);
+        recordSummarizedIn(ctx.db, feedArticleIds, story.existing.id);
         return;
       }
       const articleId = insertArticle(ctx.db, {
@@ -565,6 +609,7 @@ async function writeStories(ctx: Context): Promise<void> {
       });
       if (mentions !== null) replaceMentions(ctx.db, articleId, mentions);
       acceptCandidates(ctx.db, candidateIds, articleId, groupKey, ctx.run.id);
+      recordSummarizedIn(ctx.db, feedArticleIds, articleId);
     });
     if (story.mode === "update") ctx.stats.updated += 1;
     else ctx.stats.created += 1;

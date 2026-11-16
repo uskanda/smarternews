@@ -54,7 +54,7 @@ async function contentOf(
   const extracted = extractArticle(page.html, page.url, MAX_CONTENT_CHARS);
   if (extracted.html.length === 0) return failure("no-content");
   // The same rules as the delivered content: what another site wrote is never kept as HTML.
-  const converted = convertContent(extracted.html, page.url, getSettings(deps.db).outputLanguage);
+  const converted = convertContent(extracted.html, page.url, getSettings(deps.db).outputLanguage, { embeds: true });
   if (converted.text.length === 0) return failure("no-content");
   const taken = chars(converted.text);
   const delivered = chars(article.contentText);

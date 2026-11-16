@@ -188,7 +188,7 @@ describe("adding a feed from the list of a category", () => {
     const { server, tools } = seeded();
     const view = await openAddDialog(`/c/${tools.slug}`, server);
     await view.user.type(within(view.dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
-    await view.user.click(within(view.dialog).getByRole("button", { name: "閉じる" }));
+    await view.user.click(within(view.dialog).getByRole("button", { name: "やめる" }));
     await view.user.click(within(await unsavedQuestion()).getByRole("button", { name: "編集を続ける" }));
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
@@ -202,7 +202,7 @@ describe("adding a feed from the list of a category", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     await view.user.click(within(list()).getByRole("button", { name: "購読フィードを追加" }));
-    await view.user.click(within(await screen.findByRole("dialog", { name: "購読フィードを追加" })).getByRole("button", { name: "閉じる" }));
+    await view.user.click(within(await screen.findByRole("dialog", { name: "購読フィードを追加" })).getByRole("button", { name: "やめる" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
@@ -331,6 +331,28 @@ describe("the settings of a feed from its list", () => {
       enabled: true,
     });
     await waitFor(() => expect(within(list()).getByRole("button", { name: "購読フィードの設定" })).toHaveFocus());
+  });
+
+  it("makes a feed of a category a topic source, and says what that does", async () => {
+    const { server, blog } = seeded();
+    const view = await openOptions(server, blog.id);
+    const topicSource = within(view.dialog).getByRole("checkbox", { name: "トピックの取得元にする" });
+    expect(topicSource).not.toBeChecked();
+    expect(topicSource).toHaveAccessibleDescription(
+      "実行のたびに、対象期間内に届いた記事を、カテゴリのトピックの候補にします。判定にLLMを使います。記事は一覧にそのまま残ります。",
+    );
+    await view.user.click(topicSource);
+    await view.user.click(within(view.dialog).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(getFeed(server.db, blog.id).topicSource).toBe(true));
+  });
+
+  it("has no topic source switch for a feed of no category", async () => {
+    const { server } = seeded();
+    const loose = feedOf(server, "Loose");
+    const { dialog } = await openOptions(server, loose.id);
+    expect(within(dialog).getByRole("checkbox", { name: "全文を取得する" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: "トピックの取得元にする" })).not.toBeInTheDocument();
   });
 
   it("asks before closing with a switch changed, and changes nothing once it is thrown away", async () => {
@@ -464,7 +486,7 @@ describe("keys while a dialog is open", () => {
   it("does not move through the list behind the dialog for adding a feed", async () => {
     const { server, tools } = seeded();
     const view = await openAddDialog(`/c/${tools.slug}`, server);
-    within(view.dialog).getByRole("button", { name: "閉じる" }).focus();
+    within(view.dialog).getByRole("button", { name: "やめる" }).focus();
     await view.user.keyboard("j");
 
     expect(view.path()).toBe(`/c/${tools.slug}`);

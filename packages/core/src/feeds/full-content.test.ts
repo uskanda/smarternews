@@ -148,6 +148,16 @@ describe("fetchFullContent", () => {
     expect(body.split("\n\n").filter((block) => block.startsWith("fulltext"))).toHaveLength(2);
   });
 
+  it("keeps a video embedded in the page as a link to it, in the output language", async () => {
+    const s = setup({
+      "https://site.example.org/1": () =>
+        page(`<p>${FULL}</p><iframe src="https://www.youtube.com/embed/abc" width="560" height="315"></iframe><p>${FULL}</p>`),
+    });
+    const id = s.article();
+    await fetchFullContent(s.deps, s.pages, id);
+    expect(getArticle(s.db, id).fullContent!.body).toContain("\n\n[埋め込み（www.youtube.com）](https://www.youtube.com/embed/abc)\n\n");
+  });
+
   it("returns what is stored without fetching the page again", async () => {
     const s = setup({ "https://site.example.org/1": fullPage });
     const id = s.article();

@@ -14,7 +14,7 @@ CREATE TABLE candidates_new (
   snippet TEXT NOT NULL DEFAULT '',
   site_name TEXT NOT NULL DEFAULT '',
   published_at TEXT,
-  source_kind TEXT NOT NULL CHECK (source_kind IN ('feed', 'news-search', 'llm-search')),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('feed', 'news-search', 'llm-search', 'subscription')),
   status TEXT NOT NULL CHECK (status IN ('rejected', 'pending', 'accepted')),
   reason TEXT NOT NULL DEFAULT '',
   importance INTEGER,
@@ -27,6 +27,8 @@ CREATE TABLE candidates_new (
     'no-date', 'below-minimum', 'over-limit', 'event-outside-window', 'event-no-date',
     'missed-follow-up', 'stopped-follow-up', 'blocked-site'
   )),
+  -- The feed article the candidate was found as, also when another source found the same page.
+  feed_article_id INTEGER REFERENCES articles (id) ON DELETE SET NULL,
   -- The host of the URL, lowercased and without a leading "www.". For a Google News redirect that could not be
   -- resolved, the host of the outlet the search named. Empty when neither is known.
   site_host TEXT NOT NULL DEFAULT ''
@@ -35,9 +37,9 @@ CREATE TABLE candidates_new (
 -- The candidates kept so far never stored the outlet of an unresolved redirect, so theirs stays empty.
 INSERT INTO candidates_new
   (id, category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-   importance, group_key, body, article_id, created_at, reason_code, site_host)
+   importance, group_key, body, article_id, created_at, reason_code, feed_article_id, site_host)
 SELECT id, category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-       importance, group_key, body, article_id, created_at, reason_code, sn_candidate_host(url)
+       importance, group_key, body, article_id, created_at, reason_code, feed_article_id, sn_candidate_host(url)
   FROM candidates;
 DROP TABLE candidates;
 ALTER TABLE candidates_new RENAME TO candidates;

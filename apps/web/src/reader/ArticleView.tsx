@@ -265,6 +265,7 @@ export function ArticleView({
   id,
   categoryName,
   feedName,
+  feedListPath = () => null,
   timeZone,
   backTo,
   articlePath,
@@ -280,6 +281,8 @@ export function ArticleView({
   id: number;
   categoryName: (categoryId: number | null) => string;
   feedName: (feedId: number | null) => string;
+  /** Where the feed's name in a feed article leads: the list of that feed. Null leaves the name as text. */
+  feedListPath?: (article: Article) => string | null;
   timeZone: string;
   /** Set on a narrow screen, where the list is on another pane. */
   backTo: string | null;
@@ -343,6 +346,7 @@ export function ArticleView({
   // The title as the site wrote it, which a filter matches: the line under a translated title, or the headline.
   const originalTitleShown = article.translatedTitle !== null && article.translatedTitle !== article.title;
   const filterSource = (original: boolean) => (delivered && original ? { [FILTER_SOURCE_ATTRIBUTE]: "" } : {});
+  const feedPath = delivered ? feedListPath(article) : null;
 
   return (
     <article ref={pane} aria-label="記事" className="min-w-0 px-lg py-xl md:px-2xl">
@@ -352,7 +356,13 @@ export function ArticleView({
         <div className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
           {delivered ? (
             <>
-              <span>{feedName(article.feedId)}</span>
+              {feedPath !== null ? (
+                <Link to={feedPath} className="tap text-primary underline underline-offset-4">
+                  {feedName(article.feedId)}
+                </Link>
+              ) : (
+                <span>{feedName(article.feedId)}</span>
+              )}
               {article.author ? <span>{article.author}</span> : null}
               <span>{formatFull(article.updatedAt, timeZone)} に公開</span>
             </>
@@ -435,6 +445,17 @@ export function ArticleView({
                 </li>
               ))}
             </ul>
+          </section>
+        ) : null}
+        {article.summarizedIn ? (
+          // The generated article a run wrote this feed article into: the same story, gathered from more pages.
+          <section aria-label="この記事をまとめた生成記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">この記事をまとめた生成記事</h3>
+            <p className="type-body-md">
+              <Link to={articlePath(article.summarizedIn.id)} className="tap break-words text-primary underline underline-offset-4">
+                {article.summarizedIn.title}
+              </Link>
+            </p>
           </section>
         ) : null}
         {article.autoSummary ? (
@@ -533,6 +554,26 @@ export function ArticleView({
           </ul>
         </section>
         )}
+        {article.feedArticles.length > 0 ? (
+          // The articles of subscribed feeds this article was written from; each opens in the list of its feed, which
+          // includes read articles, as the other feeds of a feed article do.
+          <section aria-label="まとめた配信記事" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">まとめた配信記事</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.feedArticles.map((delivered) => (
+                <li key={delivered.articleId} className="min-w-0">
+                  <Link
+                    to={`${listPathOf({ type: "feed", feedId: delivered.feedId }, () => undefined)}/${delivered.articleId}?read=1`}
+                    className="tap break-words text-primary underline underline-offset-4"
+                  >
+                    {delivered.title}
+                  </Link>
+                  <span className="pl-sm text-on-surface-muted">{delivered.feedTitle}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <div className="flex flex-wrap gap-sm">
           <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
             {article.starred ? "スターを外す" : "スターを付ける"}

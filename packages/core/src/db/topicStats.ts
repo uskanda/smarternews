@@ -22,7 +22,7 @@ const OPEN_END = "9999-12-31T23:59:59.999Z";
 
 function zero(): TopicStatsCounts {
   return {
-    collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0 } },
+    collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
     rejectedByJudge: 0,
     belowMinimum: 0,
     overLimit: 0,
