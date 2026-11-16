@@ -168,7 +168,7 @@ Nothing is stored but the record of the call, which belongs to no run. To use a 
 | Field | Meaning |
 |---|---|
 | `topicId`, `text` | The topic |
-| `collected` | The candidates collected for it: `total`, and `bySource` with `feed`, `news-search` and `llm-search` |
+| `collected` | The candidates collected for it: `total`, and `bySource` with `feed`, `news-search`, `llm-search` and `subscription` (articles of subscribed feeds that are topic sources) |
 | `rejectedByJudge` | Candidates the `judge` task rejected |
 | `belowMinimum` | Candidates rejected because their story was below the category's `minImportance` |
 | `overLimit` | Candidates rejected because the run had written `maxArticlesPerRun` articles |
@@ -330,6 +330,8 @@ The detail adds these:
 | `previousArticles` | The chain of earlier articles of the same story, newest first, at most 20: the article of `previousArticleId`, the article that one follows up, and so on. Each has `id`, `title` and `firstPublishedAt`. The chain ends where an article was deleted or where it comes back on itself. Empty without `previousArticleId` |
 | `laterArticles` | The later articles of the same story, newest first by `firstPublishedAt`, at most 20: the articles whose `previousArticleId` is this one, the articles that follow those up, and so on, in the same shape as `previousArticles`. Given for every generated article, starred or not. Empty when nothing follows the article up |
 | `otherFeeds` | The other feeds that delivered a feed article: one entry per copy recorded as its duplicate, with `articleId` (the copy), `feedId` and `feedTitle`, in the order the copies were stored. Empty for an article without duplicates |
+| `summarizedIn` | The generated article a run wrote a feed article into, as `id` and `title`. `null` when no run did, and for a generated article |
+| `feedArticles` | The feed articles a run wrote into a generated article, in the order they were stored: `articleId`, `feedId`, `feedTitle` and `title` each. Articles the filters hide are left out. Empty for a feed article |
 | `fullContent` | The full content of a feed article, taken from its page: `body` (Markdown), `bodyHtml` and `fetchedAt`. It comes apart from `body`, which stays what the feed delivered. `null` when there is none, and always for a generated article |
 | `fullContentStatus` | `none`, `waiting` (its feed fetches full content and this article is next in line for it), `fetched` or `failed`. Always `none` for a generated article |
 | `fullContentError` | Why the full content could not be had: `reason` and `detail`, as in the answer of `POST /api/v1/articles/:id/full-content`. `null` unless the status is `failed` |
@@ -469,7 +471,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/page/candidates` | Propose selectors for a page without a feed, each with a preview. See [Web feeds](#web-feeds) |
 | `POST /api/v1/feeds/page/preview` | Show what a set of selectors takes out of a page |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, and `selectors` of a web feed |
+| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, `topicSource`, and `selectors` of a web feed |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -498,7 +500,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" --data-binary @feeds.opml "$AP
 
 Subscribing fetches the URL once and answers when that is done. Status 400 means that the URL does not return RSS or Atom, or that it is a destination the crawler does not fetch (see the README). A 409 answer says that the URL is already subscribed; URLs that differ only in tracking parameters count as the same. Every item the feed delivers at that moment becomes an unread article, except items published more than 90 days ago.
 
-`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize`, `translate` and `fetchFullContent` are `false` unless you send `true`, at registration or in a change.
+`categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize`, `translate`, `fetchFullContent` and `topicSource` are `false` unless you send `true`, at registration or in a change. `topicSource` can be `true` only for a feed of a category: a feed of none is refused with status 400 and the field `topicSource`. A feed that leaves its category keeps the value, which counts again once the feed is in a category.
 
 `move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
@@ -517,6 +519,7 @@ Fields of a feed:
 | `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
 | `translate` | True when the titles and contents of this feed's articles are translated into the output language. Switching it on translates nothing that is stored: an article the feed already has is translated when it is opened |
 | `fetchFullContent` | True when the server fetches the page of every article this feed delivers and stores its text as the full content. Only articles stored after it was switched on are fetched |
+| `topicSource` | True when the runs of the feed's category judge its articles as candidates of every enabled topic of the category. A run takes the articles stored within the category's window, leaving out hidden duplicates, articles the filters hide and pages judged before, newest first and at most `limits.subscriptionCandidatesPerRun` (60 by default) of config.yaml. Articles stored before it was switched on count too. The judgements take model calls: one for every `limits.judgeBatchSize` articles. The feed article stays in its lists as it was; the article it went into is named in its `summarizedIn` |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `goneAt` | When the first of the 410 (Gone) answers in a row came, or `null`. Any other answer empties it. The feed stays enabled and goes on being fetched |
@@ -835,7 +838,7 @@ A retry has the `trigger` `schedule`. `retrySkipped` is one of four values:
 
 A failed run can have neither `retryAt` nor `retrySkipped`. Its retry has been queued, or it failed before retries existed, or the server closed it at start-up because it had waited for more than six hours.
 
-`GET /api/v1/runs/:id/candidates` accepts `status=rejected` (the default), `pending`, `accepted` or `all`. Each candidate has `title`, `url`, `siteName`, `publishedAt`, `sourceKind`, `topics`, `importance` and `reason`. Runs and candidates are deleted after 30 days.
+`GET /api/v1/runs/:id/candidates` accepts `status=rejected` (the default), `pending`, `accepted` or `all`. Each candidate has `title`, `url`, `siteName`, `publishedAt`, `sourceKind`, `topics`, `importance` and `reason`. `sourceKind` is `feed` (a feed URL of a topic), `news-search`, `llm-search` or `subscription` (an article of a subscribed feed that is a topic source). Runs and candidates are deleted after 30 days.
 
 ### Attention
 
