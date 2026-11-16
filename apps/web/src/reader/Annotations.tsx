@@ -553,7 +553,7 @@ export function AnnotatedBody({
         ]
       : []),
     ...(selection.filterable ? [{ label: "隠すフィルターを作る…", run: () => setFilteringFor(selection.value) }] : []),
-    ...(selection.topicDraft !== null ? [{ label: "トピックを足す…", run: () => setTopicFor(selection.topicDraft) }] : []),
+    ...(selection.topicDraft !== null ? [{ label: "トピックを追加…", run: () => setTopicFor(selection.topicDraft) }] : []),
   ];
 
   // From the list of annotations: the highlight is brought into view and focused, once it is drawn, and again

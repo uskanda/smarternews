@@ -16,6 +16,7 @@ const feed = (overrides: Partial<Feed> = {}): Feed => ({
   autoSummarize: false,
   translate: false,
   fetchFullContent: false,
+  topicSource: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,

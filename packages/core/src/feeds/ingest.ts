@@ -7,6 +7,7 @@ import type { Clock } from "../clock.ts";
 import { transaction, type Database } from "../db/database.ts";
 import {
   checkFeedCategory,
+  checkTopicSource,
   FEED_RETENTION_DAYS,
   feedIconState,
   fetchConditions,
@@ -103,9 +104,10 @@ function storedAttachments(item: SubscriptionItem): string | null {
 
 /** The content of an item, or its Media RSS description when the feed gives no content. */
 function contentOf(item: SubscriptionItem, baseUrl: string, language: string): ConvertedContent {
+  // An embed is not shown, but kept as a link so that the reader knows it was there.
   return item.description !== null && item.contentHtml.length === 0
-    ? convertDescription(item.description, baseUrl, language)
-    : convertContent(item.contentHtml, baseUrl, language);
+    ? convertDescription(item.description, baseUrl, language, { embeds: true })
+    : convertContent(item.contentHtml, baseUrl, language, { embeds: true });
 }
 
 function setReference(db: Database, articleId: number, url: string | null, feedTitle: string, title: string): void {
@@ -441,6 +443,8 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
   const url = normalizeUrl(input.url);
   if (findFeedByUrl(db, url)) throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   checkFeedCategory(db, input.categoryId);
+  // Refused before anything is fetched.
+  checkTopicSource(input.topicSource, input.categoryId);
 
   const result = input.format === "page" && input.selectors !== undefined ? await firstPage(deps, url, input.selectors) : await firstFeed(deps, url);
   const now = clock();
@@ -460,6 +464,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         autoSummarize: input.autoSummarize,
         translate: input.translate,
         fetchFullContent: input.fetchFullContent,
+        topicSource: input.topicSource,
       },
       clock,
     );

@@ -4,7 +4,7 @@
 export interface Segment {
   /** Markdown of the segment, as it is in the content. */
   original: string;
-  /** False for code, images, rules, and what lies past the length that is translated. */
+  /** False for code, images, the links of embeds, rules, and what lies past the length that is translated. */
   translate: boolean;
 }
 
@@ -50,8 +50,11 @@ function itemsOf(block: string): string[] {
   return items;
 }
 
+/** The paragraph `convertContent` writes for a frame, a video or an audio: a link named after its host. */
+const EMBED_LINK = /^\[(?:埋め込み（[^）]*）|Embedded content \([^)]*\))\]\(https?:\/\/[^)\s]+\)$/;
+
 function hasWords(segment: string): boolean {
-  if (/^`{3,}/.test(segment) || /^-{3,}$/.test(segment)) return false;
+  if (/^`{3,}/.test(segment) || /^-{3,}$/.test(segment) || EMBED_LINK.test(segment)) return false;
   const withoutImages = segment.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/^(- |\d+\. |>)/, "");
   return withoutImages.replace(/[\\\s]/g, "").length > 0;
 }

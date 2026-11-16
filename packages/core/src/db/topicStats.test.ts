@@ -87,7 +87,7 @@ describe("topicStats", () => {
     expect(result.topics[1]).toEqual({
       topicId: s.quiet.id,
       text: "Quiet topic",
-      collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0 } },
+      collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 0,
       belowMinimum: 0,
       overLimit: 0,
@@ -109,9 +109,10 @@ describe("topicStats", () => {
     s.candidate({ sourceKind: "news-search", status: "accepted" });
     s.candidate({ sourceKind: "llm-search" });
     s.candidate({ sourceKind: "llm-search", topicIds: [s.topic.id, s.quiet.id] });
+    s.candidate({ sourceKind: "subscription", topicIds: [s.topic.id, s.quiet.id] });
 
-    expect(s.of(s.topic.id).collected).toEqual({ total: 5, bySource: { feed: 2, "news-search": 1, "llm-search": 2 } });
-    expect(s.of(s.quiet.id).collected).toEqual({ total: 1, bySource: { feed: 0, "news-search": 0, "llm-search": 1 } });
+    expect(s.of(s.topic.id).collected).toEqual({ total: 6, bySource: { feed: 2, "news-search": 1, "llm-search": 2, subscription: 1 } });
+    expect(s.of(s.quiet.id).collected).toEqual({ total: 2, bySource: { feed: 0, "news-search": 0, "llm-search": 1, subscription: 1 } });
   });
 
   it("counts the rejections by the kind of their reason, the three kinds about dates together", () => {
@@ -265,7 +266,7 @@ describe("topicStats around the last version", () => {
     expect(entry.boundary).toEqual({ at: daysAgo(10), trigger: "interpreted" });
     expect(entry).toMatchObject({ collected: { total: 3 }, created: 3, missed: 1 });
     expect(entry.before).toEqual({
-      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0 } },
+      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 1,
       belowMinimum: 1,
       overLimit: 0,
@@ -318,7 +319,7 @@ function entry(topicId: number, values: { collected?: number; rejected?: number;
   return {
     topicId,
     text: `Topic ${topicId}`,
-    collected: { total: values.collected ?? 0, bySource: { feed: values.collected ?? 0, "news-search": 0, "llm-search": 0 } },
+    collected: { total: values.collected ?? 0, bySource: { feed: values.collected ?? 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
     rejectedByJudge: values.rejected ?? 0,
     belowMinimum: 0,
     overLimit: 0,
