@@ -1,13 +1,15 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import * as Dialog from "@radix-ui/react-dialog";
 import { anchorOf, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
 import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
 import { useHotkeys } from "../lib/keys.ts";
+import { forgetNoteDraft, keepNoteDraft, noteDraftOf } from "../lib/note-drafts.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button } from "../ui/controls.tsx";
+import { DialogCloseButton, FormDialog } from "../ui/FormDialog.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 import { MENU, MENU_ITEM } from "../shell/order.tsx";
 import { AddTopicDialog, useTopicCategories } from "./AddTopicDialog.tsx";
 import { FilterFromSelectionDialog } from "./FilterFromSelection.tsx";
@@ -53,23 +55,30 @@ function segmentOf(root: Element, node: Node): Element | null {
  * The highlights of a body drawn in `count` parts. Each part tells the text of its tree once it is drawn; when
  * every part has, and there are highlights, they are found in the text the parts make together, and the body is
  * drawn again with their marks. Without highlights the text is only kept, for a selection to be measured in.
+ * `bodyKey` names the body shown: when it changes, the text of the body before is let go and told again.
  */
-export function useBodyAnnotations(highlights: readonly Highlight[], count: number, enabled: boolean) {
-  const texts = useRef<string[]>([]);
-  const known = useRef<string[] | null>(null);
-  const [shown, setShown] = useState<string[] | null>(null);
+export function useBodyAnnotations(highlights: readonly Highlight[], count: number, enabled: boolean, bodyKey = "") {
+  const kept = useRef<{ key: string; texts: string[]; known: string[] | null }>({ key: bodyKey, texts: [], known: null });
+  // The text told for another body is let go before it is read.
+  if (kept.current.key !== bodyKey) kept.current = { key: bodyKey, texts: [], known: null };
+  const [told, setTold] = useState<{ key: string; parts: string[] } | null>(null);
+  const shown = told?.key === bodyKey ? told.parts : null;
   const wanted = enabled && highlights.length > 0;
   const tell = useCallback(
     (index: number, text: string) => {
-      texts.current[index] = text;
+      const body = kept.current;
+      if (body.key !== bodyKey) return;
+      body.texts[index] = text;
       if (!wanted) return;
-      const all = texts.current.slice(0, count);
-      if (all.length < count || all.some((part) => part === undefined)) return;
-      if (known.current && known.current.length === all.length && known.current.every((part, at) => part === all[at])) return;
-      known.current = all;
-      setShown(all);
+      // A part may tell its text before those ahead of it: a part not told yet is a hole, which `some` would skip.
+      const parts = Array.from({ length: count }, (_, at): string | undefined => body.texts[at]);
+      if (parts.some((part) => part === undefined)) return;
+      const all = parts as string[];
+      if (body.known && body.known.length === all.length && body.known.every((part, at) => part === all[at])) return;
+      body.known = all;
+      setTold({ key: bodyKey, parts: all });
     },
-    [wanted, count],
+    [wanted, count, bodyKey],
   );
   const located = useMemo(
     () => (wanted && shown && shown.length === count ? locateHighlights(shown.join(PART_SEPARATOR), highlights) : null),
@@ -80,7 +89,7 @@ export function useBodyAnnotations(highlights: readonly Highlight[], count: numb
     enabled ? { ranges: bySegment?.[index] ?? [], onText: (text: string) => tell(index, text) } : undefined;
   /** The text of the parts as drawn now, and where each starts in it. */
   const current = () => {
-    const parts = texts.current.slice(0, count).map((part) => part ?? "");
+    const parts = kept.current.texts.slice(0, count).map((part) => part ?? "");
     return { text: parts.join(PART_SEPARATOR), starts: partStarts(parts) };
   };
   return { marksFor, located, current };
@@ -210,15 +219,37 @@ function placeOf(root: Element | null, id: number): HTMLElement | null {
   );
 }
 
-const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";
-const PANEL =
-  "fixed top-1/2 left-1/2 z-50 flex max-h-[90dvh] w-[min(90vw,var(--spacing-list))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-y-auto rounded-lg border border-outline bg-surface p-xl";
 const TEXTAREA = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 
-/** A note being written: a field and the buttons to save it or not. The note is kept as it is written. */
-function NoteForm({ label, initial, onSave, onCancel, saving }: { label: string; initial: string; onSave: (text: string) => void; onCancel: () => void; saving: boolean }) {
-  const [draft, setDraft] = useState(initial);
+/**
+ * A note being written: a field and the buttons to save it or not. The note is kept as it is written. It starts
+ * from `start`, by default the note as saved, `saved`; while it differs from that, or is being saved, it tells
+ * the dialog it is in, and cancelling asks before throwing it away. `onDraftChange` hears each change.
+ */
+function NoteForm({
+  label,
+  saved,
+  start = saved,
+  autoFocus = true,
+  onSave,
+  onCancel,
+  onDraftChange,
+  saving,
+}: {
+  label: string;
+  saved: string;
+  start?: string;
+  autoFocus?: boolean;
+  onSave: (text: string) => void;
+  onCancel: () => void;
+  onDraftChange?: (text: string) => void;
+  saving: boolean;
+}) {
+  const [draft, setDraft] = useState(start);
+  const [asking, setAsking] = useState(false);
   const id = useId();
+  const changed = draft !== saved;
+  useUnsaved(label, changed || saving);
   return (
     <form
       className="flex flex-col gap-sm"
@@ -230,13 +261,46 @@ function NoteForm({ label, initial, onSave, onCancel, saving }: { label: string;
       <label htmlFor={id} className="type-label-md">
         {label}
       </label>
-      <textarea id={id} rows={4} maxLength={5000} value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus className={TEXTAREA} />
+      <textarea
+        id={id}
+        rows={4}
+        maxLength={5000}
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          onDraftChange?.(event.target.value);
+        }}
+        autoFocus={autoFocus}
+        className={TEXTAREA}
+      />
       <div className="flex flex-wrap justify-end gap-sm">
         <Button type="submit" variant="primary" disabled={saving}>
           保存する
         </Button>
-        <Button onClick={onCancel}>やめる</Button>
+        <Button onClick={() => (changed ? setAsking(true) : onCancel())}>やめる</Button>
       </div>
+      <ConfirmDialog
+        open={asking}
+        title="保存していない変更があります"
+        onDismiss={() => setAsking(false)}
+        actions={
+          <>
+            <Button
+              onClick={() => {
+                setAsking(false);
+                onCancel();
+              }}
+            >
+              破棄して閉じる
+            </Button>
+            <Button variant="primary" onClick={() => setAsking(false)}>
+              編集を続ける
+            </Button>
+          </>
+        }
+      >
+        <p>書きかけの{label}は保存されません。</p>
+      </ConfirmDialog>
     </form>
   );
 }
@@ -276,45 +340,26 @@ function HighlightDialog({
     setSaving(false);
   }
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content
-          data-hotkeys="off"
-          aria-describedby={undefined}
-          onCloseAutoFocus={(event) => {
-            const target = returnFocus();
-            if (target) {
-              event.preventDefault();
-              target.focus();
-            }
-          }}
-          className={PANEL}
-        >
-          <Dialog.Title className="type-headline-md">ハイライト</Dialog.Title>
-          <Quote>{highlight.quote}</Quote>
-          {writing ? (
-            <NoteForm label="メモ" initial={highlight.note ?? ""} onSave={(text) => void save(text)} onCancel={() => setWriting(false)} saving={saving} />
-          ) : (
-            <>
-              {highlight.note !== null ? (
-                <section aria-label="メモ" className="flex flex-col gap-xs">
-                  <h3 className="type-label-sm text-on-surface-muted">メモ</h3>
-                  <p className="break-words whitespace-pre-wrap type-body-md">{highlight.note}</p>
-                </section>
-              ) : null}
-              <div className="flex flex-wrap justify-end gap-sm">
-                <Button onClick={() => setWriting(true)}>{highlight.note !== null ? "メモを書き直す" : "メモを書く"}</Button>
-                <Button onClick={() => onRemove(highlight)}>ハイライトを消す</Button>
-                <Dialog.Close asChild>
-                  <Button>閉じる</Button>
-                </Dialog.Close>
-              </div>
-            </>
-          )}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <FormDialog open onOpenChange={(open) => (open ? undefined : onClose())} title="ハイライト" layout="compact" returnFocus={returnFocus}>
+      <Quote>{highlight.quote}</Quote>
+      {writing ? (
+        <NoteForm label="メモ" saved={highlight.note ?? ""} onSave={(text) => void save(text)} onCancel={() => setWriting(false)} saving={saving} />
+      ) : (
+        <>
+          {highlight.note !== null ? (
+            <section aria-label="メモ" className="flex flex-col gap-xs">
+              <h3 className="type-label-sm text-on-surface-muted">メモ</h3>
+              <p className="break-words whitespace-pre-wrap type-body-md">{highlight.note}</p>
+            </section>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-sm">
+            <Button onClick={() => setWriting(true)}>{highlight.note !== null ? "メモを書き直す" : "メモを書く"}</Button>
+            <Button onClick={() => onRemove(highlight)}>ハイライトを消す</Button>
+            <DialogCloseButton>閉じる</DialogCloseButton>
+          </div>
+        </>
+      )}
+    </FormDialog>
   );
 }
 
@@ -322,25 +367,19 @@ function HighlightDialog({
 function NewHighlightDialog({ quote, onSave, onClose }: { quote: string; onSave: (note: string) => Promise<void>; onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={OVERLAY} />
-        <Dialog.Content data-hotkeys="off" aria-describedby={undefined} className={PANEL}>
-          <Dialog.Title className="type-headline-md">メモを書いてハイライトする</Dialog.Title>
-          <Quote>{quote}</Quote>
-          <NoteForm
-            label="メモ"
-            initial=""
-            saving={saving}
-            onCancel={onClose}
-            onSave={(text) => {
-              setSaving(true);
-              void onSave(text).finally(() => setSaving(false));
-            }}
-          />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <FormDialog open onOpenChange={(open) => (open ? undefined : onClose())} title="メモを書いてハイライトする" layout="compact">
+      <Quote>{quote}</Quote>
+      <NoteForm
+        label="メモ"
+        saved=""
+        saving={saving}
+        onCancel={onClose}
+        onSave={(text) => {
+          setSaving(true);
+          void onSave(text).finally(() => setSaving(false));
+        }}
+      />
+    </FormDialog>
   );
 }
 
@@ -383,9 +422,13 @@ function MissingHighlights({ highlights, onOpen }: { highlights: readonly Highli
  * and in the original title: the element under `scope` that carries `FILTER_SOURCE_ATTRIBUTE`. A right click on
  * `scope` over a selection that offers something opens the same actions as a menu; otherwise the browser's own.
  * In any article, a topic can be added from a selection anywhere under `scope`, while a category holds topics.
+ *
+ * `bodyKey` names the body shown, as the full content or a translation. When it changes, only the body is drawn
+ * anew and its highlights found again; the menus and the dialogs stay open with what was written in them.
  */
 export function AnnotatedBody({
   article,
+  bodyKey,
   count,
   enabled,
   focusId,
@@ -393,6 +436,7 @@ export function AnnotatedBody({
   render,
 }: {
   article: Article;
+  bodyKey: string;
   count: number;
   enabled: boolean;
   focusId: number | null;
@@ -401,7 +445,7 @@ export function AnnotatedBody({
   render: (marksFor: (index: number) => AnnotationMarks | undefined) => ReactNode;
 }) {
   const highlights = article.annotations.highlights;
-  const { marksFor, located, current } = useBodyAnnotations(highlights, count, enabled);
+  const { marksFor, located, current } = useBodyAnnotations(highlights, count, enabled, bodyKey);
   const actions = useAnnotationActions();
   const toast = useToast();
   const root = useRef<HTMLDivElement>(null);
@@ -509,17 +553,18 @@ export function AnnotatedBody({
         ]
       : []),
     ...(selection.filterable ? [{ label: "隠すフィルターを作る…", run: () => setFilteringFor(selection.value) }] : []),
-    ...(selection.topicDraft !== null ? [{ label: "トピックを足す…", run: () => setTopicFor(selection.topicDraft) }] : []),
+    ...(selection.topicDraft !== null ? [{ label: "トピックを追加…", run: () => setTopicFor(selection.topicDraft) }] : []),
   ];
 
-  // From the list of annotations: the highlight is brought into view and focused, once it is drawn.
-  const focused = useRef<number | null>(null);
+  // From the list of annotations: the highlight is brought into view and focused, once it is drawn, and again
+  // in each body shown after.
+  const focused = useRef<{ id: number; bodyKey: string } | null>(null);
   const settled = highlights.length === 0 || located !== null;
   useLayoutEffect(() => {
-    if (focusId === null || focused.current === focusId || !settled) return;
+    if (focusId === null || (focused.current?.id === focusId && focused.current.bodyKey === bodyKey) || !settled) return;
     const place = placeOf(root.current, focusId);
     if (!place) return;
-    focused.current = focusId;
+    focused.current = { id: focusId, bodyKey };
     place.scrollIntoView?.({ block: "center" });
     place.focus({ preventScroll: true });
   });
@@ -550,7 +595,8 @@ export function AnnotatedBody({
           if ((event.key === "Enter" || event.key === " ") && open(event.target)) event.preventDefault();
         }}
       >
-        {render(marksFor)}
+        {/* A new body is drawn from nothing, so that each part tells its text again. */}
+        <Fragment key={bodyKey}>{render(marksFor)}</Fragment>
         {enabled ? (
           <MissingHighlights
             highlights={missing}
@@ -582,7 +628,11 @@ export function AnnotatedBody({
           <span ref={trigger} aria-hidden className="pointer-events-none fixed top-0 left-0 size-0" />
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
-          <ContextMenu.Content className={MENU} aria-label="選んだ文字列の操作" onCloseAutoFocus={(event) => event.preventDefault()}>
+          <ContextMenu.Content
+            className={MENU}
+            aria-label="選んだ文字列の操作"
+            data-hotkeys="off"
+            onCloseAutoFocus={(event) => event.preventDefault()}>
             {menuFor
               ? [
                   ...choices(menuFor).map((choice) => (
@@ -678,21 +728,40 @@ export function AnnotatedBody({
 /**
  * The note on the whole article, above the body: a button that opens its field, and the note as written. Saving
  * an empty field removes the note.
+ *
+ * What is written and not saved is kept for the article in the tab. An article opened with such a draft shows its
+ * field open with the draft in it, leaving the focus where it was, so that the keys of the list still act.
  */
 export function ArticleNoteSection({ article }: { article: Article }) {
   const actions = useAnnotationActions();
   const toast = useToast();
   const note = article.annotations.note;
-  const [editing, setEditing] = useState(false);
+  const saved = note?.text ?? "";
+  // The article's view is drawn anew for each article, so the draft is read once, when it opens.
+  const [restored, setRestored] = useState<string | null>(() => {
+    const draft = noteDraftOf(article.id);
+    return draft !== null && draft !== saved ? draft : null;
+  });
+  const [editing, setEditing] = useState(restored !== null);
   const [saving, setSaving] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (restored === null) forgetNoteDraft(article.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a draft the same as the note, found on opening
+  }, []);
+
+  function close() {
+    forgetNoteDraft(article.id);
+    setRestored(null);
+    setEditing(false);
+    requestAnimationFrame(() => button.current?.focus());
+  }
   async function save(text: string) {
     setSaving(true);
     try {
       if (text.trim().length > 0) await actions.saveNote(article.id, text);
       else if (note !== null) await actions.deleteNote(article.id);
-      setEditing(false);
-      requestAnimationFrame(() => button.current?.focus());
+      close();
     } catch {
       toast({ message: "メモを保存できませんでした。もう一度試してください。" });
     }
@@ -703,13 +772,13 @@ export function ArticleNoteSection({ article }: { article: Article }) {
       {editing ? (
         <NoteForm
           label="記事へのメモ"
-          initial={note?.text ?? ""}
+          saved={saved}
+          start={restored ?? saved}
+          autoFocus={restored === null}
           saving={saving}
           onSave={(text) => void save(text)}
-          onCancel={() => {
-            setEditing(false);
-            requestAnimationFrame(() => button.current?.focus());
-          }}
+          onCancel={close}
+          onDraftChange={(text) => (text === saved ? forgetNoteDraft(article.id) : keepNoteDraft(article.id, text))}
         />
       ) : (
         <>

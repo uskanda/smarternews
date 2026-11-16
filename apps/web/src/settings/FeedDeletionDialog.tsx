@@ -40,7 +40,8 @@ export function FeedDeletionDialog({
     setRemoving(true);
     try {
       await api.deleteFeed(target.id);
-      for (const key of ["feeds", "counts", "articles", "filters", "rules"]) void client.invalidateQueries({ queryKey: [key] });
+      // The annotations of the feed's articles go with them.
+      for (const key of ["feeds", "counts", "articles", "filters", "rules", "annotations"]) void client.invalidateQueries({ queryKey: [key] });
       toast({ message: "購読フィードの登録を解除しました" });
       onDeleted?.(target);
     } catch {

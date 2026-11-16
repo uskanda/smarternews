@@ -10,7 +10,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { ACTION_LABEL, conditionsLabel, FilterForm, scopeLabel, useRefresh } from "./FilterForm.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
-import { UnsavedGuard } from "./unsaved.tsx";
+import { UnsavedGuard } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 
@@ -46,7 +46,7 @@ function HiddenArticles({ filter }: { filter: Filter }) {
       {list.hasNextPage ? (
         <div>
           <Button onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-            さらに表示
+            さらに読み込む
           </Button>
         </div>
       ) : null}

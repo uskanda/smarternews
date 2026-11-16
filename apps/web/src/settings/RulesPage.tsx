@@ -9,7 +9,7 @@ import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { conditionsLabel, scopeLabel } from "./FilterForm.tsx";
 import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { actionsLabel, RuleForm, useRuleRefresh } from "./RuleForm.tsx";
-import { UnsavedGuard } from "./unsaved.tsx";
+import { UnsavedGuard } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
 

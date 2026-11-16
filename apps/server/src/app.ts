@@ -52,6 +52,7 @@ import {
   getRun,
   getSettings,
   getTopic,
+  restoreLlmSearch,
   importOpml,
   importSettings,
   listArticles,
@@ -71,6 +72,7 @@ import {
   markArticlesRead,
   moveCategory,
   moveFeed,
+  requestFetchAll,
   categoryMoveSchema,
   feedMoveSchema,
   pageCandidatesRequestSchema,
@@ -335,6 +337,11 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   api.post("/topics/:id/interpret", (c) => c.json(requestInterpretation(db, idParam(c, "topic"))));
+  api.post("/topics/:id/llm-search/restore", (c) => {
+    const id = idParam(c, "topic");
+    restoreLlmSearch(db, id, clock);
+    return c.json(getTopic(db, id));
+  });
   // Judges stored candidates again with a text that is not saved. Answers at once; the result is asked for below.
   // Nothing is stored but the record of the model calls.
   api.post("/topics/:id/trials", async (c) => {
@@ -430,6 +437,13 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
+  // Every enabled feed, now. It answers before anything is fetched: the poller takes the feeds one at a time,
+  // as on its timer, and `fetchRequestedAt` of the feeds says which still wait.
+  api.post("/feeds/fetch", (c) => {
+    const result = requestFetchAll(db, clock());
+    poller.tick();
+    return c.json(result);
+  });
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));

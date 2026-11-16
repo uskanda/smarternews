@@ -7,7 +7,7 @@ import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, messageFor } from "../ui/controls.tsx";
 import { conditionsComplete, ConditionsInput, conditionsOf, newCondition, problemText, ScopeSelect, scopeKey, scopeOf, type DraftCondition, type ScopeKey } from "./FilterForm.tsx";
-import { useUnsaved } from "./unsaved.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 // The inputs of a rule: the scope and conditions of a filter, and the actions.
 
