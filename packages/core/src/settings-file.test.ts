@@ -5,6 +5,7 @@ import { nextArticleForFullContent, nextArticleToSummarize, recordFullContentFai
 import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
+import { createRule, listRules } from "./db/rules.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
 import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
 import { getListView, listListViews, updateListView } from "./db/list-views.ts";
@@ -78,7 +79,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -242,6 +243,85 @@ const condition = (value: string, fields: Array<"title" | "content" | "author" |
   fields,
   match,
   value,
+});
+
+describe("rules in the settings file", () => {
+  function withRules() {
+    const db = seeded();
+    const security = listCategories(db).find((category) => category.slug === "security")!;
+    const feed = insertFeed(db, { url: "https://status.example.org/feed.xml", title: "Status" }, clock);
+    createRule(db, { scope: { type: "all" }, conditions: [condition("障害")], actions: ["notify", "star"] }, clock);
+    createRule(db, { scope: { type: "feed", feedId: feed.id }, conditions: [condition("^v\\d", ["title"], "regex")], actions: ["read"], enabled: false }, clock);
+    createRule(db, { scope: { type: "category", categoryId: security.id }, conditions: [condition("patch", ["title", "content"])], actions: ["summarize"] }, clock);
+    return db;
+  }
+
+  it("writes the rules with their scope by slug or URL, the switch only when off", () => {
+    const file = parse(exportSettings(withRules()));
+    expect(file.rules).toEqual([
+      { scope: "all", conditions: [{ fields: ["title"], match: "contains", value: "障害" }], actions: ["star", "notify"] },
+      { scope: { feed: "https://status.example.org/feed.xml" }, enabled: false, conditions: [{ fields: ["title"], match: "regex", value: "^v\\d" }], actions: ["read"] },
+      { scope: { category: "security" }, conditions: [{ fields: ["title", "content"], match: "contains", value: "patch" }], actions: ["summarize"] },
+    ]);
+  });
+
+  it("reproduces the rules on an empty server", () => {
+    const exported = exportSettings(withRules());
+    const target = createTestDb();
+    expect(importSettings(target, exported, clock)).toMatchObject({ rulesCreated: 3 });
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("adds the rules that are not registered yet and takes the switch of the others", () => {
+    const db = createTestDb();
+    const known = createRule(db, { scope: { type: "all" }, conditions: [condition("障害")], actions: ["star"] }, clock);
+    const text = `version: 1
+rules:
+  - scope: all
+    enabled: false
+    conditions: [{ fields: [title], match: contains, value: 障害 }]
+    actions: [star]
+  - scope: all
+    conditions: [{ fields: [title], match: contains, value: 障害 }]
+    actions: [star, notify]
+`;
+    expect(importSettings(db, text, clock)).toMatchObject({ rulesCreated: 1 });
+    expect(listRules(db).map((rule) => [rule.id === known.id, rule.enabled, rule.actions])).toEqual([
+      [true, false, ["star"]],
+      [false, true, ["star", "notify"]],
+    ]);
+  });
+
+  it("refuses a rule whose scope is nowhere, a wrong regular expression and a rule without an action, and stores nothing", () => {
+    const db = createTestDb();
+    const nowhere = `version: 1
+categories:
+  - slug: tools
+    name: Tools
+    kind: news
+rules:
+  - scope: { feed: https://missing.example.org/feed.xml }
+    conditions: [{ fields: [title], match: contains, value: x }]
+    actions: [star]
+`;
+    expect(() => importSettings(db, nowhere, clock)).toThrow(expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "rules.0.scope.feed" })] }));
+    expect(listCategories(db)).toEqual([]);
+    const wrong = `version: 1
+rules:
+  - scope: all
+    conditions: [{ fields: [title], match: regex, value: "(sale" }]
+    actions: [star]
+`;
+    expect(() => importSettings(db, wrong, clock)).toThrow(expect.objectContaining({ fields: [expect.objectContaining({ path: "rules.0.conditions.0.value" })] }));
+    const none = `version: 1
+rules:
+  - scope: all
+    conditions: [{ fields: [title], match: contains, value: x }]
+    actions: []
+`;
+    expect(() => importSettings(db, none, clock)).toThrow(expect.objectContaining({ fields: [expect.objectContaining({ path: "rules.0.actions" })] }));
+    expect(listRules(db)).toEqual([]);
+  });
 });
 
 describe("subscribed feeds and filters in the settings file", () => {
@@ -575,6 +655,7 @@ describe("the example settings file", () => {
       feedsCreated: 3,
       feedsUpdated: 0,
       filtersCreated: 2,
+      rulesCreated: 1,
       termGroupsCreated: 2,
       highlightTermsCreated: 3,
       listViewsUpdated: 1,

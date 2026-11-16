@@ -456,11 +456,14 @@
     color: var(--color-on-surface);
   }
 
-  /* The menu of a selection in the body, below it: the look of the menu of an entry. */
+  /* The menu of a selection in the body, below it: the look of the menu of an entry. No wider than the screen, less
+     8px on each side, as the script places it; its buttons wrap past that. */
   .selection-menu {
     position: fixed;
     z-index: 30;
     display: flex;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 2 * 8px);
     gap: var(--spacing-xs);
     padding: var(--spacing-xs);
     border: 1px solid var(--color-outline-strong);

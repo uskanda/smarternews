@@ -48,6 +48,9 @@ import {
   filterPreviewResultSchema,
   filterSchema,
   filterUpdateResultSchema,
+  ruleNotificationListSchema,
+  rulePreviewResultSchema,
+  ruleSchema,
   termGroupSchema,
   topicSchema,
   topicRewriteResultSchema,
@@ -106,6 +109,13 @@ import {
   type FilterPreviewResult,
   type FilterUpdate,
   type FilterUpdateResult,
+  type Rule,
+  type RuleCreate,
+  type RuleNotificationList,
+  type RuleNotificationsQuery,
+  type RulePreview,
+  type RulePreviewResult,
+  type RuleUpdate,
   type HighlightTermCreate,
   type TermGroup,
   type TermGroupCreate,
@@ -388,6 +398,16 @@ export function createApi(options: ApiOptions) {
       json(articlePageSchema, `/filters/${id}/articles${query(page)}`),
     /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
     previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
+    rules: (): Promise<Rule[]> => json(z.array(ruleSchema), "/rules"),
+    createRule: (input: RuleCreate): Promise<Rule> => json(ruleSchema, "/rules", body("POST", input)),
+    /** Changes a rule or switches it. It acts on what is stored from then on only. */
+    updateRule: (id: number, patch: RuleUpdate): Promise<Rule> => json(ruleSchema, `/rules/${id}`, body("PATCH", patch)),
+    deleteRule: async (id: number): Promise<void> => void (await request(`/rules/${id}`, { method: "DELETE" })),
+    /** How many stored feed articles a rule meets, without saving it. */
+    previewRule: (input: RulePreview): Promise<RulePreviewResult> => json(rulePreviewResultSchema, "/rules/preview", body("POST", input)),
+    /** The unread feed articles a rule made ones to notify, newest first, after `after` when it is given. */
+    ruleNotifications: (page: RuleNotificationsQuery = {}): Promise<RuleNotificationList> =>
+      json(ruleNotificationListSchema, `/rule-notifications${query(page)}`),
 
     /** The entries whose list view differs from the defaults. Any other entry is newest first. */
     listViews: (): Promise<ListViews> => json(listViewsSchema, "/list-views"),

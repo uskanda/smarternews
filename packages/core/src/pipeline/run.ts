@@ -9,6 +9,7 @@ import {
   recentNewsArticles,
   recentTopicHeadlines,
   reviseArticle,
+  starredStoryTips,
   type ArticleDigest,
   type EventFields,
 } from "../db/articles.ts";
@@ -62,6 +63,10 @@ const HOUR = 3_600_000;
 const UPDATE_WINDOW_MS = 72 * HOUR;
 /** How far back published news articles are offered to the grouping step. */
 const FOLLOW_UP_LOOKBACK_MS = 14 * 24 * HOUR;
+/** How far back a starred news article keeps its story open to follow-ups beyond `FOLLOW_UP_LOOKBACK_MS`. */
+const STARRED_LOOKBACK_MS = 90 * 24 * HOUR;
+/** How many articles of starred stories are offered at most on top of the recent ones. */
+const STARRED_STORIES_LIMIT = 20;
 /** Event announcements appear long before the event, so news search looks this far back for them. */
 const EVENT_SEARCH_HOURS = 30 * 24;
 
@@ -350,11 +355,20 @@ interface Story {
   mode: "new" | "update" | "follow";
 }
 
+/**
+ * The news articles a new page could be a follow-up to: those updated recently, and the newest article of each
+ * story the reader starred within a longer time. An article in both is offered once.
+ */
+function newsToFollow(ctx: Context): ArticleDigest[] {
+  const at = (ms: number) => new Date(ctx.now.getTime() - ms).toISOString();
+  const recent = recentNewsArticles(ctx.db, ctx.category.id, at(FOLLOW_UP_LOOKBACK_MS));
+  const starred = starredStoryTips(ctx.db, ctx.category.id, at(STARRED_LOOKBACK_MS), STARRED_STORIES_LIMIT, new Set(recent.map((article) => article.id)));
+  return [...recent, ...starred];
+}
+
 async function groupStories(ctx: Context, pending: PendingCandidate[]): Promise<Story[] | null> {
   const isNews = ctx.category.kind === "news";
-  const existing = isNews
-    ? recentNewsArticles(ctx.db, ctx.category.id, new Date(ctx.now.getTime() - FOLLOW_UP_LOOKBACK_MS).toISOString())
-    : openEventArticles(ctx.db, ctx.category.id, ctx.now.toISOString());
+  const existing = isNews ? newsToFollow(ctx) : openEventArticles(ctx.db, ctx.category.id, ctx.now.toISOString());
 
   let groups: Array<{ candidateIds: number[]; existingArticleId: number | null }>;
   if (pending.length === 1 && existing.length === 0) {

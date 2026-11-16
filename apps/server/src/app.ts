@@ -96,6 +96,16 @@ import {
   filterPreviewSchema,
   filterUpdateSchema,
   previewFilter,
+  createRule,
+  deleteRule,
+  listRuleNotifications,
+  listRules,
+  previewRule,
+  ruleCreateSchema,
+  ruleNotificationsQuerySchema,
+  rulePreviewSchema,
+  ruleUpdateSchema,
+  updateRule,
   recordArticleOpened,
   addHighlightTerm,
   createTermGroup,
@@ -463,6 +473,19 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/filters/:id/articles", (c) =>
     c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
   );
+
+  // rules: what is done to a feed article when it is first stored
+  api.get("/rules", (c) => c.json(listRules(db)));
+  api.post("/rules", async (c) => c.json(createRule(db, parse(ruleCreateSchema, await jsonBody(c)), clock), 201));
+  // Counts against the stored articles without saving anything. Before `/rules/:id`, which it is not.
+  api.post("/rules/preview", async (c) => c.json(previewRule(db, parse(rulePreviewSchema, await jsonBody(c)))));
+  api.patch("/rules/:id", async (c) => c.json(updateRule(db, idParam(c, "rule"), parse(ruleUpdateSchema, await jsonBody(c)))));
+  api.delete("/rules/:id", (c) => {
+    deleteRule(db, idParam(c, "rule"));
+    return c.body(null, 204);
+  });
+  // The feed articles a rule made ones the app notifies, for the periodic check of the app.
+  api.get("/rule-notifications", (c) => c.json(listRuleNotifications(db, parse(ruleNotificationsQuerySchema, c.req.query()))));
 
   // list views: how each entry of the left pane and the drawer orders its articles, shared by both apps
   api.get("/list-views", (c) => c.json(listListViews(db)));

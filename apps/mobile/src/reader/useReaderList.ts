@@ -186,8 +186,9 @@ export function useReaderList(ref: ListRef) {
     [results.data],
   );
   // What was listed on screen has been seen: the periodic check does not notify it later. Only generated
-  // articles are ever notified, so only they move the mark: a newer feed article must not hide from the
-  // check a generated article that is in another list.
+  // articles move this mark: a newer feed article must not hide from the check a generated article that is in
+  // another list. The feed articles a rule chose have a mark of their own, which the lists cannot move: they
+  // do not say when the rule chose an article.
   useEffect(() => {
     const newest = fetched.reduce((latest, item) => (item.origin === "generated" && item.updatedAt > latest ? item.updatedAt : latest), "");
     if (newest !== "") void advanceCheckedAt(newest);

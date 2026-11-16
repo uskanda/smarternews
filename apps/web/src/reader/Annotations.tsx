@@ -1,5 +1,5 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { anchorOf, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
+import { anchorOf, checkHighlightQuote, locateHighlights, PART_SEPARATOR, partStarts, rangesByPart, type HighlightAnchor, type LocatedHighlights } from "@smarternews/client";
 import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
@@ -105,7 +105,51 @@ interface Selected {
   filterable: boolean;
   /** The text a new topic starts with, line breaks made spaces; null when a topic cannot be added from it. */
   topicDraft: string | null;
-  rect: { top: number; bottom: number; left: number };
+  rect: Box;
+  /** Whether any of the selection is in the visible part of the pane the body scrolls in. */
+  visible: boolean;
+}
+
+interface Box {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/** The space kept between the menu of a selection and the edges of the screen, and between it and the selection. */
+const MENU_MARGIN = 8;
+const MENU_GAP = 6;
+
+/**
+ * Where the menu of a selection goes on a screen of `view`: below the selection at its left, moved left as far as
+ * it would go past the right edge, and above the selection when it would go past the bottom edge. When it fits
+ * neither below nor above, it is kept on the screen.
+ */
+export function placeMenu(
+  rect: { top: number; bottom: number; left: number },
+  menu: { width: number; height: number },
+  view: { width: number; height: number },
+): { top: number; left: number } {
+  const left = Math.max(MENU_MARGIN, Math.min(rect.left, view.width - MENU_MARGIN - menu.width));
+  const below = rect.bottom + MENU_GAP;
+  const above = rect.top - MENU_GAP - menu.height;
+  const lowest = view.height - MENU_MARGIN - menu.height;
+  let top = below;
+  if (below > lowest) top = above >= MENU_MARGIN ? above : Math.max(MENU_MARGIN, lowest);
+  return { top, left };
+}
+
+/**
+ * Where the selected range is on the screen, and whether it overlaps the visible part of the pane the body under
+ * `root` scrolls in, or of the screen without one. A browser without the measure puts the menu at the top.
+ */
+function boxOf(range: Range, root: Element): { rect: Box; visible: boolean } {
+  const box = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
+  const rect = { top: box.top, bottom: box.bottom, left: box.left, right: box.right };
+  const pane = root.closest("[data-article-scroll]")?.getBoundingClientRect() ?? { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth };
+  const visible = rect.bottom >= pane.top && rect.top <= pane.bottom && rect.right >= pane.left && rect.left <= pane.right;
+  return { rect, visible };
 }
 
 /** The most characters of a selection a topic is added from: past that it is a quotation, not a subject. */
@@ -199,9 +243,7 @@ function selectionIn(
   // The selection's own text, unlike the range's, breaks the line between paragraphs, as a copy would.
   const topicDraft = options.topics ? topicDraftIn(range, scope, (selection.toString() || value).trim()) : null;
   if (!anchor && !filterable && topicDraft === null) return null;
-  // Where the selection is on the screen; a browser without the measure puts the menu at the top.
-  const box = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : { top: 0, bottom: 0, left: 0 };
-  return { value, anchor, filterable, topicDraft, rect: { top: box.top, bottom: box.bottom, left: box.left } };
+  return { value, anchor, filterable, topicDraft, ...boxOf(range, root) };
 }
 
 /** Copies the text selected, as the browser's own menu would. */
@@ -478,9 +520,30 @@ export function AnnotatedBody({
           ? selectionIn(scope?.current ?? root.current, root.current, { highlights: enabled, filters, topics, body: current(), ranges })
           : null,
       );
+    // A scroll of the body or a change of the screen moves the selection: only where it is is measured again, once
+    // a frame, as the rest of what it offers stays the same.
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const selection = document.getSelection();
+      if (!root.current || !selection || selection.rangeCount === 0) return;
+      const { rect, visible } = boxOf(selection.getRangeAt(0), root.current);
+      setSelected((previous) => (previous ? { ...previous, rect, visible } : previous));
+    };
+    const remeasure = () => {
+      if (frame === 0) frame = requestAnimationFrame(measure);
+    };
     look();
     document.addEventListener("selectionchange", look);
-    return () => document.removeEventListener("selectionchange", look);
+    // Caught on the way down, a scroll of any element reaches here: the body scrolls in a pane of its own.
+    document.addEventListener("scroll", remeasure, { capture: true, passive: true });
+    window.addEventListener("resize", remeasure);
+    return () => {
+      document.removeEventListener("selectionchange", look);
+      document.removeEventListener("scroll", remeasure, { capture: true });
+      window.removeEventListener("resize", remeasure);
+      if (frame !== 0) cancelAnimationFrame(frame);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `current` reads the texts kept in a ref
   }, [enabled, filters, topics, ranges, scope]);
 
@@ -541,15 +604,31 @@ export function AnnotatedBody({
     }
   }
 
+  /**
+   * Whether a selection can be highlighted at all. A quote the server refuses is not sent, nor written a note for:
+   * the reason is told, and the selection is kept to be narrowed.
+   */
+  function fits(anchor: HighlightAnchor): boolean {
+    const tooLong = checkHighlightQuote(anchor.quote);
+    if (tooLong !== null) toast({ message: tooLong });
+    return tooLong === null;
+  }
+  const highlightSelection = (anchor: HighlightAnchor) => {
+    if (fits(anchor)) void add(anchor, null);
+  };
+  const writeNote = (anchor: HighlightAnchor) => {
+    if (fits(anchor)) setWritingFor(anchor);
+  };
+
   const anchor = selected?.anchor ?? null;
-  useHotkeys({ h: anchor ? () => void add(anchor, null) : undefined });
+  useHotkeys({ h: anchor ? () => highlightSelection(anchor) : undefined });
 
   /** The actions a selection offers, the same in its menu and in the menu of a right click. */
   const choices = (selection: Selected) => [
     ...(selection.anchor
       ? [
-          { label: "ハイライト", run: () => void add(selection.anchor!, null) },
-          { label: "メモを書く", run: () => setWritingFor(selection.anchor) },
+          { label: "ハイライト", run: () => highlightSelection(selection.anchor!) },
+          { label: "メモを書く", run: () => writeNote(selection.anchor!) },
         ]
       : []),
     ...(selection.filterable ? [{ label: "隠すフィルターを作る…", run: () => setFilteringFor(selection.value) }] : []),
@@ -577,6 +656,20 @@ export function AnnotatedBody({
     setOpened(id);
     return true;
   }
+  // The menu of a selection is placed once it is drawn and before it is painted, where it fits on the screen. It is
+  // measured at the left edge first, where nothing narrows it, so that its own width is what is placed.
+  const toolbar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = toolbar.current;
+    if (!menu || !selected) return;
+    menu.style.top = "0px";
+    menu.style.left = "0px";
+    const { width, height } = menu.getBoundingClientRect();
+    const place = placeMenu(selected.rect, { width, height }, { width: window.innerWidth, height: window.innerHeight });
+    menu.style.top = `${place.top}px`;
+    menu.style.left = `${place.left}px`;
+  });
+
   const openedHighlight = highlights.find((highlight) => highlight.id === opened);
   const focusBack = () => (returnTo.current !== null ? placeOf(root.current, returnTo.current) : null) ?? root.current;
 
@@ -607,12 +700,12 @@ export function AnnotatedBody({
           />
         ) : null}
       </div>
-      {selected && !writingFor && filteringFor === null && topicFor === null ? (
+      {selected?.visible && !writingFor && filteringFor === null && topicFor === null ? (
         <div
+          ref={toolbar}
           role="toolbar"
           aria-label="選んだ文字列"
           className="selection-menu"
-          style={{ top: `${selected.rect.bottom + 6}px`, left: `${Math.max(8, selected.rect.left)}px` }}
           // Pressing a button must not lose the selection before the button reads it.
           onMouseDown={(event) => event.preventDefault()}
         >
