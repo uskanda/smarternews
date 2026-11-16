@@ -86,6 +86,23 @@ export function useScopedFilterCount(target: { feedId: number } | { categoryId: 
   ).length;
 }
 
+export function useRules() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["rules"], queryFn: () => api.rules() });
+}
+
+/**
+ * How many rules have the given feed or category as their scope, enabled or not: what goes with it when it is
+ * deleted. Undefined until the rules have arrived.
+ */
+export function useScopedRuleCount(target: { feedId: number } | { categoryId: number }): number | undefined {
+  const rules = useRules().data;
+  if (!rules) return undefined;
+  return rules.filter((rule) =>
+    "feedId" in target ? rule.scope.type === "feed" && rule.scope.feedId === target.feedId : rule.scope.type === "category" && rule.scope.categoryId === target.categoryId,
+  ).length;
+}
+
 /**
  * The term groups in their order. Changing them on the settings page sets this anew, so lists and articles
  * take the new colours without a reload.
