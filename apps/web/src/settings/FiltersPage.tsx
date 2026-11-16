@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router";
 import { formatFull } from "@smarternews/client";
 import { useCategories, useFeeds, useFilters, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { usePending } from "../lib/pending.ts";
 import { useScrollMemory } from "../lib/scroll-memory.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
@@ -86,6 +87,8 @@ function FilterRow({
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const removed = useRef(false);
+  // Switching and deleting the filter: one waits for its answer before either can be sent again.
+  const [pending, run] = usePending();
   const focus = useInlineEditFocus(editing);
   const summary = `${ACTION_LABEL[filter.action]}（${scopeLabel(filter.scope, categories, feeds)}）`;
 
@@ -138,7 +141,11 @@ function FilterRow({
           <Button ref={focus.opener} aria-label={`${summary}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
-          <Button aria-label={`${summary}を${filter.enabled ? "無効にする" : "有効にする"}`} onClick={() => void toggle()}>
+          <Button
+            aria-label={`${summary}を${filter.enabled ? "無効にする" : "有効にする"}`}
+            disabled={pending}
+            onClick={() => void run(toggle)}
+          >
             {filter.enabled ? "無効にする" : "有効にする"}
           </Button>
           <Button aria-label={`${summary}を削除`} onClick={() => setConfirming(true)}>
@@ -154,7 +161,7 @@ function FilterRow({
         returnFocus={() => (removed.current ? afterRemoval() : null)}
         actions={
           <>
-            <Button variant="danger" onClick={() => void remove()}>
+            <Button variant="danger" disabled={pending} onClick={() => void run(remove)}>
               削除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>

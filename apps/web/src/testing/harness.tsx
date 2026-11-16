@@ -111,10 +111,17 @@ export function renderApp(options: RenderOptions = {}) {
     /**
      * Holds back the responses of the requests that `match`, sent from now until `release`. The server answers
      * each request when it is sent; the app gets the answer only once released, as from a slow connection.
+     * A string matches the whole "METHOD path" (such as "DELETE /api/v1/topics/3"), a pattern any part of it.
      */
-    hold: (match: (request: string) => boolean) => {
+    hold: (match: string | RegExp | ((request: string) => boolean)) => {
       let open: () => void = () => {};
-      const hold: Hold = { match, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
+      const matches =
+        typeof match === "function"
+          ? match
+          : typeof match === "string"
+            ? (request: string) => request === match
+            : (request: string) => match.test(request);
+      const hold: Hold = { match: matches, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
       holds.push(hold);
       return {
         /** How many responses are held back. */

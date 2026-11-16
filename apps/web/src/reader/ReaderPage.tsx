@@ -26,6 +26,7 @@ import { unfold } from "../lib/collapsed.ts";
 import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
+import { usePending } from "../lib/pending.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
 import {
   ANNOTATIONS_LABEL,
@@ -210,6 +211,9 @@ export function ReaderPage({ view }: { view: View }) {
   const panes = usePanes(layout);
   const client = useQueryClient();
   const toast = useToast();
+  // Marking all as read, by the button or by Shift+A: a second one before the answer would mark nothing, and its
+  // toast would take the place of the first one's undo.
+  const [markingAll, runMarkAll] = usePending();
   const timeZone = useTimeZone();
   const settings = useSettings();
   // A failed change of flags is answered with what this render holds: the kept rows, the toast, sending again.
@@ -852,7 +856,7 @@ export function ReaderPage({ view }: { view: View }) {
       Space: () => page(1),
       "Shift+Space": () => page(-1),
       // The same as the buttons and the toggle beside the list, and only while they are offered.
-      "Shift+A": canMarkAll ? () => void markAllRead() : undefined,
+      "Shift+A": canMarkAll ? () => void runMarkAll(markAllRead) : undefined,
       r: refresh,
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
@@ -937,10 +941,10 @@ export function ReaderPage({ view }: { view: View }) {
           <div className="flex flex-wrap gap-sm">
             {canMarkAll ? (
               <span className="flex">
-                <Button className="rounded-r-none!" onClick={() => void markAllRead()}>
+                <Button className="rounded-r-none!" disabled={markingAll} onClick={() => void runMarkAll(markAllRead)}>
                   すべて既読にする
                 </Button>
-                <MarkOlderMenu onChoose={(period) => void markOlderRead(period)} />
+                <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
               </span>
             ) : null}
             <Button onClick={refresh}>読み直す</Button>

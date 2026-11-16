@@ -24,7 +24,7 @@ const MENU_ITEM =
  * periods. The keyboard opens it with Enter, Space or the down arrow on the button, moves with the arrows,
  * chooses with Enter or Space, and leaves with Escape.
  */
-export function MarkOlderMenu({ onChoose }: { onChoose: (period: MarkOlderPeriod) => void }) {
+export function MarkOlderMenu({ onChoose, disabled = false }: { onChoose: (period: MarkOlderPeriod) => void; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -75,6 +75,8 @@ export function MarkOlderMenu({ onChoose }: { onChoose: (period: MarkOlderPeriod
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        // While marking is under way: one marking at a time, as for "mark all as read".
+        disabled={disabled}
         // Joined to the right edge of "mark all as read", so that the two read as one action.
         className="-ml-px rounded-l-none! px-sm!"
         onClick={() => setOpen((current) => !current)}
