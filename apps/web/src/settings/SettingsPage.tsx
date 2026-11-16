@@ -346,7 +346,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
               problems.digestSchedule ??
               fieldMessage(error, "digestSchedule", { label: "ダイジェストを作る時刻", formatHint: TIME_FORMAT_HINT })
             }
-            hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「今すぐ作る」でだけ作ります。"
+            hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「いま作る」でだけ作ります。"
           />
         </div>
         <div className="sm:col-span-2">
@@ -816,6 +816,7 @@ const SECTIONS = [
   { id: "settings-file", name: "設定ファイル" },
   { id: "providers", name: "プロバイダー" },
   { id: "usage", name: "利用量" },
+  { id: "connect", name: "アプリの接続" },
   { id: "tokens", name: "トークン" },
 ] as const;
 
@@ -903,6 +904,10 @@ function SettingsSections() {
       <SettingsFile />
       <Providers />
       <UsageSection />
+      <section id="connect" aria-label="アプリの接続" className={SECTION}>
+        <h2 className="type-headline-md">アプリの接続</h2>
+        <ConnectCode />
+      </section>
       <section id="tokens" aria-label="トークン" className={SECTION}>
         <h2 tabIndex={-1} className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
@@ -926,7 +931,6 @@ function SettingsSections() {
         >
           <p>このブラウザーに保存したトークンを消します。次に開くとき、サーバーで表示したトークンをもう一度入力する必要があります。</p>
         </ConfirmDialog>
-        <ConnectCode />
       </section>
     </div>
   );

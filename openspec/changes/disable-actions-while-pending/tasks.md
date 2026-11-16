@@ -18,7 +18,7 @@
 
 ## 3. ほかの、データを変える操作
 
-- [x] 3.1 `term-highlights.test.tsx` に、追加、編集の保存、並べ替えのテストを足し、`TermHighlightsPage.tsx` を直して通す。並べ替えのあと、押したボタンにフォーカスが戻ることも確かめる
+- [x] 3.1 `term-highlights.test.tsx` に、追加と編集の保存のテストを足し、`TermHighlightsPage.tsx` を直して通す。並べ替えは、mainで楽観的な更新になったので対象から外す
 - [x] 3.2 `filters.test.tsx` に、フィルターの削除と切り替えを2回押すテストを足し、`FiltersPage.tsx` を直して通す。削除のあと「削除できませんでした」が出ないことを確かめる
 - [x] 3.3 `settings.test.tsx` に、設定の保存と設定ファイルの読み込みのテストを足し、`SettingsPage.tsx` と `CategoryPage.tsx` を直して通す
 - [x] 3.4 `feeds-settings.test.tsx` に、購読フィードの編集、基本の取得周期の保存、OPMLの読み込みのテストを足し、`FeedsPage.tsx` を直して通す

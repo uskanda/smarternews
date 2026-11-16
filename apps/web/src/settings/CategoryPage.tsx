@@ -158,7 +158,7 @@ function CategoryForm({ category }: { category: Category }) {
       setError(null);
       void client.invalidateQueries({ queryKey: ["category-versions", category.id] });
       await client.invalidateQueries({ queryKey: ["categories"] });
-      toast({ message: "保存しました" });
+      toast({ message: "カテゴリを保存しました" });
     } catch (caught) {
       setError(caught);
     }
@@ -714,7 +714,7 @@ function RunNow({ category }: { category: Category }) {
       <h2 className="type-headline-md">実行</h2>
       <div className="flex flex-wrap items-center gap-md">
         <Button onClick={() => void run()} disabled={active}>
-          いますぐ実行
+          いま実行
         </Button>
         {active ? <span className="type-body-md">実行中です。終わると記事が一覧に並びます。</span> : null}
         <Link to={`/runs?category=${category.id}`} className="tap type-body-md text-primary underline underline-offset-4">

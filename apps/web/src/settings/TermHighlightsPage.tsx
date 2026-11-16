@@ -33,6 +33,24 @@ function useStore() {
         return groups.some((each) => each.id === group.id) ? groups.map((each) => (each.id === group.id ? group : each)) : [...groups, group];
       }),
     without: (id: number) => client.setQueryData<TermGroup[]>(["term-groups"], (groups) => groups?.filter((each) => each.id !== id)),
+    /** Takes a term out of the group as it is now, so that a removal answered late does not bring back another. */
+    withoutTerm: (groupId: number, termId: number) =>
+      client.setQueryData<TermGroup[]>(["term-groups"], (groups) =>
+        groups?.map((each) => (each.id === groupId ? { ...each, terms: each.terms.filter((term) => term.id !== termId) } : each)),
+      ),
+    /**
+     * Puts the groups in the order of `groups`, keeping what each holds now. Groups not shown any more stay
+     * away; groups the order does not know yet go last.
+     */
+    order: (groups: TermGroup[]) =>
+      client.setQueryData<TermGroup[]>(["term-groups"], (current) => {
+        if (!current) return groups;
+        const known = new Set(groups.map((each) => each.id));
+        const now = new Map(current.map((each) => [each.id, each]));
+        return [...groups.flatMap((each) => now.get(each.id) ?? []), ...current.filter((each) => !known.has(each.id))];
+      }),
+    now: () => client.getQueryData<TermGroup[]>(["term-groups"]) ?? [],
+    reload: () => void client.invalidateQueries({ queryKey: ["term-groups"] }),
   };
 }
 
@@ -214,12 +232,21 @@ function AddTerm({ group, inputRef }: { group: TermGroup; inputRef: Ref<HTMLInpu
   );
 }
 
+/** The delete button of one term. It waits for its own answer only, so that the other terms can be deleted meanwhile. */
+function RemoveTerm({ text, onRemove }: { text: string; onRemove: () => Promise<void> }) {
+  const [removing, run] = usePending();
+  return (
+    <Button variant="quiet" aria-label={`「${text}」を削除`} disabled={removing} onClick={() => void run(onRemove)}>
+      削除
+    </Button>
+  );
+}
+
 function GroupRow({
   group,
   first,
   last,
   onMove,
-  moving,
   focusMove,
   onFocused,
   afterRemoval,
@@ -228,8 +255,6 @@ function GroupRow({
   first: boolean;
   last: boolean;
   onMove: (group: TermGroup, direction: "up" | "down") => void;
-  /** A move of any group waits for its answer: no group moves until it comes. */
-  moving: boolean;
   /** The move button to focus once the group has moved, so that a keyboard user stays where they were. */
   focusMove: "up" | "down" | null;
   /** Called once the focus has moved, so that a later change of the order does not move it again. */
@@ -242,7 +267,6 @@ function GroupRow({
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // Deleting the group or one of its terms: one at a time.
   const [removing, run] = usePending();
   const focus = useInlineEditFocus(editing);
   const up = useRef<HTMLButtonElement>(null);
@@ -251,13 +275,12 @@ function GroupRow({
   const termInput = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    // The buttons are held while the move waits, and a held button takes no focus: it is focused once they are free.
-    if (focusMove === null || moving) return;
+    if (focusMove === null) return;
     // A button that cannot be pressed any more passes the focus to the other one.
     if (focusMove === "up") (first ? down : up).current?.focus();
     if (focusMove === "down") (last ? up : down).current?.focus();
     onFocused();
-  }, [focusMove, first, last, moving, onFocused]);
+  }, [focusMove, first, last, onFocused]);
 
   async function removeGroup() {
     try {
@@ -274,7 +297,7 @@ function GroupRow({
   async function removeTerm(termId: number, text: string) {
     try {
       await api.deleteHighlightTerm(group.id, termId);
-      store.one({ ...group, terms: group.terms.filter((term) => term.id !== termId) });
+      store.withoutTerm(group.id, termId);
       // The button that was pressed is gone with the term; the focus stays in the group, where terms are added.
       termInput.current?.focus();
       toast({ message: `語「${text}」を削除しました` });
@@ -300,14 +323,7 @@ function GroupRow({
           {group.terms.map((term) => (
             <li key={term.id} className="inline-flex min-w-0 items-center gap-xs rounded-sm border border-outline pl-sm">
               <span className="min-w-0 break-words">{term.text}</span>
-              <Button
-                variant="quiet"
-                aria-label={`「${term.text}」を削除`}
-                disabled={removing}
-                onClick={() => void run(() => removeTerm(term.id, term.text))}
-              >
-                削除
-              </Button>
+              <RemoveTerm text={term.text} onRemove={() => removeTerm(term.id, term.text)} />
             </li>
           ))}
         </ul>
@@ -320,10 +336,10 @@ function GroupRow({
         <>
           <AddTerm group={group} inputRef={termInput} />
           <div className="flex flex-wrap gap-sm pt-xs">
-            <Button ref={up} aria-label={`${group.name}を上へ`} disabled={first || moving} onClick={() => onMove(group, "up")}>
+            <Button ref={up} aria-label={`${group.name}を上へ`} disabled={first} onClick={() => onMove(group, "up")}>
               上へ
             </Button>
-            <Button ref={down} aria-label={`${group.name}を下へ`} disabled={last || moving} onClick={() => onMove(group, "down")}>
+            <Button ref={down} aria-label={`${group.name}を下へ`} disabled={last} onClick={() => onMove(group, "down")}>
               下へ
             </Button>
             <Button ref={focus.opener} aria-label={`${group.name}を編集`} onClick={() => setEditing(true)}>
@@ -375,22 +391,43 @@ function TermHighlights() {
   // Cleared once the moved group has taken the focus, so that adding or deleting a group later leaves the focus alone.
   const [moved, setMoved] = useState<{ id: number; direction: "up" | "down" } | null>(null);
   const focused = useCallback(() => setMoved(null), []);
-  const [moving, run] = usePending();
   const listHeading = useRef<HTMLHeadingElement>(null);
 
-  async function move(group: TermGroup, direction: "up" | "down") {
-    const list = groups.data ?? [];
+  // Moves go to the server one by one: each names the group to go before, which means what the screen shows
+  // only once the server has the moves before it.
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  /** Moves sent or waiting to be sent. The order an answer brings is shown only when none is left. */
+  const pending = useRef(0);
+  /** Goes up when a move fails, so that the moves pressed before it are dropped. */
+  const round = useRef(0);
+
+  function move(group: TermGroup, direction: "up" | "down") {
+    const list = store.now();
     const at = list.findIndex((each) => each.id === group.id);
+    const to = direction === "up" ? at - 1 : at + 1;
+    if (at < 0 || to < 0 || to >= list.length) return;
     // Up: before the one above. Down: before the one two below, or last.
     const before = direction === "up" ? list[at - 1]!.id : (list[at + 2]?.id ?? null);
-    try {
-      store.all(await api.moveTermGroup(group.id, before));
-      setMoved({ id: group.id, direction });
-    } catch (error) {
-      // The focus is not to jump to a group moved earlier once the buttons are free again.
-      setMoved(null);
-      toast({ message: messageFor(error) });
-    }
+    const next = list.filter((each) => each.id !== group.id);
+    next.splice(to, 0, list[at]!);
+    store.all(next);
+    setMoved({ id: group.id, direction });
+
+    pending.current += 1;
+    const sent = round.current;
+    queue.current = queue.current.then(async () => {
+      if (sent !== round.current) return;
+      try {
+        const answer = await api.moveTermGroup(group.id, before);
+        pending.current -= 1;
+        if (pending.current === 0) store.order(answer);
+      } catch {
+        round.current += 1;
+        pending.current = 0;
+        store.reload();
+        toast({ message: "並べ替えられませんでした。もう一度試してください。" });
+      }
+    });
   }
 
   return (
@@ -425,8 +462,7 @@ function TermHighlights() {
               group={group}
               first={index === 0}
               last={index === groups.data.length - 1}
-              onMove={(target, direction) => void run(() => move(target, direction))}
-              moving={moving}
+              onMove={move}
               focusMove={moved?.id === group.id ? moved.direction : null}
               onFocused={focused}
               afterRemoval={() => listHeading.current}

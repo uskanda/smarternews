@@ -383,6 +383,23 @@ describe("the articles a filter hides", () => {
     const article = await screen.findByRole("article", { name: "記事" });
     expect(await within(article).findByRole("heading", { name: "夏の特売" })).toBeInTheDocument();
   });
+
+  it("reads in more of them with the same button name as the article list", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Shop");
+    for (let minute = 0; minute <= 50; minute++) {
+      seedFeedArticle(server.db, feed.id, { title: `特売${minute}`, at: `2026-03-01T00:${String(minute).padStart(2, "0")}:00.000Z` });
+    }
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user } = renderApp({ server, route: "/settings/filters" });
+
+    await user.click(await screen.findByRole("button", { name: "隠すフィルター（全体）が隠している記事" }));
+    const hidden = await section("隠している記事");
+    await within(hidden).findByRole("link", { name: "特売50" });
+    await user.click(within(hidden).getByRole("button", { name: "さらに読み込む" }));
+
+    expect(await within(hidden).findByRole("link", { name: "特売0" })).toBeInTheDocument();
+  });
 });
 
 describe("deleting what filters apply to", () => {

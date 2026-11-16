@@ -127,7 +127,7 @@ describe("highlighting a selection", () => {
     selectText(article.querySelector(".article-body")!, QUOTE);
     // A topic can be added too, as the article's category holds topics.
     await waitFor(() =>
-      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを足す…"]),
+      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを追加…"]),
     );
     await user.click(within(menu()!).getByRole("button", { name: "ハイライト" }));
 
@@ -992,13 +992,13 @@ describe("a dialog of an annotation when the body shown changes", () => {
   it("keeps the dialog of a topic when the translation arrives", async () => {
     const { server, route, release } = translating();
     const { user } = renderApp({ server, route });
-    await choose(user, "The plant opens", "トピックを足す…");
-    const dialog = await screen.findByRole("dialog", { name: "トピックを足す" });
+    await choose(user, "The plant opens", "トピックを追加…");
+    const dialog = await screen.findByRole("dialog", { name: "トピックを追加" });
     await user.type(within(dialog).getByLabelText("文章"), " in Ohio");
 
     await arrives(release);
 
-    expect(screen.getByRole("dialog", { name: "トピックを足す" })).toBe(dialog);
+    expect(screen.getByRole("dialog", { name: "トピックを追加" })).toBe(dialog);
     expect(within(dialog).getByLabelText("文章")).toHaveValue("The plant opens in Ohio");
   });
 

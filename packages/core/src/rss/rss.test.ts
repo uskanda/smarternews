@@ -43,6 +43,8 @@ const article = (overrides: Partial<Article> = {}): Article => ({
   previousArticles: [],
   updateNotes: [],
   otherFeeds: [],
+  summarizedIn: null,
+  feedArticles: [],
   annotations: { note: null, highlights: [] },
   mentions: [],
   attachments: [],
