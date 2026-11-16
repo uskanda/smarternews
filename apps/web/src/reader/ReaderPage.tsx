@@ -29,6 +29,7 @@ import { useScrollRead } from "../lib/scroll-read.ts";
 import {
   ANNOTATIONS_LABEL,
   buildNav,
+  checkSearchWords,
   FEEDS_LABEL,
   GENERATED_LABEL,
   hasImportanceFilter,
@@ -278,8 +279,13 @@ export function ReaderPage({ view }: { view: View }) {
     [words, searchCategory, searchFeedId, searchUnread],
   );
   const narrowed = searchSlug !== null || searchFeedId !== undefined || searchUnread;
+  // Words the server refuses, from a URL typed or kept, are not sent: trying again would fail the same way.
+  const wordsProblem = isSearch && words.length > 0 ? checkSearchWords(words) : null;
   // A category is named by its slug, so the search waits for the categories when it names one.
-  const results = useArticleSearch(searchQuery, isSearch && words.length > 0 && (searchSlug === null || categories.data !== undefined));
+  const results = useArticleSearch(
+    searchQuery,
+    isSearch && words.length > 0 && wordsProblem === null && (searchSlug === null || categories.data !== undefined),
+  );
   const terms = isSearch ? results.data?.pages[0]?.terms : undefined;
   // The articles of a name: every one, read ones included, newest first, whatever the entry chosen before.
   const mentionName = isMention ? (search.get("name") ?? "").trim() : "";
@@ -994,8 +1000,9 @@ export function ReaderPage({ view }: { view: View }) {
         className="min-h-0 flex-1 overflow-y-auto"
       >
         {/* A next page that could not be loaded is said below the rows, where the reader is. */}
+        {wordsProblem !== null ? <ErrorNotice message={wordsProblem} /> : null}
         {active.isError && !active.isFetchNextPageError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
-        {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
+        {active.isPending && !active.isError && !(isSearch && words.length === 0) && wordsProblem === null &&!(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
         ) : null}

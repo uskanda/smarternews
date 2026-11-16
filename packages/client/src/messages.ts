@@ -1,3 +1,4 @@
+import { charCount, MAX_ANNOTATION_CHARS, MAX_QUERY_CHARS } from "@smarternews/core/api";
 import { ApiError, type FieldProblem } from "./api.ts";
 import { feedErrorLabel } from "./labels.ts";
 
@@ -158,7 +159,27 @@ export function checkText(text: string, { label, max, required = true }: { label
   return text.trim().length > max ? describeProblem({ code: "too_big", maximum: max, unit: "chars" }, label) : null;
 }
 
-const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d$/;
+/**
+ * The reason the words of a search are too long, or null. Counted as the server counts them: without the spaces
+ * around them, a character outside the BMP, such as an emoji, once.
+ */
+export function checkSearchWords(text: string): string | null {
+  return charCount(text.trim()) > MAX_QUERY_CHARS
+    ? describeProblem({ code: "too_big", maximum: MAX_QUERY_CHARS, unit: "chars" }, "検索の語")
+    : null;
+}
+
+/**
+ * The reason a quote is too long to highlight, or null. Counted as the server counts it: with its spaces, in
+ * UTF-16 units. The reason says what to do, as the quote is what was selected, not what was written.
+ */
+export function checkHighlightQuote(quote: string): string | null {
+  return quote.length > MAX_ANNOTATION_CHARS
+    ? `${describeProblem({ code: "too_big", maximum: MAX_ANNOTATION_CHARS, unit: "chars" }, "ハイライトする文字列")}選ぶ範囲を狭めてください。`
+    : null;
+}
+
+const TIME_OF_DAY =/^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** Times of day written as `HH:MM`, apart by commas or spaces, `max` of them at most. Empty text is no time. */
 export function checkTimes(text: string, wording: FieldWording & { max: number }): Checked<string[]> {
