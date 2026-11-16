@@ -1,9 +1,18 @@
-import { insertFeed, listListViews, recordFetchFailure, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
+import {
+  getArticle,
+  insertFeed,
+  listListViews,
+  recordFetchFailure,
+  recordFetchSuccess,
+  saveAutoSummary,
+  setArticleFlags,
+  updateFeed,
+} from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { relayPath } from "@smarternews/server/testing";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -224,6 +233,40 @@ describe("the list an entry opens", () => {
     renderApp({ server, route: `/f/${blog.id}/${newPost}` });
     expect(await within(await opened()).findByRole("heading", { level: 2, name: "New post" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Blog" })).toBeInTheDocument();
+  });
+
+  it("keeps an article opened directly in the unread list of a category, read before the categories and the list arrive", async () => {
+    const { server, newPost } = seeded();
+    const held = gate();
+    renderApp({
+      server,
+      route: `/c/tools/${newPost}`,
+      hold: (request) => (request === "GET /api/v1/categories" || request.startsWith("GET /api/v1/articles?") ? held.wait : undefined),
+    });
+    expect(await within(await opened()).findByRole("heading", { level: 2, name: "New post" })).toBeInTheDocument();
+    await waitFor(() => expect(getArticle(server.db, newPost).isRead).toBe(true));
+
+    await act(async () => held.open());
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Generated", "New post", "Release 2", "Old post"]));
+    expect(row(/New post/)).toHaveAttribute("data-read", "true");
+  });
+
+  it("keeps an article opened directly in the unread list of a feed, read before the feeds and the list arrive", async () => {
+    const { server, blog, oldPost } = seeded();
+    const held = gate();
+    renderApp({
+      server,
+      route: `/f/${blog.id}/${oldPost}`,
+      hold: (request) => (request === "GET /api/v1/feeds" || request.startsWith("GET /api/v1/articles?") ? held.wait : undefined),
+    });
+    expect(await within(await opened()).findByRole("heading", { level: 2, name: "Old post" })).toBeInTheDocument();
+    await waitFor(() => expect(getArticle(server.db, oldPost).isRead).toBe(true));
+
+    await act(async () => held.open());
+
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Old post"]));
+    expect(row(/Old post/)).toHaveAttribute("data-read", "true");
   });
 
   it("says so when the feed does not exist", async () => {
@@ -610,6 +653,62 @@ describe("an article that other feeds delivered too", () => {
     // The copy was marked read with the kept article, so the list includes read articles to show it.
     await waitFor(() => expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]));
     expect(row(/Big news \(Releases\)/)).toHaveAttribute("data-read", "true");
+  });
+});
+
+describe("the feed's name in an opened feed article", () => {
+  it("leads to the unread list of the feed and keeps the article open beside it", async () => {
+    const { server, blog, newPost } = seeded();
+    const { user, path } = renderApp({ server, route: `/unread/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "New post" });
+    const name = await within(pane).findByRole("link", { name: "Blog" });
+    expect(name).toHaveAttribute("href", `/f/${blog.id}/${newPost}`);
+
+    await user.click(name);
+
+    expect(path()).toBe(`/f/${blog.id}/${newPost}`);
+    expect(within(list()).getByRole("heading", { level: 1, name: "Blog" })).toBeInTheDocument();
+    expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveAttribute("aria-current", "page");
+    expect(within(article()).getByRole("heading", { level: 2, name: "New post" })).toBeInTheDocument();
+    // The list is the unread one the left pane opens: the article that was read is not in it.
+    await waitFor(() => expect(rowTitles()).toEqual(["Old post"]));
+  });
+
+  it("leads to the list alone on a narrow screen, where the list and the article are not shown together", async () => {
+    const { server, blog, newPost } = seeded();
+    renderApp({ server, route: `/unread/${newPost}`, width: 390 });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "New post" });
+    expect(await within(pane).findByRole("link", { name: "Blog" })).toHaveAttribute("href", `/f/${blog.id}`);
+  });
+
+  it("is no link in the list of that feed", async () => {
+    const { server, blog, newPost } = seeded();
+    renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "New post" });
+    expect(pane).toHaveTextContent("Blog");
+    expect(within(pane).queryByRole("link", { name: "Blog" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the way to the feed's site above its list", () => {
+  it("opens the site of the feed in a new tab", async () => {
+    const { server, blog } = seeded();
+    recordFetchSuccess(server.db, blog.id, { now: at(120), siteUrl: "https://blog.example.org/" });
+    renderApp({ server, route: `/f/${blog.id}` });
+    const site = await within(list()).findByRole("link", { name: "サイトを開く" });
+    expect(site).toHaveAttribute("href", "https://blog.example.org/");
+    expect(site).toHaveAttribute("target", "_blank");
+    expect(site).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("is not shown for a feed whose site is not known", async () => {
+    const { server, blog } = seeded();
+    renderApp({ server, route: `/f/${blog.id}` });
+    await within(list()).findByRole("button", { name: "購読フィードの設定" });
+    expect(within(list()).queryByRole("link", { name: "サイトを開く" })).not.toBeInTheDocument();
   });
 });
 

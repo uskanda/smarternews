@@ -1,4 +1,15 @@
-import { createRun, createTopic, finishRun, insertCandidate, resolvePricing, setRetry, startRun, type RetrySkipped, type RunOutcome } from "@smarternews/core";
+import {
+  createRun,
+  createTopic,
+  finishRun,
+  insertCandidate,
+  recordSearchAttempt,
+  resolvePricing,
+  setRetry,
+  startRun,
+  type RetrySkipped,
+  type RunOutcome,
+} from "@smarternews/core";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
@@ -23,6 +34,32 @@ function finished(server: TestServer, categoryId: number, outcome: Partial<RunOu
   return run.id;
 }
 
+/** A topic whose web search by the model found no new candidate in three runs in a row. */
+function reducedLlmSearchTopic(server: TestServer, categoryId: number) {
+  const topic = createTopic(
+    server.db,
+    categoryId,
+    { text: "Exploited bugs", sources: { llmSearch: true }, interpretation: { queries: ["q"], criteria: "c" } },
+    server.clock,
+  );
+  for (let index = 0; index < 3; index += 1) {
+    const run = finished(server, categoryId);
+    recordSearchAttempt(server.db, {
+      runId: run,
+      topicId: topic.id,
+      kind: "llm-search",
+      engine: null,
+      query: topic.text,
+      ok: true,
+      returned: 0,
+      googleAttempted: 0,
+      googleUnresolved: 0,
+      createdAt: server.clock().toISOString(),
+    });
+  }
+  return topic;
+}
+
 const rows = () => within(screen.getByRole("table", { name: "実行履歴" })).getAllByRole("row").slice(1);
 
 describe("running a category now", () => {
@@ -31,10 +68,10 @@ describe("running a category now", () => {
     const category = server.category("Security");
     const { user, requests } = renderApp({ server, route: `/settings/categories/${category.id}` });
 
-    await user.click(await screen.findByRole("button", { name: "いますぐ実行" }));
+    await user.click(await screen.findByRole("button", { name: "いま実行" }));
 
     expect(await screen.findByText(/実行中です/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "いますぐ実行" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "いま実行" })).toBeDisabled());
     expect(requests.filter((request) => request === `POST /api/v1/categories/${category.id}/runs`)).toHaveLength(1);
   });
 });
@@ -79,7 +116,7 @@ describe("the latest run on the category page", () => {
     const section = await latest();
     await waitFor(() => expect(section).toHaveTextContent("成功"));
 
-    await user.click(within(section).getByRole("button", { name: "いますぐ実行" }));
+    await user.click(within(section).getByRole("button", { name: "いま実行" }));
 
     await waitFor(() => expect(section).toHaveTextContent(/待機中|実行中/));
     expect(section).not.toHaveTextContent("成功");
@@ -288,6 +325,35 @@ describe("attention", () => {
     expect(await screen.findByText("確認したことを保存できませんでした。もう一度試してください。")).toBeInTheDocument();
     expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
   });
+
+  it("puts a web search by the model cut to once a day back to every run, and drops its item", async () => {
+    const server = makeServer();
+    const category = server.category("Security");
+    const topic = reducedLlmSearchTopic(server, category.id);
+    const { user, requests } = renderApp({ server, route: "/runs" });
+
+    expect(await screen.findByRole("region", { name: "注意" })).toHaveTextContent(
+      "Securityのトピック「Exploited bugs」で、LLM検索の新しい候補が3回続けて0件です。1日1回に減らしています。",
+    );
+    await user.click(within(section()).getByRole("button", { name: "元に戻す" }));
+
+    await waitFor(() => expect(screen.queryByRole("region", { name: "注意" })).not.toBeInTheDocument());
+    expect(requests).toContain(`POST /api/v1/topics/${topic.id}/llm-search/restore`);
+  });
+
+  it("keeps the item of a web search by the model and says so when it cannot be put back", async () => {
+    const server = makeServer();
+    reducedLlmSearchTopic(server, server.category("Security").id);
+    let down = false;
+    const { user } = renderApp({ server, route: "/runs", offline: () => down });
+    await screen.findByRole("region", { name: "注意" });
+
+    down = true;
+    await user.click(within(section()).getByRole("button", { name: "元に戻す" }));
+
+    expect(await screen.findByText("LLM検索を元に戻せませんでした。もう一度試してください。")).toBeInTheDocument();
+    expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
+  });
 });
 
 describe("one run", () => {
@@ -366,6 +432,34 @@ describe("one run", () => {
     expect(item).toHaveTextContent("Example News");
     expect(item).toHaveTextContent("exploited flaws");
     expect(item).toHaveTextContent("advertising without new information");
+    expect(item).not.toHaveTextContent("購読フィード");
+  });
+
+  it("marks a rejected candidate that a subscribed feed delivered", async () => {
+    const { server, category, id, flaws } = withRejections();
+    insertCandidate(server.db, {
+      categoryId: category.id,
+      runId: id,
+      url: "https://example.org/subscribed",
+      fetchable: true,
+      title: "From a subscribed feed",
+      snippet: "",
+      siteName: "Lang News",
+      publishedAt: null,
+      sourceKind: "subscription",
+      status: "rejected",
+      reason: "about another product",
+      reasonCode: null,
+      importance: 1,
+      topicIds: [flaws.id],
+      now: server.clock().toISOString(),
+    });
+    renderApp({ server, route: `/runs/${id}` });
+
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    const item = (await within(rejected).findByRole("link", { name: "From a subscribed feed" })).closest("li")!;
+    expect(item).toHaveTextContent("Lang News");
+    expect(item).toHaveTextContent("購読フィード");
   });
 
   it("leads from the topic of each rejected candidate to the editor of that topic", async () => {

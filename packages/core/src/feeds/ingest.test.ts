@@ -5,6 +5,7 @@ import { replaceMentions } from "../db/mentions.ts";
 import { getFeed, insertFeed, listFeeds, updateFeed } from "../db/feeds.ts";
 import { updateSettings } from "../db/settings.ts";
 import { createFilter } from "../db/filters.ts";
+import { addHighlightTerm, createTermGroup } from "../db/term-highlights.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { purgeExpired } from "../runs/retention.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
@@ -124,6 +125,15 @@ describe("subscribe", () => {
     expect(row.content_text).toBe("It is out.");
   });
 
+  it("keeps an embedded video as a link to it, and leaves the link out of the text for matching", async () => {
+    const s = setup([{ title: "Clip", key: "clip", content: '<p>Watch this.</p><video controls><source src="https://media.example.org/clip.mp4"></video>' }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL, categoryId: createCategory(s.db, { name: "Tools", kind: "news" }, s.clock).id });
+    const [article] = s.list({ feed: feed.id });
+    const row = s.db.prepare("SELECT body, content_text FROM articles WHERE id = ?").get(article!.id)!;
+    expect(row.body).toBe("Watch this.\n\n[埋め込み（media.example.org）](https://media.example.org/clip.mp4)");
+    expect(row.content_text).toBe("Watch this.");
+  });
+
   it("refuses a page that is not a feed, and stores nothing", async () => {
     const s = setup(() => html("<html><body>Hello</body></html>"));
     await expect(subscribe(s.deps, { url: FEED_URL })).rejects.toMatchObject({ code: "invalid", message: expect.stringMatching(/not a feed/) });
@@ -202,6 +212,36 @@ describe("fetchFeed", () => {
 
     const [after] = s.list();
     expect(after).toMatchObject({ id: before!.id, title: "A (corrected)", summary: "Better words.", isRead: true, updatedAt: before!.updatedAt });
+  });
+
+  it("gives a new article the behaviour score of its feed, and matches it with the highlight terms", async () => {
+    const s = setup([{ title: "Plain", key: "a" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const group = createTermGroup(s.db, { name: "Power" }, s.clock);
+    addHighlightTerm(s.db, group.id, { text: "battery" }, s.clock);
+    s.db.prepare("UPDATE feeds SET relevance_score = 0.4 WHERE id = ?").run(feed.id);
+    s.serve([{ title: "New BATTERY", key: "b" }, { title: "Plain", key: "a" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    const rows = s.db.prepare("SELECT title, feed_score, term_match FROM articles ORDER BY id").all();
+    expect(rows).toEqual([
+      { title: "Plain", feed_score: 0, term_match: 0 },
+      { title: "New BATTERY", feed_score: 0.4, term_match: 1 },
+    ]);
+  });
+
+  it("matches a rewritten article with the highlight terms again", async () => {
+    const s = setup([{ title: "Battery", key: "a" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    const group = createTermGroup(s.db, { name: "Power" }, s.clock);
+    addHighlightTerm(s.db, group.id, { text: "battery" }, s.clock);
+    expect(s.db.prepare("SELECT term_match FROM articles").get()).toEqual({ term_match: 1 });
+    s.serve([{ title: "Solar", key: "a", content: "<p>Sun.</p>" }]);
+
+    await fetchFeed(s.deps, feed.id);
+
+    expect(s.db.prepare("SELECT term_match FROM articles").get()).toEqual({ term_match: 0 });
   });
 
   it("keeps the names found in an article when its item is rewritten", async () => {

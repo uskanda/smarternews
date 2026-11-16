@@ -58,6 +58,7 @@ The web app is a three-pane reader: views and categories on the left, the list o
 - Opening an article marks it as read. "すべて既読にする" marks everything in the list, and can be undone for ten seconds.
 - "スクロールした記事を既読にする" in "この端末の設定" marks an unread article as read once its row has gone wholly past the top of the list, however fast you scroll. It is off by default. The rows stay in the list, and the list gets room below its last row so that the last one can go past the top too. There is no undo; put an article back to unread from 最近読んだ記事 instead. An article put back to unread is left alone until the list is reloaded or another entry is opened. 最近読んだ記事, search results and event categories are never marked this way.
 - The button "並び順" at the top of the list switches it between newest first and oldest first. Each entry of the left pane keeps its own order on the server, so the Android app opens it the same way. Oldest first goes by the same time: a generated article that a follow-up rewrites moves to the end, and new articles join at the end. In an oldest first list, "すべて既読にする" also marks the articles not loaded yet, up to the time the list was loaded. Event categories, 最近読んだ記事 and search results keep their own order.
+- "関連度順" in "並び順" puts the articles nearest your interests first. Each article is placed as if it were newer by 48 hours times its relevance, from 0 to 1, so old articles do not stay on top. A generated article's relevance comes from its importance. A feed article's is half how often you opened or starred the articles of its feed in the last 30 days, and half whether its titles or summary have a highlight term. No model is called, and the relevance is not shown.
 - Importance 4 and 5 are marked in the list, and a switch narrows the list to them.
 - An event category is shown as a list of upcoming events grouped by day.
 - A category with subscribed feeds lists them below its name, after an entry "AI生成" for the articles the model wrote. "AI生成" at the top shows the written articles of every category, and "購読フィード" below it the feed articles of every feed. Feeds without a category are under "未分類".
@@ -81,7 +82,7 @@ In the drawer, a long press on a category or a feed picks it up; drag it to reor
 
 To connect, open the web app's settings on a computer, press "アプリ接続用のQRコードを表示する", and scan the code from the app's first screen. You can also type the server's URL and the token. The device keeps the token in its encrypted storage. Your phone must be able to reach the server, for example over Tailscale.
 
-- "並び順" at the top of a list switches it between newest first and oldest first, as on the web app, and the two share the order of each entry.
+- "並び順" at the top of a list switches it between newest first, oldest first and relevance, as on the web app, and the two share the order of each entry.
 - The button on top of a feed article fetches its full content, and switches between it and what the feed delivered once it is there.
 - Swipe an article left or right to move to the next or the previous one. In the list, a swipe to the left marks a row as read without opening it, and a long press offers the star and the source.
 - "スクロールした記事を既読にする" in "この端末の設定" marks rows read as the list is scrolled past them, as on the web app. It is switched on the device by itself: turning it on in the browser does not turn it on in the app. A row put back to unread by a swipe, the long press menu or the article screen is left alone until the list is pulled or another list is opened. If the server cannot be reached, the rows show unread again with "もう一度試す".
@@ -147,7 +148,7 @@ Add a feed in the web app under "設定" and "購読フィードを設定する"
 - A fetch that fails is shown on the feed, with the reason, and not in the run history. After each failure in a row the wait doubles, up to one day. A `Retry-After` on a 429 or 503 answer is waited for as well, up to one day. A feed that answers 410 is shown as gone, with a suggestion to unsubscribe; it is not disabled.
 - Every item a feed delivers when you subscribe becomes an unread article. Items older than 90 days are left out.
 - Articles of feeds can be starred and marked read like any other. Without a star they are deleted after 90 days.
-- The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts and embedded frames are removed.
+- The content is reduced to paragraphs, headings, lists, quotes, emphasis, code, links and images. Scripts are removed. Videos, audio and embedded frames are not shown; each is kept as a link to its original address, named "Embedded content (host)".
 - Deleting a category keeps its feeds. They move to "未分類" with their articles.
 
 Images in the content are loaded by your browser or phone through the server, which fetches them from the site that publishes them (see [Images](#images)). For articles the model wrote, no image is ever loaded.
@@ -183,7 +184,7 @@ Duplicate removal is on by default. Switch it off in the global settings to see 
 
 ### Digests
 
-A digest sums up what arrived since the last one: an executive summary of up to 800 characters, then about three lines for each category with something worth telling. Each line links to the articles it is drawn from. Digests are made at the times of "ダイジェストを作る時刻" in the global settings, 7:00 and 19:00 by default in the configured time zone; an empty list makes them by hand only, with "今すぐ作る" on the page "ダイジェスト".
+A digest sums up what arrived since the last one: an executive summary of up to 800 characters, then about three lines for each category with something worth telling. Each line links to the articles it is drawn from. Digests are made at the times of "ダイジェストを作る時刻" in the global settings, 7:00 and 19:00 by default in the configured time zone; an empty list makes them by hand only, with "いま作る" on the page "ダイジェスト".
 
 - One digest is one call of the `digest` task. It reads at most 200 articles of the period: generated articles by importance, then feed articles newest first. Of a feed article only its title and its summary, or the first 300 characters of what the feed delivered, are given to the model; the full content never is. Feed articles of a feed without a category feed the executive summary only.
 - A period runs from the end of the last digest to now, and never more than 24 hours back. A period without an article makes no digest and calls no model. A digest that fails is not tried again by itself; the next one covers its period.

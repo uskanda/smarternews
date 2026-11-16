@@ -12,7 +12,10 @@ export interface SearchAttempt {
   /** The query of news search, or the topic's text for web search by the model. */
   query: string;
   ok: boolean;
-  /** The results the source returned, before those an earlier run settled were left out. */
+  /**
+   * News search: the results the source returned, before those an earlier run settled were left out. Web search by
+   * the model: the new candidates, that no earlier run settled, could be fetched and fall within the window.
+   */
   returned: number;
   googleAttempted: number;
   googleUnresolved: number;
@@ -63,6 +66,11 @@ export function listSearchAttempts(db: Database, runId: number): SearchAttempt[]
 /** Every search still on record, the oldest first. The records of 30 days of one person's topics are few. */
 export function listAllSearchAttempts(db: Database): SearchAttempt[] {
   return db.prepare("SELECT * FROM search_attempts ORDER BY id").all().map(toAttempt);
+}
+
+/** The web searches by the model of one topic, the oldest first. */
+export function listLlmSearchAttempts(db: Database, topicId: number): SearchAttempt[] {
+  return db.prepare("SELECT * FROM search_attempts WHERE topic_id = ? AND kind = 'llm-search' ORDER BY id").all(topicId).map(toAttempt);
 }
 
 export function deleteSearchAttemptsBefore(db: Database, before: string): number {

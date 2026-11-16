@@ -64,6 +64,8 @@ export function Field({
   hint?: ReactNode;
   error?: string | null;
   multiline?: boolean;
+  /** Reaches the input or the text area, for putting the focus there. */
+  ref?: Ref<HTMLInputElement & HTMLTextAreaElement>;
 } & InputHTMLAttributes<HTMLInputElement> &
   TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const id = useId();
@@ -109,7 +111,7 @@ export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () =
       <span>{messageFor(error)}</span>
       {onRetry ? (
         <Button onClick={onRetry} className="text-on-surface">
-          再試行
+          もう一度試す
         </Button>
       ) : null}
     </div>

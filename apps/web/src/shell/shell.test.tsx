@@ -738,7 +738,7 @@ describe("failures", () => {
     expect(alert).toHaveTextContent("サーバーに接続できません");
 
     down = false;
-    await user.click(within(alert).getByRole("button", { name: "再試行" }));
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
     expect(await screen.findByRole("link", { name: /Back online/ })).toBeInTheDocument();
   });
 
@@ -992,6 +992,19 @@ describe("hiding the entries without unread articles", () => {
     await waitFor(() => expect(path()).toBe(`/f/${busy.id}`));
     // Once another list is open, the feed that was open goes too.
     await waitFor(() => expect(entry(/^Empty/)).not.toBeInTheDocument());
+  });
+
+  it("keeps a feed that has gone, with its mark and its category, once it is on", async () => {
+    window.localStorage.setItem("smarternews.nav.hideRead", "on");
+    const { server, cars } = seeded();
+    const ended = feedOf(server, "Ended", cars.id);
+    recordFetchFailure(server.db, ended.id, { now: server.clock().toISOString(), error: "HTTP status 410: x", gone: true });
+    renderApp({ server });
+
+    await waitFor(() => expect(entry(/^Busy/)).toHaveTextContent("1"));
+    expect(entry(/^Empty/)).not.toBeInTheDocument();
+    expect(entry(/^Cars/)).toBeInTheDocument();
+    expect(within(entry(/^Ended/)!).getByRole("img", { name: "配信終了" })).toBeInTheDocument();
   });
 
   it("passes the hidden entries by with Shift+J and Shift+K", async () => {

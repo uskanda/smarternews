@@ -8,7 +8,8 @@ import { useApp } from "../app/context.ts";
 import { topicEditPath } from "../lib/paths.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, ErrorNotice, Field, fieldError } from "../ui/controls.tsx";
-import { FormDialog } from "../ui/FormDialog.tsx";
+import { FormDialog, useDialogCancel } from "../ui/FormDialog.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 // Adding a topic while reading, from the articles of a name or from a selection: a category and the text, as on
 // the page of the category, with the same defaults for the rest. The next run interprets it; adding starts none.
@@ -29,6 +30,7 @@ const comparable = (text: string) => text.normalize("NFKC").toLowerCase().trim()
 /**
  * The dialog. `draft` is the text it starts with; the category it starts in is the article's, `categoryId`, when
  * that holds topics, else the first one the left pane lists. `trigger`, when given, is the button that opens it.
+ * Once the text or the category is changed, cancelling asks first.
  */
 export function AddTopicDialog({
   draft,
@@ -44,7 +46,7 @@ export function AddTopicDialog({
   trigger?: ReactNode;
 }) {
   return (
-    <FormDialog open={open} onOpenChange={onOpenChange} trigger={trigger} title="トピックを足す">
+    <FormDialog open={open} onOpenChange={onOpenChange} trigger={trigger} title="トピックを追加">
       {/* Drawn only while open, so each opening starts from the draft. */}
       <AddTopicForm draft={draft} categoryId={categoryId} onDone={() => onOpenChange(false)} />
     </FormDialog>
@@ -56,7 +58,7 @@ export function AddTopicButton({ draft, categoryId }: { draft: string; categoryI
   const [open, setOpen] = useState(false);
   const choices = useTopicCategories();
   if (choices.length === 0) return null;
-  return <AddTopicDialog draft={draft} categoryId={categoryId} open={open} onOpenChange={setOpen} trigger={<Button>トピックを足す…</Button>} />;
+  return <AddTopicDialog draft={draft} categoryId={categoryId} open={open} onOpenChange={setOpen} trigger={<Button>トピックを追加…</Button>} />;
 }
 
 function AddTopicForm({ draft, categoryId, onDone }: { draft: string; categoryId: number | null; onDone: () => void }) {
@@ -74,6 +76,8 @@ function AddTopicForm({ draft, categoryId, onDone }: { draft: string; categoryId
   const selectId = useId();
   const topics = useTopics(target).data ?? [];
   const same = text.trim() === "" ? undefined : topics.find((topic) => comparable(topic.text) === comparable(text));
+  useUnsaved("トピック", text !== draft || (chosen !== null && chosen !== initial?.id) || saving);
+  const cancel = useDialogCancel(onDone);
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -132,7 +136,7 @@ function AddTopicForm({ draft, categoryId, onDone }: { draft: string; categoryId
         <Button type="submit" variant="primary" disabled={saving || target === null || text.trim().length === 0}>
           追加する
         </Button>
-        <Button onClick={onDone}>やめる</Button>
+        <Button onClick={cancel}>やめる</Button>
       </div>
     </form>
   );

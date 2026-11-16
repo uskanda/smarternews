@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rankTopicStats, type SourceKind, type TopicStatsEntry } from "../api.ts";
+import { rankTopicStats, topicRejected, type SourceKind, type TopicStatsEntry } from "../api.ts";
 import type { ReasonCode } from "../pipeline/reasons.ts";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
 import { insertArticle, recordArticleOpened, reviseArticle, setArticleFlags } from "./articles.ts";
@@ -87,11 +87,12 @@ describe("topicStats", () => {
     expect(result.topics[1]).toEqual({
       topicId: s.quiet.id,
       text: "Quiet topic",
-      collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0 } },
+      collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 0,
       belowMinimum: 0,
       overLimit: 0,
       rejectedByDate: 0,
+      rejectedByMark: 0,
       created: 0,
       updated: 0,
       opened: 0,
@@ -108,9 +109,10 @@ describe("topicStats", () => {
     s.candidate({ sourceKind: "news-search", status: "accepted" });
     s.candidate({ sourceKind: "llm-search" });
     s.candidate({ sourceKind: "llm-search", topicIds: [s.topic.id, s.quiet.id] });
+    s.candidate({ sourceKind: "subscription", topicIds: [s.topic.id, s.quiet.id] });
 
-    expect(s.of(s.topic.id).collected).toEqual({ total: 5, bySource: { feed: 2, "news-search": 1, "llm-search": 2 } });
-    expect(s.of(s.quiet.id).collected).toEqual({ total: 1, bySource: { feed: 0, "news-search": 0, "llm-search": 1 } });
+    expect(s.of(s.topic.id).collected).toEqual({ total: 6, bySource: { feed: 2, "news-search": 1, "llm-search": 2, subscription: 1 } });
+    expect(s.of(s.quiet.id).collected).toEqual({ total: 2, bySource: { feed: 0, "news-search": 0, "llm-search": 1, subscription: 1 } });
   });
 
   it("counts the rejections by the kind of their reason, the three kinds about dates together", () => {
@@ -125,7 +127,19 @@ describe("topicStats", () => {
     s.candidate({ reasonCode: "event-no-date" });
     s.candidate({ status: "pending" });
 
-    expect(s.of(s.topic.id)).toMatchObject({ rejectedByJudge: 2, belowMinimum: 1, overLimit: 2, rejectedByDate: 3 });
+    expect(s.of(s.topic.id)).toMatchObject({ rejectedByJudge: 2, belowMinimum: 1, overLimit: 2, rejectedByDate: 3, rejectedByMark: 0 });
+  });
+
+  it("counts the follow-ups to marked articles together, as candidates no article came from", () => {
+    const s = setup();
+    s.candidate({ reasonCode: "missed-follow-up" });
+    s.candidate({ reasonCode: "missed-follow-up" });
+    s.candidate({ reasonCode: "stopped-follow-up" });
+    s.candidate({ reasonCode: "below-minimum" });
+
+    const entry = s.of(s.topic.id);
+    expect(entry).toMatchObject({ rejectedByJudge: 0, belowMinimum: 1, rejectedByMark: 3 });
+    expect(topicRejected(entry)).toBe(4);
   });
 
   it("counts the candidates of the last 30 days only, and those of the category only", () => {
@@ -252,11 +266,12 @@ describe("topicStats around the last version", () => {
     expect(entry.boundary).toEqual({ at: daysAgo(10), trigger: "interpreted" });
     expect(entry).toMatchObject({ collected: { total: 3 }, created: 3, missed: 1 });
     expect(entry.before).toEqual({
-      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0 } },
+      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 1,
       belowMinimum: 1,
       overLimit: 0,
       rejectedByDate: 0,
+      rejectedByMark: 0,
       created: 2,
       updated: 0,
       opened: 0,
@@ -304,11 +319,12 @@ function entry(topicId: number, values: { collected?: number; rejected?: number;
   return {
     topicId,
     text: `Topic ${topicId}`,
-    collected: { total: values.collected ?? 0, bySource: { feed: values.collected ?? 0, "news-search": 0, "llm-search": 0 } },
+    collected: { total: values.collected ?? 0, bySource: { feed: values.collected ?? 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
     rejectedByJudge: values.rejected ?? 0,
     belowMinimum: 0,
     overLimit: 0,
     rejectedByDate: 0,
+    rejectedByMark: 0,
     created: values.created ?? 0,
     updated: 0,
     opened: 0,
