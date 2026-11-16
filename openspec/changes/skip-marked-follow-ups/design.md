@@ -69,4 +69,4 @@
 
 ## Migration Plan
 
-移行 `033_follow_up_marks.sql` を足す。戻すときは、移行の前に取られる写し（`*.before-033`）からデータベースを戻す。
+移行 `036_follow_up_marks.sql` を足す。戻すときは、移行の前に取られる写し（`*.before-036`）からデータベースを戻す。

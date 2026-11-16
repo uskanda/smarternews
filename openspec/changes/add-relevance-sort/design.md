@@ -30,7 +30,7 @@
 
 ### 並びの値は、時刻に関連度×2日を足した仮想の生成列にする
 
-移行033で、`articles` に次の列を足す。032は、先に main に入った `add-fetch-all-feeds` が使っている。
+移行033で、`articles` に次の列を足す。032は、先にmainへ入った `add-fetch-all-feeds` が使っている。
 
 ```sql
 ALTER TABLE articles ADD COLUMN feed_score REAL NOT NULL DEFAULT 0;

@@ -642,7 +642,7 @@ describe("the migration to marks on follow-ups", () => {
 
   it("keeps the candidates with their ids, kinds and topics, and allows the kinds of marked follow-ups", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((name) => /^\d+_.*\.sql$/.test(name) && name < "036")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     const now = "2026-01-01T00:00:00.000Z";
@@ -664,7 +664,7 @@ describe("the migration to marks on follow-ups", () => {
     db.prepare("INSERT INTO candidate_topics (candidate_id, topic_id) VALUES (5, 7), (9, 7)").run();
     const before = db.prepare("SELECT * FROM candidates ORDER BY id").all();
 
-    copyFileSync(join(SHIPPED, "033_follow_up_marks.sql"), join(dir, "033_follow_up_marks.sql"));
+    copyFileSync(join(SHIPPED, "036_follow_up_marks.sql"), join(dir, "036_follow_up_marks.sql"));
     migrate(db, dir);
 
     expect(db.prepare("SELECT * FROM candidates ORDER BY id").all()).toEqual(before);
@@ -1430,7 +1430,7 @@ describe("the migration to the notes of every rewrite", () => {
 
   it("keeps the note an article has at the time it was last rewritten, and lets it go with the article", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
-    for (const name of readdirSync(SHIPPED).filter((file) => file < "033")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "034")) copyFileSync(join(SHIPPED, name), join(dir, name));
     const db = openDatabase(":memory:");
     migrate(db, dir);
     db.prepare(
@@ -1445,7 +1445,7 @@ describe("the migration to the notes of every rewrite", () => {
     insert.run(2, "2026-01-02T14:00:00.000Z", 1, null);
     insert.run(3, "2026-01-01T00:00:00.000Z", 0, null);
 
-    const file = readdirSync(SHIPPED).find((name) => name.startsWith("033"))!;
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("034_"))!;
     copyFileSync(join(SHIPPED, file), join(dir, file));
     migrate(db, dir);
 
