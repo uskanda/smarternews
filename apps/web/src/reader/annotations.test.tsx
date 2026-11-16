@@ -6,7 +6,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@te
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
-import { useBodyAnnotations } from "./Annotations.tsx";
+import { placeMenu, useBodyAnnotations } from "./Annotations.tsx";
 import { SKIP_ATTRIBUTE } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -1056,5 +1056,69 @@ describe("keys while a dialog of a highlight is open", () => {
 
     expect(getArticle(server.db, id)?.starred).toBe(false);
     expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBeInTheDocument();
+  });
+});
+
+describe("where the menu of a selection is placed", () => {
+  const phone = { width: 390, height: 800 };
+  const menuSize = { width: 210, height: 40 };
+
+  it("is below the selection, at its left, when it fits", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 50 }, menuSize, phone)).toEqual({ top: 126, left: 50 });
+  });
+
+  it("moves left as far as it would go past the right edge", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 249 }, menuSize, phone)).toEqual({ top: 126, left: 172 });
+  });
+
+  it("keeps 8 pixels from the left edge, even for a menu wider than the screen", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 2 }, menuSize, phone).left).toBe(8);
+    expect(placeMenu({ top: 100, bottom: 120, left: 100 }, { width: 500, height: 40 }, phone).left).toBe(8);
+  });
+
+  it("is above the selection when it would go past the bottom edge", () => {
+    expect(placeMenu({ top: 700, bottom: 780, left: 50 }, menuSize, phone)).toEqual({ top: 654, left: 50 });
+  });
+
+  it("stays on the screen when it fits neither below nor above", () => {
+    expect(placeMenu({ top: 20, bottom: 780, left: 50 }, menuSize, phone)).toEqual({ top: 752, left: 50 });
+  });
+});
+
+describe("the menu of a selection while the body scrolls", () => {
+  it("follows the selection, and is hidden while the selection is out of the pane", async () => {
+    let box = { top: 200, bottom: 220, left: 100, right: 200 };
+    const rect = (edges: { top: number; bottom: number; left: number; right: number }) =>
+      ({ ...edges, x: edges.left, y: edges.top, width: edges.right - edges.left, height: edges.bottom - edges.top, toJSON: () => edges }) as DOMRect;
+    const had = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+    Range.prototype.getBoundingClientRect = () => rect(box);
+    try {
+      const server = makeServer();
+      const id = generated(server);
+      renderApp({ server, route: `/all/${id}` });
+      const article = await opened();
+      await within(article).findByText(/電池の工場/);
+      const scroller = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+      vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect({ top: 100, bottom: 700, left: 0, right: 1024 }));
+
+      selectText(article.querySelector(".article-body")!, QUOTE);
+      await waitFor(() => expect(menu()?.style.top).toBe("226px"));
+
+      box = { top: 150, bottom: 170, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()?.style.top).toBe("176px"));
+
+      // Above the pane, behind the heading of the article.
+      box = { top: 40, bottom: 60, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()).toBeNull());
+
+      box = { top: 300, bottom: 320, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()?.style.top).toBe("326px"));
+    } finally {
+      if (had) Object.defineProperty(Range.prototype, "getBoundingClientRect", had);
+      else delete (Range.prototype as Partial<Range>).getBoundingClientRect;
+    }
   });
 });
