@@ -37,6 +37,18 @@ describe("splitSegments", () => {
     expect(segments.map((segment) => segment.translate)).toEqual([false, true, false]);
   });
 
+  it("does not translate a segment that holds only the link of an embed, in either language", () => {
+    const { segments } = split(
+      [
+        "[埋め込み（video.example）](https://video.example/1)",
+        "[Embedded content (audio.example)](http://audio.example/a.mp3)",
+        "[A link](https://example.org/x)",
+        "Watch [埋め込み（video.example）](https://video.example/1)",
+      ].join("\n\n"),
+    );
+    expect(segments.map((segment) => segment.translate)).toEqual([false, false, true, true]);
+  });
+
   it("translates the segments that end within the limit, and records that the rest is left", () => {
     const paragraph = "x".repeat(999);
     const markdown = Array.from({ length: 50 }, () => paragraph).join("\n\n");

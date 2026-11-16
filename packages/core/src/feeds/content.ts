@@ -1,6 +1,7 @@
 // What a feed delivers as an item's content is HTML written by someone else. It is never stored or shown as
 // HTML: this module rewrites it as Markdown that keeps only paragraphs, headings, lists, quotes, emphasis,
 // code, links and images. Scripts, styles, frames and every attribute but a link's or an image's address go.
+// When asked, a frame, a video or an audio is not shown but kept as a paragraph that links to its address.
 import { parseHTML } from "linkedom";
 
 export const MAX_CONTENT_CHARS = 100_000;
@@ -40,10 +41,27 @@ const HEADING_MARKS: Record<string, string> = { H1: "##", H2: "##", H3: "###", H
 
 const NOTICE = { ja: "（長い内容のため、ここまでを表示しています。）", en: "(The content is long and ends here.)" };
 
+/** Elements that play or show another page in place; kept as a link when the caller asks for it. */
+const EMBEDDED = new Set(["IFRAME", "VIDEO", "AUDIO"]);
+
+/** The words of the link that stands for an embed, by output language. */
+const EMBED_LABEL = { ja: (host: string) => `埋め込み（${host}）`, en: (host: string) => `Embedded content (${host})` };
+
+export interface ConvertOptions {
+  /** Keep a frame, a video or an audio as a paragraph that links to its address, instead of dropping it. */
+  embeds?: boolean;
+}
+
 interface Context {
   baseUrl: string;
   /** Plain mode yields the words only: no markup, no addresses. */
   plain: boolean;
+  embeds: boolean;
+  japanese: boolean;
+}
+
+function isJapanese(language: string): boolean {
+  return language.toLowerCase().startsWith("ja");
 }
 
 function children(node: DomNode): DomNode[] {
@@ -81,6 +99,24 @@ function image(node: DomNode, ctx: Context): string {
   const url = resolve(attribute(node, "src"), ctx.baseUrl, ["http:", "https:"]);
   if (!url) return "";
   return `![${escapeText(attribute(node, "alt").replace(/\s+/g, " "))}](${url})`;
+}
+
+/** An embed as a paragraph with a link to its address, or nothing when it has no web address or only counts readers. */
+function embedded(node: DomNode, ctx: Context): string | null {
+  if (ctx.plain || isTrackingPixel(node)) return null;
+  const schemes = ["http:", "https:"];
+  let url = resolve(attribute(node, "src"), ctx.baseUrl, schemes);
+  // A video or an audio may name its file in `source` children instead.
+  if (!url && attribute(node, "src").length === 0) {
+    for (const child of children(node)) {
+      if (child.nodeName !== "SOURCE") continue;
+      url = resolve(attribute(child, "src"), ctx.baseUrl, schemes);
+      if (url) break;
+    }
+  }
+  if (!url) return null;
+  const host = new URL(url).host;
+  return `[${escapeText((ctx.japanese ? EMBED_LABEL.ja : EMBED_LABEL.en)(host))}](${url})`;
 }
 
 function onlyImages(node: DomNode): boolean {
@@ -245,6 +281,11 @@ function blocksOf(node: DomNode, ctx: Context): string[] {
     if (child.nodeType === ELEMENT && BLOCKS.has(child.nodeName)) {
       flush();
       result.push(...block(child, ctx));
+    } else if (ctx.embeds && child.nodeType === ELEMENT && EMBEDDED.has(child.nodeName)) {
+      // An embed is set apart from the words around it, so that its link is a paragraph of its own.
+      flush();
+      const link = embedded(child, ctx);
+      if (link) result.push(link);
     } else {
       run += inline(child, ctx);
     }
@@ -261,18 +302,20 @@ function cut(markdown: string, language: string): string {
   // A code block that the cut left open would swallow the notice.
   const fences = kept.split("\n").filter((line) => /^`{3,}$/.test(line.trim())).length;
   if (fences % 2 === 1) kept += "\n```";
-  return `${kept.trimEnd()}\n\n${language.toLowerCase().startsWith("ja") ? NOTICE.ja : NOTICE.en}`;
+  return `${kept.trimEnd()}\n\n${isJapanese(language) ? NOTICE.ja : NOTICE.en}`;
 }
 
 /**
  * Rewrites an item's content as Markdown, and gives its words for matching. `baseUrl` is the item's page:
- * relative links and images are resolved against it. `language` picks the sentence that marks a cut.
+ * relative links and images are resolved against it. `language` picks the sentence that marks a cut and the
+ * words of an embed's link.
  */
-export function convertContent(html: string, baseUrl: string, language = "en"): ConvertedContent {
+export function convertContent(html: string, baseUrl: string, language = "en", options: ConvertOptions = {}): ConvertedContent {
   const { document } = parseHTML(`<!doctype html><html><body>${html}</body></html>`) as unknown as { document: { body: DomNode } };
   const body = document.body;
-  const markdown = blocksOf(body, { baseUrl, plain: false }).join("\n\n");
-  const text = blocksOf(body, { baseUrl, plain: true }).join(" ").replace(/\s+/g, " ").trim();
+  const ctx = { baseUrl, embeds: options.embeds ?? false, japanese: isJapanese(language) };
+  const markdown = blocksOf(body, { ...ctx, plain: false }).join("\n\n");
+  const text = blocksOf(body, { ...ctx, plain: true }).join(" ").replace(/\s+/g, " ").trim();
   return { markdown: cut(markdown, language), text: text.slice(0, MAX_CONTENT_CHARS) };
 }
 
@@ -319,6 +362,11 @@ export function plainDescriptionHtml(text: string): string {
  * Rewrites a Media RSS description by the rules of delivered content. One of type html is converted as it is;
  * any other is plain text, read by `plainDescriptionHtml`.
  */
-export function convertDescription(description: { text: string; html: boolean }, baseUrl: string, language = "en"): ConvertedContent {
-  return convertContent(description.html ? description.text : plainDescriptionHtml(description.text), baseUrl, language);
+export function convertDescription(
+  description: { text: string; html: boolean },
+  baseUrl: string,
+  language = "en",
+  options: ConvertOptions = {},
+): ConvertedContent {
+  return convertContent(description.html ? description.text : plainDescriptionHtml(description.text), baseUrl, language, options);
 }

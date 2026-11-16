@@ -64,6 +64,7 @@ limits:
   topicRewritesPerDay: 20 # calls that propose a rewrite of a topic; they count towards llmCallsPerDay too; 0 switches them off
   judgeBatchSize: 30      # candidates judged per model call
   pagesPerRun: 20         # article pages fetched per run
+  subscriptionCandidatesPerRun: 60  # feed articles a run judges, newest first, from the feeds of its category that are topic sources; 0 takes none
   runRetries: 2           # retries of a scheduled run that failed, 0 to 3; 0 switches them off
   monthlyBudgetUsd: 100   # US dollars one budget period may spend on providers that cost money (adapter: anthropic)
   budgetWarnRatio: 0.8    # the screens warn once the period has spent this share of the budget

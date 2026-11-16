@@ -350,6 +350,39 @@ describe("translation of a feed", () => {
   });
 });
 
+describe("a feed as a topic source", () => {
+  it("is off for a feed that is registered without saying so", () => {
+    const { db, clock, news } = setup();
+    expect(insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", categoryId: news.id }, clock).topicSource).toBe(false);
+  });
+
+  it("is stored at registration and at a change for a feed of a category", () => {
+    const { db, clock, news } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", categoryId: news.id, topicSource: true }, clock);
+    expect(feed.topicSource).toBe(true);
+    expect(updateFeed(db, feed.id, { title: "Renamed" }, clock).topicSource).toBe(true);
+    expect(updateFeed(db, feed.id, { topicSource: false }, clock).topicSource).toBe(false);
+    expect(listFeeds(db)[0]!.topicSource).toBe(false);
+  });
+
+  it("is refused for a feed of no category, at registration and at a change", () => {
+    const { db, clock, news } = setup();
+    expect(() => insertFeed(db, { url: "https://example.org/a.xml", title: "A", topicSource: true }, clock)).toThrow(/category/);
+    const feed = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    expect(() => updateFeed(db, feed.id, { topicSource: true }, clock)).toThrow(/category/);
+    expect(getFeed(db, feed.id).topicSource).toBe(false);
+    // Moved into a category with the same change, the feed takes it.
+    expect(updateFeed(db, feed.id, { categoryId: news.id, topicSource: true }, clock).topicSource).toBe(true);
+    expect(() => updateFeed(db, feed.id, { categoryId: null, topicSource: true }, clock)).toThrow(/category/);
+  });
+
+  it("stays on when the feed leaves its category, and counts again in the next one", () => {
+    const { db, clock, news } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", categoryId: news.id, topicSource: true }, clock);
+    expect(updateFeed(db, feed.id, { categoryId: null }, clock).topicSource).toBe(true);
+  });
+});
+
 describe("full content fetching of a feed", () => {
   const since = (db: ReturnType<typeof createTestDb>, id: number) =>
     db.prepare("SELECT fetch_full_content_since AS since FROM feeds WHERE id = ?").get(id)!.since;
