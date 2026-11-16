@@ -6,6 +6,7 @@ import {
   type ArticleFlagChange,
   useArticle,
   useArticleFlags,
+  useArticlePatchListener,
   useRecordOpened,
   useArticleList,
   useArticleSearch,
@@ -330,6 +331,8 @@ export function ReaderPage({ view }: { view: View }) {
   const opened = useArticle(articleId).data;
   // What is kept joins the list once it has arrived, so that a row read before then does not stand alone meanwhile.
   // A kept row shows what arrived since it was kept, such as a translated title, with the flags it was kept with.
+  // What arrived updated after the row was kept is a follow-up, made unread again on the server: it shows as it
+  // arrived.
   const arrived = active.data !== undefined;
   const items = useMemo(() => {
     if (noArticles) return EMPTY;
@@ -338,10 +341,21 @@ export function ReaderPage({ view }: { view: View }) {
     if (opened) fresh.set(opened.id, opened);
     const rows = (kept.key === listKey ? kept.items : []).map((item) => {
       const latest = fresh.get(item.id);
-      return latest ? { ...latest, isRead: item.isRead, starred: item.starred, readAt: item.readAt } : item;
+      if (!latest) return item;
+      if (latest.updatedAt > item.updatedAt) return latest;
+      return { ...latest, isRead: item.isRead, starred: item.starred, readAt: item.readAt };
     });
     return mergeKept(fetched, rows, sortKey, sort);
   }, [noArticles, arrived, fetched, opened, kept, listKey, sortKey, sort]);
+  // The kept rows are outside the cache: what changes an article there, a translated title or a change of flags
+  // undone after a failure, is put on them here.
+  useArticlePatchListener((id, patch) =>
+    setKept((current) =>
+      current.items.some((item) => item.id === id)
+        ? { key: current.key, items: current.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) }
+        : current,
+    ),
+  );
 
   // Rows scrolled past the top are marked read, where the user chose so, in the lists that are to be finished:
   // not in the recently read articles, which is where a mistake is put right, nor in search results, the
@@ -407,11 +421,13 @@ export function ReaderPage({ view }: { view: View }) {
       const changed = new Set(ids);
       setKept((current) => {
         if (current.key !== listKey) return current;
+        // Copied from the rows shown now, for a row kept already too: the copy kept before may have an old title.
+        const shown = new Map(items.filter((item) => changed.has(item.id)).map((item) => [item.id, item]));
         const known = new Set(current.items.map((item) => item.id));
-        const added = unreadOnly ? items.filter((item) => changed.has(item.id) && !known.has(item.id)) : [];
+        const added = unreadOnly ? [...shown.values()].filter((item) => !known.has(item.id)) : [];
         return {
           key: listKey,
-          items: [...current.items, ...added].map((item) => (changed.has(item.id) ? { ...item, isRead } : item)),
+          items: [...current.items, ...added].map((item) => (changed.has(item.id) ? { ...(shown.get(item.id) ?? item), isRead } : item)),
         };
       });
       readPatch(ids, isRead);
@@ -505,16 +521,8 @@ export function ReaderPage({ view }: { view: View }) {
     if (starred !== undefined) setStar(id, starred);
   }
   flagFailed.current = (change) => {
-    const { id, isRead, starred, missed, followUpsStopped } = change;
-    // The rows kept in an unread or recently read list are not in the cache, so they are put back here.
-    setKept((current) => ({
-      key: current.key,
-      items: current.items.map((item) =>
-        item.id === id
-          ? { ...item, ...(isRead !== undefined ? { isRead: !isRead } : {}), ...(starred !== undefined ? { starred: !starred } : {}) }
-          : item,
-      ),
-    }));
+    // The kept rows are put back with the cache, by the listener above.
+    const { isRead, starred, missed, followUpsStopped } = change;
     const message =
       followUpsStopped !== undefined
         ? followUpsStopped
