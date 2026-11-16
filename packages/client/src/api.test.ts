@@ -137,6 +137,14 @@ describe("the API client", () => {
     expect(seen.at(-1)!.url).toContain("/digests?limit=1");
     expect(list).toMatchObject({ building: false, items: [{ executiveSummary: "What happened.", trigger: "manual" }] });
     await expect(api.digest(list.items[0]!.id)).resolves.toMatchObject({ sections: [], articles: [] });
+
+    // A digest of a list: the target goes in the body, and the digests of a period can be asked for alone.
+    server.db.prepare("UPDATE articles SET starred = 1").run();
+    await expect(api.requestDigest({ type: "starred" })).resolves.toEqual({ status: "queued" });
+    await server.digests.idle();
+    await expect(api.digests()).resolves.toMatchObject({ items: [{ trigger: "list", target: { type: "starred", label: "スター" } }, { trigger: "manual", target: null }] });
+    await expect(api.digests({ kind: "period", limit: 1 })).resolves.toMatchObject({ items: [{ trigger: "manual" }] });
+    expect(seen.at(-1)!.url).toContain("kind=period");
   });
 
   it("downloads the settings file as text and uploads it back", async () => {

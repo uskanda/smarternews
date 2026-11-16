@@ -1451,6 +1451,39 @@ describe("the migration to web feeds", () => {
   });
 });
 
+describe("the migration to list digests", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+
+  it("allows the trigger list with a target, and keeps the digests and their constraints", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < "040")) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const insert = db.prepare(
+      `INSERT INTO digests (period_start, period_end, created_at, trigger, slot, executive_summary, sections, article_count)
+       VALUES ('2026-01-01T00:00:00.000Z', '2026-01-01T07:00:00.000Z', '2026-01-01T07:00:01.000Z', ?, ?, 'S', '[]', 3)`,
+    );
+    insert.run("schedule", "2026-01-01T07:00");
+    insert.run("manual", null);
+    const rows = () => db.prepare("SELECT * FROM digests ORDER BY id").all();
+    const before = rows();
+
+    const file = readdirSync(SHIPPED).find((name) => name.startsWith("040_"))!;
+    copyFileSync(join(SHIPPED, file), join(dir, file));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(before.map((row) => ({ ...row, target: null })));
+    db.prepare(
+      `INSERT INTO digests (period_start, period_end, created_at, trigger, slot, executive_summary, sections, article_count, target)
+       VALUES ('a', 'b', 'c', 'list', NULL, 'S', '[]', 1, '{"type":"starred","label":"スター"}')`,
+    ).run();
+    expect(() => insert.run("other", null)).toThrow();
+    // The slot stays unique.
+    expect(() => insert.run("schedule", "2026-01-01T07:00")).toThrow();
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name IN ('digests_slot', 'digests_created')").get()).toEqual({ n: 2 });
+  });
+});
+
 describe("the migration to the notes of every rewrite", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
 
