@@ -1064,7 +1064,7 @@ describe("the migration that lets the feed articles of every feed keep a list vi
 
 describe("the migration to star times", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
-  const MIGRATION = "037_starred_at.sql";
+  const MIGRATION = "038_starred_at.sql";
 
   /** A database migrated up to the one before the migration, with a category, a feed and two articles. */
   function before() {
