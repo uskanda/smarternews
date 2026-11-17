@@ -21,6 +21,35 @@ export interface RenderOptions {
   advanceTimers?: (ms: number) => void | Promise<void>;
   /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
   browserHistory?: boolean;
+  /** Holds a request ("POST /api/v1/...") until the promise it returns settles; undefined lets it through. */
+  hold?: (request: string) => Promise<unknown> | undefined;
+}
+
+/**
+ * A gate for the first request whose line contains `match`: pass `hold` to `renderApp`, and `open` it to let the
+ * request reach the server.
+ */
+export function gate(match: string) {
+  let release: () => void = () => {};
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  return {
+    hold: (request: string) => {
+      if (held || !request.includes(match)) return undefined;
+      held = true;
+      return opened;
+    },
+    /** Whether the request has come and is waiting. */
+    waiting: () => held,
+    open: async () => {
+      await act(async () => {
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    },
+  };
 }
 
 /** The browser's back. jsdom goes through its history after a task. */
@@ -57,7 +86,8 @@ export function renderApp(options: RenderOptions = {}) {
       fetchImpl={(input, init) => {
         requests.push(`${init?.method ?? "GET"} ${input}`);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
-        return server.app.request(input, init);
+        const held = options.hold?.(`${init?.method ?? "GET"} ${input}`);
+        return held ? held.then(() => server.app.request(input, init)) : server.app.request(input, init);
       }}
       initialEntries={options.browserHistory ? undefined : [path]}
       now={() => server.clock()}

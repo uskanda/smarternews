@@ -5,7 +5,7 @@ import { ApiError, checkRequired, conflictLabel, fieldError, fieldMessage, UNCAT
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
-import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
+import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, useLatest, type SelectorTexts } from "./PageSelectors.tsx";
 import { Button, Field, messageFor } from "../ui/controls.tsx";
 import { useUnsaved } from "./unsaved.tsx";
 
@@ -94,6 +94,11 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
   const [manual, setManual] = useState<SelectorTexts>(textsOf(null));
   const [tested, setTested] = useState<PageSelectors | null>(null);
   const firstChoice = useRef<HTMLInputElement>(null);
+  // Looking for feeds: an answer that comes after the URL changed or the form went away is dropped.
+  const discovery = useLatest();
+  // What is subscribed with is what the fields hold when the feed is subscribed, also after a wait for discovery.
+  const choices = useRef({ category, autoSummarize, translate, fetchFullContent });
+  choices.current = { category, autoSummarize, translate, fetchFullContent };
   useEffect(() => {
     if (found) firstChoice.current?.focus();
   }, [found]);
@@ -127,10 +132,12 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
     // The page gives titles, links and dates only: the text comes from full content, so it starts switched on.
     setFetchFullContent(true);
     const result = await candidates.ask(pageUrl);
-    if (result && result.candidates.length > 0) setChosenCandidate(0);
+    if (result === null) return;
+    if (result.candidates.length > 0) setChosenCandidate(0);
   }
 
   async function subscribe(feedUrl: string, selectors?: PageSelectors) {
+    const { category, autoSummarize, translate, fetchFullContent } = choices.current;
     const created = await api.createFeed({
       url: feedUrl,
       ...(selectors ? { format: "page" as const, selectors } : {}),
@@ -151,15 +158,16 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
     onAdded?.();
   }
 
-  async function run(action: () => Promise<void>) {
+  /** Runs the request numbered `request`; once it is not the latest, its failure and its end change nothing. */
+  async function run(request: number, action: () => Promise<void>) {
     setBusy(true);
     setProblem(null);
     try {
       await action();
     } catch (error) {
-      setProblem(explain(error));
+      if (discovery.current(request)) setProblem(explain(error));
     } finally {
-      setBusy(false);
+      if (discovery.current(request)) setBusy(false);
     }
   }
 
@@ -170,7 +178,8 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
       setProblem(empty);
       return;
     }
-    void run(async () => {
+    const request = discovery.next();
+    void run(request, async () => {
       if (page !== null) {
         const selectors = pageSelectors(candidates.state.status === "ready" ? candidates.state.result : null);
         return selectors ? subscribe(page, selectors) : undefined;
@@ -178,6 +187,7 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
       if (found !== null && chosen) return subscribe(chosen);
       // The URL may be a feed or a page that points to feeds; the server tells which.
       const { feeds } = await api.discoverFeeds(url.trim());
+      if (!discovery.current(request)) return;
       if (feeds.length === 0) {
         setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
         // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
@@ -198,7 +208,12 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
         inputMode="url"
         autoComplete="off"
         value={url}
+        // Read-only while feeds are looked for, keeping the focus: the answer is for the URL as it was sent.
+        readOnly={busy && page === null}
         onChange={(event) => {
+          // A request under way is for the URL before this change: its answer is dropped.
+          discovery.next();
+          setBusy(false);
           setUrl(event.target.value);
           setFound(null);
           leavePage();

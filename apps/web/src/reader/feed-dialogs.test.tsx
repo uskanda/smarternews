@@ -1,8 +1,8 @@
 import { deleteFeed, getArticle, getFeed, insertFeed, listFeeds, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
@@ -166,6 +166,26 @@ describe("adding a feed from the list of a category", () => {
     const again = await screen.findByRole("dialog", { name: "購読フィードを追加" });
     expect(within(again).getByLabelText("フィードまたはサイトのURL")).toHaveValue("");
     expect(within(again).getByLabelText("カテゴリ")).toHaveDisplayValue("Tools");
+  });
+
+  it("subscribes to nothing when closed while feeds are looked for, though one is found afterwards", async () => {
+    const { server, tools } = seeded();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const before = listFeeds(server.db).length;
+    const discover = gate("/feeds/discover");
+    const view = renderApp({ server, route: `/c/${tools.slug}`, hold: discover.hold });
+    await view.user.click(await within(list()).findByRole("button", { name: "購読フィードを追加" }));
+    const dialog = await screen.findByRole("dialog", { name: "購読フィードを追加" });
+    await view.user.type(within(dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await view.user.click(within(dialog).getByRole("button", { name: "購読フィードを追加" }));
+    await waitFor(() => expect(discover.waiting()).toBe(true));
+    await view.user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await discover.open();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(listFeeds(server.db)).toHaveLength(before);
+    expect(view.requests.filter((request) => request === "POST /api/v1/feeds")).toEqual([]);
   });
 });
 
