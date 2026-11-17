@@ -10,7 +10,8 @@ import { addHighlightTerm, createTermGroup } from "../db/term-highlights.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { purgeExpired } from "../runs/retention.ts";
 import { createTestDb, fakeClock } from "../testing/db.ts";
-import { fakeFetch, html, xml } from "../testing/http.ts";
+import { fakeFetch, html, xml, type Route } from "../testing/http.ts";
+import { icoBytes, imageResponse, pngBytes } from "../testing/images.ts";
 import { fakeLlm } from "../testing/llm.ts";
 import { fakeTranslator } from "../testing/translation.ts";
 import type { Translator } from "../translation/adapter.ts";
@@ -57,11 +58,12 @@ function rss(items: Item[], title = "Example Feed"): string {
   return `<?xml version="1.0"?><rss version="2.0"><channel><title>${esc(title)}</title><link>https://example.org/</link>${body}</channel></rss>`;
 }
 
-function setup(initial: Item[] | (() => Response) = []) {
+/** `others` answers the requests besides the feed, such as those for its icon; the rest answer 404. */
+function setup(initial: Item[] | (() => Response) = [], others: Record<string, Route> = {}) {
   const db = createTestDb();
   const clock = fakeClock(START);
   let answer: () => Response = typeof initial === "function" ? initial : () => xml(rss(initial));
-  const fake = fakeFetch({ [FEED_URL]: () => answer() }, clock);
+  const fake = fakeFetch({ ...others, [FEED_URL]: () => answer() }, clock);
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
   const deps = { db, clock, fetcher };
   return {
@@ -453,6 +455,78 @@ describe("conditional requests", () => {
   });
 });
 
+describe("the feed's icon", () => {
+  const FAVICON = "https://example.org/favicon.ico";
+  const ico = () => imageResponse(icoBytes(), "image/x-icon");
+  const iconRequests = (s: ReturnType<typeof setup>) => s.requests.filter((request) => request.url === FAVICON).length;
+  const iconState = (s: ReturnType<typeof setup>, id: number) =>
+    s.db.prepare("SELECT icon_url, icon_checked_at FROM feeds WHERE id = ?").get(id) as { icon_url: string | null; icon_checked_at: string | null };
+
+  it("is looked for when the feed is subscribed, after its articles are stored", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(feed.iconUrl).toBe(FAVICON);
+    expect(feed.articleCount).toBe(1);
+    expect(iconState(s, feed.id)).toEqual({ icon_url: FAVICON, icon_checked_at: START });
+  });
+
+  it("takes the icon an Atom feed names before the site's", async () => {
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>A</title>
+      <link href="https://example.org/"/><icon>/icon.png</icon></feed>`;
+    const s = setup(() => xml(atom), { [FAVICON]: ico, "https://example.org/icon.png": () => imageResponse(pngBytes()) });
+    expect((await subscribe(s.deps, { url: FEED_URL })).iconUrl).toBe("https://example.org/icon.png");
+    expect(iconRequests(s)).toBe(0);
+  });
+
+  it("is not looked for again within 30 days, and is looked for again after them", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(10 * DAY);
+    await fetchFeed(s.deps, feed.id);
+    expect(iconRequests(s)).toBe(1);
+
+    s.clock.advance(21 * DAY);
+    await fetchFeed(s.deps, feed.id);
+    expect(iconRequests(s)).toBe(2);
+    expect(iconState(s, feed.id).icon_checked_at).toBe(s.clock().toISOString());
+  });
+
+  it("is looked for on the first fetch of a feed stored before icons existed", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = insertFeed(s.db, { url: FEED_URL, title: "Old", categoryId: null }, s.clock);
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).iconUrl).toBe(FAVICON);
+  });
+
+  it("is looked for on a not-modified answer once 30 days passed, trying the icon it had first", async () => {
+    const s = setup([{ title: "A" }], { [FAVICON]: ico });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(31 * DAY);
+    s.serve(() => new Response(null, { status: 304 }));
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "not_modified" });
+    expect(iconRequests(s)).toBe(2);
+    expect(iconState(s, feed.id)).toEqual({ icon_url: FAVICON, icon_checked_at: s.clock().toISOString() });
+  });
+
+  it("is forgotten when a later search finds none", async () => {
+    let icon = true;
+    const s = setup([{ title: "A" }], { [FAVICON]: () => (icon ? ico() : new Response("gone", { status: 404 })) });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    icon = false;
+    s.clock.advance(31 * DAY);
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id).iconUrl).toBeNull();
+  });
+
+  it("never fails the fetch when every place fails", async () => {
+    const fail = () => new Response("down", { status: 500 });
+    const s = setup([{ title: "A" }], { "https://example.org/robots.txt": () => new Response("", { status: 404 }), "https://example.org/": fail, [FAVICON]: fail });
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    expect(feed).toMatchObject({ iconUrl: null, articleCount: 1, lastError: null });
+    expect(iconState(s, feed.id).icon_checked_at).toBe(START);
+  });
+});
+
 describe("a fetch that fails", () => {
   it("records when and why, and stores nothing", async () => {
     const s = setup([{ title: "A" }]);
@@ -613,6 +687,118 @@ describe("items whose article was purged", () => {
     s.clock.advance(365 * DAY);
     purgeExpired(s.db, s.clock);
     expect(getFeed(s.db, feed.id)).toMatchObject({ articleCount: 1, starredCount: 1 });
+  });
+});
+
+describe("items whose identifier was replaced", () => {
+  const keysOf = (s: ReturnType<typeof setup>) => s.db.prepare("SELECT item_key FROM articles ORDER BY id").all().map((row) => row.item_key);
+  const readAll = (s: ReturnType<typeof setup>) => {
+    for (const article of s.list()) setArticleFlags(s.db, article.id, { isRead: true }, START);
+  };
+
+  it("keeps the read articles when the identifiers move from http to https, and moves no time of a new item", async () => {
+    const s = setup([
+      { title: "Vendor ships a fix!", key: "http://example.org/?p=1", link: "https://example.org/posts/1" },
+      { title: "Fix", key: "http://example.org/?p=2", link: "https://example.org/posts/2" },
+    ]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    readAll(s);
+    s.clock.advance(HOUR);
+    s.serve([
+      { title: "ＶＥＮＤＯＲ ships a fix", key: "https://example.org/?p=1", link: "https://example.org/posts/1" },
+      { title: "fix", key: "https://example.org/?p=2", link: "https://example.org/posts/2" },
+    ]);
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 0 });
+
+    expect(s.list({ unread: "true" })).toEqual([]);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ articleCount: 2, lastNewItemAt: START });
+    expect(keysOf(s).sort()).toEqual(["https://example.org/?p=1", "https://example.org/?p=2"]);
+    // From then on the item is known by its new identifier.
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 0 });
+  });
+
+  it("moves the page of the article to https when the feed changes its identifiers and links together", async () => {
+    const s = setup([{ title: "Vendor ships a fix", key: "old-1", link: "http://example.org/posts/1" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.clock.advance(HOUR);
+    s.serve([{ title: "Vendor ships a fix", key: "post-0001", link: "https://example.org/posts/1" }]);
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 0 });
+
+    expect(s.list()).toMatchObject([{ primaryUrl: "https://example.org/posts/1" }]);
+    expect(s.db.prepare("SELECT item_key, dedup_url FROM articles").all()).toEqual([{ item_key: "post-0001", dedup_url: "https://example.org/posts/1" }]);
+  });
+
+  it("stores a new item with another title as new, on a feed whose items all point to one page", async () => {
+    const s = setup([{ title: "Maintenance on Monday", key: "n1", link: "https://example.org/notice" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    readAll(s);
+    s.clock.advance(HOUR);
+    s.serve([{ title: "Maintenance on Friday", key: "n2", link: "https://example.org/notice", published: s.clock().toISOString() }]);
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 1 });
+
+    expect(s.list({ unread: "true" }).map((article) => article.title)).toEqual(["Maintenance on Friday"]);
+    expect(s.list().map((article) => article.title)).toContain("Maintenance on Monday");
+  });
+
+  it("stores the item as new while the old identifier is still in the document", async () => {
+    const s = setup([{ title: "Vendor ships a fix", key: "a", link: "https://example.org/posts/1" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve([
+      { title: "Vendor ships a fix", key: "b", link: "https://example.org/posts/1" },
+      { title: "Vendor ships a fix", key: "a", link: "https://example.org/posts/1" },
+    ]);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 1 });
+    expect(keysOf(s)).toEqual(["a", "b"]);
+  });
+
+  it("stores the item as new when two stored articles have its page", async () => {
+    const s = setup([
+      { title: "Vendor ships a fix", key: "a", link: "https://example.org/posts/1" },
+      { title: "Vendor ships a fix", key: "b", link: "http://example.org/posts/1" },
+    ]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve([{ title: "Vendor ships a fix", key: "c", link: "https://example.org/posts/1" }]);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 1 });
+    expect(keysOf(s).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("stores the items as new when two of them match one stored article", async () => {
+    const s = setup([{ title: "Vendor ships a fix", key: "a", link: "https://example.org/posts/1" }]);
+    const feed = await subscribe(s.deps, { url: FEED_URL });
+    s.serve([
+      { title: "Vendor ships a fix", key: "b", link: "https://example.org/posts/1" },
+      { title: "Vendor ships a fix", key: "c", link: "http://example.org/posts/1" },
+    ]);
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ created: 2 });
+    expect(keysOf(s).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not send the title of a replaced item to translation when it did not change", async () => {
+    const s = setup([]);
+    updateSettings(s.db, { outputLanguage: "ja" });
+    const llm = fakeLlm(s.db, s.clock, {});
+    const google = fakeTranslator();
+    const translation = new TranslationService({
+      db: s.db,
+      clock: s.clock,
+      google,
+      llm: new LlmTranslator(llm.runner),
+      monthlyChars: 450_000,
+      maxCharsPerArticle: 20_000,
+      log: () => {},
+    });
+    const deps = { ...s.deps, translation };
+    s.serve([{ title: "Vendor ships a fix", key: "http://example.org/?p=1", link: "https://example.org/posts/1" }]);
+    const feed = await subscribe(deps, { url: FEED_URL, translate: true });
+    s.serve([{ title: "Vendor ships a fix", key: "https://example.org/?p=1", link: "https://example.org/posts/1" }]);
+
+    await fetchFeed(deps, feed.id);
+
+    expect(google.calls).toHaveLength(1);
+    expect(s.list()).toMatchObject([{ translatedTitle: "訳:Vendor ships a fix" }]);
   });
 });
 
@@ -1064,6 +1250,8 @@ describe("full content when a feed is fetched", () => {
     const s = await withFullContent();
     s.clock.advance(HOUR);
     s.serve([{ title: "A (corrected)", key: "a", content: "<p>Better words.</p>" }]);
+    // What the subscription asked for its icon is not the point here.
+    const before = s.requests.length;
 
     await fetchFeed(s.deps, s.feed.id);
 
@@ -1073,7 +1261,7 @@ describe("full content when a feed is fetched", () => {
       fullContentStatus: "fetched",
       fullContent: { body: FULL_MARKDOWN, fetchedAt: START },
     });
-    expect(s.requests.map((request) => request.url).filter((url) => url !== FEED_URL)).toEqual([]);
+    expect(s.requests.slice(before).map((request) => request.url).filter((url) => url !== FEED_URL)).toEqual([]);
   });
 
   it("matches filters against what the feed delivered, never against the full content", async () => {
@@ -1311,6 +1499,17 @@ describe("a web feed", () => {
     expect(getFeed(s.db, feed.id)).toMatchObject({ goneAt: null, failureCount: 0 });
   });
 
+  it("keeps the articles whose links only move from http to https", async () => {
+    const linked = (n: number, scheme: string) => `<li class="post"><a href="${scheme}://news.example.org/posts/${n}">Post ${n}</a><p>Excerpt ${n}</p></li>`;
+    const s = pageSetup(page([linked(1, "http"), linked(2, "http")]));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    s.clock.advance(HOUR);
+    s.serve(page([linked(1, "https"), linked(2, "https")]));
+
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "updated", created: 0 });
+    expect(s.list().map((article) => article.primaryUrl)).toEqual(["https://news.example.org/posts/1", "https://news.example.org/posts/2"]);
+  });
+
   it("sends no conditional request", async () => {
     const s = pageSetup(page([post(1)]));
     const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
@@ -1321,6 +1520,14 @@ describe("a web feed", () => {
       expect(request.headers["if-modified-since"]).toBeUndefined();
     }
     expect(s.pageRequests()).toHaveLength(2);
+  });
+
+  it("looks for the icon in the page it fetched, without asking for it again", async () => {
+    const s = pageSetup(page([post(1)]).replace("</head>", '<link rel="icon" href="/fav.png"></head>'));
+    const feed = await subscribe(s.deps, { url: PAGE, format: "page", selectors: SELECTORS });
+    expect(s.pageRequests()).toHaveLength(1);
+    expect(s.requests.map((request) => request.url)).toContain("https://news.example.org/fav.png");
+    expect(feed.iconUrl).toBeNull();
   });
 
   it("calls no model to subscribe, to fetch, or to store, for three web feeds", async () => {

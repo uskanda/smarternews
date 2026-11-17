@@ -191,6 +191,7 @@ A digest sums up what arrived since the last one: an executive summary of up to 
 - A period runs from the end of the last digest to now, and never more than 24 hours back. A period without an article makes no digest and calls no model. A digest that fails is not tried again by itself; the next one covers its period.
 - A time missed while the server was down is made up for at start-up when it lies within the last six hours; after a longer stop only the latest such time is.
 - Digests are read in the web app, the Android app and the API, and are never in the RSS output, because they draw on feed articles. The Android app notifies a new digest unless notifications are off. Digests are deleted after 180 days.
+- On the web, the articles of a name, search results and the starred articles offer "この一覧をまとめる", which makes a digest of the newest articles of that list, at most 200. The page "ダイジェスト" labels it "一覧" and names the list in place of a period. It shares the day's allowance with the other digests, leaves the period of the next scheduled digest alone, and is not notified on Android.
 
 ## Feeds and API
 

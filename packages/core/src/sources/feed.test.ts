@@ -408,6 +408,34 @@ describe("JSON Feed", () => {
   });
 });
 
+describe("the icon a feed names", () => {
+  const atom = (icon: string) => `<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom"><title>A</title><link href="https://example.org/"/>${icon}</feed>`;
+
+  it("takes Atom's icon, resolved against the URL of the feed", () => {
+    expect(parseSubscription(atom("<icon>/favicon.png</icon>"), "https://example.org/feed.atom").iconUrl).toBe("https://example.org/favicon.png");
+    expect(parseSubscription(atom("<icon>https://cdn.example.net/i.png</icon>"), null).iconUrl).toBe("https://cdn.example.net/i.png");
+  });
+
+  it("leaves out an Atom icon that is not on the web, and Atom's logo", () => {
+    expect(parseSubscription(atom("<icon>javascript:alert(1)</icon>"), "https://example.org/feed.atom").iconUrl).toBeNull();
+    expect(parseSubscription(atom("<logo>https://example.org/logo.png</logo>"), "https://example.org/feed.atom").iconUrl).toBeNull();
+  });
+
+  it("takes JSON Feed's favicon, not its icon, which is a large picture", () => {
+    const json = (fields: Record<string, string>) => JSON.stringify({ version: "https://jsonfeed.org/version/1.1", title: "J", items: [], ...fields });
+    expect(parseSubscription(json({ favicon: "fav.png", icon: "big.png" }), "https://example.org/feed.json").iconUrl).toBe("https://example.org/fav.png");
+    expect(parseSubscription(json({ icon: "https://example.org/big.png" }), "https://example.org/feed.json").iconUrl).toBeNull();
+  });
+
+  it("never takes RSS's image, which is mostly a wide logo", () => {
+    const rss = `<?xml version="1.0"?><rss version="2.0"><channel><title>R</title><link>https://example.org/</link>
+      <image><url>https://example.org/logo.png</url><title>R</title><link>https://example.org/</link></image></channel></rss>`;
+    expect(parseSubscription(rss, "https://example.org/rss.xml").iconUrl).toBeNull();
+    expect(parseSubscription(RDF, "https://example.org/rdf").iconUrl).toBeNull();
+  });
+});
+
 describe("collectFeed", () => {
   const fetcher = (routes: Parameters<typeof fakeFetch>[0]) =>
     new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 100000, fetchImpl: fakeFetch(routes).fetchImpl });

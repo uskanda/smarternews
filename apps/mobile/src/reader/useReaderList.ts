@@ -13,6 +13,7 @@ import {
   ANNOTATIONS_LABEL,
   SAVED_SEARCHES_LABEL,
   sortKeyFor,
+  sortOptionsOf,
   targetFilter,
   targetScope,
   UNCATEGORIZED_LABEL,
@@ -34,12 +35,13 @@ export const SEARCH_KEY = "search";
 /** The key of the articles of a name found in articles, which are no list of the drawer either. */
 export const MENTION_KEY = "mention";
 
-/** A search: the words, and the narrowing to a category, a feed or unread articles. */
+/** A search: the words, and the narrowing to a category, a feed, unread articles or starred articles. */
 export interface SearchRef {
   q: string;
   category?: number;
   feed?: number;
   unread: boolean;
+  starred: boolean;
 }
 
 export interface ListRef {
@@ -58,7 +60,7 @@ const idParam = (value: string | undefined) => (value !== undefined && /^\d{1,15
 /** The list a screen shows, from the key of the list and the search parameters of the screen. */
 export function listRefOf(
   key: string,
-  params: { read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; name?: string },
+  params: { read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; starred?: string; name?: string },
 ): ListRef {
   return {
     key,
@@ -71,6 +73,7 @@ export function listRefOf(
             ...(idParam(params.category) !== undefined ? { category: idParam(params.category) } : {}),
             ...(idParam(params.feed) !== undefined ? { feed: idParam(params.feed) } : {}),
             unread: params.unread === "true",
+            starred: params.starred === "true",
           },
         }
       : {}),
@@ -97,8 +100,14 @@ const EMPTY: ArticleSummary[] = [];
 export function listParams(ref: ListRef): Record<string, string> {
   if (ref.mention) return { name: ref.mention.name };
   if (ref.search) {
-    const { q, category, feed, unread } = ref.search;
-    return { q, ...(category !== undefined ? { category: String(category) } : {}), ...(feed !== undefined ? { feed: String(feed) } : {}), ...(unread ? { unread: "true" } : {}) };
+    const { q, category, feed, unread, starred } = ref.search;
+    return {
+      q,
+      ...(category !== undefined ? { category: String(category) } : {}),
+      ...(feed !== undefined ? { feed: String(feed) } : {}),
+      ...(unread ? { unread: "true" } : {}),
+      ...(starred ? { starred: "true" } : {}),
+    };
   }
   return { ...(ref.includeRead ? { read: "1" } : {}), ...(ref.importantOnly ? { min: "4" } : {}) };
 }
@@ -156,8 +165,9 @@ export function useReaderList(ref: ListRef) {
       ...(search?.category !== undefined ? { category: search.category } : {}),
       ...(search?.feed !== undefined ? { feed: search.feed } : {}),
       ...(search?.unread ? { unread: "true" as const } : {}),
+      ...(search?.starred ? { starred: "true" as const } : {}),
     }),
-    [search?.q, search?.category, search?.feed, search?.unread],
+    [search?.q, search?.category, search?.feed, search?.unread, search?.starred],
   );
   const unreadOnly = isSearch ? searchQuery.unread === "true" : !isMention && filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
@@ -187,7 +197,7 @@ export function useReaderList(ref: ListRef) {
     if (newest !== "") void advanceCheckedAt(newest);
   }, [fetched]);
   const kept = session.keptFor(listKey);
-  const items = useMemo(() => mergeKept(fetched, kept, found ? undefined : sortKeyFor(target), sort), [fetched, kept, target, found, sort]);
+  const items = useMemo(() => mergeKept(fetched, kept, found ? undefined : sortKeyFor(target, sort), sort), [fetched, kept, target, found, sort]);
 
   const setRead = useCallback(
     (target: { id: number }, isRead: boolean) => {
@@ -282,6 +292,8 @@ export function useReaderList(ref: ListRef) {
     sortMenu,
     /** The order the list is shown in. */
     sort,
+    /** The orders the menu offers: newest and oldest first, and by star time for the starred articles. */
+    sortOptions: sortOptionsOf(target),
     /** Lists the entry in the other order, from its start, and stores the order on the server. */
     changeSort: (next: ListSort) => sortChange.mutate({ key: keyOf(target), sort: next }),
     /** When the server read the first page: what a mark-all-read covers, whatever the order and the pages loaded. */

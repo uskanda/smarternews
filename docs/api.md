@@ -94,7 +94,7 @@ Settings fields:
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, [rules](#rules) by their scope, conditions and actions, and term groups by `name`. A filter and a rule name a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
-`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, or the same item twice makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
 `savedSearches` holds the [saved searches](#saved-searches) in their order: `name`, `query`, and `scope`, which is `{"category": "tools"}` or `{"feed": "https://example.com/feed.xml"}` and is left out for a search over every article. Export leaves `savedSearches` out when there are none. Import stores them after the categories and feeds of the file; one with the same name, words and scope as a saved search on the server is not saved again. The searches of the file come first, in the file's order, and the others follow. A scope that names a category or feed found neither in the file nor on the server makes the whole file invalid. `savedSearchesCreated` in the response counts the searches saved.
 
@@ -123,6 +123,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 |---|---|
 | `GET /api/v1/categories/:id/topics` | List the topics of a category |
 | `GET /api/v1/categories/:id/topic-stats` | What each topic of a category brought in the last 30 days |
+| `GET /api/v1/categories/:id/site-stats` | What the sites of a category's candidates brought in the last 30 days, and its blocked sites |
+| `PUT /api/v1/categories/:id/blocked-sites/:host` | Block a site in the category |
+| `DELETE /api/v1/categories/:id/blocked-sites/:host` | Stop blocking it (status 204) |
 | `POST /api/v1/categories/:id/topics` | Add a topic (status 201) |
 | `GET /api/v1/topics/:id` | Read one |
 | `PATCH /api/v1/topics/:id` | Change `text`, `enabled`, `sources`, `search`, `queries` |
@@ -147,7 +150,7 @@ Web search by the model leaves out pages an earlier run of the category settled 
 
 ### Topic trials
 
-A trial shows what a new text would change before you save it. `POST /api/v1/topics/:id/trials` takes `{"text": ..., "search": ...}`, the text and the search locale being edited; `search` left out or `null` uses the settings'. The trial asks the `interpret` task once with them, then the `judge` task once per batch of `limits.judgeBatchSize` stored candidates of the topic. It takes up to that many of the newest candidates the judge accepted and as many it rejected, more of one side when the other has fewer. Candidates rejected for an unknown publication time are left out, and a candidate the program rejected after the judge accepted it (below the minimum importance, over the article limit, an event date outside the window or unconfirmed) counts as accepted. The other topics a candidate matched are judged with their saved text, and each batch is judged at the time its newest candidate was collected.
+A trial shows what a new text would change before you save it. `POST /api/v1/topics/:id/trials` takes `{"text": ..., "search": ...}`, the text and the search locale being edited; `search` left out or `null` uses the settings'. The trial asks the `interpret` task once with them, then the `judge` task once per batch of `limits.judgeBatchSize` stored candidates of the topic. It takes up to that many of the newest candidates the judge accepted and as many it rejected, more of one side when the other has fewer. Candidates rejected for an unknown publication time or a [blocked site](#site-stats-and-blocked-sites) are left out, and a candidate the program rejected after the judge accepted it (below the minimum importance, over the article limit, an event date outside the window or unconfirmed) counts as accepted. The other topics a candidate matched are judged with their saved text, and each batch is judged at the time its newest candidate was collected.
 
 The answer comes at once: 202 with `{"status": "started", "id": ...}`. When a limit leaves too few calls for the trial, nothing starts and the answer is 200 with `id` `null` and a `status` that names the limit: `limit` for `limits.topicTrialsPerDay`, `day` for `limits.llmCallsPerDay`, `budget` for the monthly budget. While another trial runs, the answer is 409. Only one trial runs at a time.
 
@@ -175,12 +178,13 @@ Nothing is stored but the record of the call, which belongs to no run. To use a 
 | `belowMinimum` | Candidates rejected because their story was below the category's `minImportance` |
 | `overLimit` | Candidates rejected because the run had written `maxArticlesPerRun` articles |
 | `rejectedByDate` | Candidates rejected for a date: news without a publication time, and events outside the window or without a date |
+| `blockedSite` | Candidates rejected before the judge because their site is [blocked](#site-stats-and-blocked-sites) in the category |
 | `rejectedByMark` | Candidates rejected as a follow-up to an article marked as a [miss](#misses) or with its [follow-ups stopped](#stopped-follow-ups) |
 | `created` | Generated articles of the topic made in the period. Feed articles are never counted |
 | `updated` | Generated articles of the topic rewritten by a follow-up, the last time in the period |
 | `opened`, `starred` | Of the articles in `created`: the ones opened, and the ones with a star now |
 | `missed` | Of the articles in `created`: the ones marked as a [miss](#misses) for this topic, whenever the mark was made |
-| `topRejectedSites` | Up to three sites with the most rejected candidates, as `siteName` and `count`, most first; candidates without a site name are left out |
+| `topRejectedSites` | Up to three sites with the most rejected candidates, as `host` and `count`, most first, then by host. Candidates whose host is not known and those of a blocked site are left out |
 | `boundary`, `before`, `after` | Only when the topic [changed](#topic-versions) in the period: `boundary` is the last change, as `at` and `trigger`; `before` and `after` hold the fields above from `collected` to `topRejectedSites`, counted up to it and from it on |
 
 A candidate that matched two topics counts for both. A candidate keeps only its last reason, so one the judge accepted and the program then rejected counts under the program's reason. An unknown category answers 404.
@@ -189,6 +193,29 @@ A change is a version of the topic made after its first interpretation; the vers
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/topic-stats"
+```
+
+### Site stats and blocked sites
+
+Every candidate keeps the site it came from: the host of its URL, lowercased and without a leading `www.`. Subdomains are sites of their own. For a Google News result whose redirect link could not be resolved, the site is the host of the outlet the search named; candidates stored before sites were kept have no known site in that case.
+
+`site-stats` counts the candidates the category collected in the last 30 days by site. No model is called. The answer has `since`, the start of the period; `sites`, the sites with candidates in the period, the most candidates first, then by host, with the unknown site after the named ones; and `blocked`, the sites blocked in the category, by host, as `host` and `blockedAt`. Each entry of `sites` has:
+
+| Field | Meaning |
+|---|---|
+| `host` | The site. Empty for the candidates whose site is not known |
+| `candidates`, `accepted`, `rejected` | The candidates collected, and those accepted and rejected so far |
+| `articles` | The articles written from the site's candidates |
+| `opened`, `starred`, `missed` | Of those articles: the ones opened, the ones with a star now, and the ones marked as a [miss](#misses) |
+| `blocked` | Whether the site is blocked in the category now |
+
+`PUT /api/v1/categories/:id/blocked-sites/:host` takes no body, blocks the site in the category and answers it as `host` and `blockedAt`. The host is brought to the same form first, so `WWW.Example.org` blocks `example.org`; a value that is not a host name answers 400. Blocking a site again keeps the time it was first blocked. `DELETE` with the same path stops blocking it, and answers 404 when it is not blocked. An unknown category answers 404.
+
+From the next run of the category, a candidate of a blocked site from any source is rejected right after collecting, before its date is looked at, with the program's reason for a blocked site and counted under `blockedSite` in the topic stats. It never reaches the `judge` task and its page is never fetched, and its URL is settled like any judged one, so it is not collected again after the site is unblocked. Blocking a site in one category leaves the others alone.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/site-stats"
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" "$API/api/v1/categories/1/blocked-sites/example.org"
 ```
 
 ### Topic versions
@@ -238,7 +265,7 @@ Query parameters of the list:
 | `minImportance` | 1 to 5; only articles at or above this importance. Feed articles have no importance, so this leaves them out |
 | `includeEnded` | `true` to include events that have ended |
 | `recentlyRead` | `true` for the articles read in the last seven days, last read first. Cannot be combined with `category`, `origin`, `feed`, `uncategorized`, `kind`, `unread`, `starred`, `starredStory`, `minImportance` or `order` |
-| `order` | `newest` (the default), `oldest` or `relevance`. See below. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
+| `order` | `newest` (the default), `oldest` or `relevance`, see below; or `starred`: by `starredAt`, last starred first, allowed with `starred=true` only. Not allowed with `kind=event` or `recentlyRead=true`, whose order is fixed, not even as `newest` |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
@@ -309,6 +336,7 @@ Fields of an article in the list:
 | `followsStarred` | True for a generated article that follows a starred one up: one of its earlier articles (`previousArticles`, at most 20) has a star. False for a feed article |
 | `unreadFollowUps` | For a starred generated article, how many of its later articles, followed at most 20 steps, are unread. `0` for any other article |
 | `readAt` | When the article was last marked read, by the server's clock. Reading an article that is already read keeps the time, and putting it back to unread clears it. `null` for an unread article, and for one read before read times were recorded |
+| `starredAt` | When the article was starred, by the server's clock. Starring an article that is already starred keeps the time, and taking the star away clears it. `null` for an article without a star. A star given before star times were recorded has the article's `updatedAt` of that time |
 | `openedAt` | When the article was first opened, by the server's clock: see [Open times](#open-times). `null` for an article never opened, and for every article opened before open times were recorded |
 | `primaryUrl` | URL of the main source. For a feed article, the page of the item |
 | `rankAt` | What `order=relevance` sorts by: `updatedAt` moved later by 48 hours times the article's relevance. For ordering, not for showing |
@@ -380,7 +408,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 
 ### Search
 
-`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs, the targets of links or the names found in articles (see [Mentions](#mentions)). Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed. The search calls neither a model nor the translation API.
+`GET /api/v1/search` returns the articles that contain every word of `q`, generated and feed articles alike, newest first by last update. It matches the title, the translated title, the summary, the automatic summary, the body (for a feed article, its content without markup), the impact and the venue of an event, and the reader's annotations: highlighted texts, those no longer in the body included, and notes. The words may be spread over the fields and the annotations. It does not match source URLs, the targets of links or the names found in articles (see [Mentions](#mentions)). Read articles and events that have ended are included; a feed article that a filter hides is not, unless it has a star or an annotation. A hidden duplicate is left out unless `feed` names its feed or `starred=true` is given. The search calls neither a model nor the translation API.
 
 | Parameter | Effect |
 |---|---|
@@ -388,6 +416,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/articles/1/open"
 | `category` | Category id: its generated articles and the articles of its feeds |
 | `feed` | Feed id; only the articles of that subscribed feed |
 | `unread` | `true` for unread articles only |
+| `starred` | `true` for starred articles only: what the starred list holds, hidden duplicates included. The results stay newest first by last update |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The `nextCursor` of the previous page |
 
@@ -541,6 +570,7 @@ Fields of a feed:
 | Field | Content |
 |---|---|
 | `url`, `title`, `siteUrl` | The feed, its name, and the page it belongs to |
+| `iconUrl` | The icon of the feed's site as a path of the image relay (see [Images](#images)), or `null` when none was found. The server looks for it after the first successful fetch and again 30 days after the last look: the icon an Atom feed (`<icon>`) or a JSON Feed (`favicon`) names, then the `<link rel="icon">` of the site's page, then `/favicon.ico`. RSS's `<image>` is not used. The original address is in no answer |
 | `format` | `feed` for RSS, Atom and RDF; `page` for a [web feed](#web-feeds). It never changes |
 | `selectors` | The selectors of a web feed; `null` for a feed |
 | `categoryId` | The category, or `null` |
@@ -666,7 +696,7 @@ The path has no origin. The web app loads it from its own origin; another client
 
 The signature is an HMAC-SHA256 of the original URL, made with a key that the server creates at its first start and keeps in the data directory as `image-proxy.key`. The key appears in no answer, no log and no settings file. A signed path does not expire. Deleting the key file and restarting the server makes every earlier path invalid; the next answers carry new ones.
 
-A request for a relay path needs no token, since an image element cannot send one. The server fetches the original with the same limits as a page: no request to a refused address, every redirect target checked, at most five redirects, the configured time limit and `User-Agent`. It sends nothing the device sent, such as cookies or the referrer, and it does not wait the interval per host or read `robots.txt`. It keeps at most four fetches open to one host; the others wait their turn. An image may be up to 10 MB, and its format is told from its bytes: JPEG, PNG, GIF, WebP and AVIF are served, anything else, SVG included, is refused.
+A request for a relay path needs no token, since an image element cannot send one. The server fetches the original with the same limits as a page: no request to a refused address, every redirect target checked, at most five redirects, the configured time limit and `User-Agent`. It sends nothing the device sent, such as cookies or the referrer, and it does not wait the interval per host or read `robots.txt`. It keeps at most four fetches open to one host; the others wait their turn. An image may be up to 10 MB, and its format is told from its bytes: JPEG, PNG, GIF, WebP, AVIF and ICO (served as `image/x-icon`, for site icons) are served, anything else, SVG included, is refused.
 
 | Status | Meaning |
 |---|---|
@@ -795,7 +825,7 @@ Status 400 answers a rule without an action, a wrong regular expression, and a s
 
 ## List views
 
-Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)). An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
+Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
 
 | Operation | Purpose |
 |---|---|
@@ -809,7 +839,7 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application
 
 A key names an entry: `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed), `uncategorized`, `category-3` (a category), `category-3-generated` (the generated articles of a category) or `feed-12` (a subscribed feed). An entry set back to all its defaults is no longer listed. Deleting a category deletes the views of the category and of its generated articles; its feeds keep theirs when they move to no category. Deleting a feed deletes its view.
 
-Status 404 answers a category or feed that does not exist. Status 400 answers an event category, whose list is ordered by start; `recently-read`, which is ordered by read time; a key it cannot read; and a `sort` other than the three.
+Status 404 answers a category or feed that does not exist. Status 400 answers an event category, whose list is ordered by start; `recently-read`, which is ordered by read time; a key it cannot read; a `sort` it does not know; and `starred` as the `sort` of any entry but `starred`.
 
 ## Term highlights
 
@@ -941,20 +971,24 @@ The `key` names the kind, the target and what set the item off: the failed run, 
 |---|---|
 | `GET /api/v1/digests` | List the digests, the latest first |
 | `GET /api/v1/digests/:id` | Read one digest |
-| `POST /api/v1/digests` | Make a digest of the period that ends now |
+| `POST /api/v1/digests` | Make a digest of the period that ends now, or of a list of articles |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests"
-curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests?limit=1"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"target":{"type":"search","q":"semiconductor","unread":true}}' "$API/api/v1/digests"
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/digests?limit=1&kind=period"
 ```
 
-A digest sums up the generated and feed articles of a period in one call of the `digest` task. The server makes one at the times of `digestSchedule` in the settings, and makes up at start-up for a time missed in the last six hours. A period runs from the end of the last digest to the time the digest is started, at most 24 hours back.
+A digest sums up the generated and feed articles of a period in one call of the `digest` task. The server makes one at the times of `digestSchedule` in the settings, and makes up at start-up for a time missed in the last six hours. A period runs from the end of the last digest of a period to the time the digest is started, at most 24 hours back.
 
-The list answers `items` and `building`, `true` while a digest is being made. `limit` takes 1 to 200 and is 30 by default. Each item has `id`, `createdAt`, `periodStart`, `periodEnd`, `trigger` (`schedule`, `catch-up` or `manual`), `articleCount`, the number of articles the model read, and `executiveSummary`.
+A digest of a list sums up the articles of a list the reader chose instead: the newest articles of the list, at most 200, which the server looks up itself as the list's screen does. The body of `POST` names the list in `target`: `{"type":"mention","name":"..."}` for the articles of a name, `{"type":"search","q":"...","category":1,"feed":2,"unread":true}` for a search, whose `category`, `feed` and `unread` are optional, and `{"type":"starred"}` for the starred articles. Its trigger is `list`, its period runs from its oldest article to its newest, and it is left out when the period of the next digest of a period is worked out. It counts towards `digestsPerDay` like any other digest.
+
+The list answers `items` and `building`, `true` while a digest is being made. `limit` takes 1 to 200 and is 30 by default; `kind=period` leaves out the digests of a list. Each item has `id`, `createdAt`, `periodStart`, `periodEnd`, `trigger` (`schedule`, `catch-up`, `manual` or `list`), `articleCount`, the number of articles the model read, `executiveSummary`, and `target`: for a digest of a list its `type` and the `label` the screens show in place of the period, such as `検索：semiconductor（未読だけ）`; `null` for a digest of a period.
 
 One digest adds `sections` and `articles`. A section has `categoryId`, `categoryName`, the name the category had when the digest was made, and `lines`, each with `text` and `articleIds`, the articles it is drawn from. Ids the model was not given are dropped before the digest is stored. `articles` gives `id`, `title` and `origin` of the source articles that are still stored; an id of a deleted article stays in its line and is missing from `articles`. Digests are deleted after 180 days.
 
-`POST` answers at once. It answers 202 with `{"status":"queued"}` when a digest is started, and 409 while one is being made. It answers 200 with `limit` when the day has made `digestsPerDay` calls for digests, `budget` when the provider of the task costs money and the budget period is used up, and `empty` when the period holds no article; the model is not called then. Digests are never in the RSS output.
+`POST` answers at once. It answers 202 with `{"status":"queued"}` when a digest is started, and 409 while one is being made. It answers 200 with `limit` when the day has made `digestsPerDay` calls for digests, `budget` when the provider of the task costs money and the budget period is used up, and `empty` when the period or the list holds no article; the model is not called then. Digests are never in the RSS output.
 
 ## Providers
 

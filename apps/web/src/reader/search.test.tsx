@@ -222,6 +222,30 @@ describe("the results", () => {
     expect(path()).toBe(`/search?q=${q("電池")}&unread=true`);
   });
 
+  it("include articles without a star until starred only is chosen", async () => {
+    const { server, ids } = seeded();
+    setArticleFlags(server.db, ids.aOld!, { starred: true }, server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: `/search?q=${q("電池")}` });
+    await waitFor(() => expect(rowTitles()).toHaveLength(3));
+    const toggle = screen.getByRole("checkbox", { name: "スターだけ" });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+
+    await waitFor(() => expect(rowTitles()).toEqual(["電池の古い話"]));
+    expect(path()).toBe(`/search?q=${q("電池")}&starred=true`);
+  });
+
+  it("drop starred only with the rest of the narrowing when it is widened", async () => {
+    const { server } = seeded();
+    const { user, path } = renderApp({ server, route: `/search?q=${q("電池")}&starred=true` });
+    await user.click(await screen.findByRole("button", { name: "絞り込みを外す" }));
+
+    await waitFor(() => expect(rowTitles()).toHaveLength(3));
+    expect(path()).toBe(`/search?q=${q("電池")}`);
+    expect(screen.getByRole("checkbox", { name: "スターだけ" })).not.toBeChecked();
+  });
+
   it("come back the same from their URL, as after a reload, with the article that was open", async () => {
     const { server, a, ids } = seeded();
     renderApp({ server, route: `/search/${ids.feed}?q=${q("電池")}&category=${a.slug}` });

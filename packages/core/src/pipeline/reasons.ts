@@ -9,6 +9,7 @@ export const REASON_CODES = [
   "event-no-date",
   "missed-follow-up",
   "stopped-follow-up",
+  "blocked-site",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 
@@ -24,6 +25,7 @@ const REASONS: Record<"ja" | "en", Record<ReasonCode, (title: string) => string>
     "event-no-date": () => "開催日を確認できない",
     "missed-follow-up": (title) => `外れの印を付けた記事「${title}」の続報`,
     "stopped-follow-up": (title) => `続報を止めた記事「${title}」の続報`,
+    "blocked-site": () => "除外したサイト",
   },
   en: {
     "no-date": () => "publication time unknown",
@@ -33,6 +35,7 @@ const REASONS: Record<"ja" | "en", Record<ReasonCode, (title: string) => string>
     "event-no-date": () => "event date could not be confirmed",
     "missed-follow-up": (title) => `follow-up to "${title}", which was marked as a miss`,
     "stopped-follow-up": (title) => `follow-up to "${title}", whose follow-ups were stopped`,
+    "blocked-site": () => "site blocked in this category",
   },
 };
 

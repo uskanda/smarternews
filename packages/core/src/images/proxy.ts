@@ -10,7 +10,7 @@ export const IMAGE_MAX_BYTES = 10_000_000;
 /** How many fetches to one host the relay keeps open at once. */
 export const IMAGE_FETCHES_PER_HOST = 4;
 /** The formats the relay accepts. SVG is not among them. */
-const ACCEPT = "image/avif,image/webp,image/png,image/jpeg,image/gif";
+const ACCEPT = "image/avif,image/webp,image/png,image/jpeg,image/gif,image/x-icon";
 
 /** An image could not be relayed: the destination is refused, the site failed, or the answer is no image. */
 export class ImageFetchError extends Error {

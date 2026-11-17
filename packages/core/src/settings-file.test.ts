@@ -987,6 +987,17 @@ describe("list views in the settings file", () => {
     expect(getListView(db, `feed-${feed.id}`).sort).toBe("newest");
   });
 
+  it("carry the starred articles in the order by star time to another server", () => {
+    const { db } = changed();
+    updateListView(db, "starred", { sort: "starred" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([{ list: "starred", sort: "starred" }]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(1);
+    expect(views(other)).toEqual([{ key: "starred", sort: "starred" }]);
+  });
+
   it("carry the relevance order to another server", () => {
     const { db, tools } = changed();
     updateListView(db, "all", { sort: "relevance" });
@@ -1057,6 +1068,8 @@ describe("list views in the settings file", () => {
       ["{ list: unread, sort: oldest }, { list: unread, sort: oldest }", "listViews.1.list"],
       ["{ list: recentlyRead, sort: oldest }", "listViews.0.list"],
       ["{ list: unread, sort: random }", "listViews.0.sort"],
+      ["{ list: starred, sort: oldest }, { list: { category: tools }, sort: starred }", "listViews.1.sort"],
+      ["{ list: all, sort: starred }", "listViews.0.sort"],
     ];
     for (const [entries, path] of refused) {
       const text = `version: 1\nsettings: { readerInfo: changed }\nlistViews: [${entries}]\n`;

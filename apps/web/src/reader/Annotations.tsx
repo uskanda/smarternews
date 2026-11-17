@@ -3,8 +3,10 @@ import { anchorOf, checkHighlightQuote, locateHighlights, PART_SEPARATOR, partSt
 import { MAX_FILTER_VALUE_CHARS, type Article, type Highlight } from "@smarternews/core/api";
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { useAnnotationActions } from "../api/queries.ts";
+import { copyText } from "../lib/clipboard.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { forgetNoteDraft, keepNoteDraft, noteDraftOf } from "../lib/note-drafts.ts";
+import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button } from "../ui/controls.tsx";
@@ -244,12 +246,6 @@ function selectionIn(
   const topicDraft = options.topics ? topicDraftIn(range, scope, (selection.toString() || value).trim()) : null;
   if (!anchor && !filterable && topicDraft === null) return null;
   return { value, anchor, filterable, topicDraft, ...boxOf(range, root) };
-}
-
-/** Copies the text selected, as the browser's own menu would. */
-function copy(value: string) {
-  if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => document.execCommand("copy"));
-  else document.execCommand("copy");
 }
 
 /** The first mark of a highlight, which takes the focus, or its entry among those the body no longer holds. */
@@ -604,6 +600,10 @@ export function AnnotatedBody({
     }
   }
 
+  // A highlight without a note, by the button, the menu or h: the selection stays until the answer, and a second
+  // one sent meanwhile would be stored twice.
+  const [highlighting, runHighlight] = usePending();
+
   /**
    * Whether a selection can be highlighted at all. A quote the server refuses is not sent, nor written a note for:
    * the reason is told, and the selection is kept to be narrowed.
@@ -614,7 +614,7 @@ export function AnnotatedBody({
     return tooLong === null;
   }
   const highlightSelection = (anchor: HighlightAnchor) => {
-    if (fits(anchor)) void add(anchor, null);
+    if (fits(anchor)) void runHighlight(() => add(anchor, null));
   };
   const writeNote = (anchor: HighlightAnchor) => {
     if (fits(anchor)) setWritingFor(anchor);
@@ -624,10 +624,10 @@ export function AnnotatedBody({
   useHotkeys({ h: anchor ? () => highlightSelection(anchor) : undefined });
 
   /** The actions a selection offers, the same in its menu and in the menu of a right click. */
-  const choices = (selection: Selected) => [
+  const choices = (selection: Selected): { label: string; run: () => void; disabled?: boolean }[] => [
     ...(selection.anchor
       ? [
-          { label: "ハイライト", run: () => highlightSelection(selection.anchor!) },
+          { label: "ハイライト", run: () => highlightSelection(selection.anchor!), disabled: highlighting },
           { label: "メモを書く", run: () => writeNote(selection.anchor!) },
         ]
       : []),
@@ -710,7 +710,7 @@ export function AnnotatedBody({
           onMouseDown={(event) => event.preventDefault()}
         >
           {choices(selected).map((choice) => (
-            <Button key={choice.label} onClick={choice.run}>
+            <Button key={choice.label} disabled={choice.disabled} onClick={choice.run}>
               {choice.label}
             </Button>
           ))}
@@ -729,12 +729,12 @@ export function AnnotatedBody({
             {menuFor
               ? [
                   ...choices(menuFor).map((choice) => (
-                    <ContextMenu.Item key={choice.label} className={MENU_ITEM} onSelect={choice.run}>
+                    <ContextMenu.Item key={choice.label} className={MENU_ITEM} disabled={choice.disabled} onSelect={choice.run}>
                       {choice.label}
                     </ContextMenu.Item>
                   )),
                   <ContextMenu.Separator key="separator" className="my-xs border-t border-outline" />,
-                  <ContextMenu.Item key="copy" className={MENU_ITEM} onSelect={() => copy(menuFor.value)}>
+                  <ContextMenu.Item key="copy" className={MENU_ITEM} onSelect={() => void copyText(menuFor.value)}>
                     コピー
                   </ContextMenu.Item>,
                 ]

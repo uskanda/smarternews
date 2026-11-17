@@ -266,13 +266,14 @@ export function useArticlePatchListener(listener: ArticlePatchListener): void {
 /**
  * The translation of a feed article's content. It is asked for when an article of a feed that translates is
  * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
- * put into the article and into the lists, which show the translated title.
+ * put into the article and into the lists, which show the translated title. While `wait` is set, as it is while
+ * the full content is on its way, nothing is asked: what the feed delivered would be translated for nothing.
  */
-export function useArticleTranslation(article: Article | undefined) {
+export function useArticleTranslation(article: Article | undefined, { wait = false }: { wait?: boolean } = {}) {
   const { api } = useApp();
   const client = useQueryClient();
   const id = article?.id ?? null;
-  const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  const wanted = !wait && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
     // The full content, once it arrives, is translated anew: the server dropped the translation of the excerpt.
     queryKey: ["article-translation", id, article?.fullContent?.fetchedAt ?? null],
@@ -521,8 +522,11 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
       markStale(["counts"]);
       // A miss changes how many misses a topic has had since its interpretation.
       if (variables.missed !== undefined) markStale(["topics"]);
-      // Misses and stars are counted in the stats of the topics.
-      if (variables.missed !== undefined || variables.starred !== undefined) markStale(["topic-stats"]);
+      // Misses and stars are counted in the stats of the topics and of the sites.
+      if (variables.missed !== undefined || variables.starred !== undefined) {
+        markStale(["topic-stats"]);
+        markStale(["site-stats"]);
+      }
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) markStale(["articles"]);
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
@@ -552,6 +556,12 @@ export function useTopics(categoryId: number | null) {
 export function useTopicStats(categoryId: number) {
   const { api } = useApp();
   return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
+}
+
+/** What the sites of the category's candidates brought in the last 30 days, and the sites blocked in it. */
+export function useSiteStats(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["site-stats", categoryId], queryFn: () => api.siteStats(categoryId) });
 }
 
 /** The versions of a topic, newest first. Stale once the topic is saved or goes back to a version. */

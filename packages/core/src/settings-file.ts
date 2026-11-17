@@ -25,7 +25,7 @@ import { transaction, type Database } from "./db/database.ts";
 import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
 import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { createRule, findSameRule, listRules, updateRule } from "./db/rules.ts";
-import { checkListViewTarget, listViewEntries, setListView } from "./db/list-views.ts";
+import { checkListViewTarget, listViewEntries, setListView, sortAllowed } from "./db/list-views.ts";
 import { createSavedSearch, listSavedSearches, orderSavedSearches } from "./db/saved-searches.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
@@ -386,8 +386,9 @@ function importTermGroups(db: Database, file: SettingsFile, result: ImportResult
 
 /**
  * Stores the list views of the file, once its categories and feeds are stored: a category is tied to the one
- * of that slug, a feed to the one of that URL, on the server. An entry found nowhere, an event category, and
- * an entry named twice refuse the file. What an entry leaves out, and every entry the file does not name, stays.
+ * of that slug, a feed to the one of that URL, on the server. An entry found nowhere, an event category, an
+ * entry named twice, and the order by star time for an entry other than the starred articles refuse the file.
+ * What an entry leaves out, and every entry the file does not name, stays.
  */
 function importListViews(db: Database, file: SettingsFile, result: ImportResult): void {
   const seen = new Set<string>();
@@ -411,8 +412,12 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
     const key = listViewKey(target);
     if (seen.has(key)) throw refuseAt(path, "the entry is named twice", "not_allowed");
     seen.add(key);
-    checkListViewTarget(db, target);
-    setListView(db, target, entry.sort === undefined ? {} : { sort: entry.sort });
+    if (entry.sort !== undefined && !sortAllowed(target, entry.sort)) {
+      throw refuseAt(`listViews.${index}.sort`, "only the starred articles can be in the order by star time", "not_allowed");
+    }
+    const patch = entry.sort === undefined ? {} : { sort: entry.sort };
+    checkListViewTarget(db, target, patch);
+    setListView(db, target, patch);
     result.listViewsUpdated += 1;
   });
 }

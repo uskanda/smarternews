@@ -2,9 +2,11 @@ import {
   getArticle,
   insertFeed,
   listListViews,
+  recordFeedIcon,
   recordFetchFailure,
   recordFetchSuccess,
   saveAutoSummary,
+  saveTranslatedTitle,
   setArticleFlags,
   updateFeed,
 } from "@smarternews/core";
@@ -56,6 +58,55 @@ function seeded() {
   server.clock.advance(1);
   return { server, tools, cars, blog, releases, loose, oldPost, newPost, release, stray, generated, carNews };
 }
+
+describe("the icons of feeds in the navigation", () => {
+  const ICON = "https://blog.example.org/favicon.ico";
+  const frameOf = (name: RegExp) => within(nav()).getByRole("link", { name }).querySelector("[data-feed-icon]");
+
+  it("stand before the name of a feed through the relay, and leave an empty frame for a feed without one", async () => {
+    const { server, blog } = seeded();
+    recordFeedIcon(server.db, blog.id, { iconUrl: ICON, checkedAt: at(0) });
+    renderApp({ server });
+    await within(nav()).findByRole("link", { name: /Blog/ });
+
+    const image = await waitFor(() => {
+      const found = frameOf(/Blog/)?.querySelector("img");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(image.getAttribute("src")).toBe(relayPath(ICON));
+    expect(image).toHaveAttribute("alt", "");
+    expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
+    // The frame comes first, so the names of feeds with and without an icon start at one place.
+    expect(within(nav()).getByRole("link", { name: /Blog/ }).firstElementChild).toBe(frameOf(/Blog/));
+    expect(frameOf(/Releases/)).toBeEmptyDOMElement();
+    // Read out as before: the name and the count, nothing of the picture.
+    expect(navLines()).toContain("Blog2");
+  });
+
+  it("are left out of the categories and the views, and out of the rows of the list", async () => {
+    const { server, blog } = seeded();
+    recordFeedIcon(server.db, blog.id, { iconUrl: ICON, checkedAt: at(0) });
+    renderApp({ server, route: `/f/${blog.id}` });
+    await within(list()).findByRole("link", { name: /New post/ });
+    expect(frameOf(/Tools/)).toBeNull();
+    expect(frameOf(/未読/)).toBeNull();
+    expect(list().querySelector("img")).toBeNull();
+  });
+
+  it("leave the frame empty when the picture cannot be loaded", async () => {
+    const { server, blog } = seeded();
+    recordFeedIcon(server.db, blog.id, { iconUrl: ICON, checkedAt: at(0) });
+    renderApp({ server });
+    const image = await waitFor(() => {
+      const found = frameOf(/Blog/)?.querySelector("img");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    fireEvent.error(image);
+    expect(frameOf(/Blog/)).toBeEmptyDOMElement();
+  });
+});
 
 describe("the entries of the navigation", () => {
   it("lists the generated articles and the feeds below a category that has feeds, with unread counts", async () => {
@@ -346,8 +397,21 @@ describe("a feed article that is opened", () => {
     expect(open).toHaveBeenCalledWith("https://blog.example.org/new", "_blank", "noopener,noreferrer");
 
     await user.keyboard("s");
-    expect(await within(await opened()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await within(await within(await opened()).findByRole("group", { name: "記事の操作" })).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     open.mockRestore();
+  });
+
+  it("copies the link to its page with the headline it shows, the translated title when there is one", async () => {
+    const { server, blog, newPost } = seeded();
+    saveTranslatedTitle(server.db, newPost, { original: "New post", title: "新しい投稿", sourceLanguage: "en" });
+    const { user } = renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "新しい投稿" });
+
+    await user.click(within(pane).getByRole("button", { name: "リンクをコピー" }));
+
+    await screen.findByText("リンクをコピーしました", { selector: '[role="status"] > span' });
+    expect(await navigator.clipboard.readText()).toBe("[新しい投稿](https://blog.example.org/new)");
   });
 });
 

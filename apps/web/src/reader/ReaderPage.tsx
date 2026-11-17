@@ -1,4 +1,4 @@
-import type { Article, ArticleListQuery, ArticleSummary, Category, Feed, ListSort } from "@smarternews/core/api";
+import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListSort } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
@@ -23,10 +23,13 @@ import {
   useTimeZone,
 } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { articleLink } from "../lib/article-link.ts";
+import { copyText } from "../lib/clipboard.ts";
 import { unfold } from "../lib/collapsed.ts";
 import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { useLayout } from "../lib/layout.ts";
+import { usePending } from "../lib/pending.ts";
 import { useScrollRead } from "../lib/scroll-read.ts";
 import {
   ANNOTATIONS_LABEL,
@@ -44,6 +47,7 @@ import {
   nextTarget,
   RECENTLY_READ_LABEL,
   sortKeyFor,
+  sortOptionsOf,
   targetFilter,
   targetScope,
   UNCATEGORIZED_LABEL,
@@ -67,6 +71,7 @@ import { MarkOlderMenu, type MarkOlderPeriod } from "./MarkOlderMenu.tsx";
 import { SaveSearchButton } from "./SaveSearchDialog.tsx";
 import { useScrollToRead } from "./scroll-read.ts";
 import { SortMenu } from "./SortMenu.tsx";
+import { SummarizeList } from "./SummarizeList.tsx";
 
 export type View =
   | "unread"
@@ -214,6 +219,9 @@ export function ReaderPage({ view }: { view: View }) {
   const panes = usePanes(layout);
   const client = useQueryClient();
   const toast = useToast();
+  // Marking all as read, by the button or by Shift+A: a second one before the answer would mark nothing, and its
+  // toast would take the place of the first one's undo.
+  const [markingAll, runMarkAll] = usePending();
   const timeZone = useTimeZone();
   const settings = useSettings();
   // A failed change of flags is answered with what this render holds: the kept rows, the toast, sending again.
@@ -273,13 +281,14 @@ export function ReaderPage({ view }: { view: View }) {
       ...(readToggle && !includeRead ? { unread: "true" as const } : {}),
     };
   }, [target, category, isEvents, readToggle, includeRead, importantOnly, sort]);
-  // The search: the words, a category by its slug or a feed by its id, and whether only unread articles count.
+  // The search: the words, a category by its slug or a feed by its id, and whether only unread or starred articles count.
   const words = isSearch ? (search.get("q") ?? "").trim() : "";
   const searchSlug = isSearch ? search.get("category") : null;
   const searchCategory = searchSlug ? categories.data?.find((entry) => entry.slug === searchSlug) : undefined;
   const feedParam = isSearch ? search.get("feed") : null;
   const searchFeedId = feedParam && /^\d{1,15}$/.test(feedParam) ? Number(feedParam) : undefined;
   const searchUnread = isSearch && search.get("unread") === "true";
+  const searchStarred = isSearch && search.get("starred") === "true";
   const searchQuery = useMemo(
     () =>
       // A saved search: its words and narrowing, unread only until the read ones are asked for.
@@ -295,10 +304,11 @@ export function ReaderPage({ view }: { view: View }) {
             ...(searchCategory ? { category: searchCategory.id } : {}),
             ...(searchFeedId !== undefined ? { feed: searchFeedId } : {}),
             ...(searchUnread ? { unread: "true" as const } : {}),
+            ...(searchStarred ? { starred: "true" as const } : {}),
           },
-    [savedSearch, includeRead, words, searchCategory, searchFeedId, searchUnread],
+    [savedSearch, includeRead, words, searchCategory, searchFeedId, searchUnread, searchStarred],
   );
-  const narrowed = searchSlug !== null || searchFeedId !== undefined || searchUnread;
+  const narrowed = searchSlug !== null || searchFeedId !== undefined || searchUnread || searchStarred;
   // Words the server refuses, from a URL typed or kept, are not sent: trying again would fail the same way.
   const wordsProblem = isSearch && words.length > 0 ? checkSearchWords(words) : null;
   // A category is named by its slug, so the search waits for the categories when it names one.
@@ -312,6 +322,22 @@ export function ReaderPage({ view }: { view: View }) {
   // The articles of a name: every one, read ones included, newest first, whatever the entry chosen before.
   const mentionName = isMention ? (search.get("name") ?? "").trim() : "";
   const mentionList = useMentionArticles(mentionName, isMention && mentionName.length > 0);
+  // The lists that can be summed up in a digest: a search with words, the articles of a name, the starred articles.
+  // A search that names a category waits for it, as the search itself does.
+  const digestTarget: DigestTargetRequest | null =
+    view === "starred"
+      ? { type: "starred" }
+      : isMention && mentionName.length > 0
+        ? { type: "mention", name: mentionName }
+        : isSearch && words.length > 0 && (searchSlug === null || searchCategory !== undefined)
+          ? {
+              type: "search",
+              q: words,
+              ...(searchCategory ? { category: searchCategory.id } : {}),
+              ...(searchFeedId !== undefined ? { feed: searchFeedId } : {}),
+              ...(searchUnread ? { unread: true as const } : {}),
+            }
+          : null;
 
   const unreadOnly = isSearch ? searchUnread : isSaved ? !includeRead : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
@@ -355,7 +381,7 @@ export function ReaderPage({ view }: { view: View }) {
     const settled = !pending && kept.key === pendingKey && (unreadOnly || recentlyRead);
     setKept({ key: listKey, items: settled ? kept.items : [] });
   }
-  const sortKey = target ? sortKeyFor(target) : undefined;
+  const sortKey = target ? sortKeyFor(target, sort) : undefined;
   // The article open now, as the server last gave it. A row of it may be made from it before the list arrives.
   const opened = useArticle(articleId).data;
   // What is kept joins the list once it has arrived, so that a row read before then does not stand alone meanwhile.
@@ -372,7 +398,7 @@ export function ReaderPage({ view }: { view: View }) {
       const latest = fresh.get(item.id);
       if (!latest) return item;
       if (latest.updatedAt > item.updatedAt) return latest;
-      return { ...latest, isRead: item.isRead, starred: item.starred, readAt: item.readAt };
+      return { ...latest, isRead: item.isRead, starred: item.starred, starredAt: item.starredAt, readAt: item.readAt };
     });
     return mergeKept(fetched, rows, sortKey, sort);
   }, [noArticles, arrived, fetched, opened, kept, listKey, sortKey, sort]);
@@ -528,6 +554,12 @@ export function ReaderPage({ view }: { view: View }) {
   function undoMiss(id: number, wasRead: boolean) {
     if (!wasRead) showRead(id, false);
     flags.mutate({ id, missed: false, ...(wasRead ? {} : { isRead: false }) });
+  }
+  /** Copies the headline and the main source of the article as a Markdown link, and says whether it was copied. */
+  async function copyLink(target: Pick<Article, "title" | "translatedTitle" | "primaryUrl">) {
+    const link = articleLink(target);
+    if (link === null) return;
+    toast({ message: (await copyText(link)) ? "リンクをコピーしました" : "リンクをコピーできませんでした" });
   }
   /** Changes the star: a row unstarred in the starred list is kept there, like a read one in an unread list. */
   function setStar(id: number, starred: boolean) {
@@ -705,7 +737,7 @@ export function ReaderPage({ view }: { view: View }) {
     }
   }
 
-  function toggleParam(name: "read" | "min" | "unread", value: string, on: boolean) {
+  function toggleParam(name: "read" | "min" | "unread" | "starred", value: string, on: boolean) {
     const next = new URLSearchParams(search);
     if (on) next.set(name, value);
     else next.delete(name);
@@ -723,7 +755,7 @@ export function ReaderPage({ view }: { view: View }) {
   }
   function widen() {
     const next = new URLSearchParams(search);
-    for (const name of ["category", "feed", "unread"]) next.delete(name);
+    for (const name of ["category", "feed", "unread", "starred"]) next.delete(name);
     setSearch(next, { replace: true });
   }
   const narrowingId = useId();
@@ -885,7 +917,7 @@ export function ReaderPage({ view }: { view: View }) {
       Space: () => page(1),
       "Shift+Space": () => page(-1),
       // The same as the buttons and the toggle beside the list, and only while they are offered.
-      "Shift+A": canMarkAll ? () => void markAllRead() : undefined,
+      "Shift+A": canMarkAll ? () => void runMarkAll(markAllRead) : undefined,
       r: refresh,
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
@@ -893,6 +925,8 @@ export function ReaderPage({ view }: { view: View }) {
       // The same as the button under the body of a generated article, and only while it is shown.
       x: opened?.origin === "generated" && opened.id === articleId ? () => toggleMiss(opened) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
+      // The same as the button under the body, and only while it is shown: for the article in the article pane.
+      c: opened && opened.id === articleId && articleLink(opened) !== null ? () => void copyLink(opened) : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
         opened?.origin === "feed" && opened.id === articleId && !fullContent.isFetching(opened.id)
@@ -975,10 +1009,10 @@ export function ReaderPage({ view }: { view: View }) {
           <div className="flex flex-wrap gap-sm">
             {canMarkAll ? (
               <span className="flex">
-                <Button className="rounded-r-none!" onClick={() => void markAllRead()}>
+                <Button className="rounded-r-none!" disabled={markingAll} onClick={() => void runMarkAll(markAllRead)}>
                   すべて既読にする
                 </Button>
-                <MarkOlderMenu onChoose={(period) => void markOlderRead(period)} />
+                <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
               </span>
             ) : null}
             <Button onClick={refresh}>読み直す</Button>
@@ -991,7 +1025,7 @@ export function ReaderPage({ view }: { view: View }) {
           {importanceFilter ? (
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
-          {sortMenu ? <SortMenu sort={sort} onChange={changeSort} /> : null}
+          {sortMenu && target !== null ? <SortMenu sort={sort} options={sortOptionsOf(target)} onChange={changeSort} /> : null}
           {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
@@ -1005,6 +1039,7 @@ export function ReaderPage({ view }: { view: View }) {
           ) : null}
           {/* The article in the article pane, the one the name was chosen in, gives the category to start in. */}
           {isMention && mentionName.length > 0 ? <AddTopicButton draft={mentionName} categoryId={opened?.categoryId ?? null} /> : null}
+          {digestTarget ? <SummarizeList target={digestTarget} /> : null}
           {isSearch ? (
             <>
               <span className="inline-flex items-center gap-xs type-body-md">
@@ -1032,7 +1067,8 @@ export function ReaderPage({ view }: { view: View }) {
                 </select>
               </span>
               <Checkbox label="未読だけ" checked={searchUnread} onChange={(event) => toggleParam("unread", "true", event.target.checked)} />
-              {/* The words and the narrowing are saved; whether only unread articles are shown is not. */}
+              <Checkbox label="スターだけ" checked={searchStarred} onChange={(event) => toggleParam("starred", "true", event.target.checked)} />
+              {/* The words and the narrowing are saved; whether only unread or starred articles are shown is not. */}
               <SaveSearchButton
                 search={{
                   query: words,
@@ -1161,6 +1197,7 @@ export function ReaderPage({ view }: { view: View }) {
               onToggleRead={(article) => setRead(article.id, !article.isRead)}
               onToggleMiss={toggleMiss}
               onToggleFollowUps={(article) => flags.mutate({ id: article.id, followUpsStopped: !article.followUpsStopped })}
+              onCopyLink={(article) => void copyLink(article)}
               fullContent={{
                 fetching: fullContent.isFetching(articleId),
                 requestFailed: fullContent.requestFailed(articleId),
