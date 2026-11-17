@@ -1,5 +1,5 @@
 import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListSort } from "@smarternews/core/api";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -63,6 +63,7 @@ import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
 import { ArticleRow } from "./ArticleRow.tsx";
 import { ArticleView, type ArticleNeighbors } from "./ArticleView.tsx";
+import { countNewArticles } from "./count-new.ts";
 import { CategorySettingsLink, EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
@@ -605,10 +606,33 @@ export function ReaderPage({ view }: { view: View }) {
   function refresh() {
     setKept({ key: listKey, items: [] });
     setRefreshes((count) => count + 1);
-    void client.invalidateQueries({ queryKey: ["articles"] });
-    void client.invalidateQueries({ queryKey: ["counts"] });
-    // The list of annotations is not a list of articles, so it is fetched again on its own.
-    if (isAnnotations) void client.invalidateQueries({ queryKey: ["annotations"] });
+    return Promise.all([
+      client.invalidateQueries({ queryKey: ["articles"] }),
+      client.invalidateQueries({ queryKey: ["counts"] }),
+      // The list of annotations is not a list of articles, so it is fetched again on its own.
+      isAnnotations ? client.invalidateQueries({ queryKey: ["annotations"] }) : undefined,
+    ]);
+  }
+
+  // A refresh the user asked for, by the button or r: it shows that it is under way, and says what came of it.
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshByUser() {
+    if (refreshing) return;
+    setRefreshing(true);
+    const listQueryKey = isSearch ? ["articles", "search", searchQuery] : isMention ? ["articles", "mention", mentionName] : ["articles", filter];
+    const before = [...fetched, ...(kept.key === listKey ? kept.items : [])].map((item) => item.id);
+    const complete = !active.hasNextPage;
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+    // A failure is shown above the list already.
+    const state = client.getQueryState<InfiniteData<{ items: ArticleSummary[] }>>(listQueryKey);
+    if (!state || state.status !== "success" || state.fetchStatus !== "idle" || state.error) return;
+    const after = state.data?.pages.flatMap((page) => page.items.map((item) => item.id)) ?? [];
+    const count = countNewArticles({ before, after, complete });
+    toast({ message: count > 0 ? `新しい記事が${count}件あります` : "新しい記事はありませんでした" });
   }
 
   /**
@@ -689,7 +713,7 @@ export function ReaderPage({ view }: { view: View }) {
     if (asOf === undefined || fetched.length === 0) return;
     try {
       const result = await api.markRead({ before: before(asOf), ...(target ? targetScope(target) : {}), ...(importantOnly ? { minImportance: 4 } : {}) });
-      refresh();
+      void refresh();
       // Nothing to undo, and nothing finished to move on from.
       if (result.updated === 0 && none.length > 0) return void toast({ message: none });
       // Moving on is an extra: when it fails, the marking has still happened and can still be undone.
@@ -885,7 +909,8 @@ export function ReaderPage({ view }: { view: View }) {
       "Shift+Space": () => page(-1),
       // The same as the buttons and the toggle beside the list, and only while they are offered.
       "Shift+A": canMarkAll ? () => void runMarkAll(markAllRead) : undefined,
-      r: refresh,
+      // The list of annotations is read again without a word: it has a button of its own for that.
+      r: isAnnotations ? () => void refresh() : () => void refreshByUser(),
       u: readToggle ? () => toggleParam("read", "1", !includeRead) : undefined,
       s: selected ? () => toggleStar(selected) : undefined,
       m: selected ? () => setRead(selected.id, !selected.isRead) : undefined,
@@ -977,7 +1002,9 @@ export function ReaderPage({ view }: { view: View }) {
                 <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
               </span>
             ) : null}
-            <Button onClick={refresh}>読み直す</Button>
+            <Button onClick={() => void refreshByUser()} disabled={refreshing}>
+              {refreshing ? "読み直し中…" : "読み直す"}
+            </Button>
           </div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">

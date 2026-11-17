@@ -1385,6 +1385,111 @@ describe("read state", () => {
     await waitFor(() => expect(rowTitles()).toEqual(["Second"]));
   });
 
+  describe("reading the list again", () => {
+    const toast = () => screen.queryByText(/新しい記事/, { selector: '[role="status"] > span' });
+
+    /** Holds the lists of articles the client asks for until `release` is called. */
+    function holdLists(server: TestServer) {
+      const original = server.app.request.bind(server.app);
+      let gate: Promise<void> | null = null;
+      let open = () => {};
+      server.app.request = (async (input: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET") === "GET" && /\/articles(\?|$)/.test(String(input)) && gate) await gate;
+        return original(input, init);
+      }) as typeof server.app.request;
+      onTestFinished(() => {
+        server.app.request = original;
+      });
+      return {
+        hold: () => {
+          gate = new Promise((resolve) => {
+            open = resolve;
+          });
+        },
+        release: () => {
+          gate = null;
+          open();
+        },
+      };
+    }
+
+    it("shows that it is reading while it reads, and takes neither the button nor r meanwhile", async () => {
+      const server = makeServer();
+      articles(server, server.category().id, [{ title: "First" }]);
+      const lists = holdLists(server);
+      const { user, requests } = renderApp({ server });
+      await screen.findByRole("link", { name: /First/ });
+
+      lists.hold();
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
+
+      const busy = await screen.findByRole("button", { name: "読み直し中…" });
+      expect(busy).toBeDisabled();
+      const asked = requests.filter((request) => /^GET \S*\/articles\?/.test(request)).length;
+      await user.keyboard("r");
+      expect(requests.filter((request) => /^GET \S*\/articles\?/.test(request)).length).toBe(asked);
+      expect(toast()).toBeNull();
+
+      lists.release();
+      expect(await screen.findByRole("button", { name: "読み直す" })).toBeEnabled();
+      expect(await screen.findByText("新しい記事はありませんでした", { selector: '[role="status"] > span' })).toBeInTheDocument();
+    });
+
+    it("says how many articles came into the list", async () => {
+      const server = makeServer();
+      const category = server.category();
+      articles(server, category.id, [{ title: "First" }]);
+      const { user } = renderApp({ server });
+      await screen.findByRole("link", { name: /First/ });
+      articles(server, category.id, [{ title: "Second" }, { title: "Third" }]);
+
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
+
+      expect(await screen.findByText("新しい記事が2件あります", { selector: '[role="status"] > span' })).toBeInTheDocument();
+      expect(rowTitles()).toEqual(["Third", "Second", "First"]);
+    });
+
+    it("says that nothing new came in when r is pressed and rows read went away", async () => {
+      const server = makeServer();
+      articles(server, server.category().id, [{ title: "First" }, { title: "Second" }]);
+      const { user } = renderApp({ server });
+      await user.click(await screen.findByRole("link", { name: /First/ }));
+      await waitFor(() => expect(row(/First/)).toHaveAttribute("data-read", "true"));
+
+      await user.keyboard("r");
+
+      expect(await screen.findByText("新しい記事はありませんでした", { selector: '[role="status"] > span' })).toBeInTheDocument();
+      expect(rowTitles()).toEqual(["Second"]);
+    });
+
+    it("says nothing in a toast when the list cannot be read", async () => {
+      const server = makeServer();
+      articles(server, server.category().id, [{ title: "First" }]);
+      let offline = false;
+      const { user } = renderApp({ server, offline: () => offline });
+      await screen.findByRole("link", { name: /First/ });
+
+      offline = true;
+      await user.click(screen.getByRole("button", { name: "読み直す" }));
+
+      await waitFor(() => expect(screen.getByRole("button", { name: "読み直す" })).toBeEnabled());
+      expect(toast()).toBeNull();
+    });
+
+    it("says nothing about new articles after marking everything as read", async () => {
+      const server = makeServer();
+      articles(server, server.category().id, [{ title: "One" }, { title: "Two" }]);
+      const { user } = renderApp({ server });
+      await screen.findByRole("link", { name: /Two/ });
+
+      await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
+
+      expect(await screen.findByText("2件を既読にしました", { selector: '[role="status"] > span' })).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole("link", { name: /Two/ })).not.toBeInTheDocument());
+      expect(toast()).toBeNull();
+    });
+  });
+
   it("puts an article back to unread on request", async () => {
     const server = makeServer();
     const id = server.article(server.category().id, { title: "Later" });
