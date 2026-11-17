@@ -24,10 +24,10 @@
 
 ### 保存：`list_views` に列を足す
 
-移行041で、`ALTER TABLE ... ADD COLUMN` により `format` 列を足す。値は `standard`、`compact`、`expanded` のどれかに限り、既定は `standard` とする。
+移行045で、`ALTER TABLE ... ADD COLUMN` により `format` 列を足す。値は `standard`、`compact`、`expanded` のどれかに限り、既定は `standard` とする。
 
 - 計画では、移行031と同じく表を作り直すとしていた。作り直しが要るのは既存のCHECKを変えるときである。新しい列に自分のCHECKを付けて足すことは、SQLiteでもそのままできる。既存の行は既定値の `standard` を受け取る
-- 番号は、計画の時点の032ではなく、origin/mainの最大の040の次の041にした
+- 番号は、計画の時点の032ではなく、origin/mainの最大の044の次の045にした
 
 `setListView` は、渡されなかった値を保存済みの値のまま残す。並び順と形式の両方が既定に戻った行だけを消す。行の有無で「変えた項目」を表す今の約束を保つためである。
 
@@ -93,7 +93,7 @@ clientに `withViewChange(views, key, patch)` を置く。変えない値を残�
 
 ## Migration Plan
 
-- 移行041は列を足すだけで、既存の行は `standard` になる。戻すときは、古い版が `format` 列を読まないので、そのまま動く。
+- 移行045は列を足すだけで、既存の行は `standard` になる。戻すときは、古い版が `format` 列を読まないので、そのまま動く。
 - 設定ファイルは、`format` のない古いファイルも読める。新しいファイルを古いサーバーに読み込むと、`format` は読み飛ばされ、並び順だけが入る。
 
 ## Open Questions

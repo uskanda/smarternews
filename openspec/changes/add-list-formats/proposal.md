@@ -28,7 +28,7 @@ Webの記事の一覧は、3段の行と本文のペインを並べる1つの形
 
 ## Impact
 
-- core：移行041（`list_views` に `format` 列）、`api.ts` の表示の設定と設定ファイルのスキーマ、`list-views.ts`、`settings-file.ts`
+- core：移行045（`list_views` に `format` 列）、`api.ts` の表示の設定と設定ファイルのスキーマ、`list-views.ts`、`settings-file.ts`
 - client：形式の名前と既定、変更を画面へ先に反映するための関数
 - Web：`ReaderPage`、`ArticleRow`、`ArticleView`、並び順のメニューの共通化、展開の形式の記事の部品、一覧の取得の件数
 - アプリ：並び順の変更を画面へ先に反映する処理

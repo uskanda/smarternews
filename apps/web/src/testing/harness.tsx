@@ -43,6 +43,33 @@ export function gate(): { wait: Promise<void>; open: () => void } {
   return { wait, open };
 }
 
+/**
+ * A gate for the first request whose line contains `match`: pass `hold` to `renderApp`, and `open` it to let the
+ * request reach the server. Later requests that match go through at once.
+ */
+export function gateFirst(match: string) {
+  let release: () => void = () => {};
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  return {
+    hold: (request: string) => {
+      if (held || !request.includes(match)) return undefined;
+      held = true;
+      return opened;
+    },
+    /** Whether the request has come and is waiting. */
+    waiting: () => held,
+    open: async () => {
+      await act(async () => {
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    },
+  };
+}
+
 /** The browser's back. jsdom goes through its history after a task. */
 export async function back(): Promise<void> {
   await act(async () => {

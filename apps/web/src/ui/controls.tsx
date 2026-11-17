@@ -50,7 +50,7 @@ export function StarMark() {
 }
 
 const INPUT =
-  "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error";
+  "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error read-only:border-outline read-only:text-on-surface-muted";
 
 /** A labelled input with room for a hint and for the reason a value was refused. */
 export function Field({

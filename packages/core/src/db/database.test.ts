@@ -15,6 +15,14 @@ function tableNames(db: ReturnType<typeof openDatabase>): string[] {
     .map((row) => String(row.name));
 }
 
+describe("the shipped migrations", () => {
+  it("each have a number of their own", () => {
+    const names = readdirSync(join(import.meta.dirname, "migrations")).filter((name) => /^\d+_.*\.sql$/.test(name));
+    const shared = names.filter((name) => names.some((other) => other !== name && Number.parseInt(other, 10) === Number.parseInt(name, 10)));
+    expect(shared).toEqual([]);
+  });
+});
+
 describe("migrate", () => {
   it("applies numbered files in order and records each once", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
@@ -750,7 +758,7 @@ describe("the migration to subscribed feeds as topic sources", () => {
 
 describe("the migration to site hosts", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
-  const MIGRATION = "038_site_hosts.sql";
+  const MIGRATION = "042_site_hosts.sql";
 
   it("gives the kept candidates the host of their URL, none to an unresolved redirect, and keeps their topics, kinds and feed articles", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
@@ -1132,7 +1140,7 @@ describe("the migration that lets the feed articles of every feed keep a list vi
 
 describe("the migration to star times", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
-  const MIGRATION = "040_starred_at.sql";
+  const MIGRATION = "043_starred_at.sql";
 
   /** A database migrated up to the one before the migration, with a category, a feed and two articles. */
   function before() {
@@ -1655,7 +1663,7 @@ describe("the migration to the notes of every rewrite", () => {
 
 describe("the migration to list formats", () => {
   const SHIPPED = join(import.meta.dirname, "migrations");
-  const MIGRATION = "041_list_formats.sql";
+  const MIGRATION = "045_list_formats.sql";
 
   it("gives every list view the standard format, keeps the rows, and refuses an unknown format", () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));

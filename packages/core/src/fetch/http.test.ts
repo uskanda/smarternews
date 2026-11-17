@@ -183,6 +183,41 @@ describe("Fetcher redirects", () => {
     expect(requests[1]).toMatchObject({ method: "POST", body: "a=1" });
   });
 
+  it("reports where a permanent redirect leads", async () => {
+    const { fetcher } = setup({ "http://example.org/feed": redirect("https://example.org/feed", 301), "https://example.org/feed": "ok" });
+    await expect(fetcher.get("http://example.org/feed")).resolves.toMatchObject({ url: "https://example.org/feed", permanentUrl: "https://example.org/feed" });
+  });
+
+  it("follows permanent redirects in a row to the last of them", async () => {
+    const { fetcher } = setup({
+      "http://example.org/feed": redirect("https://example.org/feed", 308),
+      "https://example.org/feed": redirect("https://example.net/feed", 301),
+      "https://example.net/feed": "ok",
+    });
+    await expect(fetcher.get("http://example.org/feed")).resolves.toMatchObject({ permanentUrl: "https://example.net/feed" });
+  });
+
+  it("stops at a temporary redirect that comes after a permanent one", async () => {
+    const { fetcher } = setup({
+      "http://example.org/feed": redirect("https://example.org/feed", 301),
+      "https://example.org/feed": redirect("https://example.org/feed?session=1", 302),
+      "https://example.org/feed?session=1": "ok",
+      "https://example.org/later": redirect("https://example.org/feed", 301),
+    });
+    await expect(fetcher.get("http://example.org/feed")).resolves.toMatchObject({ url: "https://example.org/feed?session=1", permanentUrl: "https://example.org/feed" });
+  });
+
+  it("reports no permanent target after a temporary redirect, nor without a redirect", async () => {
+    const { fetcher } = setup({
+      "https://example.org/a": redirect("https://example.org/b", 302),
+      "https://example.org/b": redirect("https://example.org/c", 301),
+      "https://example.org/c": "ok",
+    });
+    await expect(fetcher.get("https://example.org/a")).resolves.toMatchObject({ url: "https://example.org/c", permanentUrl: null });
+    await expect(fetcher.get("https://example.org/c")).resolves.toMatchObject({ permanentUrl: null });
+    await expect(fetcher.getBytes("https://example.org/c", { maxBytes: 100 })).resolves.toMatchObject({ permanentUrl: null });
+  });
+
   it("waits the host interval before a redirect back to the same host", async () => {
     const { fetcher, requests } = setup({ "https://example.org/old": redirect("https://example.org/new"), "https://example.org/new": "ok" });
     await fetcher.get("https://example.org/old");

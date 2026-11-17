@@ -1,9 +1,9 @@
 import { deleteFeed, getArticle, getFeed, insertFeed, listFeeds, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { gateFirst, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
@@ -171,6 +171,27 @@ describe("adding a feed from the list of a category", () => {
     const again = await screen.findByRole("dialog", { name: "購読フィードを追加" });
     expect(within(again).getByLabelText("フィードまたはサイトのURL")).toHaveValue("");
     expect(within(again).getByLabelText("カテゴリ")).toHaveDisplayValue("Tools");
+  });
+
+  it("subscribes to nothing when closed while feeds are looked for, though one is found afterwards", async () => {
+    const { server, tools } = seeded();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const before = listFeeds(server.db).length;
+    const discover = gateFirst("/feeds/discover");
+    const view = renderApp({ server, route: `/c/${tools.slug}`, hold: discover.hold });
+    await view.user.click(await within(list()).findByRole("button", { name: "購読フィードを追加" }));
+    const dialog = await screen.findByRole("dialog", { name: "購読フィードを追加" });
+    await view.user.type(within(dialog).getByLabelText("フィードまたはサイトのURL"), FEED);
+    await view.user.click(within(dialog).getByRole("button", { name: "購読フィードを追加" }));
+    await waitFor(() => expect(discover.waiting()).toBe(true));
+    await view.user.keyboard("{Escape}");
+    await view.user.click(within(await unsavedQuestion()).getByRole("button", { name: "破棄して閉じる" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await discover.open();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(listFeeds(server.db)).toHaveLength(before);
+    expect(view.requests.filter((request) => request === "POST /api/v1/feeds")).toEqual([]);
   });
 
   it("stays open with the URL when the list behind is pressed", async () => {
@@ -410,7 +431,7 @@ describe("the settings of a feed from its list", () => {
     expect(view.path()).toBe("/settings/feeds");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const row = (await within(screen.getByRole("region", { name: "購読フィードの一覧" })).findByText("Blog")).closest("li")!;
-    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    await waitFor(() => expect(within(row).getByLabelText("URL")).toHaveFocus());
     expect(within(row).getByRole("checkbox", { name: "翻訳する" })).not.toBeChecked();
     expect(getFeed(server.db, blog.id).translate).toBe(false);
     expect(view.requests.filter((request) => request.startsWith("PATCH"))).toEqual([]);

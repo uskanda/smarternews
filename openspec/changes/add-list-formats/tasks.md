@@ -2,7 +2,7 @@
 
 ## 1. 保存とAPI
 
-- [x] 1.1 `041_list_formats.sql` で `list_views` に `format` 列を足す。既存の行が `standard` のまま残り、知らない値を拒むことを `database.test.ts` で確かめる
+- [x] 1.1 `045_list_formats.sql` で `list_views` に `format` 列を足す。既存の行が `standard` のまま残り、知らない値を拒むことを `database.test.ts` で確かめる
 - [x] 1.2 `api.ts` に `listFormatSchema` を足し、表示の設定、部分更新、設定ファイルの項目に `format` を足す。`list-views.ts` で、渡されなかった値を残し、両方が既定に戻った行だけを消す。`list-views.test.ts` で確かめる
 - [x] 1.3 `settings-file.ts` で `format` を書き出しと読み込みに足す。既定を書かないこと、古いファイルで形式が残ること、知らない形式を拒むこと、往復を `settings-file.test.ts` で確かめる
 - [x] 1.4 `PATCH /list-views/:key` が `{ format }` を受け、並び順を残すことを `list-views-api.test.ts` で確かめる。知らない形式と、表示の設定を持たない項目を拒むことも確かめる。clientの `api.test.ts` も直す
