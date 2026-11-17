@@ -124,6 +124,8 @@ const configSchema = z.strictObject({
       hostIntervalMs: z.number().int().min(0).default(1000),
       timeoutMs: z.number().int().min(100).default(15_000),
       maxBytes: z.number().int().min(1024).default(2_000_000),
+      /** The size limit of feeds, apart from the one of pages: a feed that lists every episode grows large. */
+      feedMaxBytes: z.number().int().min(1024).default(10_000_000),
       allowPrivateHosts: z.array(z.string().min(1)).default([]),
     })
     .prefault({}),

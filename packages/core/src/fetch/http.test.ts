@@ -82,6 +82,18 @@ describe("Fetcher", () => {
     await expect(fetcher.get("https://example.org/big")).rejects.toThrow(/larger than 1000 bytes/);
   });
 
+  it("takes the size limit of one request from the caller", async () => {
+    const { fetcher } = setup({ "https://example.org/big": "x".repeat(5000) }, { feedMaxBytes: 8000 });
+    await expect(fetcher.get("https://example.org/big", { maxBytes: 4000 })).rejects.toThrow(/larger than 4000 bytes/);
+    await expect(fetcher.get("https://example.org/big", { maxBytes: fetcher.feedMaxBytes })).resolves.toMatchObject({ status: 200 });
+    await expect(fetcher.get("https://example.org/big")).rejects.toThrow(/larger than 1000 bytes/);
+  });
+
+  it("names the limit of pages as the limit of feeds when it is given none", () => {
+    const { fetcher } = setup({});
+    expect([fetcher.maxBytes, fetcher.feedMaxBytes]).toEqual([1000, 1000]);
+  });
+
   it("hands back the status of an error response instead of throwing", async () => {
     const { fetcher } = setup({});
     await expect(fetcher.get("https://example.org/missing")).resolves.toMatchObject({ status: 404 });
