@@ -12,6 +12,7 @@ import {
   type DigestList,
   type DigestListQuery,
   type DigestRequestResult,
+  type DigestTargetRequest,
   highlightSchema,
   type AnnotationList,
   type AnnotationListQuery,
@@ -29,6 +30,7 @@ import {
   categorySchema,
   countsSchema,
   feedDiscoveryResultSchema,
+  feedFetchAllResultSchema,
   feedFetchResultSchema,
   feedSchema,
   feedStatsSchema,
@@ -47,10 +49,15 @@ import {
   filterPreviewResultSchema,
   filterSchema,
   filterUpdateResultSchema,
+  ruleNotificationListSchema,
+  rulePreviewResultSchema,
+  ruleSchema,
   termGroupSchema,
   topicSchema,
   topicRewriteResultSchema,
   topicStatsSchema,
+  siteStatsSchema,
+  blockedSiteSchema,
   topicVersionSchema,
   categoryVersionSchema,
   topicTrialSchema,
@@ -76,6 +83,7 @@ import {
   type Feed,
   type FeedCreate,
   type FeedDiscoveryResult,
+  type FeedFetchAllResult,
   type FeedFetchResult,
   type FeedMove,
   type FeedStats,
@@ -104,6 +112,13 @@ import {
   type FilterPreviewResult,
   type FilterUpdate,
   type FilterUpdateResult,
+  type Rule,
+  type RuleCreate,
+  type RuleNotificationList,
+  type RuleNotificationsQuery,
+  type RulePreview,
+  type RulePreviewResult,
+  type RuleUpdate,
   type HighlightTermCreate,
   type TermGroup,
   type TermGroupCreate,
@@ -111,6 +126,8 @@ import {
   type Topic,
   type TopicCreate,
   type TopicStats,
+  type SiteStats,
+  type BlockedSite,
   type TopicUpdate,
   type TopicVersion,
   type CategoryVersion,
@@ -261,11 +278,20 @@ export function createApi(options: ApiOptions) {
     topics: (categoryId: number): Promise<Topic[]> => json(z.array(topicSchema), `/categories/${categoryId}/topics`),
     /** What each topic of the category brought in the last 30 days. */
     topicStats: (categoryId: number): Promise<TopicStats> => json(topicStatsSchema, `/categories/${categoryId}/topic-stats`),
+    /** What the sites of the category's candidates brought in the last 30 days, and the sites blocked in it. */
+    siteStats: (categoryId: number): Promise<SiteStats> => json(siteStatsSchema, `/categories/${categoryId}/site-stats`),
+    /** Rejects the candidates of a site in the category from the next run on, before the judge. */
+    blockSite: (categoryId: number, host: string): Promise<BlockedSite> =>
+      json(blockedSiteSchema, `/categories/${categoryId}/blocked-sites/${encodeURIComponent(host)}`, { method: "PUT" }),
+    unblockSite: async (categoryId: number, host: string): Promise<void> =>
+      void (await request(`/categories/${categoryId}/blocked-sites/${encodeURIComponent(host)}`, { method: "DELETE" })),
     createTopic: (categoryId: number, input: TopicCreate): Promise<Topic> =>
       json(topicSchema, `/categories/${categoryId}/topics`, body("POST", input)),
     updateTopic: (id: number, patch: TopicUpdate): Promise<Topic> => json(topicSchema, `/topics/${id}`, body("PATCH", patch)),
     /** Has the topic interpreted again before the next run of its category. */
     interpretTopic: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/interpret`, { method: "POST" }),
+    /** Puts the topic's web search by the model, cut to once a day, back to every run. */
+    restoreLlmSearch: (id: number): Promise<Topic> => json(topicSchema, `/topics/${id}/llm-search/restore`, { method: "POST" }),
     deleteTopic: async (id: number): Promise<void> => void (await request(`/topics/${id}`, { method: "DELETE" })),
     /** The versions of the topic, newest first. */
     topicVersions: (id: number): Promise<TopicVersion[]> => json(z.array(topicVersionSchema), `/topics/${id}/versions`),
@@ -286,7 +312,15 @@ export function createApi(options: ApiOptions) {
     search: (params: ArticleSearchQuery): Promise<ArticleSearchResult> =>
       json(
         articleSearchResultSchema,
-        `/search${query({ q: params.q, category: params.category, feed: params.feed, unread: params.unread, cursor: params.cursor, limit: params.limit })}`,
+        `/search${query({
+          q: params.q,
+          category: params.category,
+          feed: params.feed,
+          unread: params.unread,
+          starred: params.starred,
+          cursor: params.cursor,
+          limit: params.limit,
+        })}`,
       ),
     /** The articles that have the name among the names found in them, newest first, read ones included, a page at a time. */
     mentionArticles: (params: MentionArticlesQuery): Promise<ArticleList> =>
@@ -360,6 +394,8 @@ export function createApi(options: ApiOptions) {
     /** What became of the articles the feed delivered in the last 30 days. */
     feedStats: (id: number): Promise<FeedStats> => json(feedStatsSchema, `/feeds/${id}/stats`),
     fetchFeed: (id: number): Promise<FeedFetchResult> => json(feedFetchResultSchema, `/feeds/${id}/fetch`, { method: "POST" }),
+    /** Asks for every enabled feed to be fetched now. Answers at once; `fetchRequestedAt` of the feeds says which still wait. */
+    fetchAllFeeds: (): Promise<FeedFetchAllResult> => json(feedFetchAllResultSchema, "/feeds/fetch", { method: "POST" }),
     exportOpml: async (): Promise<string> => (await request("/feeds/opml")).text(),
     importOpml: (text: string): Promise<OpmlImportResult> =>
       json(opmlImportResultSchema, "/feeds/opml", { method: "POST", headers: { "content-type": "text/x-opml" }, body: text }),
@@ -374,6 +410,16 @@ export function createApi(options: ApiOptions) {
       json(articlePageSchema, `/filters/${id}/articles${query(page)}`),
     /** How many articles a filter would hide, without saving it. With `id`, as a change to that filter. */
     previewFilter: (input: FilterPreview): Promise<FilterPreviewResult> => json(filterPreviewResultSchema, "/filters/preview", body("POST", input)),
+    rules: (): Promise<Rule[]> => json(z.array(ruleSchema), "/rules"),
+    createRule: (input: RuleCreate): Promise<Rule> => json(ruleSchema, "/rules", body("POST", input)),
+    /** Changes a rule or switches it. It acts on what is stored from then on only. */
+    updateRule: (id: number, patch: RuleUpdate): Promise<Rule> => json(ruleSchema, `/rules/${id}`, body("PATCH", patch)),
+    deleteRule: async (id: number): Promise<void> => void (await request(`/rules/${id}`, { method: "DELETE" })),
+    /** How many stored feed articles a rule meets, without saving it. */
+    previewRule: (input: RulePreview): Promise<RulePreviewResult> => json(rulePreviewResultSchema, "/rules/preview", body("POST", input)),
+    /** The unread feed articles a rule made ones to notify, newest first, after `after` when it is given. */
+    ruleNotifications: (page: RuleNotificationsQuery = {}): Promise<RuleNotificationList> =>
+      json(ruleNotificationListSchema, `/rule-notifications${query(page)}`),
 
     /** The entries whose list view differs from the defaults. Any other entry is newest first. */
     listViews: (): Promise<ListViews> => json(listViewsSchema, "/list-views"),
@@ -408,8 +454,12 @@ export function createApi(options: ApiOptions) {
     /** The digests, the latest first, and whether one is being made. */
     digests: (filter: DigestListQuery = {}): Promise<DigestList> => json(digestListSchema, `/digests${query(filter)}`),
     digest: (id: number): Promise<Digest> => json(digestSchema, `/digests/${id}`),
-    /** Asks for a digest now. Answers at once: a digest that was started shows in the list when it is made. */
-    requestDigest: (): Promise<DigestRequestResult> => json(digestRequestResultSchema, "/digests", { method: "POST" }),
+    /**
+     * Asks for a digest now: of the period that ends now, or of the list given. Answers at once: a digest that was
+     * started shows in the list when it is made.
+     */
+    requestDigest: (target?: DigestTargetRequest): Promise<DigestRequestResult> =>
+      json(digestRequestResultSchema, "/digests", target === undefined ? { method: "POST" } : body("POST", { target })),
 
     providers: (): Promise<ProviderStatus> => json(providerStatusSchema, "/providers"),
     usage: (): Promise<Usage> => json(usageSchema, "/usage"),

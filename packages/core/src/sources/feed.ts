@@ -85,7 +85,7 @@ function atomEntry(entry: Node, timeZone: string): FeedItem {
 
 /** Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed. A date without an offset is read in `timeZone`. */
 export function parseFeed(xml: string, timeZone: string = DEFAULT_TIME_ZONE): ParsedFeed {
-  const json = parseJsonFeed(xml, timeZone);
+  const json = parseJsonFeed(xml, null, timeZone);
   if (json) return { title: json.title, items: json.items.map(({ title, url, snippet, publishedAt }) => ({ title, url, snippet, publishedAt })) };
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
@@ -147,6 +147,11 @@ export interface ParsedSubscription {
   title: string;
   /** The page the feed belongs to. */
   siteUrl: string | null;
+  /**
+   * The small square icon the feed names: Atom's `<icon>` or JSON Feed's `favicon`, as an absolute address.
+   * Null for RSS and RDF, whose `<image>` is mostly a wide logo.
+   */
+  iconUrl: string | null;
   items: SubscriptionItem[];
 }
 
@@ -366,8 +371,11 @@ function jsonItem(item: Node, timeZone: string): SubscriptionItem {
   };
 }
 
-/** A JSON Feed read in full, or null when the text is not one. A date without an offset is read in `timeZone`. */
-export function parseJsonFeed(text: string, timeZone: string = DEFAULT_TIME_ZONE): ParsedSubscription | null {
+/**
+ * A JSON Feed read in full, or null when the text is not one. `feedUrl` resolves a relative favicon. A date
+ * without an offset is read in `timeZone`.
+ */
+export function parseJsonFeed(text: string, feedUrl: string | null = null, timeZone: string = DEFAULT_TIME_ZONE): ParsedSubscription | null {
   if (!text.trimStart().startsWith("{")) return null;
   let root: unknown;
   try {
@@ -381,6 +389,8 @@ export function parseJsonFeed(text: string, timeZone: string = DEFAULT_TIME_ZONE
   return {
     title: plainText(stringOf(feed.title), 200),
     siteUrl: siteLink(feed.home_page_url, (link) => stringOf(link).trim()),
+    // `icon` is a picture of 512 by 512 for a list of feeds; `favicon` is the one for a small place.
+    iconUrl: absoluteUrl(stringOf(feed.favicon).trim(), feedUrl),
     items: items.map((item) => jsonItem(item, timeZone)),
   };
 }
@@ -388,10 +398,10 @@ export function parseJsonFeed(text: string, timeZone: string = DEFAULT_TIME_ZONE
 /**
  * Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author, content
  * and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the relative
- * pages of items. A date without an offset is read in `timeZone`.
+ * pages of items. It also resolves a relative icon. A date without an offset is read in `timeZone`.
  */
 export function parseSubscription(xml: string, feedUrl: string | null = null, timeZone: string = DEFAULT_TIME_ZONE): ParsedSubscription {
-  const json = parseJsonFeed(xml, timeZone);
+  const json = parseJsonFeed(xml, feedUrl, timeZone);
   if (json) return json;
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
@@ -399,6 +409,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null, ti
     return {
       title: plainText(textOf(rss.title), 200),
       siteUrl: siteLink(rss.link, rssLink),
+      iconUrl: null,
       items: ((rss.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl, timeZone)),
     };
   }
@@ -408,6 +419,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null, ti
     return {
       title: plainText(textOf(channel?.title), 200),
       siteUrl: siteLink(channel?.link, rssLink),
+      iconUrl: null,
       items: ((rdf.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl, timeZone)),
     };
   }
@@ -419,6 +431,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null, ti
     return {
       title: plainText(textOf(atom.title), 200),
       siteUrl: siteLink(atom.link, atomLink),
+      iconUrl: absoluteUrl(textOf(atom.icon).trim(), feedUrl),
       items: entries.map((entry, index) => {
         const read = atomEntry(entry, timeZone);
         const contentHtml = atomContent(entry, rawEntries[index]);

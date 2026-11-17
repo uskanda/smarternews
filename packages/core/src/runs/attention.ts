@@ -7,6 +7,7 @@ import type { Database } from "../db/database.ts";
 import { json, num, str, strOrNull } from "../db/rows.ts";
 import { listAllSearchAttempts, type SearchAttempt } from "../db/search-attempts.ts";
 import { listTopics } from "../db/topics.ts";
+import { llmSearchReduction } from "./llm-search-reduction.ts";
 
 const DAY = 86_400_000;
 /** A topic without an article written or updated in this many days is pointed out. */
@@ -105,12 +106,15 @@ function trailing<T>(list: T[], holds: (entry: T) => boolean): T[] {
   return list.slice(start);
 }
 
-/** A search that found nothing in the last three attempts that did not fail, while the topic still makes it. */
-function emptySearches(attempts: SearchAttempt[], { topics }: Scope, engines: readonly string[] | undefined): AttentionItem[] {
+/**
+ * A news search, by engine and query, that found nothing in the last three attempts that did not fail, while the
+ * topic still makes it.
+ */
+function emptyNewsSearches(attempts: SearchAttempt[], { topics }: Scope, engines: readonly string[] | undefined): AttentionItem[] {
   const groups = new Map<string, SearchAttempt[]>();
   for (const attempt of attempts) {
-    if (!attempt.ok) continue;
-    const id = JSON.stringify([attempt.topicId, attempt.kind, attempt.engine, attempt.query]);
+    if (!attempt.ok || attempt.kind !== "news-search") continue;
+    const id = JSON.stringify([attempt.topicId, attempt.engine, attempt.query]);
     groups.set(id, [...(groups.get(id) ?? []), attempt]);
   }
   const items: AttentionItem[] = [];
@@ -121,21 +125,45 @@ function emptySearches(attempts: SearchAttempt[], { topics }: Scope, engines: re
     const entry = topics.get(first.topicId);
     if (!entry) continue;
     const { topic, category } = entry;
-    const news = first.kind === "news-search";
-    const stillMade = news
-      ? topic.sources.newsSearch && topic.queries.includes(first.query) && (engines === undefined || engines.includes(first.engine ?? ""))
-      : topic.sources.llmSearch && topic.text === first.query;
+    const stillMade = topic.sources.newsSearch && topic.queries.includes(first.query) && (engines === undefined || engines.includes(first.engine ?? ""));
     if (!stillMade) continue;
     items.push({
       ...EMPTY,
       kind: "empty-search",
-      key: news ? `empty:news-search:${topic.id}:${first.engine}:${first.query}:${first.id}` : `empty:llm-search:${topic.id}:${first.id}`,
+      key: `empty:news-search:${topic.id}:${first.engine}:${first.query}:${first.id}`,
       categoryId: category.id,
       categoryName: category.name,
       topicId: topic.id,
       topicText: topic.text,
       source: first.kind,
       engine: first.engine,
+      query: first.query,
+      since: first.createdAt,
+    });
+  }
+  return items;
+}
+
+/**
+ * Web search by the model cut to once a day, because three attempts in a row found no new candidate. The run cuts
+ * the search by the same test, so the item lasts exactly as long as the search is cut.
+ */
+function reducedLlmSearches(db: Database, { topics }: Scope): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  for (const { topic, category } of topics.values()) {
+    const streak = llmSearchReduction(db, topic);
+    if (!streak) continue;
+    const first = streak[0]!;
+    items.push({
+      ...EMPTY,
+      kind: "empty-search",
+      key: `empty:llm-search:${topic.id}:${first.id}`,
+      categoryId: category.id,
+      categoryName: category.name,
+      topicId: topic.id,
+      topicText: topic.text,
+      source: "llm-search",
+      engine: null,
       query: first.query,
       since: first.createdAt,
     });
@@ -193,7 +221,8 @@ export function listAttention(db: Database, now: Date, options: { engines?: read
   const all = [
     ...failedRuns(db, within),
     ...uninterpreted(db, within),
-    ...emptySearches(attempts, within, options.engines),
+    ...emptyNewsSearches(attempts, within, options.engines),
+    ...reducedLlmSearches(db, within),
     ...idleTopics(db, within, now),
     ...unresolvedGoogle(attempts, options.engines),
   ];

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../config.ts";
 import { setArticleFlags } from "../db/articles.ts";
+import { createCategory } from "../db/categories.ts";
+import { createRun } from "../db/runs.ts";
+import { blockSite } from "../db/sites.ts";
 import { listSearchAttempts } from "../db/search-attempts.ts";
 import { getTopic, requestInterpretation, updateTopic } from "../db/topics.ts";
 import { listTopicVersions } from "../db/versions.ts";
+import { restoreLlmSearch } from "../runs/llm-search-reduction.ts";
 import { materialLines } from "../testing/llm.ts";
 import { pipelineHarness } from "../testing/pipeline.ts";
 
@@ -282,6 +286,105 @@ describe("recording search attempts", () => {
       expect.objectContaining({ topicId: topic.id, kind: "llm-search", engine: null, query: "Topic", ok: true, returned: 1 }),
     ]);
   });
+
+  it("counts only the new candidates of the model's web search, and does not fetch the settled pages again", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { llmSearch: true });
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/found", title: "Found by search", snippet: "s" }] });
+    h.page("https://example.org/found", "The page text.", "2026-03-01T10:00:00Z");
+    await h.run();
+    const fetchedBefore = h.urls().filter((url) => url === "https://example.org/found").length;
+
+    const second = await h.run();
+
+    expect(listSearchAttempts(h.db, second.id)).toEqual([expect.objectContaining({ kind: "llm-search", ok: true, returned: 0 })]);
+    expect(h.urls().filter((url) => url === "https://example.org/found")).toHaveLength(fetchedBefore);
+  });
+});
+
+describe("the headlines handed to the model's web search", () => {
+  it("passes the titles of the topic's generated articles to the search task", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { llmSearch: true });
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/found", title: "Found by search", snippet: "s" }] });
+    h.page("https://example.org/found", "The page text.", "2026-03-01T10:00:00Z");
+    await h.run();
+    expect(h.requests.search[0]!.prompt).not.toContain("Found by search");
+
+    await h.run();
+
+    expect(h.requests.search[1]!.prompt).toContain("<material>\n- Found by search\n</material>");
+  });
+});
+
+describe("web search by the model cut to once a day", () => {
+  /** A topic whose web search by the model found nothing new in three runs, the last at 06:00 UTC. */
+  async function reduced(trigger: "schedule" | "manual" = "manual") {
+    const h = pipelineHarness({ now: "2026-03-01T00:00:00.000Z" });
+    const topic = h.addTopic("Topic", { llmSearch: true });
+    h.handlers.search = () => ({ results: [] });
+    for (const at of ["2026-02-28T06:00:00.000Z", "2026-02-28T18:00:00.000Z", "2026-03-01T06:00:00.000Z"]) {
+      h.clock.set(at);
+      await h.run();
+    }
+    expect(getTopic(h.db, topic.id).llmSearchReduced).toBe(true);
+    const runAt = async (at: string) => {
+      h.clock.set(at);
+      const run = createRun(h.db, { categoryId: h.category.id, trigger, slot: null }, h.clock);
+      return h.execute(run.id);
+    };
+    return { h, topic, runAt };
+  }
+
+  it("does not search again on the same day, by a scheduled run or by a manual one, and records no attempt", async () => {
+    for (const trigger of ["schedule", "manual"] as const) {
+      const { h, runAt } = await reduced(trigger);
+      const run = await runAt("2026-03-01T18:00:00.000Z");
+      expect(h.requests.search).toHaveLength(3);
+      expect(listSearchAttempts(h.db, run.id)).toEqual([]);
+    }
+  });
+
+  it("searches once on the next day", async () => {
+    const { h, runAt } = await reduced();
+    await runAt("2026-03-02T06:00:00.000Z");
+    await runAt("2026-03-02T18:00:00.000Z");
+    expect(h.requests.search).toHaveLength(4);
+  });
+
+  it("searches again on the same day when that day's search failed", async () => {
+    const { h, runAt } = await reduced();
+    h.handlers.search = () => {
+      throw new Error("search failed");
+    };
+    await runAt("2026-03-02T06:00:00.000Z");
+    h.handlers.search = () => ({ results: [] });
+    await runAt("2026-03-02T18:00:00.000Z");
+    expect(h.requests.search.length).toBeGreaterThan(4);
+  });
+
+  it("searches every run again once a search finds a new candidate", async () => {
+    const { h, topic, runAt } = await reduced();
+    h.handlers.search = () => ({ results: [{ url: "https://example.org/new", title: "New page", snippet: "s" }] });
+    h.page("https://example.org/new", "The page text.", "2026-03-02T05:00:00Z");
+    await runAt("2026-03-02T06:00:00.000Z");
+    expect(getTopic(h.db, topic.id).llmSearchReduced).toBe(false);
+    await runAt("2026-03-02T07:00:00.000Z");
+    expect(h.requests.search).toHaveLength(5);
+  });
+
+  it("searches again on the same day after the user restores it, or rewrites the topic", async () => {
+    const { h, topic, runAt } = await reduced();
+    restoreLlmSearch(h.db, topic.id, h.clock);
+    await runAt("2026-03-01T18:00:00.000Z");
+    expect(h.requests.search).toHaveLength(4);
+
+    const other = await reduced();
+    updateTopic(other.h.db, other.topic.id, { text: "Topic, rewritten" }, other.h.clock);
+    other.h.handlers.interpret = () => ({ queries: ["q"], criteria: "c", suggestedSources: { newsSearch: false, llmSearch: true } });
+    await other.runAt("2026-03-01T18:00:00.000Z");
+    expect(other.h.requests.search).toHaveLength(4);
+  });
 });
 
 describe("judging", () => {
@@ -361,6 +464,85 @@ describe("judging", () => {
     await h.run();
 
     expect(h.articles().map((article) => article.title)).toEqual(["Story"]);
+  });
+});
+
+describe("blocked sites", () => {
+  const hosts = (h: ReturnType<typeof pipelineHarness>, runId: number) =>
+    h.db.prepare("SELECT title, site_host FROM candidates WHERE run_id = ? ORDER BY title").all(runId).map((row) => ({ ...row }));
+
+  it("rejects the candidates of a blocked site before the judge, never fetches their pages, and settles them", async () => {
+    const h = pipelineHarness({ outputLanguage: "ja" });
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [
+      { title: "Kept", link: "https://news.example.net/kept" },
+      { title: "Blocked", link: "https://www.Example.org/blocked" },
+      { title: "Blocked undated", link: "https://example.org/undated", published: null },
+      { title: "Subdomain", link: "https://blog.example.org/sub" },
+    ]);
+    blockSite(h.db, h.category.id, "example.org", h.clock());
+
+    const run = await h.run();
+
+    expect(h.reasonCodes(run.id)).toEqual([
+      { title: "Blocked", reasonCode: "blocked-site" },
+      { title: "Blocked undated", reasonCode: "blocked-site" },
+      { title: "Kept", reasonCode: null },
+      { title: "Subdomain", reasonCode: null },
+    ]);
+    expect(h.candidates(run.id, "rejected").map((candidate) => candidate.reason)).toEqual(["除外したサイト", "除外したサイト"]);
+    expect(materialLines(h.requests.judge[0]!.prompt).map((candidate) => candidate.title)).toEqual(["Kept", "Subdomain"]);
+    expect(h.urls().filter((url) => url.includes("example.org/blocked") || url.includes("example.org/undated"))).toEqual([]);
+    expect(run).toMatchObject({ collected: 4, rejected: 2 });
+
+    const second = await h.run();
+    expect(second).toMatchObject({ collected: 0 });
+  });
+
+  it("calls no model when every candidate is of a blocked site", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Blocked", link: "https://example.org/blocked" }]);
+    blockSite(h.db, h.category.id, "example.org", h.clock());
+
+    const run = await h.run();
+
+    expect(run).toMatchObject({ llmCalls: 0, rejected: 1 });
+  });
+
+  it("leaves the candidates of a site blocked in another category to the judge", async () => {
+    const h = pipelineHarness();
+    h.addTopic("Topic", { feeds: [FEED] });
+    h.feed(FEED, [{ title: "Story", link: "https://example.org/story" }]);
+    const other = createCategory(h.db, { name: "Other", kind: "news" }, () => h.clock());
+    blockSite(h.db, other.id, "example.org", h.clock());
+
+    await h.run();
+
+    expect(materialLines(h.requests.judge[0]!.prompt).map((candidate) => candidate.title)).toEqual(["Story"]);
+  });
+
+  it("knows the site of a Google News result whose redirect could not be resolved by the outlet the search named", async () => {
+    const h = pipelineHarness({ newsSearch: { engines: ["google-news"] } });
+    h.addTopic("Topic", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "Unresolved", link: "https://outlet.example.org/a" }] });
+    h.routes["https://news.google.com/_/DotsSplashUi/data/batchexecute"] = () => new Response("", { status: 500 });
+    blockSite(h.db, h.category.id, "outlet.example.org", h.clock());
+
+    const run = await h.run();
+
+    expect(h.reasonCodes(run.id)).toEqual([{ title: "Unresolved", reasonCode: "blocked-site" }]);
+    expect(hosts(h, run.id)).toEqual([{ title: "Unresolved", site_host: "outlet.example.org" }]);
+  });
+
+  it("stores the host of each candidate", async () => {
+    const h = pipelineHarness({ newsSearch: { engines: ["google-news"] } });
+    h.addTopic("Topic", { newsSearch: true, queries: ["rust"] });
+    h.googleNews({ rust: [{ title: "Resolved", link: "https://www.News.example.net/a" }] });
+
+    const run = await h.run();
+
+    expect(hosts(h, run.id)).toEqual([{ title: "Resolved", site_host: "news.example.net" }]);
   });
 });
 

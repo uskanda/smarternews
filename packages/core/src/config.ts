@@ -97,6 +97,11 @@ const configSchema = z.strictObject({
       topicRewritesPerDay: z.number().int().min(0).default(20),
       judgeBatchSize: z.number().int().min(1).max(100).default(30),
       pagesPerRun: z.number().int().min(0).default(20),
+      /**
+       * Feed articles a run takes, newest first, from the feeds of its category that are topic sources. Two batches
+       * of the judge by default. 0 takes none.
+       */
+      subscriptionCandidatesPerRun: z.number().int().min(0).default(60),
       /** How often a scheduled run that failed is tried again. 0 switches retries off. */
       runRetries: z.number().int().min(0).max(3).default(2),
       /** US dollars the providers that cost money may use in one budget period. */

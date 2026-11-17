@@ -109,11 +109,15 @@ describe("the shape of a search", () => {
     unconfirmed: false,
     firstPublishedAt: "2026-03-01T00:00:00.000Z",
     updatedAt: "2026-03-01T00:00:00.000Z",
+    rankAt: "2026-03-01T00:00:00.000Z",
     revision: 0,
     isRead: false,
     readAt: null,
     openedAt: null,
     starred: false,
+    starredAt: null,
+    followsStarred: false,
+    unreadFollowUps: 0,
     primaryUrl: null,
     refCount: 0,
     event: null,
@@ -173,10 +177,11 @@ describe("the key of a list view", () => {
 });
 
 describe("the shape of a change to a list view", () => {
-  it("takes the newest or the oldest first, and a body without it", () => {
+  it("takes the newest or the oldest first, the relevance order, and a body without it", () => {
     expect(listViewUpdateSchema.parse({ sort: "oldest" })).toEqual({ sort: "oldest" });
+    expect(listViewUpdateSchema.parse({ sort: "relevance" })).toEqual({ sort: "relevance" });
     expect(listViewUpdateSchema.parse({})).toEqual({});
-    expect(listViewUpdateSchema.safeParse({ sort: "relevance" }).success).toBe(false);
+    expect(listViewUpdateSchema.safeParse({ sort: "random" }).success).toBe(false);
   });
 });
 

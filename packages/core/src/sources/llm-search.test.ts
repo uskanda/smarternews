@@ -21,14 +21,19 @@ const newsInput = {
   since: new Date("2026-02-28T12:00:00Z"),
 };
 
-function setup(results: Array<{ url: string; title: string; snippet: string }>, routes: Parameters<typeof fakeFetch>[0]) {
+function setup(
+  results: Array<{ url: string; title: string; snippet: string }>,
+  routes: Parameters<typeof fakeFetch>[0],
+  options: { seen?: string[]; pagesPerRun?: number } = {},
+) {
   const db = createTestDb();
   const clock = fakeClock(now.toISOString());
   const llm = fakeLlm(db, clock, { search: () => ({ results }) });
   const fake = fakeFetch(routes);
   const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 100000, fetchImpl: fake.fetchImpl });
-  const pages = new PageFetcher(fetcher, { pagesPerRun: 20 });
-  return { deps: { runner: llm.runner, budget: { runId: null, calls: 0 }, pages }, llm, ...fake };
+  const pages = new PageFetcher(fetcher, { pagesPerRun: options.pagesPerRun ?? 20 });
+  const seen = new Set(options.seen ?? []);
+  return { deps: { runner: llm.runner, budget: { runId: null, calls: 0 }, pages, isSeen: (url: string) => seen.has(url) }, llm, ...fake };
 }
 
 const result = (path: string) => ({ url: `https://example.org/${path}`, title: `Result ${path}`, snippet: `About ${path}` });
@@ -80,6 +85,27 @@ describe("collectLlmSearch", () => {
     expect(prompt).toContain("Maker fairs");
     expect(prompt).toContain("last 24 hours");
     expect(llm.requests.search[0]!.webSearch).toBe(true);
+  });
+
+  it("does not fetch a page an earlier run settled, and leaves the page limit to the new ones", async () => {
+    const { deps, urls } = setup(
+      [result("old-1"), { ...result("old-2"), url: "https://example.org/old-2?utm_source=x" }, result("new")],
+      {
+        "https://example.org/old-1": () => dated("2026-03-01T06:00:00Z"),
+        "https://example.org/old-2": () => dated("2026-03-01T06:00:00Z"),
+        "https://example.org/new": () => dated("2026-03-01T07:00:00Z"),
+      },
+      { seen: ["https://example.org/old-1", "https://example.org/old-2"], pagesPerRun: 1 },
+    );
+    const candidates = await collectLlmSearch(deps, newsInput);
+    expect(candidates.map((candidate) => candidate.url)).toEqual(["https://example.org/new"]);
+    expect(urls().filter((url) => !url.endsWith("/robots.txt"))).toEqual(["https://example.org/new"]);
+  });
+
+  it("hands the recent headlines to the search task", async () => {
+    const { deps, llm } = setup([], {});
+    await collectLlmSearch(deps, { ...newsInput, recentHeadlines: ["Fair opens in March"] });
+    expect(llm.requests.search[0]!.prompt).toContain("Fair opens in March");
   });
 
   it("lists a page once when the task returns it twice", async () => {

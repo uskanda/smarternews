@@ -1,5 +1,5 @@
 import { dayKey, formatClock, formatFull } from "@smarternews/client";
-import type { Digest, DigestSummary } from "@smarternews/core/api";
+import type { Digest, DigestSummary, DigestTarget } from "@smarternews/core/api";
 import { DrawerActions } from "@react-navigation/native";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import type { ReactNode } from "react";
@@ -15,6 +15,11 @@ import { Txt } from "../ui/Txt";
 function periodLabel(digest: Pick<DigestSummary, "periodStart" | "periodEnd">, timeZone: string): string {
   const sameDay = dayKey(digest.periodStart, timeZone) === dayKey(digest.periodEnd, timeZone);
   return `${formatFull(digest.periodStart, timeZone)} 〜 ${sameDay ? formatClock(digest.periodEnd, timeZone) : formatFull(digest.periodEnd, timeZone)}`;
+}
+
+/** What a digest of a list was made of, shown in place of its period: for example 一覧・スター. */
+function targetLabel(target: DigestTarget): string {
+  return `一覧・${target.label}`;
 }
 
 /** A pressable line of text, such as the title of a source article. At least 48dp high. */
@@ -48,7 +53,7 @@ function DigestBody({ digest, timeZone, onOpenArticle }: { digest: Digest; timeZ
     <View style={{ gap: theme.spacing.lg, paddingVertical: theme.spacing.lg }}>
       <View style={{ gap: theme.spacing.sm, paddingHorizontal: theme.spacing.lg }}>
         <Txt variant="label-sm" color="on-surface-muted">
-          {periodLabel(digest, timeZone)}
+          {digest.target === null ? periodLabel(digest, timeZone) : targetLabel(digest.target)}
         </Txt>
         <Txt variant="body-lg">{digest.executiveSummary}</Txt>
       </View>
@@ -136,7 +141,7 @@ export function DigestsScreen() {
               <LinkRow key={item.id} label={formatFull(item.createdAt, timeZone)} selected={item.id === shownId} onPress={() => router.setParams({ digestId: String(item.id) })}>
                 <Txt variant={item.id === shownId ? "label-md" : "body-md"}>{formatFull(item.createdAt, timeZone)}</Txt>
                 <Txt variant="label-sm" color="on-surface-muted">
-                  {`${item.articleCount}件の記事から`}
+                  {item.target === null ? `${item.articleCount}件の記事から` : `${targetLabel(item.target)}・${item.articleCount}件の記事から`}
                 </Txt>
               </LinkRow>
             ))}

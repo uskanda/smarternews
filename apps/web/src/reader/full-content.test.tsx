@@ -1,5 +1,5 @@
 import { insertFeed, recordFullContentFailure, saveArticleTranslation, saveFullContent, saveTranslatedTitle } from "@smarternews/core";
-import { seedFeedArticle } from "@smarternews/core/testing";
+import { fakeTranslator, seedFeedArticle } from "@smarternews/core/testing";
 import { relayPath } from "@smarternews/server/testing";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -17,8 +17,8 @@ const FETCHING = "全文を取得しています。";
 const LONG = "A sentence of the page that the full content is taken from. ".repeat(8);
 const PAGE = `<html><head><title>a</title></head><body><article><h1>a</h1><p>${LONG}</p><p>${LONG}</p></article></body></html>`;
 
-function seeded(options: { fetchFullContent?: boolean; translate?: boolean } = {}) {
-  const server = makeServer();
+function seeded(options: { fetchFullContent?: boolean; translate?: boolean; google?: ReturnType<typeof fakeTranslator> } = {}) {
+  const server = makeServer(undefined, options.google ? { google: options.google } : {});
   const feed = insertFeed(
     server.db,
     { url: "https://blog.example.org/feed.xml", title: "Blog", fetchFullContent: options.fetchFullContent, translate: options.translate },
@@ -177,6 +177,86 @@ describe("full content and translation", () => {
     await user.click(within(article()).getByRole("button", { name: "配信された内容を表示" }));
     expect(within(article()).getByText(EXCERPT)).toBeInTheDocument();
     expect(article().querySelector(".segment")).toBeNull();
+  });
+
+  /** An article of a feed that translates and fetches full content, stored after the feed was fetched: it waits for its full content. */
+  function waiting(options: { google?: ReturnType<typeof fakeTranslator> } = {}) {
+    const server = makeServer(undefined, options.google ? { google: options.google } : {});
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", fetchFullContent: true, translate: true }, server.clock);
+    const id = seedFeedArticle(server.db, feed.id, { title: "Story", body: EXCERPT, at: AT, storedAt: AFTER, url: "https://blog.example.org/story" });
+    const translations = (requests: string[]) => requests.filter((request) => request === `POST /api/v1/articles/${id}/translation`);
+    return { server, id, route: `/f/${feed.id}/${id}`, translations };
+  }
+
+  it("asks for no translation while an opened article waits for its full content, and translates the full content once it arrives", async () => {
+    const { server, route, translations } = waiting();
+    const page = gatedPage();
+    server.site.set("https://blog.example.org/story", page.answer);
+    const { requests } = renderApp({ server, route });
+    const pane = await opened();
+
+    expect(await within(pane).findByText(FETCHING)).toBeInTheDocument();
+    expect(within(pane).queryByText("翻訳しています。")).not.toBeInTheDocument();
+    expect(translations(requests)).toEqual([]);
+
+    page.open();
+
+    expect(await within(article()).findAllByText(/^訳:A sentence of the page/)).not.toHaveLength(0);
+    expect(within(article()).queryByText("翻訳できませんでした。原文を表示しています。")).not.toBeInTheDocument();
+    expect(translations(requests)).toHaveLength(1);
+  });
+
+  it("translates the full content when the w key fetched it while the delivered content was being translated", async () => {
+    const google = fakeTranslator();
+    const translate = google.translate.bind(google);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    google.translate = async (items, target) => {
+      await gate;
+      return translate(items, target);
+    };
+    const { server, id, route, posts } = seeded({ translate: true, google });
+    const page = gatedPage();
+    server.site.set("https://blog.example.org/story", page.answer);
+    const translations = (requests: string[]) => requests.filter((request) => request === `POST /api/v1/articles/${id}/translation`);
+    const { user, requests } = renderApp({ server, route });
+    await within(await opened()).findByText(EXCERPT);
+    await waitFor(() => expect(translations(requests)).toHaveLength(1));
+
+    await user.keyboard("w");
+    expect(await within(article()).findByText(FETCHING)).toBeInTheDocument();
+    expect(translations(requests)).toHaveLength(1);
+
+    page.open();
+    await within(article()).findByText(SHOWING_FULL);
+    release();
+
+    expect(await within(article()).findAllByText(/^訳:A sentence of the page/)).not.toHaveLength(0);
+    expect(within(article()).queryByText("翻訳できませんでした。原文を表示しています。")).not.toBeInTheDocument();
+    expect(posts(requests)).toHaveLength(1);
+  });
+
+  it("translates what the feed delivered when the full content could not be fetched", async () => {
+    const { server, route, translations } = waiting();
+    const { requests } = renderApp({ server, route });
+    const pane = await opened();
+
+    expect(await within(pane).findByText("全文を取得できませんでした。ページが見つかりませんでした（HTTP 404）。")).toBeInTheDocument();
+    expect(await within(article()).findByText("訳:Only an excerpt.")).toBeInTheDocument();
+    expect(translations(requests)).toHaveLength(1);
+  });
+
+  it("translates what the feed delivered when the request for the full content got no answer", async () => {
+    const { server, route, translations } = waiting();
+    const request = server.app.request.bind(server.app);
+    server.app.request = ((input: string, init?: RequestInit) =>
+      String(input).endsWith("/full-content") ? Promise.reject(new TypeError("fetch failed")) : request(input, init)) as typeof server.app.request;
+    const { requests } = renderApp({ server, route });
+    const pane = await opened();
+
+    expect(await within(pane).findByText("全文を取得できませんでした。通信に失敗しました。")).toBeInTheDocument();
+    expect(await within(article()).findByText("訳:Only an excerpt.")).toBeInTheDocument();
+    expect(translations(requests)).toHaveLength(1);
   });
 });
 

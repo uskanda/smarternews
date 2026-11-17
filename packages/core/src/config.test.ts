@@ -85,6 +85,7 @@ providers:
       topicRewritesPerDay: 20,
       judgeBatchSize: 30,
       pagesPerRun: 20,
+      subscriptionCandidatesPerRun: 60,
       runRetries: 2,
       monthlyBudgetUsd: 100,
       budgetWarnRatio: 0.8,

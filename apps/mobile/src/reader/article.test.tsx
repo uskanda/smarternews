@@ -393,6 +393,55 @@ describe("an article that other feeds delivered too", () => {
   });
 });
 
+describe("a feed article and the generated article it was written into", () => {
+  async function summarized() {
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const feed = await server.feed("Lang News", tools.id);
+    const delivered = await server.feedArticle(feed.id, { title: "Rust 2.0 is out", at: "2026-03-01T10:00:00.000Z", url: "https://news.example.org/rust-2" });
+    const story = await server.article(tools.id, { title: "Rust 2.0 released" });
+    await server.sql("UPDATE articles SET summarized_in = ? WHERE id = ?", story, delivered);
+    return { server, tools, feed, delivered, story };
+  }
+
+  it("leads from the feed article to the generated article", async () => {
+    const { server, feed, delivered } = await summarized();
+    await renderApp({ server, url: `/list/feed-${feed.id}` });
+    await press(/Rust 2.0 is out/);
+    await screen.findByRole("header", { name: "Rust 2.0 is out" });
+    expect(within(screen.getByTestId("summarized-in")).getByText("この記事をまとめた生成記事")).toBeOnTheScreen();
+
+    await userEvent.setup().press(await screen.findByRole("link", { name: "Rust 2.0 released" }));
+
+    expect(await screen.findByRole("header", { name: "Rust 2.0 released" })).toBeOnTheScreen();
+    expect(delivered).toBeGreaterThan(0);
+  });
+
+  it("leads from the generated article to the feed article", async () => {
+    const { server, tools, story } = await summarized();
+    await renderApp({ server, url: `/article/${story}?list=category-${tools.id}` });
+    await screen.findByRole("header", { name: "Rust 2.0 released" });
+    expect(within(screen.getByTestId("feed-articles")).getByText("まとめた配信記事")).toBeOnTheScreen();
+
+    await userEvent.setup().press(screen.getByRole("link", { name: "Rust 2.0 is out、Lang News" }));
+
+    await eventually(() => expect(screen.getByRole("header", { name: "Rust 2.0 is out" })).toBeOnTheScreen());
+  });
+
+  it("shows neither for a feed article no run wrote into a generated article", async () => {
+    // A feed of its own: the pager also lays out the articles next to the open one.
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    const feed = await server.feed("Lang News", tools.id);
+    const alone = await server.feedArticle(feed.id, { title: "Alone", at: "2026-03-01T09:00:00.000Z", url: "https://news.example.org/alone" });
+    await server.article(tools.id, { title: "Rust 2.0 released" });
+    await renderApp({ server, url: `/article/${alone}?list=feed-${feed.id}` });
+    await screen.findByRole("header", { name: "Alone" });
+    expect(screen.queryByText("この記事をまとめた生成記事")).toBeNull();
+    expect(screen.queryByText("まとめた配信記事")).toBeNull();
+  });
+});
+
 describe("swiping through a list oldest first", () => {
   it("shows the next older article after a swipe to the left from the first", async () => {
     const server = await makeServer();

@@ -34,6 +34,23 @@ describe("list views", () => {
     expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [{ key: "feeds", sort: "oldest" }] });
   });
 
+  it("keep the starred articles in the order by star time", async () => {
+    const s = testServer();
+    expect(await (await s.patch("/api/v1/list-views/starred", { sort: "starred" })).json()).toEqual({ key: "starred", sort: "starred" });
+    expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [{ key: "starred", sort: "starred" }] });
+  });
+
+  it("take the relevance order for a category and keep it", async () => {
+    const s = testServer();
+    const category = s.category("Tools");
+    expect(await (await s.patch(`/api/v1/list-views/category-${category.id}`, { sort: "relevance" })).json()).toEqual({
+      key: `category-${category.id}`,
+      sort: "relevance",
+    });
+    expect(await (await s.get("/api/v1/list-views")).json()).toEqual({ items: [{ key: `category-${category.id}`, sort: "relevance" }] });
+    expect((await s.patch("/api/v1/list-views/unread", { sort: "random" })).status).toBe(400);
+  });
+
   it("take a body without settings and change nothing", async () => {
     const s = testServer();
     await s.patch("/api/v1/list-views/unread", { sort: "oldest" });
@@ -59,6 +76,8 @@ describe("list views", () => {
       ["recently-read", { sort: "oldest" }],
       ["search", { sort: "oldest" }],
       ["unread", { sort: "random" }],
+      ["unread", { sort: "starred" }],
+      ["feeds", { sort: "starred" }],
     ] as const) {
       const response = await s.patch(`/api/v1/list-views/${key}`, body);
       expect(response.status).toBe(400);
