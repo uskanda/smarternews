@@ -6,6 +6,7 @@ import { useAnnotationList } from "../api/queries.ts";
 import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { LoadMore } from "../ui/LoadMore.tsx";
 import { SelectedMark } from "./SelectedMark.tsx";
 
 /** Where a row of the list leads: the article, brought to the annotation. */
@@ -85,7 +86,7 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
         <Button onClick={() => void list.refetch()}>読み直す</Button>
       </header>
       <div ref={pane} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
-        {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
+        {list.isError && !list.isFetchNextPageError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
         {list.isPending ? <Loading /> : null}
         {list.isSuccess && items.length === 0 ? (
           <div className="flex flex-col items-start gap-sm p-lg type-body-md">
@@ -98,13 +99,7 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
             <AnnotationRow key={item.id} item={item} selected={item.id === selected} timeZone={timeZone} now={now} />
           ))}
         </ul>
-        {list.hasNextPage ? (
-          <div className="flex justify-center p-lg">
-            <Button onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-              さらに読み込む
-            </Button>
-          </div>
-        ) : null}
+        <LoadMore list={list} scroller={pane} />
       </div>
     </section>
   );

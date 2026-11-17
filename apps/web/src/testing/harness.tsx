@@ -17,6 +17,8 @@ export interface RenderOptions {
   server?: TestServer;
   /** Makes every request fail as if the server were down, while it returns true. */
   offline?: () => boolean;
+  /** Holds the answer to a request until the promise returned for it settles. Undefined answers at once. */
+  hold?: (request: string) => Promise<unknown> | undefined;
   /** Pass fake-timer advancing to user-event when a test freezes time. */
   advanceTimers?: (ms: number) => void | Promise<void>;
   /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
@@ -55,8 +57,11 @@ export function renderApp(options: RenderOptions = {}) {
   const view = render(
     <App
       fetchImpl={(input, init) => {
-        requests.push(`${init?.method ?? "GET"} ${input}`);
+        const request = `${init?.method ?? "GET"} ${input}`;
+        requests.push(request);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
+        const held = options.hold?.(request);
+        if (held) return held.then(() => server.app.request(input, init));
         return server.app.request(input, init);
       }}
       initialEntries={options.browserHistory ? undefined : [path]}

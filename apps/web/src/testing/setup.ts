@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, configure } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { act, cleanup, configure } from "@testing-library/react";
+import { afterEach, onTestFinished } from "vitest";
 import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetHideReadState } from "../lib/hide-read.ts";
 import { resetHotkeys } from "../lib/keys.ts";
@@ -70,3 +70,68 @@ class NoopObserver {
 }
 globalThis.IntersectionObserver = NoopObserver as unknown as typeof IntersectionObserver;
 globalThis.ResizeObserver = NoopObserver as unknown as typeof ResizeObserver;
+
+/** What a test sees of the intersection observers the app makes, after `watchIntersections`. */
+export interface Intersections {
+  /** Puts the element in view: its observers are told now, and those made later are told when they start. */
+  show(element: Element): void;
+  /** Takes the element out of view, telling its observers. */
+  hide(element: Element): void;
+  /** The options of the observers watching the element now. */
+  optionsFor(element: Element): IntersectionObserverInit[];
+}
+
+/**
+ * Replaces the observer that does nothing, for this test, with one the test drives: jsdom has no layout, so
+ * the test says which elements are in view. As in a browser, an observer tells what it watches once it starts.
+ */
+export function watchIntersections(): Intersections {
+  const inView = new Set<Element>();
+  const observers = new Set<DrivenObserver>();
+  const entry = (target: Element): IntersectionObserverEntry =>
+    ({ target, isIntersecting: inView.has(target), intersectionRatio: inView.has(target) ? 1 : 0 }) as IntersectionObserverEntry;
+  class DrivenObserver {
+    readonly targets = new Set<Element>();
+    readonly callback: IntersectionObserverCallback;
+    readonly options: IntersectionObserverInit;
+    constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
+      this.callback = callback;
+      this.options = options;
+    }
+    observe(target: Element) {
+      this.targets.add(target);
+      observers.add(this);
+      queueMicrotask(() => {
+        if (this.targets.has(target)) this.callback([entry(target)], this as unknown as IntersectionObserver);
+      });
+    }
+    unobserve(target: Element) {
+      this.targets.delete(target);
+    }
+    disconnect() {
+      this.targets.clear();
+      observers.delete(this);
+    }
+  }
+  const tell = (element: Element) =>
+    act(() => {
+      for (const observer of [...observers]) {
+        if (observer.targets.has(element)) observer.callback([entry(element)], observer as unknown as IntersectionObserver);
+      }
+    });
+  globalThis.IntersectionObserver = DrivenObserver as unknown as typeof IntersectionObserver;
+  onTestFinished(() => {
+    globalThis.IntersectionObserver = NoopObserver as unknown as typeof IntersectionObserver;
+  });
+  return {
+    show(element) {
+      inView.add(element);
+      tell(element);
+    },
+    hide(element) {
+      inView.delete(element);
+      tell(element);
+    },
+    optionsFor: (element) => [...observers].filter((observer) => observer.targets.has(element)).map((observer) => observer.options),
+  };
+}

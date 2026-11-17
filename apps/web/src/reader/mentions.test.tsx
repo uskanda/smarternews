@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "../App.tsx";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { watchIntersections } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
 const BOJ: Mention = { name: "日本銀行", kind: "organization" };
@@ -194,7 +195,8 @@ describe("the list of a name", () => {
     expect(await within(list()).findByText("「日本銀行」を含む記事はありません。")).toBeInTheDocument();
   });
 
-  it("loads more rows, and moves through them with j and k", async () => {
+  it("loads more rows near the end, and moves through them with j and k", async () => {
+    const intersections = watchIntersections();
     const server = makeServer();
     const category = server.category();
     for (let index = 0; index < 55; index += 1) {
@@ -204,7 +206,7 @@ describe("the list of a name", () => {
     const { user, path } = renderApp({ server, route: `/mentions?${n("日本銀行")}` });
     await waitFor(() => expect(rowTitles()).toHaveLength(50));
 
-    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    intersections.show(list().querySelector("[data-load-more]")!);
     await waitFor(() => expect(rowTitles()).toHaveLength(55));
 
     await user.keyboard("j");

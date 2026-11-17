@@ -5,6 +5,7 @@ import { ANNOTATION_SAMPLE_MARKDOWN, ANNOTATION_SAMPLE_TEXT, withoutSpaces } fro
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { watchIntersections } from "../testing/setup.ts";
 import { useBodyAnnotations } from "./Annotations.tsx";
 import { SKIP_ATTRIBUTE } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -424,6 +425,58 @@ describe("the list of annotations", () => {
     expect(rows[1]!.querySelector("[data-article-note]")).toHaveTextContent("記事へのメモ");
     expect(rows[1]!.querySelector("[data-note]")).toHaveTextContent("記事全体のメモ");
     expect(rows[2]!.querySelector("[data-note]")).toBeNull();
+  });
+
+  describe("further annotations", () => {
+    const more = (list: HTMLElement) => list.querySelector("[data-load-more]")!;
+    const notes = (list: HTMLElement) => within(list).queryAllByRole("listitem").map((row) => row.querySelector("[data-note]")?.textContent);
+    function sixty() {
+      const server = makeServer();
+      const id = generated(server);
+      const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+      for (let index = 0; index < 60; index += 1) addHighlight(server.db, id, anchor(QUOTE, `メモ${index}`), at(60 - index));
+      return server;
+    }
+
+    it("loads the rest near the end until all 60 are shown once, with no button", async () => {
+      const intersections = watchIntersections();
+      renderApp({ server: sixty(), route: "/annotations" });
+      const list = await screen.findByRole("region", { name: "注釈の一覧" });
+      await within(list).findByText("メモ59");
+      expect(notes(list)).toHaveLength(50);
+      expect(intersections.optionsFor(more(list))).toEqual([{ root: list.querySelector("[data-list-scroll]"), rootMargin: "0px 0px 100% 0px" }]);
+
+      intersections.show(more(list));
+
+      await waitFor(() => expect(notes(list)).toHaveLength(60));
+      expect(new Set(notes(list)).size).toBe(60);
+      expect(within(list).queryByRole("button", { name: "さらに読み込む" })).toBeNull();
+    });
+
+    it("tells of a failure at the end, not at the top, and tries again with the button", async () => {
+      const intersections = watchIntersections();
+      let down = false;
+      const { user, requests } = renderApp({ server: sixty(), route: "/annotations", offline: () => down });
+      const list = await screen.findByRole("region", { name: "注釈の一覧" });
+      await within(list).findByText("メモ59");
+
+      down = true;
+      intersections.show(more(list));
+
+      expect(await within(list).findByText("続きを読み込めませんでした")).toBeInTheDocument();
+      expect(within(list).getAllByRole("alert")).toHaveLength(1);
+      expect(within(list).queryByRole("button", { name: "再試行" })).toBeNull();
+      const asked = requests.length;
+      intersections.hide(more(list));
+      intersections.show(more(list));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(requests).toHaveLength(asked);
+
+      down = false;
+      await user.click(within(list).getByRole("button", { name: "さらに読み込む" }));
+      await waitFor(() => expect(notes(list)).toHaveLength(60));
+      expect(within(list).queryByText("続きを読み込めませんでした")).toBeNull();
+    });
   });
 
   it("opens the article at the highlight chosen, moves with j and k, and shows the top for a note", async () => {

@@ -51,6 +51,7 @@ import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { LoadMore } from "../ui/LoadMore.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
 import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
@@ -774,7 +775,8 @@ export function ReaderPage({ view }: { view: View }) {
         onScroll={(event) => positions.current.set(listKey, event.currentTarget.scrollTop)}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        {active.isError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
+        {/* A failure of the next page is told at the end, where the reader is. */}
+        {active.isError && !active.isFetchNextPageError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
         {active.isPending && !active.isError && !(isSearch && words.length === 0) && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
@@ -800,13 +802,7 @@ export function ReaderPage({ view }: { view: View }) {
             />
           ))}
         </ul>
-        {active.hasNextPage ? (
-          <div className="flex justify-center p-lg">
-            <Button onClick={() => void active.fetchNextPage()} disabled={active.isFetchingNextPage}>
-              さらに読み込む
-            </Button>
-          </div>
-        ) : null}
+        <LoadMore list={active} scroller={listScroll} />
         {/* Room below the last row, so that it too can go past the top. */}
         {scrollReadOn ? <div aria-hidden="true" data-scroll-read-room style={{ height: listHeight }} /> : null}
       </div>
