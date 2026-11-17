@@ -2,7 +2,7 @@
 // here: the items are stored as they come, with their content rewritten as Markdown. The titles of a feed
 // that translates go to the translation API after they are stored, and to nothing else. A web feed is read
 // from its page with its selectors (`page.ts`); from then on it is stored the way a feed is.
-import type { Feed, FeedCreate, PageSelectors } from "../api.ts";
+import type { Feed, FeedCreate, FeedUpdate, PageSelectors } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { transaction, type Database } from "../db/database.ts";
 import {
@@ -13,11 +13,14 @@ import {
   fetchConditions,
   findFeed,
   findFeedByUrl,
+  followMove,
   getFeed,
   insertFeed,
   recordFeedIcon,
   recordFetchFailure,
   recordFetchSuccess,
+  replaceFeedUrl,
+  updateFeed,
 } from "../db/feeds.ts";
 import { num, str, type Row } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
@@ -408,9 +411,16 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   if (conditions.etag) headers["if-none-match"] = conditions.etag;
   if (conditions.lastModified) headers["if-modified-since"] = conditions.lastModified;
   const response = await deps.fetcher.get(url, { headers });
-  if (response.status === 304) return null;
+  const { permanentUrl } = response;
+  if (response.status === 304) return { parsed: null, permanentUrl };
   if (response.status < 200 || response.status >= 300) throw new FeedHttpError(response.status, url, response.headers["retry-after"]);
-  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null, page: undefined };
+  return {
+    parsed: parseSubscription(response.text, url),
+    etag: response.headers.etag ?? null,
+    lastModified: response.headers["last-modified"] ?? null,
+    page: undefined,
+    permanentUrl,
+  };
 }
 
 /**
@@ -422,7 +432,13 @@ async function downloadPage(deps: FeedDeps, url: string, selectors: PageSelector
   const page = await pageFetcherOf(deps).fetchPage(url);
   if (!page.ok && page.reason === "http") throw new FeedHttpError(page.status, url, page.retryAfter);
   if (!page.ok) throw new Error(pageFailureReason(page, url));
-  return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined, page: { html: page.html, url: page.url } };
+  return {
+    parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone),
+    etag: undefined,
+    lastModified: undefined,
+    page: { html: page.html, url: page.url },
+    permanentUrl: page.permanentUrl,
+  };
 }
 
 /** Fetches one subscribed feed and stores what is new. A failure is recorded on the feed, never thrown. */
@@ -437,27 +453,33 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
     const now = clock();
     // The feed may have been deleted while the request was under way.
     if (!findFeed(db, feedId)) return { status: "failed", created: 0, error: "the feed was deleted" };
-    if (result === null) {
-      recordFetchSuccess(db, feedId, { now: now.toISOString() });
+    const { parsed } = result;
+    if (parsed === null) {
+      // The target of a permanent redirect that answers "not modified" still delivers the same feed.
+      transaction(db, () => {
+        recordFetchSuccess(db, feedId, { now: now.toISOString() });
+        followMove(db, feedId, result.permanentUrl, now.toISOString());
+      });
       await refreshIcon(deps, feedId, now);
       return { status: "not_modified", created: 0 };
     }
     const stored = transaction(db, () => {
       // Read again inside the transaction: the category may have changed since the request started.
-      const count = storeItems(db, getFeed(db, feedId), result.parsed, now);
+      const count = storeItems(db, getFeed(db, feedId), parsed, now);
       recordFetchSuccess(db, feedId, {
         now: now.toISOString(),
         etag: result.etag,
         lastModified: result.lastModified,
-        title: result.parsed.title,
-        siteUrl: result.parsed.siteUrl,
+        title: parsed.title,
+        siteUrl: parsed.siteUrl,
       });
+      followMove(db, feedId, result.permanentUrl, now.toISOString());
       return count;
     });
     // After the articles are stored, and never failing the fetch: an article without a translated title is
     // translated when it is opened.
     if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
-    await refreshIcon(deps, feedId, now, { named: result.parsed.iconUrl, page: result.page });
+    await refreshIcon(deps, feedId, now, { named: parsed.iconUrl, page: result.page });
     return { status: "updated", created: stored.created };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -471,13 +493,20 @@ function refuse(message: string): DomainError {
   return new DomainError("invalid", message, [{ path: "url", message, code: "unreachable" }]);
 }
 
-async function firstFeed(deps: FeedDeps, url: string) {
+/** The first fetch of a feed. Sent without conditions, so it never comes back as not modified. */
+async function firstFeed(
+  deps: FeedDeps,
+  url: string,
+): Promise<{ parsed: ParsedSubscription; etag?: string | null; lastModified?: string | null; page: undefined }> {
+  let result: Awaited<ReturnType<typeof download>>;
   try {
-    return (await download(deps, url, { etag: null, lastModified: null }))!;
+    result = await download(deps, url, { etag: null, lastModified: null });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw refuse(/not a feed/.test(message) ? `the document at ${url} is not a feed` : `the feed could not be fetched: ${message}`);
   }
+  if (result.parsed === null) throw refuse(`the feed could not be fetched: HTTP status 304: ${url}`);
+  return { parsed: result.parsed, etag: result.etag, lastModified: result.lastModified, page: undefined };
 }
 
 /** The first fetch of a web feed: refused unless at least one article can be taken out of the page. */
@@ -533,4 +562,44 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
   if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
   await refreshIcon(deps, stored.feed.id, now, { named: result.parsed.iconUrl, page: result.page });
   return findFeed(db, stored.feed.id, now) ?? stored.feed;
+}
+
+/**
+ * Changes a feed, its URL included. A URL other than the one it has is checked the way a subscription is: it
+ * is refused when another feed has it, and fetched once, and nothing changes unless what it gives is a feed
+ * (for a web feed, unless its selectors take an article out of the page). Then the URL and the rest of the
+ * change are stored together with the items fetched, and what was learnt about the old URL is forgotten. The
+ * articles stay: they are told apart by their feed and their key, not by the URL of the feed.
+ */
+export async function changeFeedUrl(deps: FeedDeps, id: number, patch: FeedUpdate): Promise<Feed> {
+  const { db, clock } = deps;
+  const { url: requested, ...rest } = patch;
+  const current = getFeed(db, id);
+  const url = requested === undefined ? current.url : normalizeUrl(requested);
+  if (url === current.url) return updateFeed(db, id, rest, clock);
+  const other = findFeedByUrl(db, url);
+  if (other && other.id !== id) throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
+  if (rest.categoryId !== undefined) checkFeedCategory(db, rest.categoryId);
+  // Refused before anything is fetched, as at registration.
+  checkTopicSource(rest.topicSource, rest.categoryId !== undefined ? rest.categoryId : current.categoryId);
+
+  const selectors = rest.selectors ?? current.selectors ?? undefined;
+  const result = current.format === "page" && selectors !== undefined ? await firstPage(deps, url, selectors) : await firstFeed(deps, url);
+  const now = clock();
+  const stored = transaction(db, () => {
+    updateFeed(db, id, rest, clock);
+    replaceFeedUrl(db, id, url);
+    const { titled } = storeItems(db, getFeed(db, id, now), result.parsed, now);
+    recordFetchSuccess(db, id, {
+      now: now.toISOString(),
+      etag: result.etag ?? null,
+      lastModified: result.lastModified ?? null,
+      title: result.parsed.title,
+      siteUrl: result.parsed.siteUrl,
+    });
+    return { feed: getFeed(db, id, now), titled };
+  });
+  if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
+  await refreshIcon(deps, id, now, { named: result.parsed.iconUrl, page: result.page });
+  return findFeed(db, id, now) ?? stored.feed;
 }

@@ -22,6 +22,8 @@ const feed = (overrides: Partial<Feed> = {}): Feed => ({
   lastError: null,
   failureCount: 0,
   goneAt: null,
+  movedFrom: null,
+  movedAt: null,
   nextFetchAt: null,
   fetchRequestedAt: null,
   articleCount: 0,
