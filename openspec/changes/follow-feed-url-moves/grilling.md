@@ -25,7 +25,7 @@ httpsへの移行やドメインの移転のたびに、削除して登録し直
 |---|---|
 | 変更の名前 | `follow-feed-url-moves` |
 | 取得の結果 | `HttpResponse` と `BytesResponse` に `permanentUrl`（恒久的な転送の行き先。無ければnull）を足す。Webページの取得の結果にも渡す |
-| スキーマの変更 | `032_feed_url_moves.sql` で、`feeds` に4列を足す。数えている行き先とその数、書き換え前の元のURLと書き換えた日時 |
+| スキーマの変更 | `044_feed_url_moves.sql` で、`feeds` に4列を足す。数えている行き先とその数、書き換え前の元のURLと書き換えた日時 |
 | APIの値 | `Feed` に `movedFrom` と `movedAt` を足す |
 | 304の扱い | 転送先が答えた成功の取得として数える |
 | 書き換えのトランザクション | 項目の保存と同じトランザクションで行う |

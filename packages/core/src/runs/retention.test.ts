@@ -107,6 +107,7 @@ describe("purgeExpired", () => {
         executiveSummary: "Summary.",
         sections: [{ categoryId: 1, categoryName: "C", lines: [{ text: "Line.", articleIds: [plain.id] }] }],
         articleCount: 1,
+        target: null,
       });
     const now = h.clock().getTime();
     const old = digest(new Date(now - 181 * DAY).toISOString());

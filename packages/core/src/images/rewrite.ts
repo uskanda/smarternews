@@ -1,7 +1,7 @@
 // The API names the relay in place of the original URL of every image a screen may load. Stored content keeps
 // the original, so a new key only changes the answers. Only the content of feed articles is rewritten: an
 // image in the body of a generated article is never loaded, wherever it points.
-import type { Article, ArticleTranslation, FullContent } from "../api.ts";
+import type { Article, ArticleTranslation, Feed, FullContent } from "../api.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { imageProxyPath } from "./sign.ts";
 
@@ -42,6 +42,15 @@ export function relayTranslation(translation: ArticleTranslation, key: Uint8Arra
       return { original, translated, originalHtml: html(original), translatedHtml: translated === null ? null : html(translated) };
     }),
   };
+}
+
+/**
+ * A feed as the API gives it: its icon through the relay, and null in place of an icon that is not on the web.
+ * The original address of the icon never reaches a screen.
+ */
+export function relayFeedIcon(feed: Feed, key: Uint8Array): Feed {
+  const icon = feed.iconUrl;
+  return { ...feed, iconUrl: icon !== null && /^https?:\/\//i.test(icon) ? imageProxyPath(key, icon) : null };
 }
 
 /**

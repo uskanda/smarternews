@@ -1,7 +1,21 @@
 import type { Category, Feed } from "@smarternews/core/api";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildNav, hideEmptyEntries, listKey, type ListTarget, type NavModel } from "./nav.ts";
-import { applyMove, dropAt, edgeScroll, groupAt, movableOf, nextEventCategory, nextTarget, stepMove, stepTarget, type Row } from "./order.ts";
+import {
+  applyMove,
+  createMoveQueue,
+  dropAt,
+  edgeScroll,
+  groupAt,
+  jumpCandidates,
+  movableOf,
+  nextEventCategory,
+  nextTarget,
+  stepMove,
+  stepTarget,
+  type MoveAnswer,
+  type Row,
+} from "./order.ts";
 
 const category = (id: number, name: string, kind: Category["kind"] = "news"): Category => ({
   id,
@@ -24,12 +38,14 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   selectors: null,
   title,
   siteUrl: null,
+  iconUrl: null,
   categoryId,
   intervalMinutes: null,
   enabled: true,
   autoSummarize: false,
   translate: false,
   fetchFullContent: false,
+  topicSource: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,
@@ -38,6 +54,7 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   movedFrom: null,
   movedAt: null,
   nextFetchAt: null,
+  fetchRequestedAt: null,
   articleCount: 0,
   starredCount: 0,
   annotatedCount: 0,
@@ -340,5 +357,149 @@ describe("nextEventCategory", () => {
     expect(nextEventCategory(model(), cat(4))).toEqual(cat(4));
     expect(nextEventCategory(model(), null)).toEqual(cat(4));
     expect(nextEventCategory(buildNav({ categories: [category(1, "A")], feeds: [], counts: undefined }), null)).toBeNull();
+  });
+});
+
+describe("createMoveQueue", () => {
+  /** A send whose answer the test gives by hand. */
+  function deferred() {
+    let resolve!: (answer: MoveAnswer) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<MoveAnswer>((ok, fail) => {
+      resolve = ok;
+      reject = fail;
+    });
+    return { send: vi.fn(() => promise), resolve, reject };
+  }
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  it("sends one move at a time, in the order they came", async () => {
+    const queue = createMoveQueue({ onSettled: () => {}, onFailed: () => {} });
+    const first = deferred();
+    const second = deferred();
+    queue.push(first.send);
+    queue.push(second.send);
+
+    expect(first.send).toHaveBeenCalledTimes(1);
+    expect(second.send).not.toHaveBeenCalled();
+    expect(queue.busy()).toBe(true);
+
+    first.resolve({ categories: [category(2, "B"), category(1, "A")] });
+    await flush();
+    expect(second.send).toHaveBeenCalledTimes(1);
+    expect(queue.busy()).toBe(true);
+  });
+
+  it("gives the last answer of each list once, when nothing is left to send", async () => {
+    const onSettled = vi.fn();
+    const queue = createMoveQueue({ onSettled, onFailed: () => {} });
+    const first = deferred();
+    const second = deferred();
+    const third = deferred();
+    queue.push(first.send);
+    queue.push(second.send);
+    queue.push(third.send);
+
+    first.resolve({ categories: [category(2, "B"), category(1, "A")] });
+    await flush();
+    second.resolve({ feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    await flush();
+    expect(onSettled).not.toHaveBeenCalled();
+    third.resolve({ categories: [category(1, "A"), category(2, "B")] });
+    await flush();
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledWith({ categories: [category(1, "A"), category(2, "B")], feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    expect(queue.busy()).toBe(false);
+  });
+
+  it("drops the moves still waiting when one fails, and says so once", async () => {
+    const onSettled = vi.fn();
+    const onFailed = vi.fn();
+    const queue = createMoveQueue({ onSettled, onFailed });
+    const first = deferred();
+    const second = deferred();
+    const third = deferred();
+    queue.push(first.send);
+    queue.push(second.send);
+    queue.push(third.send);
+
+    first.resolve({ feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    await flush();
+    second.reject(new TypeError("fetch failed"));
+    await flush();
+
+    expect(third.send).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(onFailed).toHaveBeenCalledWith(new TypeError("fetch failed"), { feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(queue.busy()).toBe(false);
+  });
+
+  it("starts afresh after a failure", async () => {
+    const onSettled = vi.fn();
+    const queue = createMoveQueue({ onSettled, onFailed: () => {} });
+    const failing = deferred();
+    queue.push(failing.send);
+    failing.reject(new TypeError("fetch failed"));
+    await flush();
+
+    const next = deferred();
+    queue.push(next.send);
+    expect(next.send).toHaveBeenCalledTimes(1);
+    next.resolve({ feeds: [feed(11, "X", 1)] });
+    await flush();
+    expect(onSettled).toHaveBeenCalledWith({ feeds: [feed(11, "X", 1)] });
+  });
+});
+
+describe("jumpCandidates", () => {
+  const keys = (nav: NavModel, query: string) => jumpCandidates(nav, query).map((candidate) => listKey(candidate.target));
+
+  it("lists the categories and the feeds in the order of the left pane, without the generated articles", () => {
+    expect(keys(model(), "")).toEqual(["category-1", "feed-11", "feed-12", "feed-13", "category-2", "feed-21", "category-3", "category-4", "uncategorized", "feed-91"]);
+  });
+
+  it("gives each feed the name of its group, and each entry its unread count", () => {
+    const candidates = jumpCandidates(model({ "feed-12": 4, "category-2": 2 }), "");
+    expect(candidates.find((candidate) => listKey(candidate.target) === "feed-12")).toEqual({ target: fd(12), label: "Y", unread: 4, group: "A" });
+    expect(candidates.find((candidate) => listKey(candidate.target) === "feed-91")?.group).toBe("未分類");
+    expect(candidates.find((candidate) => listKey(candidate.target) === "category-2")).toEqual({ target: cat(2), label: "B", unread: 2, group: null });
+  });
+
+  it("keeps the entries whose name holds the text", () => {
+    const nav = buildNav({
+      categories: [category(1, "テック")],
+      feeds: [feed(11, "Example Blog", 1), feed(12, "Daily News", 1), feed(13, "Another blog", null)],
+      counts: undefined,
+    });
+    expect(keys(nav, "blog")).toEqual(["feed-11", "feed-13"]);
+    expect(keys(nav, "テッ")).toEqual(["category-1"]);
+    expect(keys(nav, "nothing")).toEqual([]);
+  });
+
+  it("does not tell full-width from half-width letters, nor capitals from small ones", () => {
+    const nav = buildNav({ categories: [category(1, "ﾃｯｸ")], feeds: [feed(11, "Example Blog", 1)], counts: undefined });
+    expect(keys(nav, "ＢＬＯＧ")).toEqual(["feed-11"]);
+    expect(keys(nav, "EXAMPLE")).toEqual(["feed-11"]);
+    expect(keys(nav, "テック")).toEqual(["category-1"]);
+  });
+
+  it("keeps only the entries that hold every word", () => {
+    const nav = buildNav({ categories: [category(1, "A")], feeds: [feed(11, "Tech News", 1), feed(12, "World News", 1)], counts: undefined });
+    expect(keys(nav, "news tech")).toEqual(["feed-11"]);
+    expect(keys(nav, "  news　world ")).toEqual(["feed-12"]);
+    expect(keys(nav, "   ")).toEqual(["category-1", "feed-11", "feed-12"]);
+  });
+
+  it("does not match a feed by the name of its category", () => {
+    expect(keys(model(), "a")).toEqual(["category-1"]);
+  });
+
+  it("takes the entries a hidden pane leaves out from the model before hiding", () => {
+    const full = model({ "feed-11": 1 });
+    const shown = hideEmptyEntries(full, { current: null, counted: true });
+    expect(keys(shown, "Z")).toEqual([]);
+    expect(keys(full, "Z")).toEqual(["feed-13"]);
   });
 });

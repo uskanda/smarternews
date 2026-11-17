@@ -19,6 +19,23 @@ function group(server: TestServer, name: string, color: TermColor, ...terms: str
   return created;
 }
 
+/** Holds the requests that match until the test answers or fails each of them, in the order it chooses. */
+function gate(match: (request: string) => boolean) {
+  const waiting: Array<{ request: string; answer: () => void; fail: () => void }> = [];
+  return {
+    waiting,
+    hold: (request: string) =>
+      match(request)
+        ? new Promise<void>((resolve, reject) => {
+            waiting.push({ request, answer: resolve, fail: () => reject(new Error("held request failed")) });
+          })
+        : undefined,
+  };
+}
+
+const MOVE_FAILED = "並べ替えられませんでした。もう一度試してください。";
+const isMove = (request: string) => request.startsWith("POST ") && request.endsWith("/move");
+
 describe("the settings page", () => {
   it("has a section for term highlights right after the subscribed feeds, which explains them and opens their page", async () => {
     const { user, path } = renderApp({ route: "/settings" });
@@ -135,6 +152,7 @@ describe("the term highlights page", () => {
     await user.click(within(dialog).getByRole("button", { name: "削除する" }));
 
     await waitFor(async () => expect(await shown()).toEqual(["B 紫"]));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "一覧" })).toHaveFocus());
   });
 
   it("adds a term to a group, refuses one it has in another width, and removes one", async () => {
@@ -154,6 +172,8 @@ describe("the term highlights page", () => {
 
     await user.click(within(item).getByRole("button", { name: "「関税」を削除" }));
     await waitFor(async () => expect(await shown()).toEqual(["通商 橙色 TSMC"]));
+    // The button went with the term; the focus stays in the group, where a term is added.
+    await waitFor(() => expect(within(item).getByLabelText("「通商」に足す語")).toHaveFocus());
   });
 
   it("moves a group up and down, cannot move the first up or the last down, and keeps the focus on the moved group", async () => {
@@ -172,6 +192,114 @@ describe("the term highlights page", () => {
     await waitFor(async () => expect(within(await groupItem("B")).getByRole("button", { name: "Bを下へ" })).toHaveFocus());
     await user.click(within(await groupItem("B")).getByRole("button", { name: "Bを下へ" }));
     await waitFor(async () => expect(await shown()).toEqual(["A 緑", "B 紫"]));
+  });
+
+  it("keeps both terms removed when two of one group are removed before the first answer comes", async () => {
+    const server = makeServer();
+    const created = group(server, "通商", "orange", "関税", "輸出", "TSMC");
+    const held = gate((request) => request.startsWith("DELETE "));
+    const { user } = renderApp({ server, route: "/settings/term-highlights", hold: held.hold });
+    const item = await waitFor(() => groupItem("通商"));
+
+    await user.click(within(item).getByRole("button", { name: "「関税」を削除" }));
+    await user.click(within(item).getByRole("button", { name: "「輸出」を削除" }));
+    await waitFor(() => expect(held.waiting).toHaveLength(2));
+    held.waiting[0]!.answer();
+    await waitFor(async () => expect(await shown()).toEqual(["通商 橙色 輸出 TSMC"]));
+    held.waiting[1]!.answer();
+
+    await waitFor(async () => expect(await shown()).toEqual(["通商 橙色 TSMC"]));
+    expect(listTermGroups(server.db).find((each) => each.id === created.id)?.terms.map((term) => term.text)).toEqual(["TSMC"]);
+  });
+
+  it("moves a group once for every press made before the answers come, and sends the moves one by one", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    group(server, "B", "purple");
+    group(server, "C", "orange");
+    const held = gate(isMove);
+    const { user } = renderApp({ server, route: "/settings/term-highlights", hold: held.hold });
+    await waitFor(() => groupItem("C"));
+
+    await user.click(within(await groupItem("C")).getByRole("button", { name: "Cを上へ" }));
+    await user.click(within(await groupItem("C")).getByRole("button", { name: "Cを上へ" }));
+    await waitFor(async () => expect(await shown()).toEqual(["C 橙色", "A 緑", "B 紫"]));
+    expect(held.waiting).toHaveLength(1);
+
+    held.waiting[0]!.answer();
+    await waitFor(() => expect(held.waiting).toHaveLength(2));
+    expect(await shown()).toEqual(["C 橙色", "A 緑", "B 紫"]);
+    held.waiting[1]!.answer();
+
+    await waitFor(() => expect(listTermGroups(server.db).map((each) => each.name)).toEqual(["C", "A", "B"]));
+    await waitFor(async () => expect(await shown()).toEqual(["C 橙色", "A 緑", "B 紫"]));
+    expect(within(await groupItem("C")).getByRole("button", { name: "Cを下へ" })).toHaveFocus();
+  });
+
+  it("goes back to the order on the server and says so when a move fails, and drops the moves still waiting", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    group(server, "B", "purple");
+    group(server, "C", "orange");
+    const held = gate(isMove);
+    const { user, requests } = renderApp({ server, route: "/settings/term-highlights", hold: held.hold });
+    await waitFor(() => groupItem("C"));
+
+    await user.click(within(await groupItem("C")).getByRole("button", { name: "Cを上へ" }));
+    await user.click(within(await groupItem("C")).getByRole("button", { name: "Cを上へ" }));
+    await waitFor(async () => expect(await shown()).toEqual(["C 橙色", "A 緑", "B 紫"]));
+    held.waiting[0]!.fail();
+
+    expect(await screen.findByText(MOVE_FAILED)).toBeInTheDocument();
+    await waitFor(async () => expect(await shown()).toEqual(["A 緑", "B 紫", "C 橙色"]));
+    expect(screen.getAllByText(MOVE_FAILED)).toHaveLength(1);
+    expect(requests.filter(isMove)).toHaveLength(1);
+    expect(listTermGroups(server.db).map((each) => each.name)).toEqual(["A", "B", "C"]);
+  });
+
+  it("keeps the focus on the moved group when it moves the same way twice", async () => {
+    const server = makeServer();
+    for (const name of ["A", "B", "C", "D"]) group(server, name, "green");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+
+    (await waitFor(() => groupItem("A"))).querySelector<HTMLElement>("[aria-label='Aを下へ']")!.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(async () => expect(await shown()).toEqual(["B 緑", "A 緑", "C 緑", "D 緑"]));
+    await waitFor(async () => expect(within(await groupItem("A")).getByRole("button", { name: "Aを下へ" })).toHaveFocus());
+
+    await user.keyboard("{Enter}");
+    await waitFor(async () => expect(await shown()).toEqual(["B 緑", "C 緑", "A 緑", "D 緑"]));
+    await waitFor(async () => expect(within(await groupItem("A")).getByRole("button", { name: "Aを下へ" })).toHaveFocus());
+  });
+
+  it("leaves the focus where it is when a group is added after a move", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    group(server, "B", "purple");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    await user.click(within(await waitFor(() => groupItem("A"))).getByRole("button", { name: "Aを下へ" }));
+    await waitFor(async () => expect(await shown()).toEqual(["B 紫", "A 緑"]));
+
+    const name = within(await section("語のまとまりの追加")).getByLabelText("まとまりの名前");
+    await user.type(name, "C{Enter}");
+    await waitFor(async () => expect(await shown()).toEqual(["B 紫", "A 緑", "C 緑"]));
+
+    expect(within(await groupItem("A")).getByRole("button", { name: "Aを下へ" })).not.toHaveFocus();
+    expect(name).toHaveFocus();
+  });
+
+  it("leaves the focus alone when a group deleted after a move makes the moved one first", async () => {
+    const server = makeServer();
+    for (const name of ["A", "B", "C"]) group(server, name, "green");
+    const { user } = renderApp({ server, route: "/settings/term-highlights" });
+    await user.click(within(await waitFor(() => groupItem("C"))).getByRole("button", { name: "Cを上へ" }));
+    await waitFor(async () => expect(await shown()).toEqual(["A 緑", "C 緑", "B 緑"]));
+
+    await user.click(within(await groupItem("A")).getByRole("button", { name: "Aを削除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" }));
+    await waitFor(async () => expect(await shown()).toEqual(["C 緑", "B 緑"]));
+
+    expect(within(await groupItem("C")).getByRole("button", { name: "Cを下へ" })).not.toHaveFocus();
   });
 
   it("says near the order that the upper group colours a place two groups match", async () => {
@@ -248,5 +376,90 @@ describe("changes to term groups not saved yet", () => {
     await toUnread(user);
 
     expect(await question()).toHaveTextContent("まとまり『通商』への語の追加");
+  });
+});
+
+describe("a change waiting for the server's answer", () => {
+  it("deletes a group once when 削除する is pressed twice", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange", "関税");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+    const held = hold(/^DELETE \/api\/v1\/term-groups\/\d+$/);
+    const item = await waitFor(() => groupItem("通商"));
+
+    await user.click(within(item).getByRole("button", { name: "通商を削除" }));
+    const remove = within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("まとまり「通商」を削除しました");
+  });
+
+  it("deletes a term once when its 削除 is pressed twice", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange", "関税", "輸出");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+    const held = hold(/^DELETE \/api\/v1\/term-groups\/\d+\/terms\/\d+$/);
+    const item = await waitFor(() => groupItem("通商"));
+
+    const remove = within(item).getByRole("button", { name: "「関税」を削除" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    // Another term can be deleted meanwhile: only the pressed one waits.
+    expect(within(item).getByRole("button", { name: "「輸出」を削除" })).toBeEnabled();
+    expect(requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("語「関税」を削除しました");
+  });
+
+  it("adds a group and a term once when their buttons are pressed twice", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+    const form = await section("語のまとまりの追加");
+
+    const groupHeld = hold("POST /api/v1/term-groups");
+    await user.type(within(form).getByLabelText("まとまりの名前"), "半導体");
+    const addGroup = within(form).getByRole("button", { name: "まとまりを追加" });
+    await user.click(addGroup);
+    await user.click(addGroup);
+    expect(addGroup).toBeDisabled();
+    expect(requests.filter((request) => request === "POST /api/v1/term-groups")).toHaveLength(1);
+    await groupHeld.release();
+    await waitFor(async () => expect(await shown()).toEqual(["通商 橙色", "半導体 緑"]));
+
+    const termHeld = hold(/^POST \/api\/v1\/term-groups\/\d+\/terms$/);
+    const item = await groupItem("通商");
+    await user.type(within(item).getByLabelText("「通商」に足す語"), "関税");
+    const addTerm = within(item).getByRole("button", { name: "語を追加" });
+    await user.click(addTerm);
+    await user.click(addTerm);
+    expect(addTerm).toBeDisabled();
+    expect(requests.filter((request) => /terms$/.test(request))).toHaveLength(1);
+    await termHeld.release();
+    await waitFor(async () => expect(await shown()).toEqual(["通商 橙色 関税", "半導体 緑"]));
+  });
+
+  it("saves an edited group once when 保存する is pressed twice", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+
+    const saveHeld = hold(/^PATCH \/api\/v1\/term-groups\/\d+$/);
+    const a = await waitFor(() => groupItem("A"));
+    await user.click(within(a).getByRole("button", { name: "Aを編集" }));
+    await user.click(within(a).getByRole("radio", { name: "桃色" }));
+    const save = within(a).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await saveHeld.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("まとまりを保存しました");
   });
 });

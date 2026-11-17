@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
-import { getArticle, nextArticleToSummarize, recordSummaryFailure, saveAutoSummary, setArticleFlags, skipAutoSummary } from "./articles.ts";
+import type { RuleCreate } from "../api.ts";
+import { getArticle, nextArticleToSummarize, recordSummaryFailure, requestAutoSummary, saveAutoSummary, setArticleFlags, skipAutoSummary } from "./articles.ts";
 import { updateFeed } from "./feeds.ts";
 import { createFilter } from "./filters.ts";
+import { applyRules, createRule } from "./rules.ts";
 
 const SINCE = "2026-03-01T12:00:00.000Z";
 const LATER = "2026-03-01T13:00:00.000Z";
@@ -95,5 +97,67 @@ describe("nextArticleToSummarize", () => {
       skipAutoSummary(db, next.id);
     }
     expect(order).toEqual([newest, middle, old]);
+  });
+});
+
+describe("summaries a rule asked for", () => {
+  const asks = (value: string, actions: RuleCreate["actions"] = ["summarize"]): RuleCreate => ({
+    scope: { type: "all" },
+    conditions: [{ fields: ["title"], match: "contains", value }],
+    actions,
+  });
+
+  it("are made for an article of a feed that does not summarise", () => {
+    const { db, clock } = setup();
+    const other = seedFeed(db);
+    createRule(db, asks("障害"), clock);
+    const id = seedFeedArticle(db, other, { title: "障害", at: LATER });
+    seedFeedArticle(db, other, { title: "ほか", at: LATER });
+    applyRules(db, id, LATER);
+
+    expect(nextArticleToSummarize(db)?.id).toBe(id);
+    expect(getArticle(db, id).autoSummaryPending).toBe(true);
+  });
+
+  it("go after what a reader asked for and before the rest, the latest request first", () => {
+    const { db, clock, feedId } = setup();
+    createRule(db, asks("障害"), clock);
+    const newest = seedFeedArticle(db, feedId, { title: "新しい", at: "2026-03-01T12:50:00.000Z" });
+    const firstAsked = seedFeedArticle(db, feedId, { title: "障害 1", at: "2026-03-01T12:10:00.000Z" });
+    applyRules(db, firstAsked, "2026-03-01T12:10:00.000Z");
+    const laterAsked = seedFeedArticle(db, feedId, { title: "障害 2", at: "2026-02-01T00:00:00.000Z", storedAt: LATER });
+    applyRules(db, laterAsked, "2026-03-01T12:20:00.000Z");
+    const opened = seedFeedArticle(db, feedId, { title: "開いた", at: "2026-03-01T12:05:00.000Z" });
+    requestAutoSummary(db, opened, "2026-03-01T12:30:00.000Z");
+
+    const order: number[] = [];
+    for (let next = nextArticleToSummarize(db); next; next = nextArticleToSummarize(db)) {
+      order.push(next.id);
+      skipAutoSummary(db, next.id);
+    }
+    expect(order).toEqual([opened, laterAsked, firstAsked, newest]);
+  });
+
+  it("are made for an article that a rule or the reader marked read", () => {
+    const { db, clock } = setup();
+    const other = seedFeed(db);
+    createRule(db, asks("障害", ["read", "summarize"]), clock);
+    const id = seedFeedArticle(db, other, { title: "障害", at: LATER });
+    applyRules(db, id, LATER);
+    expect(getArticle(db, id).isRead).toBe(true);
+    expect(nextArticleToSummarize(db)?.id).toBe(id);
+
+    setArticleFlags(db, id, { isRead: false }, LATER);
+    setArticleFlags(db, id, { isRead: true }, LATER);
+    expect(nextArticleToSummarize(db)?.id).toBe(id);
+  });
+
+  it("are still made after the feed stops summarising", () => {
+    const { db, clock, feedId } = setup();
+    createRule(db, asks("障害"), clock);
+    const id = seedFeedArticle(db, feedId, { title: "障害", at: LATER });
+    applyRules(db, id, LATER);
+    updateFeed(db, feedId, { autoSummarize: false }, clock);
+    expect(nextArticleToSummarize(db)?.id).toBe(id);
   });
 });

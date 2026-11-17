@@ -12,10 +12,16 @@ describe("mergeKept", () => {
     expect(mergeKept(fetched, kept).map((entry) => entry.id)).toEqual([3, 2, 1]);
   });
 
-  it("uses the kept copy when the list still returns the article, so its read state shows", () => {
-    const fetched = [item(2, "2026-03-01T12:01:00Z", false)];
-    const kept = [item(2, "2026-03-01T12:01:00Z", true)];
-    expect(mergeKept(fetched, kept)).toEqual([item(2, "2026-03-01T12:01:00Z", true)]);
+  it("shows the read state and the star of the kept copy on the row the list still returns", () => {
+    const fetched = [{ ...item(2, "2026-03-01T12:01:00Z", false), starred: false, translatedTitle: "訳した見出し" }];
+    const kept = [{ ...item(2, "2026-03-01T12:01:00Z", true), starred: true, translatedTitle: null }];
+    expect(mergeKept(fetched, kept)).toEqual([{ ...item(2, "2026-03-01T12:01:00Z", true), starred: true, translatedTitle: "訳した見出し" }]);
+  });
+
+  it("uses the row the list returns as it is when it was updated after the kept copy: a follow-up shows unread", () => {
+    const fetched = [{ ...item(2, "2026-03-01T13:00:00Z", false), title: "Follow-up", starred: false }];
+    const kept = [{ ...item(2, "2026-03-01T12:01:00Z", true), starred: true }];
+    expect(mergeKept(fetched, kept)).toEqual(fetched);
   });
 
   it("orders articles with the same update time by identifier, newest first", () => {
@@ -39,10 +45,37 @@ describe("mergeKept", () => {
     expect(merged[1]).toMatchObject({ isRead: false, readAt: "2026-03-01T12:02:00Z" });
   });
 
+  it("orders an article the list still returns by the read time the list gives it", () => {
+    const read = (id: number, readAt: string) => ({ ...item(id, "2026-03-01T00:00:00Z", true), readAt });
+    // Article 1 was kept when read at 12:01, and read again at 12:04: the list has the later time.
+    const fetched = [read(1, "2026-03-01T12:04:00Z"), read(3, "2026-03-01T12:03:00Z")];
+    const kept = [read(1, "2026-03-01T12:01:00Z")];
+    const merged = mergeKept(fetched, kept, (entry) => entry.readAt ?? "");
+    expect(merged.map((entry) => entry.id)).toEqual([1, 3]);
+    expect(merged[0]).toMatchObject({ readAt: "2026-03-01T12:04:00Z" });
+  });
+
   it("orders the recently read articles by read time, and every other list by update", () => {
     const entry = { ...item(1, "2026-03-01T12:00:00Z"), readAt: "2026-03-02T08:00:00Z" };
     expect(sortKeyFor({ type: "recentlyRead" })(entry)).toBe("2026-03-02T08:00:00Z");
     expect(sortKeyFor({ type: "unread" })(entry)).toBe("2026-03-01T12:00:00Z");
+  });
+
+  it("orders the starred articles by star time in that order, and by update otherwise", () => {
+    const entry = { ...item(1, "2026-03-01T12:00:00Z"), starredAt: "2026-03-03T08:00:00Z" };
+    expect(sortKeyFor({ type: "starred" }, "starred")(entry)).toBe("2026-03-03T08:00:00Z");
+    expect(sortKeyFor({ type: "starred" }, "newest")(entry)).toBe("2026-03-01T12:00:00Z");
+    expect(sortKeyFor({ type: "starred" }, "starred")({ ...entry, starredAt: null })).toBe("");
+  });
+});
+
+describe("mergeKept by relevance", () => {
+  it("puts an article read during the visit back in its place by the time the relevance order sorts by", () => {
+    const ranked = (id: number, updatedAt: string, rankAt: string, isRead = false) => ({ ...item(id, updatedAt, isRead), rankAt });
+    const fetched = [ranked(3, "2026-03-01T10:00:00Z", "2026-03-03T10:00:00Z"), ranked(1, "2026-03-01T12:00:00Z", "2026-03-01T12:00:00Z")];
+    const kept = [ranked(2, "2026-03-01T08:00:00Z", "2026-03-02T08:00:00Z", true)];
+    expect(mergeKept(fetched, kept, undefined, "relevance").map((entry) => entry.id)).toEqual([3, 2, 1]);
+    expect(mergeKept(fetched, kept).map((entry) => entry.id)).toEqual([1, 3, 2]);
   });
 });
 

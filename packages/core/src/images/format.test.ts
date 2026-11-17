@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jpegBytes, pngBytes } from "../testing/images.ts";
+import { icoBytes, jpegBytes, pngBytes } from "../testing/images.ts";
 import { sniffImageType } from "./format.ts";
 
 const bytes = (...parts: Array<string | number[]>) =>
@@ -32,6 +32,14 @@ describe("sniffImageType", () => {
     // HEIC and MP4 have the same box, with other brands.
     expect(sniffImageType(ftyp("heic", "mif1", "heic"))).toBeNull();
     expect(sniffImageType(ftyp("isom", "mp41"))).toBeNull();
+  });
+
+  it("tells ICO by its reserved word, its type 1 and at least one picture", () => {
+    expect(sniffImageType(icoBytes())).toBe("image/x-icon");
+    // Type 2 is a cursor, and a directory of no pictures holds nothing to draw.
+    expect(sniffImageType(bytes([0, 0, 2, 0, 1, 0]))).toBeNull();
+    expect(sniffImageType(bytes([0, 0, 1, 0, 0, 0]))).toBeNull();
+    expect(sniffImageType(bytes([0, 0, 1, 0]))).toBeNull();
   });
 
   it("refuses HTML, SVG, other text and an empty body", () => {

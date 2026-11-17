@@ -1,4 +1,5 @@
 import type { ArticleSummary } from "@smarternews/core/api";
+import { memo } from "react";
 import { Link } from "react-router";
 import { formatShort } from "@smarternews/client";
 import { useTermMatcher } from "../api/queries.ts";
@@ -9,8 +10,9 @@ import { SelectedMark } from "./SelectedMark.tsx";
 /**
  * One line of the list. Importance four gets a highlighter stroke in the margin and five has its headline
  * marked; both are also said in words for people who cannot see the mark, and so is an unread row.
+ * Memoized: moving the selection draws again only the row it leaves and the row it lands on.
  */
-export function ArticleRow({
+export const ArticleRow = memo(function ArticleRow({
   article,
   to,
   selected,
@@ -28,7 +30,8 @@ export function ArticleRow({
   /** The category of a generated article, the feed of a feed article. */
   sourceName: string;
   timeZone: string;
-  now: Date;
+  /** The time of now in milliseconds, rounded to the minute so that the rows are drawn again once a minute at most. */
+  now: number;
   /** Which time the row shows: when the article was last updated, or, in the recently read articles, when it was read. */
   time?: "updated" | "read";
   /** In search results: the text around the match, shown in place of the summary when there is one. */
@@ -86,11 +89,13 @@ export function ArticleRow({
         )}
         <span className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
           <span>{sourceName}</span>
-          <span className="tabular-nums">{formatShort(time === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, now)}</span>
+          <span className="tabular-nums">{formatShort(time === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, new Date(now))}</span>
           {article.origin === "generated" ? <span>出典{article.refCount}件</span> : null}
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
           {article.starred ? <StarMark /> : null}
+          {/* A starred story moved on: shown until the reader has read every later article. */}
+          {article.starred && article.unreadFollowUps > 0 ? <Badge>続報あり</Badge> : null}
           {groups.map((group) => (
             <span key={group.id} data-term-badge className="term-badge" data-term={group.color}>
               {group.name}
@@ -100,4 +105,4 @@ export function ArticleRow({
       </Link>
     </li>
   );
-}
+});

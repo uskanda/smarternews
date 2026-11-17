@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api.ts";
-import { checkRequired, checkText, checkTimes, checkWholeNumber, fieldMessage, settingsFileProblem } from "./messages.ts";
+import { checkHighlightQuote, checkRequired, checkSearchWords, checkText, checkTimes, checkWholeNumber, fieldMessage, settingsFileProblem } from "./messages.ts";
 
 const refused = (...fields: ApiError["fields"]) => new ApiError("invalid", 400, "the input is invalid", fields);
 
@@ -107,5 +107,24 @@ describe("the checks a screen makes before it sends", () => {
     expect(checkTimes("", times)).toEqual({ ok: true, value: [] });
     expect(checkTimes("05:00, 5時", times)).toEqual({ ok: false, message: "実行時刻の2つ目の形が正しくありません。05:00 のように24時間表記で書いてください。" });
     expect(checkTimes(Array.from({ length: 25 }, () => "05:00").join(","), times)).toEqual({ ok: false, message: "実行時刻は24個までにしてください。" });
+  });
+
+  it("counts the words of a search as the server does: without the spaces around them, an emoji once", () => {
+    const tooLong = "検索の語は200文字以内にしてください。";
+    expect(checkSearchWords("あ".repeat(200))).toBeNull();
+    expect(checkSearchWords("あ".repeat(201))).toBe(tooLong);
+    // A full-width space too.
+    expect(checkSearchWords(`  ${"あ".repeat(200)}${String.fromCharCode(0x3000)} `)).toBeNull();
+    // An emoji is two UTF-16 units, and one character to the server.
+    expect(checkSearchWords("😀".repeat(200))).toBeNull();
+    expect(checkSearchWords("😀".repeat(201))).toBe(tooLong);
+  });
+
+  it("counts a quote to highlight as the server does: with its spaces, in UTF-16 units", () => {
+    const tooLong = "ハイライトする文字列は5000文字以内にしてください。選ぶ範囲を狭めてください。";
+    expect(checkHighlightQuote("あ".repeat(5000))).toBeNull();
+    expect(checkHighlightQuote("あ".repeat(5001))).toBe(tooLong);
+    expect(checkHighlightQuote(` ${"あ".repeat(5000)}`)).toBe(tooLong);
+    expect(checkHighlightQuote("😀".repeat(2501))).toBe(tooLong);
   });
 });

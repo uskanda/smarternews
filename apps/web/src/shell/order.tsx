@@ -1,6 +1,7 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import {
   applyMove,
+  createMoveQueue,
   dropAt,
   DWELL_MS,
   edgeScroll,
@@ -11,6 +12,7 @@ import {
   stepMove,
   type Movable,
   type Move,
+  type MoveQueue,
   type NavEntry,
   type NavModel,
   type Row,
@@ -18,7 +20,9 @@ import {
 import type { Category, Feed } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type RefObject } from "react";
+import { useNavigate } from "react-router";
 import { useApp } from "../app/context.ts";
+import { categorySettingsPath } from "../lib/paths.ts";
 import { useToast } from "./toast.tsx";
 
 /** A drag starts once the pointer has moved this far; before that the press is a click on the entry. */
@@ -28,39 +32,78 @@ const SIDE_SLACK_PX = 48;
 
 const idsOf = (list: Array<{ id: number }>) => list.map((entry) => entry.id).join(",");
 
+/** The lists a move changes. A fetch of them that is under way would put back the order from before the move. */
+const ORDERED = ["categories", "feeds"];
+
 /**
- * Applies a move: the list changes at once, then the server is told. When the server refuses or cannot be
- * reached, the list goes back to what is stored and a notice says so.
+ * Applies a move: the list changes at once, then the server is told. Moves are sent one at a time, and the
+ * lists take the server's answer only when no move is left to send. Fetches of the lists are called off while
+ * moves are under way. When the server refuses or cannot be reached, the moves still waiting are dropped,
+ * the list goes back to what is stored and a notice says so.
  */
 export function useNavMoves(): (move: Move) => void {
   const { api } = useApp();
   const client = useQueryClient();
   const toast = useToast();
+  const latest = useRef({ client, toast });
+  latest.current = { client, toast };
+  /** A feed went into another category since the queue was last empty: its articles follow it. */
+  const regrouped = useRef(false);
+  /** The lists as the server stored them when the queue was last empty. */
+  const stored = useRef<{ categories: Category[]; feeds: Feed[] }>({ categories: [], feeds: [] });
+  const queue = useRef<MoveQueue | null>(null);
+  queue.current ??= createMoveQueue({
+    onSettled: (answer) => {
+      const { client } = latest.current;
+      if (answer.categories) client.setQueryData(["categories"], answer.categories);
+      if (answer.feeds) client.setQueryData(["feeds"], answer.feeds);
+      if (regrouped.current) for (const key of ["counts", "articles"]) void client.invalidateQueries({ queryKey: [key] });
+      regrouped.current = false;
+    },
+    onFailed: (_error, answered) => {
+      const { client, toast } = latest.current;
+      // What the server stored: the order before these moves, with the ones it took before the failure. The
+      // lists are asked for again as well, in case the server can still be reached.
+      const back = { ...stored.current, ...answered };
+      client.setQueryData(["categories"], back.categories);
+      client.setQueryData(["feeds"], back.feeds);
+      for (const key of regrouped.current ? [...ORDERED, "counts", "articles"] : ORDERED) void client.invalidateQueries({ queryKey: [key] });
+      regrouped.current = false;
+      toast({ message: "並べ替えられませんでした。もう一度試してください。" });
+    },
+  });
+
+  // A fetch of the lists that starts while moves are under way, such as the one each minute, is called off.
+  useEffect(
+    () =>
+      client.getQueryCache().subscribe((event) => {
+        const key = event.query.queryKey[0];
+        if (typeof key !== "string" || !ORDERED.includes(key) || event.query.state.fetchStatus !== "fetching" || !queue.current?.busy()) return;
+        queueMicrotask(() => void client.cancelQueries({ queryKey: [key] }));
+      }),
+    [client],
+  );
+
   return useCallback(
     (move: Move) => {
       const before = { categories: client.getQueryData<Category[]>(["categories"]) ?? [], feeds: client.getQueryData<Feed[]>(["feeds"]) ?? [] };
       const after = applyMove(before, move);
       const sameCategory = move.kind === "category" || before.feeds.find((feed) => feed.id === move.id)?.categoryId === move.categoryId;
       if (sameCategory && idsOf(after.categories) === idsOf(before.categories) && idsOf(after.feeds) === idsOf(before.feeds)) return;
+      // A fetch that is under way would answer with the order from before the move. Calling it off puts back
+      // what the list held when it started, at once, so the move is written over that.
+      for (const key of ORDERED) void client.cancelQueries({ queryKey: [key] });
+      if (!queue.current!.busy()) stored.current = before;
       client.setQueryData(["categories"], after.categories);
       client.setQueryData(["feeds"], after.feeds);
-      const sent =
+      if (!sameCategory) regrouped.current = true;
+      queue.current!.push(() =>
         move.kind === "category"
-          ? api.moveCategory(move.id, move.before).then((categories) => client.setQueryData(["categories"], categories))
-          : api.moveFeed(move.id, { categoryId: move.categoryId, before: move.before }).then((feeds) => client.setQueryData(["feeds"], feeds));
-      sent
-        .then(() => {
-          // The articles of a feed follow it into its new category.
-          if (!sameCategory) for (const key of ["counts", "articles"]) void client.invalidateQueries({ queryKey: [key] });
-        })
-        .catch(() => {
-          client.setQueryData(["categories"], before.categories);
-          client.setQueryData(["feeds"], before.feeds);
-          for (const key of ["categories", "feeds"]) void client.invalidateQueries({ queryKey: [key] });
-          toast({ message: "並べ替えられませんでした。もう一度試してください。" });
-        });
+          ? api.moveCategory(move.id, move.before).then((categories) => ({ categories }))
+          : api.moveFeed(move.id, { categoryId: move.categoryId, before: move.before }).then((feeds) => ({ feeds })),
+      );
     },
-    [api, client, toast],
+    [api, client],
   );
 }
 
@@ -275,8 +318,8 @@ export function openEntryMenu(event: KeyboardEvent<HTMLElement>): void {
 }
 
 /**
- * The menu of a category or a feed: one place up, one place down, and for a feed the way out. It is how the
- * order is changed without dragging. An entry that stays in place is returned as it is, without a menu.
+ * The menu of a category or a feed: one place up, one place down, then for a feed the way out and for a category
+ * its settings. It is how the order is changed without dragging. An entry that stays in place is returned as it is, without a menu.
  */
 export function EntryMenu({
   entry,
@@ -293,6 +336,7 @@ export function EntryMenu({
   children: ReactElement;
 }) {
   const trigger = useRef<HTMLSpanElement>(null);
+  const navigate = useNavigate();
   const item = movableOf(entry.target);
   if (!item) return children;
   const up = stepMove(model, item, -1);
@@ -328,14 +372,16 @@ export function EntryMenu({
           <ContextMenu.Item className={MENU_ITEM} disabled={!down} onSelect={() => run(down)}>
             下へ移動
           </ContextMenu.Item>
+          <ContextMenu.Separator className="my-xs border-t border-outline" />
           {item.kind === "feed" ? (
-            <>
-              <ContextMenu.Separator className="my-xs border-t border-outline" />
-              <ContextMenu.Item className={MENU_ITEM} onSelect={() => onUnsubscribe(item.id)}>
-                登録を解除
-              </ContextMenu.Item>
-            </>
-          ) : null}
+            <ContextMenu.Item className={MENU_ITEM} onSelect={() => onUnsubscribe(item.id)}>
+              登録を解除
+            </ContextMenu.Item>
+          ) : (
+            <ContextMenu.Item className={MENU_ITEM} onSelect={() => void navigate(categorySettingsPath(item.id))}>
+              カテゴリの設定
+            </ContextMenu.Item>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>

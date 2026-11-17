@@ -31,7 +31,7 @@ httpsへの移行やドメインの移転のたびに、削除して登録し直
 
 - `packages/core`: 次のファイルを変える。
   - 取得の結果の `permanentUrl`（`fetch/http.ts`、`fetch/pages.ts`）。
-  - スキーマの変更（`032_feed_url_moves.sql`）と、記録（`db/feeds.ts`）。
+  - スキーマの変更（`044_feed_url_moves.sql`）と、記録（`db/feeds.ts`）。
   - 自動の書き換えと手動の変更（`feeds/ingest.ts`）。
   - APIの型（`api.ts`）。
 - `apps/server`: `PATCH /feeds/:id` がURLの変更を `changeFeedUrl` に回す。

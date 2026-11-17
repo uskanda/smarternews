@@ -52,6 +52,11 @@ export class PageFetcher {
     return result;
   }
 
+  /** Whether robots.txt lets a URL that is no page, such as an icon, be fetched. Counts nothing against the limit. */
+  async allows(url: string): Promise<boolean> {
+    return (await this.#allowed(url)) === "yes";
+  }
+
   async #request(url: string): Promise<PageResult> {
     try {
       const response = await this.#fetcher.get(url, { headers: { accept: "text/html,application/xhtml+xml" } });

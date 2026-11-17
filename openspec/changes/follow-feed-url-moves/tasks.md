@@ -9,7 +9,7 @@
 
 ## 2. データベースとAPIの型
 
-- [x] 2.1 `032_feed_url_moves.sql` で、`feeds` に `move_target`、`move_count`、`moved_from`、`moved_at` を足す
+- [x] 2.1 `044_feed_url_moves.sql` で、`feeds` に `move_target`、`move_count`、`moved_from`、`moved_at` を足す
 - [x] 2.2 `Feed` と `feedSchema` に `movedFrom` と `movedAt` を足し、`feedUpdateSchema` で `url` を受け付ける。`updateFeed` は `url` を受け取らない
 
 ## 3. 自動の書き換え

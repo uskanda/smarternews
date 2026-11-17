@@ -33,7 +33,7 @@ Webページの購読フィードも `PageFetcher`（`fetch/pages.ts`）から�
 
 ### 4つの列
 
-スキーマの変更 `032_feed_url_moves.sql` で、`feeds` に次の列を足す。
+スキーマの変更 `044_feed_url_moves.sql` で、`feeds` に次の列を足す。
 
 - `move_target`：数えている行き先。
 - `move_count`：同じ行き先への転送が続けて起きた、成功した取得の数。
