@@ -86,6 +86,23 @@ export function useScopedFilterCount(target: { feedId: number } | { categoryId: 
   ).length;
 }
 
+export function useRules() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["rules"], queryFn: () => api.rules() });
+}
+
+/**
+ * How many rules have the given feed or category as their scope, enabled or not: what goes with it when it is
+ * deleted. Undefined until the rules have arrived.
+ */
+export function useScopedRuleCount(target: { feedId: number } | { categoryId: number }): number | undefined {
+  const rules = useRules().data;
+  if (!rules) return undefined;
+  return rules.filter((rule) =>
+    "feedId" in target ? rule.scope.type === "feed" && rule.scope.feedId === target.feedId : rule.scope.type === "category" && rule.scope.categoryId === target.categoryId,
+  ).length;
+}
+
 /**
  * The term groups in their order. Changing them on the settings page sets this anew, so lists and articles
  * take the new colours without a reload.
@@ -191,10 +208,13 @@ export function useArticle(id: number | null) {
   });
 }
 
-/** Applies a change to one article wherever it is cached: in every list and in its own entry. */
+/** Hears every change `patchArticle` makes to an article, as a list row has it. */
+export type ArticlePatchListener = (id: number, patch: Partial<ArticleSummary>) => void;
+const patchListeners = new WeakMap<QueryClient, Set<ArticlePatchListener>>();
+
 /**
- * Changes an article in every list and in its own entry. A miss and stopped follow-ups are only on the article: the
- * lists do not show them.
+ * Changes an article in every list and in its own entry, and tells those listening: the rows a list keeps outside
+ * the cache. A miss and stopped follow-ups are only on the article: the lists do not show them.
  */
 function patchArticle(
   client: QueryClient,
@@ -216,18 +236,38 @@ function patchArticle(
         }
       : article,
   );
+  if (Object.keys(patch).length === 0) return;
+  for (const listener of patchListeners.get(client) ?? []) listener(id, patch);
+}
+
+/**
+ * Hears every change made to a cached article: a translated title, an open time, a read state or a star, and
+ * such a change undone when the server could not store it. For the rows a list keeps outside the cache.
+ */
+export function useArticlePatchListener(listener: ArticlePatchListener): void {
+  const client = useQueryClient();
+  const latest = useRef(listener);
+  latest.current = listener;
+  useEffect(() => {
+    let listeners = patchListeners.get(client);
+    if (!listeners) patchListeners.set(client, (listeners = new Set()));
+    const heard: ArticlePatchListener = (id, patch) => latest.current(id, patch);
+    listeners.add(heard);
+    return () => void listeners.delete(heard);
+  }, [client]);
 }
 
 /**
  * The translation of a feed article's content. It is asked for when an article of a feed that translates is
  * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
- * put into the article and into the lists, which show the translated title.
+ * put into the article and into the lists, which show the translated title. While `wait` is set, as it is while
+ * the full content is on its way, nothing is asked: what the feed delivered would be translated for nothing.
  */
-export function useArticleTranslation(article: Article | undefined) {
+export function useArticleTranslation(article: Article | undefined, { wait = false }: { wait?: boolean } = {}) {
   const { api } = useApp();
   const client = useQueryClient();
   const id = article?.id ?? null;
-  const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  const wanted = !wait && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
     // The full content, once it arrives, is translated anew: the server dropped the translation of the excerpt.
     queryKey: ["article-translation", id, article?.fullContent?.fetchedAt ?? null],
@@ -476,8 +516,11 @@ export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
       markStale(["counts"]);
       // A miss changes how many misses a topic has had since its interpretation.
       if (variables.missed !== undefined) markStale(["topics"]);
-      // Misses and stars are counted in the stats of the topics.
-      if (variables.missed !== undefined || variables.starred !== undefined) markStale(["topic-stats"]);
+      // Misses and stars are counted in the stats of the topics and of the sites.
+      if (variables.missed !== undefined || variables.starred !== undefined) {
+        markStale(["topic-stats"]);
+        markStale(["site-stats"]);
+      }
       // A star changes which articles the starred list holds.
       if (variables.starred !== undefined) markStale(["articles"]);
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
@@ -507,6 +550,12 @@ export function useTopics(categoryId: number | null) {
 export function useTopicStats(categoryId: number) {
   const { api } = useApp();
   return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
+}
+
+/** What the sites of the category's candidates brought in the last 30 days, and the sites blocked in it. */
+export function useSiteStats(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["site-stats", categoryId], queryFn: () => api.siteStats(categoryId) });
 }
 
 /** The versions of a topic, newest first. Stale once the topic is saved or goes back to a version. */

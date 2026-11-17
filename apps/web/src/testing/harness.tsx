@@ -17,6 +17,11 @@ export interface RenderOptions {
   server?: TestServer;
   /** Makes every request fail as if the server were down, while it returns true. */
   offline?: () => boolean;
+  /**
+   * Holds back the answers to the requests it returns true for, given as "POST /api/v1/...". The server
+   * handles such a request at once; its answer reaches the app only when `release` lets it through.
+   */
+  holdAnswer?: (request: string) => boolean;
   /** Pass fake-timer advancing to user-event when a test freezes time. */
   advanceTimers?: (ms: number) => void | Promise<void>;
   /** Uses the browser's history, so that `back` goes through the entries the app pushed. */
@@ -62,6 +67,7 @@ export function renderApp(options: RenderOptions = {}) {
   if (options.token !== null) window.localStorage.setItem("smarternews.token", options.token ?? API_TOKEN);
   if (options.width !== undefined) setViewport(options.width);
   const requests: string[] = [];
+  const held: Array<{ request: string; answer: () => void; fail: () => void }> = [];
   const holds: Hold[] = [];
   let path = options.route ?? "/";
   let go: (delta: number) => void = () => {
@@ -74,14 +80,19 @@ export function renderApp(options: RenderOptions = {}) {
         const request = `${init?.method ?? "GET"} ${input}`;
         requests.push(request);
         if (options.offline?.()) return Promise.reject(new TypeError("fetch failed"));
-        const held = options.hold?.(request);
-        if (held) {
-          return held.then(
+        const gated = options.hold?.(request);
+        if (gated) {
+          return gated.then(
             () => server.app.request(input, init),
             () => Promise.reject(new TypeError("fetch failed")),
           );
         }
-        const response = server.app.request(input, init);
+        const response = Promise.resolve(server.app.request(input, init));
+        if (options.holdAnswer?.(request)) {
+          return new Promise<Response>((resolve, reject) => {
+            held.push({ request, answer: () => resolve(response), fail: () => reject(new TypeError("fetch failed")) });
+          });
+        }
         const hold = holds.find((entry) => entry.match(request));
         if (!hold) return response;
         hold.held += 1;
@@ -102,6 +113,21 @@ export function renderApp(options: RenderOptions = {}) {
     server,
     requests,
     user: userEvent.setup(options.advanceTimers ? { advanceTimers: options.advanceTimers } : {}),
+    /** The requests whose answers are held back, oldest first. */
+    held: () => held.map((entry) => entry.request),
+    /**
+     * Lets the answer to the held request at `index` through, or with `fail` breaks the connection instead,
+     * and waits for the app to take it.
+     */
+    release: async (index = 0, how: "answer" | "fail" = "answer") => {
+      const [entry] = held.splice(index, 1);
+      if (!entry) throw new Error(`No answer is held at ${index}.`);
+      await act(async () => {
+        if (how === "answer") entry.answer();
+        else entry.fail();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    },
     /** The path and query the app is on now. */
     path: () => path,
     /** Goes back one entry in the history, as the browser's back button does. */
@@ -111,10 +137,17 @@ export function renderApp(options: RenderOptions = {}) {
     /**
      * Holds back the responses of the requests that `match`, sent from now until `release`. The server answers
      * each request when it is sent; the app gets the answer only once released, as from a slow connection.
+     * A string matches the whole "METHOD path" (such as "DELETE /api/v1/topics/3"), a pattern any part of it.
      */
-    hold: (match: (request: string) => boolean) => {
+    hold: (match: string | RegExp | ((request: string) => boolean)) => {
       let open: () => void = () => {};
-      const hold: Hold = { match, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
+      const matches =
+        typeof match === "function"
+          ? match
+          : typeof match === "string"
+            ? (request: string) => request === match
+            : (request: string) => match.test(request);
+      const hold: Hold = { match: matches, held: 0, gate: new Promise<void>((resolve) => (open = resolve)) };
       holds.push(hold);
       return {
         /** How many responses are held back. */

@@ -83,6 +83,7 @@ describe("collectNews with Google News", () => {
       title: "Rust 2.0 released",
       snippet: "",
       siteName: "Example Times",
+      siteUrl: "https://times.example.org",
       publishedAt: new Date("2026-03-01T09:00:00Z"),
       sourceKind: "news-search",
     });
@@ -96,6 +97,7 @@ describe("collectNews with Google News", () => {
       fetchable: false,
       title: "Older coverage",
       siteName: "Example Daily",
+      siteUrl: "https://daily.example.org",
     });
   });
 

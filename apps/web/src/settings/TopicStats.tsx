@@ -38,6 +38,7 @@ function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
     ["基準未満", `${entry.belowMinimum}件`],
     ["件数上限", `${entry.overLimit}件`],
     ["日付で外れた候補", `${entry.rejectedByDate}件`],
+    ["サイトの除外", `${entry.blockedSite}件`],
     ["印のある記事の続報", `${entry.rejectedByMark}件`],
     ["作った記事", `${entry.created}件`],
     ["更新した記事", `${entry.updated}件`],
@@ -46,7 +47,7 @@ function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
     ["外れ", ofCreated(entry.missed, entry.created)],
     [
       "よく除外されるサイト",
-      entry.topRejectedSites.length > 0 ? entry.topRejectedSites.map((site) => `${site.siteName} ${site.count}件`).join("、") : "なし",
+      entry.topRejectedSites.length > 0 ? entry.topRejectedSites.map((site) => `${site.host} ${site.count}件`).join("、") : "なし",
     ],
   ];
 }

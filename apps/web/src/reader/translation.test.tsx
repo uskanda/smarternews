@@ -126,6 +126,23 @@ describe("opening an article of a feed that translates", () => {
     await waitFor(() => expect(within(list()).getByRole("link", { name: /訳:Original title/ })).toBeInTheDocument());
   });
 
+  it("puts the translated title on the row the unread list keeps once the article is read", async () => {
+    const api = gated();
+    const { server, feed } = seeded({ google: api.google });
+    const { user } = renderApp({ server, route: `/f/${feed.id}` });
+    await user.click(await within(list()).findByRole("link", { name: /Original title/ }));
+    const pane = await opened();
+    await waitFor(() => expect(within(list()).getByRole("listitem")).toHaveAttribute("data-read", "true"));
+    // A star fetches the lists again: the unread list no longer returns the article, only the row kept shows it.
+    await user.keyboard("s");
+    await waitFor(() => expect(within(list()).getByRole("listitem").querySelector('[aria-label="スター"]')).not.toBeNull());
+
+    api.open();
+
+    await within(pane).findByText("訳:First paragraph.");
+    await waitFor(() => expect(rowTitles()).toEqual(["訳:Original title"]));
+  });
+
   it("shows the stored translation at once and asks for nothing when the article has one", async () => {
     const { server, id, route, posts } = seeded();
     saveTranslatedTitle(server.db, id, { original: "Original title", title: "訳したタイトル", sourceLanguage: "en" });

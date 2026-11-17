@@ -66,6 +66,30 @@ describe("the search box", () => {
     expect(path()).toBe("/all");
   });
 
+  it("does not search words longer than the server takes, and says why under the box until they change", async () => {
+    const { user, path, requests } = renderApp({ server: seeded().server, route: "/all" });
+    await screen.findByRole("heading", { level: 1, name: "すべて" });
+    const tooLong = "電".repeat(201);
+
+    await user.click(box());
+    await user.paste(tooLong);
+    await user.keyboard("{Enter}");
+
+    const reason = await screen.findByText("検索の語は200文字以内にしてください。");
+    expect(path()).toBe("/all");
+    expect(box()).toHaveValue(tooLong);
+    expect(box()).toHaveAttribute("aria-invalid", "true");
+    expect(box().getAttribute("aria-describedby")).toBe(reason.id);
+    expect(requests.some((request) => request.includes("/search?"))).toBe(false);
+
+    await user.keyboard("{Backspace}");
+    expect(screen.queryByText("検索の語は200文字以内にしてください。")).toBeNull();
+    expect(box()).not.toHaveAttribute("aria-invalid");
+    // Two hundred characters, with spaces around them, are taken.
+    await user.keyboard(" {Enter}");
+    await screen.findByRole("heading", { level: 1, name: `「${"電".repeat(200)}」の検索結果` });
+  });
+
   it("holds the words of the results that are shown, also when they are opened from their URL", async () => {
     renderApp({ server: seeded().server, route: `/search?q=${q("電池 工場")}` });
     await screen.findByRole("heading", { level: 1, name: "「電池 工場」の検索結果" });
@@ -76,6 +100,17 @@ describe("the search box", () => {
     renderApp({ server: seeded().server, route: "/all" });
     await screen.findByRole("heading", { level: 1, name: "すべて" });
     expect(box()).toHaveClass("placeholder:text-on-surface-muted");
+  });
+});
+
+describe("the results of words too long to search", () => {
+  it("do not search, and say why without offering to try again", async () => {
+    const { requests } = renderApp({ server: seeded().server, route: `/search?q=${q("電".repeat(201))}` });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("検索の語は200文字以内にしてください。");
+    expect(screen.queryByRole("button", { name: "再試行" })).toBeNull();
+    expect(screen.queryByText("読み込み中…")).toBeNull();
+    expect(requests.some((request) => request.includes("/search?"))).toBe(false);
   });
 });
 
@@ -185,6 +220,30 @@ describe("the results", () => {
 
     await waitFor(() => expect(rowTitles()).toEqual(["News of the day", "電池の古い話"]));
     expect(path()).toBe(`/search?q=${q("電池")}&unread=true`);
+  });
+
+  it("include articles without a star until starred only is chosen", async () => {
+    const { server, ids } = seeded();
+    setArticleFlags(server.db, ids.aOld!, { starred: true }, server.clock().toISOString());
+    const { user, path } = renderApp({ server, route: `/search?q=${q("電池")}` });
+    await waitFor(() => expect(rowTitles()).toHaveLength(3));
+    const toggle = screen.getByRole("checkbox", { name: "スターだけ" });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+
+    await waitFor(() => expect(rowTitles()).toEqual(["電池の古い話"]));
+    expect(path()).toBe(`/search?q=${q("電池")}&starred=true`);
+  });
+
+  it("drop starred only with the rest of the narrowing when it is widened", async () => {
+    const { server } = seeded();
+    const { user, path } = renderApp({ server, route: `/search?q=${q("電池")}&starred=true` });
+    await user.click(await screen.findByRole("button", { name: "絞り込みを外す" }));
+
+    await waitFor(() => expect(rowTitles()).toHaveLength(3));
+    expect(path()).toBe(`/search?q=${q("電池")}`);
+    expect(screen.getByRole("checkbox", { name: "スターだけ" })).not.toBeChecked();
   });
 
   it("come back the same from their URL, as after a reload, with the article that was open", async () => {

@@ -7,6 +7,8 @@ import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
+/** The controls at the end of the article: the star and read switches there, not the small ones above the headline. */
+const actions = async () => within(await screen.findByRole("group", { name: "記事の操作" }));
 
 describe("the token screen", () => {
   it("asks for the token on a first visit and shows no articles", async () => {
@@ -462,12 +464,12 @@ describe("keyboard", () => {
     await screen.findByRole("heading", { level: 2, name: "Newer story" });
 
     await user.keyboard("s");
-    expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await (await actions()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     await user.keyboard("s");
-    expect(await screen.findByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    expect(await (await actions()).findByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
 
     await user.keyboard("m");
-    expect(await screen.findByRole("button", { name: "既読にする" })).toBeInTheDocument();
+    expect(await (await actions()).findByRole("button", { name: "既読にする" })).toBeInTheDocument();
   });
 
   it("opens the main source in a new tab with o", async () => {
@@ -553,7 +555,7 @@ describe("moving between the entries with keys", () => {
     await user.keyboard("s j ");
 
     expect(path()).toBe(`/c/${alpha.slug}/${newer}`);
-    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "記事の操作", hidden: true })).getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
 
     await user.keyboard("{Shift>}J{/Shift}");
     await waitFor(() => expect(path()).toMatch(new RegExp(`^/c/${beta.slug}`)));
@@ -658,7 +660,7 @@ describe("moving between the entries with keys", () => {
     expect(path()).toBe(`/c/${alpha.slug}/${id}`);
 
     await user.keyboard("s");
-    expect(await screen.findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await (await actions()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     expect(path()).toBe(`/c/${alpha.slug}/${id}`);
   });
 
@@ -667,12 +669,12 @@ describe("moving between the entries with keys", () => {
     const alpha = server.category("Alpha");
     const id = server.article(alpha.id, { title: "A story" });
     const { user } = renderApp({ server, route: `/c/${alpha.slug}/${id}` });
-    await screen.findByRole("button", { name: "未読に戻す" });
+    await (await actions()).findByRole("button", { name: "未読に戻す" });
 
     await user.keyboard("gm");
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "未読に戻す" })).toBeInTheDocument();
   });
 
   it("leaves g and s to a field the user types in", async () => {
@@ -1174,7 +1176,7 @@ describe("going to an entry by its name with g u", () => {
 
     expect(box()).toHaveValue("sjk");
     expect(path()).toBe(`/c/${alpha.slug}/${newer}`);
-    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "記事の操作", hidden: true })).getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
   });
 
   it("closes the left pane of a narrow screen as well", async () => {

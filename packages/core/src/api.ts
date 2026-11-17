@@ -563,6 +563,21 @@ export const articleSummarySchema = z.object({
    */
   openedAt: z.string().nullable(),
   starred: z.boolean(),
+  /**
+   * When the article was starred. Null for an article without a star. A star given before star times were kept
+   * has the article's last update at that time. Starring an article already starred keeps the time.
+   */
+  starredAt: z.string().nullable(),
+  /**
+   * True for a generated article whose chain of earlier articles, at most 20, has a starred one: a follow-up of a
+   * story the reader starred. False for a feed article.
+   */
+  followsStarred: z.boolean(),
+  /**
+   * For a starred generated article, how many of the later articles of its story, followed at most 20 steps, are
+   * unread. Zero for any other article.
+   */
+  unreadFollowUps: z.number().int(),
   primaryUrl: z.string().nullable(),
   refCount: z.number().int(),
   event: articleEventSchema.nullable(),
@@ -622,6 +637,11 @@ export const articleSchema = articleSummarySchema.extend({
    */
   previousArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
   /**
+   * The later articles on the story, newest first, at most 20: the articles that follow this one up, the ones that
+   * follow those up, and so on. It ends where the chain comes back on itself. Empty for an article without one.
+   */
+  laterArticles: z.array(z.object({ id: z.number().int(), title: z.string(), firstPublishedAt: z.string() })),
+  /**
    * The other feeds that delivered a feed article, in the order their copies were stored: one entry per
    * copy recorded as a duplicate of this article. Empty for an article without duplicates.
    */
@@ -665,10 +685,11 @@ export const articleSchema = articleSummarySchema.extend({
 export type Article = z.infer<typeof articleSchema>;
 
 /**
- * The order of an article list: by the time lists sort by, newest first or oldest first; or by relevance, which
- * is by that time moved later by up to 48 hours for the articles nearest the reader's interests (`rankAt`).
+ * The order of an article list: by the time lists sort by, newest first or oldest first; by relevance, which
+ * is by that time moved later by up to 48 hours for the articles nearest the reader's interests (`rankAt`); or,
+ * for the starred articles only, by the time they were starred, last starred first.
  */
-export const listSortSchema = z.enum(["newest", "oldest", "relevance"]);
+export const listSortSchema = z.enum(["newest", "oldest", "relevance", "starred"]);
 export type ListSort = z.infer<typeof listSortSchema>;
 
 export const articleListQuerySchema = z.object({
@@ -680,6 +701,8 @@ export const articleListQuerySchema = z.object({
   kind: kindSchema.optional(),
   unread: z.enum(["true", "false"]).optional(),
   starred: z.enum(["true", "false"]).optional(),
+  /** Only the starred articles and those that follow a starred one up (`followsStarred`). */
+  starredStory: z.enum(["true"]).optional(),
   includeEnded: z.enum(["true", "false"]).optional(),
   minImportance: z.coerce.number().int().min(1).max(5).optional(),
   /**
@@ -689,7 +712,7 @@ export const articleListQuerySchema = z.object({
   recentlyRead: z.enum(["true"]).optional(),
   /**
    * Newest first when left out. Refused with `kind=event` and `recentlyRead=true`, whose order is fixed, even
-   * as `newest`. `relevance` sorts by `rankAt`, highest first.
+   * as `newest`. `relevance` sorts by `rankAt`, highest first. `starred` is refused without `starred=true`.
    */
   order: listSortSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -715,7 +738,8 @@ export type ArticleList = z.infer<typeof articleListSchema>;
 
 /**
  * A search of the articles. Without narrowing it covers every article, generated and delivered, read or not,
- * ended events included; what filters hide is left out, and so are hidden duplicates unless a feed is named.
+ * ended events included; what filters hide is left out, and so are hidden duplicates unless a feed is named or
+ * only starred articles are asked for.
  */
 export const articleSearchQuerySchema = z.object({
   /** The terms, separated by spaces. Checked by `parseSearchTerms`: not empty, at most 200 characters. */
@@ -723,6 +747,8 @@ export const articleSearchQuerySchema = z.object({
   category: z.coerce.number().int().optional(),
   feed: z.coerce.number().int().optional(),
   unread: z.enum(["true"]).optional(),
+  /** Only starred articles: those the list of starred articles holds, hidden duplicates included. */
+  starred: z.enum(["true"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });
@@ -874,7 +900,10 @@ export function listViewKey(target: ListViewTarget): string {
   return target.list;
 }
 
-/** How one entry shows its articles. An entry the server does not answer has every default: newest first. */
+/**
+ * How one entry shows its articles. An entry the server does not answer has every default: newest first. Only
+ * the entry of starred articles can be in the order by star time.
+ */
 export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema });
 export type ListView = z.infer<typeof listViewSchema>;
 
@@ -937,6 +966,11 @@ export const feedSchema = z.object({
   selectors: pageSelectorsSchema.nullable(),
   title: z.string(),
   siteUrl: z.string().nullable(),
+  /**
+   * The icon of the feed's site, as a path of the image relay; never its original address. Null when none was
+   * found.
+   */
+  iconUrl: z.string().nullable(),
   categoryId: z.number().int().nullable(),
   /** Null means the base interval of the settings. */
   intervalMinutes: z.number().int().nullable(),
@@ -1236,6 +1270,66 @@ export const filterArticlesQuerySchema = z.object({
 });
 export type FilterArticlesQuery = z.infer<typeof filterArticlesQuerySchema>;
 
+// ---- rules -------------------------------------------------------------------------------------
+
+/** What a rule does to a feed article when it is first stored. */
+export const ruleActionSchema = z.enum(["star", "read", "notify", "summarize"]);
+export type RuleAction = z.infer<typeof ruleActionSchema>;
+export const RULE_ACTIONS = ruleActionSchema.options;
+
+/** The conditions and scope have the form of a filter's. */
+export const ruleSchema = z.object({
+  id: z.number().int(),
+  scope: filterScopeSchema,
+  conditions: z.array(filterConditionSchema),
+  /** In the order of `RULE_ACTIONS`. */
+  actions: z.array(ruleActionSchema),
+  enabled: z.boolean(),
+  createdAt: z.string(),
+});
+export type Rule = z.infer<typeof ruleSchema>;
+
+const ruleFields = {
+  scope: filterScopeSchema,
+  conditions: filterFields.conditions,
+  actions: z
+    .array(ruleActionSchema)
+    .min(1, "a rule needs at least one action")
+    .refine((actions) => new Set(actions).size === actions.length, "an action is chosen twice"),
+  enabled: z.boolean(),
+};
+
+export const ruleCreateSchema = z.object({ ...ruleFields, enabled: ruleFields.enabled.optional() });
+export type RuleCreate = z.infer<typeof ruleCreateSchema>;
+
+export const ruleUpdateSchema = z.object(ruleFields).partial();
+export type RuleUpdate = z.infer<typeof ruleUpdateSchema>;
+
+/** A rule to count against the stored feed articles, without saving it. */
+export const rulePreviewSchema = z.object({ scope: ruleFields.scope, conditions: ruleFields.conditions });
+export type RulePreview = z.infer<typeof rulePreviewSchema>;
+
+export const rulePreviewResultSchema = z.object({ matchCount: z.number().int() });
+export type RulePreviewResult = z.infer<typeof rulePreviewResultSchema>;
+
+/** The feed articles a rule made ones to notify, after a time, newest first. */
+export const ruleNotificationsQuerySchema = z.object({
+  after: z.iso.datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+export type RuleNotificationsQuery = z.infer<typeof ruleNotificationsQuerySchema>;
+
+export const ruleNotificationSchema = z.object({
+  /** When a rule made the article one to notify. */
+  notifiedAt: z.string(),
+  feedTitle: z.string(),
+  article: articleSummarySchema,
+});
+export type RuleNotification = z.infer<typeof ruleNotificationSchema>;
+
+export const ruleNotificationListSchema = z.object({ items: z.array(ruleNotificationSchema) });
+export type RuleNotificationList = z.infer<typeof ruleNotificationListSchema>;
+
 // ---- term highlights ---------------------------------------------------------------------------
 
 /** The colours a term group can take. Their values are in DESIGN.md, one for each colour scheme. */
@@ -1437,6 +1531,8 @@ export const topicStatsCountsSchema = z.object({
   rejectedByDate: z.number().int(),
   /** Rejected before writing as a follow-up to an article marked as a miss or with its follow-ups stopped. */
   rejectedByMark: z.number().int(),
+  /** Rejected before the judge because their site is blocked in the category. */
+  blockedSite: z.number().int(),
   /** Generated articles of the topic made within the period. */
   created: z.number().int(),
   /** Generated articles of the topic rewritten at least once, the last time within the period. */
@@ -1447,8 +1543,11 @@ export const topicStatsCountsSchema = z.object({
   starred: z.number().int(),
   /** Of the articles in `created`: the ones marked as a miss for this topic, whenever it was marked. */
   missed: z.number().int(),
-  /** The sites with the most rejected candidates, most first, `TOPIC_STATS_TOP_SITES` at most. */
-  topRejectedSites: z.array(z.object({ siteName: z.string(), count: z.number().int() })),
+  /**
+   * The sites with the most rejected candidates, by host, most first, `TOPIC_STATS_TOP_SITES` at most. Candidates
+   * without a known host and those rejected because their site is blocked are left out.
+   */
+  topRejectedSites: z.array(z.object({ host: z.string(), count: z.number().int() })),
 });
 export type TopicStatsCounts = z.infer<typeof topicStatsCountsSchema>;
 
@@ -1477,7 +1576,7 @@ export type TopicStats = z.infer<typeof topicStatsSchema>;
 
 /** The candidates of the topic that no article came from, rejected at any step. */
 export function topicRejected(entry: TopicStatsEntry): number {
-  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate + entry.rejectedByMark;
+  return entry.rejectedByJudge + entry.belowMinimum + entry.overLimit + entry.rejectedByDate + entry.rejectedByMark + entry.blockedSite;
 }
 
 /** The share of the topic's articles marked as misses; 0 without articles. */
@@ -1504,6 +1603,44 @@ export function rankTopicStats(entries: TopicStatsEntry[]): TopicStatsEntry[] {
       a.topicId - b.topicId,
   );
 }
+
+// ---- site stats --------------------------------------------------------------------------------
+
+/** A site blocked in a category: its candidates are rejected right after collecting, before the judge. */
+export const blockedSiteSchema = z.object({
+  /** Lowercased, without a leading `www.`. */
+  host: z.string(),
+  blockedAt: z.string(),
+});
+export type BlockedSite = z.infer<typeof blockedSiteSchema>;
+
+/** What the candidates of one site brought to a category within the last `TOPIC_STATS_DAYS` days. */
+export const siteStatsEntrySchema = z.object({
+  /** The host of the candidates. Empty for the candidates whose site is not known. */
+  host: z.string(),
+  candidates: z.number().int(),
+  accepted: z.number().int(),
+  rejected: z.number().int(),
+  /** The articles written from the site's candidates. */
+  articles: z.number().int(),
+  /** Of the articles: the ones with an open time, with a star now, and with a miss mark. */
+  opened: z.number().int(),
+  starred: z.number().int(),
+  missed: z.number().int(),
+  /** Whether the site is blocked in the category now. */
+  blocked: z.boolean(),
+});
+export type SiteStatsEntry = z.infer<typeof siteStatsEntrySchema>;
+
+export const siteStatsSchema = z.object({
+  /** The start of the period: candidates collected at or after it are counted. */
+  since: z.string(),
+  /** The sites with candidates in the period, the most candidates first, then by host. */
+  sites: z.array(siteStatsEntrySchema),
+  /** The sites blocked in the category, by host, whether they had candidates in the period or not. */
+  blocked: z.array(blockedSiteSchema),
+});
+export type SiteStats = z.infer<typeof siteStatsSchema>;
 
 // ---- providers ---------------------------------------------------------------------------------
 
@@ -1594,9 +1731,37 @@ export type Usage = z.infer<typeof usageSchema>;
 
 // ---- digests -----------------------------------------------------------------------------------
 
-/** What made a digest: a time of the schedule, a time missed while the server was down, or the reader. */
-export const digestTriggerSchema = z.enum(["schedule", "catch-up", "manual"]);
+/**
+ * What made a digest: a time of the schedule, a time missed while the server was down, the reader asking for
+ * one now, or the reader asking for one of a list of articles.
+ */
+export const digestTriggerSchema = z.enum(["schedule", "catch-up", "manual", "list"]);
 export type DigestTrigger = z.infer<typeof digestTriggerSchema>;
+
+/**
+ * The list a digest is asked for: the articles of a name, a search with its narrowing as the search screen
+ * has it, or the starred articles. What the reader sends; the server looks the articles up itself.
+ */
+export const digestTargetRequestSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("mention"), name: mentionArticlesQuerySchema.shape.name }),
+  z.object({
+    type: z.literal("search"),
+    q: z.string(),
+    category: z.number().int().optional(),
+    feed: z.number().int().optional(),
+    unread: z.literal(true).optional(),
+  }),
+  z.object({ type: z.literal("starred") }),
+]);
+export type DigestTargetRequest = z.infer<typeof digestTargetRequestSchema>;
+
+/** The list a digest was made of, with the label the screens show in place of the period. */
+export const digestTargetSchema = z.object({
+  type: z.enum(["mention", "search", "starred"]),
+  /** For example 名前：OpenAI, 検索：半導体（カテゴリ：Tech、未読だけ）, スター. */
+  label: z.string(),
+});
+export type DigestTarget = z.infer<typeof digestTargetSchema>;
 
 /** One line of a category section, with the ids of the articles it is drawn from. */
 export const digestLineSchema = z.object({ text: z.string(), articleIds: z.array(z.number().int()) });
@@ -1619,6 +1784,11 @@ export const digestSummarySchema = z.object({
   /** How many articles the model was given. */
   articleCount: z.number().int(),
   executiveSummary: z.string(),
+  /**
+   * The list a digest of the trigger `list` was made of; null for a digest of a period. The period of a list
+   * digest runs from its oldest article to its newest.
+   */
+  target: digestTargetSchema.nullable(),
 });
 export type DigestSummary = z.infer<typeof digestSummarySchema>;
 
@@ -1629,7 +1799,11 @@ export const digestSchema = digestSummarySchema.extend({
 });
 export type Digest = z.infer<typeof digestSchema>;
 
-export const digestListQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(200).optional() });
+export const digestListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  /** `period`: only the digests of a period, leaving out those made of a list. Every digest when left out. */
+  kind: z.enum(["period"]).optional(),
+});
 export type DigestListQuery = z.infer<typeof digestListQuerySchema>;
 
 export const digestListSchema = z.object({
@@ -1645,6 +1819,13 @@ export type DigestList = z.infer<typeof digestListSchema>;
  */
 export const digestRequestResultSchema = z.object({ status: z.enum(["queued", "limit", "budget", "empty"]) });
 export type DigestRequestResult = z.infer<typeof digestRequestResultSchema>;
+
+/**
+ * The body of asking for a digest now. Without a target, the digest of the period that ends now; with one, the
+ * digest of that list, made of its newest articles, at most 200.
+ */
+export const digestRequestSchema = z.object({ target: digestTargetRequestSchema.optional() });
+export type DigestRequest = z.infer<typeof digestRequestSchema>;
 
 // ---- translation -------------------------------------------------------------------------------
 
@@ -1723,6 +1904,16 @@ const settingsFileFilterSchema = z
   .refine((filter) => !(filter.action === "keep" && filter.scope === "all"), { message: KEEP_EVERYWHERE, path: ["scope"], params: { code: "not_allowed" } });
 export type SettingsFileFilter = z.infer<typeof settingsFileFilterSchema>;
 
+/** A rule in the file. Its scope is named as a filter's. */
+const settingsFileRuleSchema = z.object({
+  scope: settingsFileFilterScopeSchema,
+  /** Left out when the rule is enabled. */
+  enabled: z.boolean().optional(),
+  conditions: filterFields.conditions,
+  actions: ruleFields.actions,
+});
+export type SettingsFileRule = z.infer<typeof settingsFileRuleSchema>;
+
 /** The format before filters: a word that hid the feed articles containing it in the title, or in the title or content. */
 const settingsFileStopWordSchema = z.object({
   text: z.string().trim().min(1).max(100),
@@ -1762,6 +1953,8 @@ export const settingsFileSchema = z.object({
   /** Subscribed feeds that belong to no category. */
   subscriptions: z.array(settingsFileSubscriptionSchema).default([]),
   filters: z.array(settingsFileFilterSchema).default([]),
+  /** Left out when there are none. */
+  rules: z.array(settingsFileRuleSchema).default([]),
   /** Read for files written before filters, and turned into hide filters over everything. Never written. */
   stopWords: z.array(settingsFileStopWordSchema).default([]),
   /** In the order of the groups. Left out when there are none. */
@@ -1781,6 +1974,7 @@ export const importResultSchema = z.object({
   feedsCreated: z.number().int(),
   feedsUpdated: z.number().int(),
   filtersCreated: z.number().int(),
+  rulesCreated: z.number().int(),
   termGroupsCreated: z.number().int(),
   highlightTermsCreated: z.number().int(),
   /** The entries of `listViews` that were applied. */

@@ -9,6 +9,7 @@ const feed = (overrides: Partial<Feed> = {}): Feed => ({
   selectors: null,
   title: "Blog",
   siteUrl: null,
+  iconUrl: null,
   categoryId: null,
   intervalMinutes: null,
   enabled: true,

@@ -1,10 +1,12 @@
 import type { Category, Feed, Filter } from "@smarternews/core/api";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { formatFull } from "@smarternews/client";
 import { useCategories, useFeeds, useFilters, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { usePending } from "../lib/pending.ts";
+import { useScrollMemory } from "../lib/scroll-memory.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
@@ -13,6 +15,14 @@ import { useInlineEditFocus } from "./inline-edit-focus.ts";
 import { UnsavedGuard } from "../ui/unsaved.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
+
+/** The filters whose hidden articles are open, from `?shown=3,5`. What is not a number is passed over. */
+function shownIn(search: URLSearchParams): number[] {
+  return (search.get("shown") ?? "")
+    .split(",")
+    .filter((part) => /^\d+$/.test(part))
+    .map(Number);
+}
 
 function HiddenArticles({ filter }: { filter: Filter }) {
   const { api } = useApp();
@@ -59,20 +69,26 @@ function FilterRow({
   categories,
   feeds,
   afterRemoval,
+  showing,
+  setShowing,
 }: {
   filter: Filter;
   categories: Category[];
   feeds: Feed[];
   /** Where the focus goes once the row is gone. */
   afterRemoval: () => HTMLElement | null;
+  /** Whether the articles it hides are listed. */
+  showing: boolean;
+  setShowing: (next: boolean) => void;
 }) {
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
-  const [showing, setShowing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const removed = useRef(false);
+  // Switching and deleting the filter: one waits for its answer before either can be sent again.
+  const [pending, run] = usePending();
   const focus = useInlineEditFocus(editing);
   const summary = `${ACTION_LABEL[filter.action]}（${scopeLabel(filter.scope, categories, feeds)}）`;
 
@@ -119,13 +135,17 @@ function FilterRow({
         </div>
       ) : (
         <div className="flex flex-wrap gap-sm pt-xs">
-          <Button aria-expanded={showing} aria-label={`${summary}が隠している記事`} onClick={() => setShowing(!showing)} disabled={!filter.enabled}>
+          <Button aria-expanded={showing && filter.enabled}aria-label={`${summary}が隠している記事`} onClick={() => setShowing(!showing)} disabled={!filter.enabled}>
             隠している記事
           </Button>
           <Button ref={focus.opener} aria-label={`${summary}を編集`} onClick={() => setEditing(true)}>
             編集
           </Button>
-          <Button aria-label={`${summary}を${filter.enabled ? "無効にする" : "有効にする"}`} onClick={() => void toggle()}>
+          <Button
+            aria-label={`${summary}を${filter.enabled ? "無効にする" : "有効にする"}`}
+            disabled={pending}
+            onClick={() => void run(toggle)}
+          >
             {filter.enabled ? "無効にする" : "有効にする"}
           </Button>
           <Button aria-label={`${summary}を削除`} onClick={() => setConfirming(true)}>
@@ -141,7 +161,7 @@ function FilterRow({
         returnFocus={() => (removed.current ? afterRemoval() : null)}
         actions={
           <>
-            <Button variant="danger" onClick={() => void remove()}>
+            <Button variant="danger" disabled={pending} onClick={() => void run(remove)}>
               削除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
@@ -173,8 +193,26 @@ function Filters() {
   const categories = useCategories().data ?? [];
   const feeds = useFeeds().data ?? [];
   const listHeading = useRef<HTMLHeadingElement>(null);
+  // The filters whose hidden articles are listed are kept in the address, so that coming back from an article
+  // finds them open. Numbers that name no filter are passed over, as there is no row to open.
+  const [search, setSearch] = useSearchParams();
+  const shown = shownIn(search);
+  function setShown(id: number, next: boolean) {
+    setSearch(
+      (current) => {
+        const ids = shownIn(current).filter((entry) => entry !== id);
+        if (next) ids.push(id);
+        const changed = new URLSearchParams(current);
+        if (ids.length > 0) changed.set("shown", ids.join(","));
+        else changed.delete("shown");
+        return changed;
+      },
+      { replace: true },
+    );
+  }
+  const page = useScrollMemory("filters", filters.isSuccess || filters.isError);
   return (
-    <div className="h-full overflow-y-auto bg-surface">
+    <div ref={page} className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
         <Link to="/settings" className="tap type-body-md text-primary underline underline-offset-4">
           設定へ戻る
@@ -199,7 +237,15 @@ function Filters() {
         {filters.data?.length === 0 ? <p className="type-body-md text-on-surface-muted">フィルターはまだありません。</p> : null}
         <ul className="max-w-measure-article">
           {filters.data?.map((filter) => (
-            <FilterRow key={filter.id} filter={filter} categories={categories} feeds={feeds} afterRemoval={() => listHeading.current} />
+            <FilterRow
+              key={filter.id}
+              filter={filter}
+              categories={categories}
+              feeds={feeds}
+              afterRemoval={() => listHeading.current}
+              showing={shown.includes(filter.id)}
+              setShowing={(next) => setShown(filter.id, next)}
+            />
           ))}
         </ul>
         <p className="max-w-measure-article type-label-sm text-on-surface-muted">

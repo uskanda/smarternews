@@ -1,8 +1,8 @@
 // The media type of a relayed image comes from its first bytes, never from what the other site claims: a
 // page or a script sent as an image must not reach a screen. SVG is not among the formats, since it can carry
-// scripts and links.
+// scripts and links. ICO is, for `/favicon.ico`: it holds PNG or BMP pictures and nothing that runs.
 
-export type ImageType = "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif";
+export type ImageType = "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "image/x-icon";
 
 const ascii = (bytes: Uint8Array, start: number, length: number): string =>
   String.fromCharCode(...bytes.subarray(start, start + length));
@@ -19,8 +19,10 @@ function brands(bytes: Uint8Array): string[] {
   return found;
 }
 
-/** The format of an image by its first bytes: JPEG, PNG, GIF, WebP or AVIF. Null for anything else. */
+/** The format of an image by its first bytes: JPEG, PNG, GIF, WebP, AVIF or ICO. Null for anything else. */
 export function sniffImageType(bytes: Uint8Array): ImageType | null {
+  // An icon directory: reserved 0, type 1 (2 is a cursor), then how many pictures, at least one.
+  if (startsWith(bytes, [0, 0, 1, 0]) && bytes.length >= 6 && (bytes[4]! | (bytes[5]! << 8)) > 0) return "image/x-icon";
   if (startsWith(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg";
   if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
   const head = ascii(bytes, 0, 6);

@@ -1,5 +1,5 @@
 import { getArticle, insertFeed, IMAGE_PROXY_PATH, saveArticleTranslation, saveFullContent } from "@smarternews/core";
-import { imageResponse, jpegBytes, pngBytes, seedFeedArticle } from "@smarternews/core/testing";
+import { icoBytes, imageResponse, jpegBytes, pngBytes, seedFeedArticle } from "@smarternews/core/testing";
 import { describe, expect, it } from "vitest";
 import { relayPath, testServer } from "./testing.ts";
 
@@ -202,6 +202,36 @@ describe("images in the answers of the API", () => {
     expect(article.body).toBe("Model wrote ![x](https://img.example.org/x.png)");
     expect(JSON.stringify(article)).not.toContain(IMAGE_PROXY_PATH);
     expect(article.bodyHtml).not.toContain("<img");
+  });
+
+  it("name the relay for the icon of a feed in every answer that gives the feed, never its original address", async () => {
+    const s = testServer();
+    const FEED = "https://blog.example.org/feed.xml";
+    const ICON = "https://blog.example.org/favicon.ico";
+    s.site.set(FEED, `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><link>https://blog.example.org/</link></channel></rss>`);
+    s.site.set(ICON, () => imageResponse(icoBytes(), "image/x-icon"));
+    const created = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const answers = [
+      created,
+      (await (await s.get("/api/v1/feeds")).json())[0],
+      await (await s.get(`/api/v1/feeds/${created.id}`)).json(),
+      await (await s.patch(`/api/v1/feeds/${created.id}`, { title: "Renamed" })).json(),
+      (await (await s.post(`/api/v1/feeds/${created.id}/move`, { categoryId: null, before: null })).json())[0],
+      (await (await s.post(`/api/v1/feeds/${created.id}/fetch`, {})).json()).feed,
+    ];
+    for (const feed of answers) {
+      expect(feed.iconUrl.startsWith(IMAGE_PROXY_PATH)).toBe(true);
+      expect(original(feed.iconUrl)).toBe(ICON);
+      expect(JSON.stringify(feed)).not.toContain(ICON);
+    }
+    const icon = await s.get(created.iconUrl, null);
+    expect(icon.headers.get("content-type")).toBe("image/x-icon");
+  });
+
+  it("give null for a feed without an icon", async () => {
+    const s = testServer();
+    insertFeed(s.db, { url: "https://blog.example.org/feed.xml", title: "Blog", categoryId: null }, s.clock);
+    expect((await (await s.get("/api/v1/feeds")).json())[0].iconUrl).toBeNull();
   });
 
   it("never carry the signing key", async () => {

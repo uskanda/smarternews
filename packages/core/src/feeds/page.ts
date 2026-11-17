@@ -156,7 +156,7 @@ export function extractPage(html: string, pageUrl: string, selectors: PageSelect
 export function parsePage(html: string, pageUrl: string, selectors: PageSelectors, timeZone: string): ParsedSubscription {
   const extracted = extractPage(html, pageUrl, selectors, timeZone);
   if (extracted.matched === 0) throw new Error(NO_ITEM_ELEMENT);
-  return { title: extracted.title, siteUrl: pageUrl, items: extracted.items };
+  return { title: extracted.title, siteUrl: pageUrl, iconUrl: null, items: extracted.items };
 }
 
 // A date: year, month and day with -, /, . or 年月日 between them; a weekday in brackets may follow. Then a time,

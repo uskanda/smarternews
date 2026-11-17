@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
 import { saveBlob } from "../lib/download.ts";
 import { useFetchAllFeedsNow, useFetchFeedNow } from "../lib/fetch-now.ts";
+import { usePending } from "../lib/pending.ts";
 import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -125,6 +126,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [titleProblem, setTitleProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   useUnsaved(
     `購読フィード『${feed.title}』の編集`,
     title !== feed.title ||
@@ -140,8 +142,12 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
   );
 
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const intervalMinutes = ownInterval ? minutesOf(minutes) : null;
     const titleError = checkText(title, { label: "名前", max: FEED_TITLE_MAX_CHARS });
     setTitleProblem(titleError);
@@ -177,7 +183,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const categoryProblem = fieldMessage(error, "categoryId", "カテゴリ");
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
-    <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
+    <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md pt-sm">
       <FeedStatsSection feed={feed} />
       <Field
         label="名前"
@@ -230,7 +236,11 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
       {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
-        <Button type="submit" variant="primary" disabled={title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}>
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={saving || title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}
+        >
           保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
@@ -408,10 +418,14 @@ function BaseInterval({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [minutes, setMinutes] = useState(String(settings.feedIntervalMinutes));
   const [problem, setProblem] = useState<string | null>(null);
+  const [saving, run] = usePending();
   useUnsaved("基本の取得周期", minutes.trim() !== String(settings.feedIntervalMinutes));
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const value = minutesOf(minutes);
     if (value === null) {
       setProblem(RANGE);
@@ -430,7 +444,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
   return (
     <section aria-label="取得周期" className={SECTION}>
       <h2 className="type-headline-md">取得周期</h2>
-      <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
         <Field
           label="基本の取得周期（分）"
           type="number"
@@ -446,7 +460,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
           hint="周期を個別に決めていない購読フィードを、この間隔で取得します。取得に失敗したフィードは、成功するまで間隔を延ばします。"
         />
         <div>
-          <Button type="submit" variant="primary">
+          <Button type="submit" variant="primary" disabled={saving}>
             保存する
           </Button>
         </div>
@@ -463,6 +477,7 @@ function Opml() {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [loading, run] = usePending();
 
   async function download() {
     try {
@@ -473,8 +488,12 @@ function Opml() {
     }
   }
 
-  async function upload(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(upload);
+  };
+
+  async function upload() {
     if (!file) return;
     setResult(null);
     try {
@@ -499,7 +518,7 @@ function Opml() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form noValidate onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込むOPMLファイル
           <input type="file" accept=".opml,.xml,text/x-opml,text/xml,application/xml" className="type-body-md" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
@@ -509,7 +528,7 @@ function Opml() {
           」に入ります。すでに購読しているフィードは飛ばします。いま購読しているフィードは消えません。
         </p>
         <div>
-          <Button type="submit" disabled={!file}>
+          <Button type="submit" disabled={loading || !file}>
             読み込む
           </Button>
         </div>

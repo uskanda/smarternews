@@ -37,7 +37,7 @@ describe("the topic stats API", () => {
       collected: { total: 1, bySource: { feed: 0, "news-search": 1, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 1,
       created: 1,
-      topRejectedSites: [{ siteName: "Ads", count: 1 }],
+      topRejectedSites: [{ host: "example.org", count: 1 }],
     });
     expect(Object.values(s.llmRequests).flat()).toHaveLength(0);
   });

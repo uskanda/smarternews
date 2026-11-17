@@ -222,6 +222,72 @@ export function applyMove(lists: { categories: Category[]; feeds: Feed[] }, move
   return { ...lists, feeds: placed(lists.feeds, moved, move.before) };
 }
 
+/** What the server answers to a move: the list the move changed, in its stored order. */
+export interface MoveAnswer {
+  categories?: Category[];
+  feeds?: Feed[];
+}
+
+export interface MoveQueue {
+  /** Sends the move after the ones before it have been answered. */
+  push: (send: () => Promise<MoveAnswer>) => void;
+  /** True while a move is being sent or waits to be. */
+  busy: () => boolean;
+}
+
+/**
+ * Sends moves one at a time, so that the server stores them and answers them in the order they were made.
+ * Only the answers that arrive when nothing is left to send are given on, the last one of each list, so an
+ * answer that is already out of date never shows. When a move fails, the moves still waiting are dropped:
+ * they were made on top of the one that failed. `onFailed` gets the answers to the moves before it, which
+ * the server did store.
+ */
+export function createMoveQueue(handlers: {
+  onSettled: (answer: MoveAnswer) => void;
+  onFailed: (error: unknown, answered: MoveAnswer) => void;
+}): MoveQueue {
+  const waiting: Array<() => Promise<MoveAnswer>> = [];
+  let running = false;
+  let answer: MoveAnswer = {};
+  const next = () => {
+    const send = waiting.shift();
+    if (!send) {
+      running = false;
+      const settled = answer;
+      answer = {};
+      handlers.onSettled(settled);
+      return;
+    }
+    running = true;
+    let sent: Promise<MoveAnswer>;
+    try {
+      sent = send();
+    } catch (error) {
+      sent = Promise.reject(error);
+    }
+    sent.then(
+      (got) => {
+        answer = { ...answer, ...got };
+        next();
+      },
+      (error: unknown) => {
+        const answered = answer;
+        waiting.length = 0;
+        answer = {};
+        running = false;
+        handlers.onFailed(error, answered);
+      },
+    );
+  };
+  return {
+    push(send) {
+      waiting.push(send);
+      if (!running) next();
+    },
+    busy: () => running || waiting.length > 0,
+  };
+}
+
 /** A dragged entry this near to the top or the bottom of the list makes the list scroll. */
 export const EDGE_PX = 48;
 const EDGE_STEP_PX = 14;

@@ -164,4 +164,23 @@ describe("marking the articles older than a period as read", () => {
     expect(screen.queryByRole("button", { name: "すべて既読にする" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "期間を選んで既読にする" })).not.toBeInTheDocument();
   });
+
+  it("holds both buttons and Shift+A while the marking waits for its answer, and sends it once", async () => {
+    const { server, a, old, recent } = seeded();
+    const { user, requests, hold } = renderApp({ server, route: `/c/${a.slug}` });
+    const held = hold("POST /api/v1/articles/mark-read");
+
+    await choose(user, "1日より古い記事");
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    expect(menuButton()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "すべて既読にする" })).toBeDisabled();
+    expect(requests.filter((request) => request === "POST /api/v1/articles/mark-read")).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("1件を既読にしました");
+    expect(getArticle(server.db, old).isRead).toBe(true);
+    expect(getArticle(server.db, recent).isRead).toBe(false);
+    expect(menuButton()).toBeEnabled();
+  });
 });

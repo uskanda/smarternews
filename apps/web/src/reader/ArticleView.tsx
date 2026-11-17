@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDate, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
 import { Badge, Button, ErrorNotice, Loading, StarMark } from "../ui/controls.tsx";
+import { articleLink } from "../lib/article-link.ts";
 import { listPathOf, topicEditPath } from "../lib/paths.ts";
 import { AnnotatedBody, ArticleNoteSection, FILTER_SOURCE_ATTRIBUTE, SEGMENT_ATTRIBUTE } from "./Annotations.tsx";
 import { Highlighted, type AnnotationMarks } from "./highlight.tsx";
@@ -179,6 +180,36 @@ function SourceReason({ source }: { source: ArticleRef }) {
 const MOVE = "tap flex min-w-0 flex-col gap-px rounded-md border border-outline px-lg py-sm text-left";
 
 /** The way to the article before and after this one, each with its headline on one line. */
+/** Articles of the same story, earlier or later, newest first, each with the day it was first published. */
+function StoryChain({
+  label,
+  entries,
+  articlePath,
+  timeZone,
+}: {
+  label: string;
+  entries: Article["previousArticles"];
+  articlePath: (id: number) => string;
+  timeZone: string;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <section aria-label={label} className="flex flex-col gap-xs">
+      <h3 className="type-label-sm text-on-surface-muted">{label}</h3>
+      <ul className="flex flex-col gap-xs type-body-md">
+        {entries.map((entry) => (
+          <li key={entry.id} className="min-w-0">
+            <Link to={articlePath(entry.id)} className="tap break-words text-primary underline underline-offset-4">
+              {entry.title}
+            </Link>
+            <span className="pl-sm text-on-surface-muted tabular-nums">{formatDate(entry.firstPublishedAt, timeZone)}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function NeighborLinks({ neighbors }: { neighbors: ArticleNeighbors }) {
   const { previous, next, more, end } = neighbors;
   if (!previous && !next && !more && !end) return null;
@@ -260,6 +291,10 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
+/** The words of the star and read switches, the same above the headline and at the end of the article. */
+const starLabel = (article: Article) => (article.starred ? "スターを外す" : "スターを付ける");
+const readLabel = (article: Article) => (article.isRead ? "未読に戻す" : "既読にする");
+
 /** The article pane: what the story is, what it means for the reader, the text, and where it came from. */
 export function ArticleView({
   id,
@@ -274,6 +309,7 @@ export function ArticleView({
   onToggleRead,
   onToggleMiss,
   onToggleFollowUps,
+  onCopyLink,
   fullContent,
   terms,
   focusAnnotation = null,
@@ -295,6 +331,8 @@ export function ArticleView({
   onToggleMiss: (article: Article) => void;
   /** Stops the follow-ups of a generated article, or lets them come again. Not offered for a feed article. */
   onToggleFollowUps: (article: Article) => void;
+  /** Copies the headline and the main source as a Markdown link. Offered only for an article with a main source. */
+  onCopyLink: (article: Article) => void;
   /** The full content of a feed article: fetching it and switching to what the feed delivered. */
   fullContent: FullContentControl;
   /** The words of the search the article was opened from, marked in its headline and text. */
@@ -304,7 +342,11 @@ export function ArticleView({
 }) {
   const query = useArticle(id);
   const article = query.data;
-  const translating = useArticleTranslation(article);
+  // The content is translated once the full content arrived, or once it is known not to come. An article that
+  // waits for it counts as fetching from the start: the fetch is asked for by the reader page, after this renders.
+  const translating = useArticleTranslation(article, {
+    wait: fullContent.fetching || (article?.fullContentStatus === "waiting" && !fullContent.requestFailed),
+  });
   const summaryState = useSummaryRequest(article);
   const groups = useTermMatcher();
 
@@ -375,27 +417,16 @@ export function ArticleView({
           )}
           {article.revision > 0 ? <span>更新 {article.revision}回</span> : null}
           {article.starred ? <StarMark /> : null}
+          {/* The star and the read state, within reach without scrolling to the end; the same switches stay there. */}
+          <span role="group" aria-label="スターと既読" className="flex flex-wrap items-center gap-xs">
+            <Button size="sm" aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
+              {starLabel(article)}
+            </Button>
+            <Button size="sm" onClick={() => onToggleRead(article)}>
+              {readLabel(article)}
+            </Button>
+          </span>
         </div>
-        {!delivered && article.categoryId !== null && article.topics.length > 0 ? (
-          // The topics that chose this article, each a way to the editor of that topic: where a miss is fixed.
-          // A long topic is cut to two lines on the screen; the whole of it stays in the link, to be read out.
-          <section aria-label="トピック" className="flex flex-col gap-xs">
-            <h3 className="type-label-sm text-on-surface-muted">トピック</h3>
-            <ul className="flex flex-col gap-xs type-body-md">
-              {article.topics.map((topic) => (
-                <li key={topic.id} className="min-w-0">
-                  <Link
-                    to={topicEditPath(article.categoryId!, topic.id)}
-                    title={topic.text}
-                    className="tap line-clamp-2 break-words text-primary underline underline-offset-4"
-                  >
-                    {topic.text}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none" {...filterSource(!originalTitleShown)}>
             <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
@@ -514,22 +545,10 @@ export function ArticleView({
         {/* Below the content, whichever content is shown: the full content, what the feed delivered, or the translation. */}
         <Attachments article={article} />
         <Mentions article={article} />
-        {article.previousArticles.length > 0 ? (
-          // The earlier articles of the story, newest first, each with the day it was first published.
-          <section aria-label="この話題の前の記事" className="flex flex-col gap-xs">
-            <h3 className="type-label-sm text-on-surface-muted">この話題の前の記事</h3>
-            <ul className="flex flex-col gap-xs type-body-md">
-              {article.previousArticles.map((earlier) => (
-                <li key={earlier.id} className="min-w-0">
-                  <Link to={articlePath(earlier.id)} className="tap break-words text-primary underline underline-offset-4">
-                    {earlier.title}
-                  </Link>
-                  <span className="pl-sm text-on-surface-muted tabular-nums">{formatDate(earlier.firstPublishedAt, timeZone)}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        {/* The later articles come first: both lists run newest first, so the story reads down from its latest. */}
+        <StoryChain label="この話題のその後の記事" entries={article.laterArticles} articlePath={articlePath} timeZone={timeZone} />
+        <StoryChain label="この話題の前の記事" entries={article.previousArticles} articlePath={articlePath} timeZone={timeZone} />
+
         {delivered ? null : (
         <section aria-label="出典" className="flex flex-col gap-xs">
           <h3 className="type-label-sm text-on-surface-muted">出典</h3>
@@ -574,11 +593,31 @@ export function ArticleView({
             </ul>
           </section>
         ) : null}
-        <div className="flex flex-wrap gap-sm">
-          <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
-            {article.starred ? "スターを外す" : "スターを付ける"}
+        {!delivered && article.categoryId !== null && article.topics.length > 0 ? (
+          // The topics that chose this article, each a way to the editor of that topic: where a miss is fixed. They
+          // stand right before the mark of a miss, so that marking a miss and fixing its topic are side by side.
+          // A long topic is cut to two lines on the screen; the whole of it stays in the link, to be read out.
+          <section aria-label="トピック" className="flex flex-col gap-xs">
+            <h3 className="type-label-sm text-on-surface-muted">トピック</h3>
+            <ul className="flex flex-col gap-xs type-body-md">
+              {article.topics.map((topic) => (
+                <li key={topic.id} className="min-w-0">
+                  <Link
+                    to={topicEditPath(article.categoryId!, topic.id)}
+                    title={topic.text}
+                    className="tap line-clamp-2 break-words text-primary underline underline-offset-4"
+                  >
+                    {topic.text}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <div role="group" aria-label="記事の操作" className="flex flex-wrap gap-sm">          <Button aria-pressed={article.starred} onClick={() => onToggleStar(article)}>
+            {starLabel(article)}
           </Button>
-          <Button onClick={() => onToggleRead(article)}>{article.isRead ? "未読に戻す" : "既読にする"}</Button>
+          <Button onClick={() => onToggleRead(article)}>{readLabel(article)}</Button>
           {delivered ? null : (
             <>
               <Button aria-pressed={article.missed} onClick={() => onToggleMiss(article)}>
@@ -589,6 +628,11 @@ export function ArticleView({
               </Button>
             </>
           )}
+          {articleLink(article) !== null ? (
+            <Button aria-keyshortcuts="c" onClick={() => onCopyLink(article)}>
+              リンクをコピー
+            </Button>
+          ) : null}
         </div>
         {neighbors ? <NeighborLinks neighbors={neighbors} /> : null}
       </div>

@@ -1,5 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTitle, normalizeUrl } from "./url.ts";
+import { candidateHost, normalizeHost, normalizeTitle, normalizeUrl, siteHost } from "./url.ts";
+
+describe("siteHost", () => {
+  it("lowercases the host and takes off a leading www. only", () => {
+    expect(siteHost("https://WWW.Example.org/a?b=1")).toBe("example.org");
+    expect(siteHost("http://example.org.:8080/")).toBe("example.org");
+    expect(siteHost("https://www2.example.org/")).toBe("www2.example.org");
+  });
+
+  it("keeps subdomains apart", () => {
+    expect(siteHost("https://blog.example.org/a")).toBe("blog.example.org");
+    expect(siteHost("https://www.blog.example.org/a")).toBe("blog.example.org");
+  });
+
+  it("gives nothing for what is not a URL", () => {
+    expect(siteHost("not a url")).toBe("");
+    expect(siteHost("")).toBe("");
+  });
+});
+
+describe("candidateHost", () => {
+  it("is the host of the URL", () => {
+    expect(candidateHost("https://www.example.org/a", "https://other.example.net")).toBe("example.org");
+  });
+
+  it("is the host of the outlet when the URL is still a Google News redirect", () => {
+    expect(candidateHost("https://news.google.com/rss/articles/abc", "https://Times.Example.org")).toBe("times.example.org");
+    expect(candidateHost("https://news.google.com/rss/articles/abc", null)).toBe("");
+    expect(candidateHost("https://news.google.com/rss/articles/abc", "")).toBe("");
+  });
+});
+
+describe("normalizeHost", () => {
+  it("brings a host written by hand to the form of a candidate's", () => {
+    expect(normalizeHost(" WWW.Example.org ")).toBe("example.org");
+    expect(normalizeHost("blog.example.org")).toBe("blog.example.org");
+    expect(normalizeHost("xn--r8jz45g.jp")).toBe("xn--r8jz45g.jp");
+  });
+
+  it("gives null for what is not a host", () => {
+    for (const value of ["", "a b", "user@example.org", "example.org/a", "example.org:80", "."]) expect(normalizeHost(value)).toBeNull();
+  });
+});
 
 describe("normalizeUrl", () => {
   it("drops tracking parameters, so two links that differ only in them are equal", () => {

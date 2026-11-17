@@ -1,5 +1,6 @@
 import type { Candidate, SourceKind } from "../api.ts";
 import { reasonText, type ReasonCode } from "../pipeline/reasons.ts";
+import { candidateHost } from "../fetch/url.ts";
 import type { Database } from "./database.ts";
 import { bool, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
@@ -20,6 +21,8 @@ export interface NewCandidate {
   title: string;
   snippet: string;
   siteName: string;
+  /** The site of the candidate; left out, the host of its URL. */
+  siteHost?: string;
   publishedAt: string | null;
   sourceKind: SourceKind;
   status: "rejected" | "pending";
@@ -38,8 +41,8 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
     .prepare(
       `INSERT INTO candidates
          (category_id, run_id, url, fetchable, title, snippet, site_name, published_at, source_kind, status, reason,
-          reason_code, importance, created_at, feed_article_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reason_code, importance, created_at, feed_article_id, site_host)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       candidate.categoryId,
@@ -57,6 +60,7 @@ export function insertCandidate(db: Database, candidate: NewCandidate): number {
       candidate.importance,
       candidate.now,
       candidate.feedArticleId ?? null,
+      candidate.siteHost ?? candidateHost(candidate.url, null),
     );
   const id = num(result.lastInsertRowid);
   const link = db.prepare("INSERT OR IGNORE INTO candidate_topics (candidate_id, topic_id) VALUES (?, ?)");
@@ -182,13 +186,13 @@ export interface TrialCandidate {
   /** What the judge concluded. A candidate the program rejected after the judge accepted it counts as accepted. */
   verdict: "accepted" | "rejected";
   /** The program's reason when the program rejected it, which replaced the judge's reason. */
-  programReason: Exclude<ReasonCode, "no-date"> | null;
+  programReason: Exclude<ReasonCode, "no-date" | "blocked-site"> | null;
 }
 
 /**
  * Candidates of a topic for a trial: the newest `perSide` the judge accepted and the newest `perSide` it rejected,
- * a short side filled with more of the other. Candidates rejected for an unknown publication time never reached
- * the judge and are left out. Newest first.
+ * a short side filled with more of the other. Candidates rejected for an unknown publication time or a blocked site
+ * never reached the judge and are left out. Newest first.
  */
 export function listTrialCandidates(db: Database, topicId: number, perSide: number): TrialCandidate[] {
   const all: TrialCandidate[] = [];
@@ -202,7 +206,8 @@ export function listTrialCandidates(db: Database, topicId: number, perSide: numb
     const status = str(row.status) as Candidate["status"];
     const reason = str(row.reason);
     const code = status === "rejected" ? (strOrNull(row.reason_code) as ReasonCode | null) : null;
-    if (code === "no-date") continue;
+    // Neither reached the judge.
+    if (code === "no-date" || code === "blocked-site") continue;
     all.push({
       id: num(row.id),
       url: str(row.url),
