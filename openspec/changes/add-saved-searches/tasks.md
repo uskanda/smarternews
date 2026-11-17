@@ -3,7 +3,7 @@
 ## 1. サーバーの保存と件数
 
 - [x] 1.1 `saved-searches.test.ts` に保存した検索のテストを書き、失敗することを確かめる。対象は、読み書き、並べ替え、入力の誤り、削除の連動、未読数である
-- [x] 1.2 `041_saved_searches.sql`、`db/saved-searches.ts`、`api.ts`、`getCounts` を実装し、1.1のテストが通ることを確かめる
+- [x] 1.2 `044_saved_searches.sql`、`db/saved-searches.ts`、`api.ts`、`getCounts` を実装し、1.1のテストが通ることを確かめる
 
 ## 2. APIと設定ファイル
 
