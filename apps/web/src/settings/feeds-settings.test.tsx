@@ -1,8 +1,8 @@
 import { addHighlight, followMove, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { gateFirst, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
 const FEED = "https://blog.example.org/feed.xml";
@@ -1407,5 +1407,115 @@ describe("changes to feeds not saved yet", () => {
     await toUnread(user);
 
     expect(await question()).toHaveTextContent("購読フィードの追加");
+  });
+});
+
+describe("answers that come after the input changed", () => {
+  const PAGE = "https://town.example.org/news";
+  const URL_FIELD = "フィードまたはサイトのURL";
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  it("keeps the URL field read-only, with the focus in it, while feeds are looked for", async () => {
+    const server = makeServer();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const discover = gateFirst("/feeds/discover");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: discover.hold });
+
+    const form = await section("購読フィードの追加");
+    const field = within(form).getByLabelText(URL_FIELD);
+    await user.type(field, `${FEED}{Enter}`);
+    await waitFor(() => expect(discover.waiting()).toBe(true));
+    await waitFor(() => expect(field).toHaveAttribute("readonly"));
+    expect(field).toHaveFocus();
+    await user.type(field, "x");
+    expect(field).toHaveValue(FEED);
+
+    await discover.open();
+    await rowOf("Example Blog");
+    expect(listFeeds(server.db).map((feed) => feed.url)).toEqual([FEED]);
+    expect(field).toHaveValue("");
+    expect(field).not.toHaveAttribute("readonly");
+    expect(field).toHaveFocus();
+  });
+
+  it("subscribes with the category and the switches changed while feeds are looked for", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const discover = gateFirst("/feeds/discover");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: discover.hold });
+
+    const form = await section("購読フィードの追加");
+    await within(form).findByRole("option", { name: "Tools" });
+    await user.type(within(form).getByLabelText(URL_FIELD), FEED);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await waitFor(() => expect(discover.waiting()).toBe(true));
+    await user.selectOptions(within(form).getByLabelText("カテゴリ"), "Tools");
+    await user.click(within(form).getByRole("checkbox", { name: "翻訳する" }));
+
+    await discover.open();
+    await rowOf("Example Blog");
+    expect(listFeeds(server.db)).toMatchObject([{ url: FEED, categoryId: tools.id, translate: true }]);
+  });
+
+  it("drops the candidates of a page whose URL was changed while they were awaited", async () => {
+    const OTHER = "https://village.example.org/news";
+    const listing = (title: string, keys: string[]) => () =>
+      new Response(`<html><head><title>${title}</title></head><body><ul>${keys.map((key) => `<li class="post"><a href="/news/${key}">Story ${key}</a></li>`).join("")}</ul></body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    const server = makeServer(undefined, { proposeSelectors: () => ({ candidates: [{ item: "li.post", title: null, link: null, date: null }] }) });
+    server.site.set(PAGE, listing("Town News", ["a"]));
+    server.site.set(OTHER, listing("Village News", ["x", "y"]));
+    const candidates = gateFirst("/feeds/page/candidates");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: candidates.hold });
+
+    const form = await section("購読フィードの追加");
+    const field = within(form).getByLabelText(URL_FIELD);
+    await user.type(field, PAGE);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await user.click(await within(form).findByRole("button", { name: "このページを購読する" }));
+    await waitFor(() => expect(candidates.waiting()).toBe(true));
+    expect(field).not.toHaveAttribute("readonly");
+    await user.clear(field);
+    expect(within(form).queryByText(/候補を探しています/)).not.toBeInTheDocument();
+
+    // The changed URL is another page without a feed, whose candidates come before the first page's.
+    await user.type(field, OTHER);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await user.click(await within(form).findByRole("button", { name: "このページを購読する" }));
+    expect(await within(form).findByText("2件の記事を抜き出せます")).toBeInTheDocument();
+
+    await candidates.open();
+    await settle();
+    expect(within(form).queryByText("1件の記事を抜き出せます")).not.toBeInTheDocument();
+    expect(within(form).getByText("2件の記事を抜き出せます")).toBeInTheDocument();
+    await user.click(within(form).getByRole("button", { name: "このページを追加" }));
+    await rowOf("Village News");
+    expect(listFeeds(server.db)).toMatchObject([{ url: OTHER, format: "page", articleCount: 2 }]);
+  });
+
+  it("drops the preview of selectors that were changed while it was awaited", async () => {
+    const server = makeServer(undefined, { selectorProposalsPerDay: 0 });
+    server.site.set(PAGE, () => new Response('<html><head><title>Town News</title></head><body><p><a href="/news/a">Story a</a></p></body></html>', { headers: { "content-type": "text/html" } }));
+    const preview = gateFirst("/feeds/page/preview");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: preview.hold });
+
+    const form = await section("購読フィードの追加");
+    await user.type(within(form).getByLabelText(URL_FIELD), PAGE);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await user.click(await within(form).findByRole("button", { name: "このページを購読する" }));
+    expect(await within(form).findByText(/候補は見つかりませんでした/)).toBeInTheDocument();
+    const item = within(form).getByLabelText("項目のセレクター");
+    await user.type(item, "p");
+    await user.click(within(form).getByRole("button", { name: "見本を見る" }));
+    await waitFor(() => expect(preview.waiting()).toBe(true));
+    await user.type(item, " > a");
+
+    await preview.open();
+    await settle();
+    expect(within(form).queryByText("1件の記事を抜き出せます")).not.toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "このページを追加" })).toBeDisabled();
+    expect(within(form).getByRole("button", { name: "見本を見る" })).toBeEnabled();
   });
 });
