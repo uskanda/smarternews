@@ -172,7 +172,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
 
   for (const topic of topics) {
     for (const feedUrl of topic.sources.feeds) {
-      await attempt(topic, "feed", feedUrl, () => plain(collectFeed(ctx.fetcher, feedUrl, window.since)));
+      await attempt(topic, "feed", feedUrl, () => plain(collectFeed(ctx.fetcher, feedUrl, window.since, ctx.settings.timeZone)));
     }
     if (topic.sources.newsSearch) {
       const locale = topic.search ?? ctx.settings.search;

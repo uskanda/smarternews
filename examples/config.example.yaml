@@ -77,7 +77,8 @@ fetch:
   userAgent: null         # null = "smarternews/<version> (+https://github.com/uskanda/smarternews)"
   hostIntervalMs: 1000    # minimum time between two requests to the same host
   timeoutMs: 15000
-  maxBytes: 2000000
+  maxBytes: 2000000       # the largest page; full content and web feeds are read from pages
+  feedMaxBytes: 10000000  # the largest feed; a feed that lists every past episode can be several MB
   # The crawler sends no request to loopback, private, link-local or shared-space (100.64.0.0/10) addresses.
   # List the hosts on your own network that it may fetch, for example a feed you host yourself.
   allowPrivateHosts: []   # e.g. [feeds.home.example, 192.168.0.10]

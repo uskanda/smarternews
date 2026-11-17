@@ -307,10 +307,14 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   const headers: Record<string, string> = { accept: FEED_ACCEPT };
   if (conditions.etag) headers["if-none-match"] = conditions.etag;
   if (conditions.lastModified) headers["if-modified-since"] = conditions.lastModified;
-  const response = await deps.fetcher.get(url, { headers });
+  const response = await deps.fetcher.get(url, { headers, maxBytes: deps.fetcher.feedMaxBytes });
   if (response.status === 304) return null;
   if (response.status < 200 || response.status >= 300) throw new FeedHttpError(response.status, url, response.headers["retry-after"]);
-  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
+  return {
+    parsed: parseSubscription(response.text, url, getSettings(deps.db).timeZone),
+    etag: response.headers.etag ?? null,
+    lastModified: response.headers["last-modified"] ?? null,
+  };
 }
 
 /**

@@ -25,6 +25,16 @@ describe("discoverFeeds", () => {
     ]);
   });
 
+  it("takes a feed larger than the limit of pages up to the limit of feeds, but no such page", async () => {
+    const items = "<item><title>Item</title><link>https://example.org/a</link></item>".repeat(100);
+    const big = `<?xml version="1.0"?><rss version="2.0"><channel><title>Big Feed</title>${items}</channel></rss>`;
+    const bigPage = `<html><head><link rel="alternate" type="application/rss+xml" href="/feed.xml"></head><body>${"<p>text</p>".repeat(1000)}</body></html>`;
+    const fake = fakeFetch({ "https://example.org/big.xml": () => xml(big), "https://example.org/big": () => html(bigPage) });
+    const f = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 2048, feedMaxBytes: 100_000, fetchImpl: fake.fetchImpl });
+    expect(await discoverFeeds(f, "https://example.org/big.xml")).toEqual([{ url: "https://example.org/big.xml", title: "Big Feed" }]);
+    await expect(discoverFeeds(f, "https://example.org/big")).rejects.toMatchObject({ code: "invalid", message: expect.stringMatching(/larger than 2048 bytes/) });
+  });
+
   it("gives the URL itself, with the feed's title, when it is a feed", async () => {
     const { fetcher: f } = fetcher({ "https://example.org/feed.xml": () => xml(RSS) });
     expect(await discoverFeeds(f, "https://example.org/feed.xml")).toEqual([{ url: "https://example.org/feed.xml", title: "Example Feed" }]);
