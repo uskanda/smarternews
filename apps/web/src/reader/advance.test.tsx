@@ -134,7 +134,7 @@ describe("moving on after marking all as read", () => {
     await waitFor(() => expect(path()).toBe(`/f/${y.id}`));
 
     await user.click(within(await screen.findByRole("status")).getByRole("button", { name: "取り消す" }));
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^X/ })).toHaveTextContent("X1"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^X/ })).toHaveTextContent("X、未読1件"));
     expect(path()).toBe(`/f/${y.id}`);
   });
 
@@ -145,11 +145,11 @@ describe("moving on after marking all as read", () => {
     await waitFor(() => expect(path()).toBe(`/c/${c.slug}`));
     const list = () => screen.getByRole("region", { name: "記事の一覧" });
     await user.click(await within(list()).findByRole("link", { name: /About C/ }));
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^C/ })).toHaveTextContent("C1"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^C/ })).toHaveTextContent("C、未読1件"));
 
     await user.click(within(screen.getByRole("status")).getByRole("button", { name: "取り消す" }));
 
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^A\s*\d*$/ })).toHaveTextContent("A3"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^A(、未読\d+件)?$/ })).toHaveTextContent("A、未読3件"));
     expect(within(list()).getByRole("link", { name: /About C/ })).toBeInTheDocument();
   });
 });

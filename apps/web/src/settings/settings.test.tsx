@@ -753,6 +753,8 @@ describe("the settings file", () => {
 
     await waitFor(() => expect(settingsFile).toHaveTextContent("カテゴリを2件作成"));
     expect(settingsFile).toHaveTextContent("トピックを1件作成");
+    // Read out when it appears, as the result of loading an OPML file is.
+    expect(within(settingsFile).getByRole("status")).toHaveTextContent("カテゴリを2件作成");
     expect(await within(await section("カテゴリ")).findByRole("link", { name: "Cars" })).toBeInTheDocument();
   });
 

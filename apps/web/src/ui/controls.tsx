@@ -108,7 +108,11 @@ export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () =
 }
 
 export function Loading() {
-  return <p className="p-lg type-body-md text-on-surface-muted">読み込み中…</p>;
+  return (
+    <p role="status" className="p-lg type-body-md text-on-surface-muted">
+      読み込み中…
+    </p>
+  );
 }
 
 export function PageHeading({ children }: { children: ReactNode }) {

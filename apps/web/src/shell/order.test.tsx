@@ -5,11 +5,11 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
-const named = (name: string) => new RegExp(`^${name}\\s*\\d*$`);
+const named = (name: string) => new RegExp(`^${name}(、未読\\d+件)?$`);
 const link = (name: string) => within(nav()).getByRole("link", { name: named(name) });
 /** The categories and what is below them, as labels in order. */
 const groupLines = () =>
-  [...nav().querySelectorAll<HTMLElement>("[data-nav-key]")].map((row) => `${row.closest("ul ul") ? "  " : ""}${row.querySelector("a")!.textContent!.replace(/\d+$/, "").trim()}`);
+  [...nav().querySelectorAll<HTMLElement>("[data-nav-key]")].map((row) => `${row.closest("ul ul") ? "  " : ""}${row.querySelector("a")!.textContent!.replace(/、未読\d+件\d+$/, "").trim()}`);
 
 function feedOf(server: TestServer, title: string, categoryId: number | null) {
   return insertFeed(server.db, { url: `https://${title.toLowerCase()}.example.org/feed.xml`, title, categoryId }, server.clock);
@@ -53,7 +53,7 @@ function layOut() {
 /** The height of the middle of a row, by its place among the rows that show. */
 const mid = (label: string, nth = 0) => {
   const rows = [...nav().querySelectorAll<HTMLElement>("[data-nav-key]")];
-  const matches = rows.map((row, index) => ({ row, index })).filter(({ row }) => row.querySelector("a")!.textContent!.replace(/\d+$/, "").trim() === label);
+  const matches = rows.map((row, index) => ({ row, index })).filter(({ row }) => row.querySelector("a")!.textContent!.replace(/、未読\d+件\d+$/, "").trim() === label);
   return 100 + matches[nth]!.index * 20 + 10;
 };
 
@@ -347,7 +347,7 @@ describe("dragging an entry", () => {
     const { server } = seeded();
     const { path } = await ready({ server, route: "/all" });
     layOut();
-    const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/\d+$/, ""));
+    const views = () => within(nav().querySelector("ul")!).getAllByRole("link").map((entry) => entry.textContent!.replace(/、(未読|スター)\d+件\d+$/, ""));
     const ORDER = ["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト"];
 
     const recent = within(nav()).getByRole("link", { name: "最近読んだ記事" });

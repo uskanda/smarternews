@@ -32,12 +32,19 @@ describe("proposals of a topic rewrite", () => {
   it("lists the proposals with what changed, and puts the one chosen into the editor without saving it", async () => {
     const s = seeded();
     const { user, requests } = await openEditor(s);
+    // The status is there, empty, before asking: one that appears with its text may not be read out.
+    const status = screen.getAllByRole("status").filter((element) => element.textContent === "").at(-1);
+    expect(status).toBeDefined();
 
     await user.click(proposeButton());
 
     const results = await screen.findByRole("region", { name: "書き直しの案" });
+    expect(within(results).getByRole("status")).toBe(status);
     const items = await within(results).findAllByRole("listitem");
     expect(items).toHaveLength(2);
+    // Only how to use a proposal is read out; the proposals are left to be read.
+    expect(status).toHaveTextContent(/^「この案を使う」を押すと、編集欄の文章が置き換わります。/);
+    expect(within(status!).queryAllByRole("listitem")).toHaveLength(0);
     expect(items[0]).toHaveTextContent("Rustのコンパイラーのリリース。入門記事は除く");
     expect(items[0]).toHaveTextContent("判定基準でも入門記事が除かれるはずです。");
 
@@ -67,7 +74,7 @@ describe("proposals of a topic rewrite", () => {
     const first = await openEditor(limited);
     await first.user.click(proposeButton());
     const results = await screen.findByRole("region", { name: "書き直しの案" });
-    await waitFor(() => expect(results).toHaveTextContent("今日の書き直しの案の上限に達したため、案を出せません。"));
+    await waitFor(() => expect(within(results).getByRole("status")).toHaveTextContent("今日の書き直しの案の上限に達したため、案を出せません。"));
     expect(limited.server.llmRequests.proposeTopicRewrite).toHaveLength(0);
     first.unmount();
 
@@ -88,6 +95,6 @@ describe("proposals of a topic rewrite", () => {
     const failing = seeded({ proposeTopicRewrite: () => ({ proposals: [] }) });
     const second = await openEditor(failing);
     await second.user.click(proposeButton());
-    await waitFor(() => expect(screen.getByRole("region", { name: "書き直しの案" })).toHaveTextContent("案を出せませんでした。"));
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "書き直しの案" })).getByRole("status")).toHaveTextContent("案を出せませんでした。"));
   });
 });

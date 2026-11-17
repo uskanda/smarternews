@@ -102,13 +102,11 @@ const ITEM = "tap flex min-w-0 flex-1 items-center justify-between gap-sm rounde
 function NavItem({
   to,
   label,
-  count,
   attention,
   onNavigate,
 }: {
   to: string;
   label: string;
-  count?: number;
   /** The attention items not yet dismissed, shown in the warning colour and read out as what they are. */
   attention?: number;
   onNavigate?: () => void;
@@ -116,7 +114,6 @@ function NavItem({
   return (
     <NavLink to={to} onClick={onNavigate} className={({ isActive }) => `${ITEM} ${isActive ? "bg-selected font-semibold" : ""}`}>
       <span className="min-w-0 truncate">{label}</span>
-      {count ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
       {attention ? (
         <>
           {/* Read out apart from the name, and as what the number counts. */}
@@ -166,11 +163,14 @@ function FeedStateIcon({ state, label = FEED_STATE_LABEL[state] }: { state: Feed
   );
 }
 
+const COUNT_KIND = { unread: "未読", starred: "スター" } as const;
+
 /** An entry that opens a list of articles. It is current on that list and on an article opened from it. */
 function ListItem({
   entry,
   to,
   count = entry.unread,
+  countKind = "unread",
   holdsCurrent = false,
   state = entry.state,
   stateLabel,
@@ -179,6 +179,8 @@ function ListItem({
   entry: NavEntry;
   to: string;
   count?: number;
+  /** What the number counts, read out with it: unread articles, or starred ones beside "スター". */
+  countKind?: keyof typeof COUNT_KIND;
   /** True for a folded category whose hidden entry is the one that is open: the row shows where the reader is. */
   holdsCurrent?: boolean;
   /** The mark beside the name: the feed's own state, or that of the feeds hidden below a folded category. */
@@ -204,7 +206,15 @@ function ListItem({
           <FeedStateIcon state={state} label={stateLabel} />
         </>
       ) : null}
-      {count > 0 ? <span className="tabular-nums text-on-surface-muted">{count}</span> : null}
+      {count > 0 ? (
+        <>
+          {/* Read out apart from the name, and as what the number counts. */}
+          <span className="sr-only">{`、${COUNT_KIND[countKind]}${count}件`}</span>
+          <span aria-hidden="true" className="tabular-nums text-on-surface-muted">
+            {count}
+          </span>
+        </>
+      ) : null}
     </Link>
   );
 }
@@ -257,7 +267,11 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         {model.views.map((entry) => (
           <li key={listKey(entry.target)} className="flex">
             {/* Beside "スター" stands the number of starred articles, not of unread ones. */}
-            <ListItem entry={entry} to={pathOf(entry)} count={entry.target.type === "starred" ? model.starred : entry.unread} onNavigate={onNavigate} />
+            {entry.target.type === "starred" ? (
+              <ListItem entry={entry} to={pathOf(entry)} count={model.starred} countKind="starred" onNavigate={onNavigate} />
+            ) : (
+              <ListItem entry={entry} to={pathOf(entry)} onNavigate={onNavigate} />
+            )}
           </li>
         ))}
         {/* Not a list of articles: it stays below 注釈, and Shift+J and Shift+K pass it by. */}

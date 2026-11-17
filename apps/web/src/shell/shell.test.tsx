@@ -84,7 +84,7 @@ describe("the list of views and categories", () => {
 
     const views = await within(nav()).findAllByRole("list");
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
-    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト"]);
+    expect(within(views[0]!).getAllByRole("link").map((link) => link.textContent!.replace(/、.*$/, ""))).toEqual(["未読", "すべて", "スター", "AI生成", "購読フィード", "最近読んだ記事", "注釈", "ダイジェスト"]);
     expect(within(nav()).getByRole("link", { name: "最近読んだ記事" })).toHaveTextContent(/^最近読んだ記事$/);
     expect(within(nav()).getByRole("link", { name: "注釈" })).toHaveTextContent(/^注釈$/);
     expect(within(nav()).getByRole("link", { name: "ダイジェスト" })).toHaveTextContent(/^ダイジェスト$/);
@@ -114,6 +114,23 @@ describe("the list of views and categories", () => {
 
     const marked = await within(nav()).findByRole("link", { name: "実行履歴、注意2件" });
     expect(within(marked).getByText("2")).toHaveClass("text-warning");
+  });
+
+  it("reads the number beside an entry out as what it counts: unread articles, or starred ones beside スター", async () => {
+    const server = makeServer();
+    const a = server.category("Security");
+    server.article(a.id);
+    const starred = server.article(a.id);
+    setArticleFlags(server.db, starred, { isRead: true, starred: true }, server.clock().toISOString());
+    server.article(server.category("Tools").id);
+    setArticleFlags(server.db, server.article(server.category("Quiet").id), { isRead: true }, server.clock().toISOString());
+    renderApp({ server });
+
+    const security = await within(nav()).findByRole("link", { name: "Security、未読1件" });
+    expect(within(security).getByText("1")).toHaveAttribute("aria-hidden", "true");
+    expect(within(nav()).getByRole("link", { name: "未読、未読2件" })).toBeInTheDocument();
+    expect(within(nav()).getByRole("link", { name: "スター、スター1件" })).toBeInTheDocument();
+    expect(within(nav()).getByRole("link", { name: "Quiet" })).toBeInTheDocument();
   });
 
   it("puts no number beside the run history when there is nothing to look at", async () => {

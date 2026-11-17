@@ -478,7 +478,11 @@ function SettingsFile() {
           </Button>
         </div>
       </form>
-      {result ? <p className="type-body-md">{result}</p> : null}
+      {result ? (
+        <p role="status" className="type-body-md">
+          {result}
+        </p>
+      ) : null}
       {error ? (
         <div role="alert" className="max-w-measure rounded-md border border-error px-lg py-sm type-body-md text-error">
           <p>{error instanceof ApiError && error.kind === "invalid" ? "設定ファイルの形式が合わないため、何も変更していません。" : messageFor(error)}</p>

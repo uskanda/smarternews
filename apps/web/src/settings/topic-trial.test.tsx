@@ -79,6 +79,9 @@ describe("trying a topic before saving it", () => {
     expect(minor).toHaveTextContent("試し採用リリースの知らせ（重要度 2）");
     expect(minor).toHaveTextContent("重要度がカテゴリの最低（3）を下回るため、記事になりません");
     expect(within(minor).getByRole("link", { name: "Rust minor release" })).toHaveAttribute("href", "https://example.org/Rust%20minor%20release");
+    // Only the one sentence is read out when the trial ends; the candidates and the new wording are left to be read.
+    const status = within(results).getByRole("status");
+    expect(status).toHaveTextContent(/^3件を試し、2件の結論が入れ替わりました。$/);
 
     expect(s.server.llmRequests.interpret[0]!.prompt).toContain("Rust compiler releases");
     expect(requests.filter((request) => request.startsWith("PATCH"))).toEqual([]);
@@ -109,14 +112,19 @@ describe("trying a topic before saving it", () => {
       },
     });
     const { user } = await openEditor(s);
+    // The status is there, empty, before the trial starts: one that appears with its text may not be read out.
+    const [status] = screen.getAllByRole("status").filter((element) => element.textContent === "");
+    expect(status).toBeDefined();
 
     await user.click(screen.getByRole("button", { name: "試す" }));
 
     const results = await screen.findByRole("region", { name: "試しの結果" });
-    await within(results).findByText("試しています…");
+    expect(within(results).getByRole("status")).toBe(status);
+    await waitFor(() => expect(status).toHaveTextContent(/^試しています…$/));
     expect(screen.getByRole("button", { name: "試す" })).toBeDisabled();
     release();
     await within(results).findByText("入れ替わる候補はありません。", {}, { timeout: 4000 });
+    expect(status).toHaveTextContent(/^0件を試し、0件の結論が入れ替わりました。$/);
     expect(screen.getByRole("button", { name: "試す" })).toBeEnabled();
   });
 
@@ -127,7 +135,7 @@ describe("trying a topic before saving it", () => {
     await user.click(screen.getByRole("button", { name: "試す" }));
 
     const results = await screen.findByRole("region", { name: "試しの結果" });
-    await waitFor(() => expect(results).toHaveTextContent("今日の試しの上限に達したため、試せません。"));
+    await waitFor(() => expect(within(results).getByRole("status")).toHaveTextContent("今日の試しの上限に達したため、試せません。"));
     expect(s.server.llmRequests.interpret).toHaveLength(0);
   });
 });
