@@ -1,4 +1,4 @@
-import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListSort } from "@smarternews/core/api";
+import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListFormat, ListSort } from "@smarternews/core/api";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
@@ -13,8 +13,9 @@ import {
   useCategories,
   useCounts,
   useFeeds,
+  EXPANDED_PAGE_SIZE,
   useFullContentFetch,
-  useListSortChange,
+  useListViewChange,
   useListViews,
   useMentionArticles,
   useReadPatch,
@@ -40,6 +41,7 @@ import {
   hasListControls,
   hasReadToggle,
   hasSortMenu,
+  listFormatOf,
   listKey as keyOf,
   listSortOf,
   mergeKept,
@@ -68,8 +70,9 @@ import { CategorySettingsLink, EventList } from "./EventList.tsx";
 import { FeedOptionsDialog } from "./FeedOptionsDialog.tsx";
 import { FeedStatusBanner } from "./FeedStatusBanner.tsx";
 import { MarkOlderMenu, type MarkOlderPeriod } from "./MarkOlderMenu.tsx";
-import { useScrollToRead } from "./scroll-read.ts";
-import { SortMenu } from "./SortMenu.tsx";
+import { ExpandedArticle } from "./ExpandedArticle.tsx";
+import { firstRowBelow, useScrollToRead } from "./scroll-read.ts";
+import { FormatMenu, SortMenu } from "./SortMenu.tsx";
 import { SummarizeList } from "./SummarizeList.tsx";
 
 export type View =
@@ -102,6 +105,7 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
+const NO_IDS: ReadonlySet<number> = new Set();
 
 /**
  * What an empty list says. The importance filter comes first, since it may be why nothing is left; read articles
@@ -261,7 +265,12 @@ export function ReaderPage({ view }: { view: View }) {
   const viewsSettled = listViews.isSuccess || listViews.isError;
   const sortMenu = target !== null && !isSearch && hasSortMenu(target, categories.data);
   const sort: ListSort = target !== null && sortMenu ? listSortOf(target, listViews.data?.items, categories.data) : "newest";
-  const sortChange = useListSortChange(() => toast({ message: "並び順を保存できませんでした。もう一度試してください。" }));
+  const sortChange = useListViewChange(() => toast({ message: "並び順を保存できませんでした。もう一度試してください。" }));
+  // The format is kept by the same entries as the order; every other list is in the standard format.
+  const format: ListFormat = target !== null && sortMenu ? listFormatOf(target, listViews.data?.items, categories.data) : "standard";
+  const compact = format === "compact";
+  const expanded = format === "expanded";
+  const formatChange = useListViewChange(() => toast({ message: "表示を保存できませんでした。もう一度試してください。" }));
 
   const filter = useMemo<ArticleListQuery>(() => {
     if (target === null) return {};
@@ -322,7 +331,7 @@ export function ReaderPage({ view }: { view: View }) {
   const unreadOnly = isSearch ? searchUnread : filter.unread === "true";
   // The recently read articles stop being listed once put back to unread: such a row is kept like a read one in an unread list.
   const recentlyRead = filter.recentlyRead === "true";
-  const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations);
+  const list = useArticleList(filter, target !== null && viewsSettled && !isAnnotations, expanded ? EXPANDED_PAGE_SIZE : undefined);
   const active = isSearch ? results : isMention ? mentionList : list;
   // No list of articles: the annotations, and a feed or a category not known, or not yet. Their filter is empty,
   // the filter of すべて, whose rows are in the cache: they are no rows of this page, for the keys or the list.
@@ -405,7 +414,10 @@ export function ReaderPage({ view }: { view: View }) {
   if (articleId !== null && (lastOpened === null || lastOpened.key !== listKey || lastOpened.id !== articleId)) setLastOpened({ key: listKey, id: articleId });
   /** The article chosen in the list: the one open, or else the one last opened from this list. */
   const current = articleId ?? (lastOpened?.key === listKey ? lastOpened.id : null);
-  const listShown = layout !== "narrow" || articleId === null;
+  // The expanded list has no article pane: an article opened by its path, from a link, takes the screen alone, as
+  // on a narrow screen, with the way back to the list.
+  const alone = layout === "narrow" || expanded;
+  const listShown = !alone || articleId === null;
   const listWasShown = useRef(listShown);
   // Back in the list: where it was left, with the article last read in view and the focus on it. This comes
   // before the marking of what is scrolled past, so that the marking starts from the place put back and does
@@ -579,8 +591,9 @@ export function ReaderPage({ view }: { view: View }) {
   // Full content: the fetch is kept here, for the `w` key and the article pane alike. Which content is shown is
   // held for one visit to an article; choosing it again shows the full content.
   const fullContent = useFullContentFetch();
-  const [deliveredShown, setDeliveredShown] = useState<number | null>(null);
-  useEffect(() => setDeliveredShown(null), [articleId]);
+  // A set, as the expanded list shows many articles at once; it is held while that list is.
+  const [deliveredShown, setDeliveredShown] = useState<ReadonlySet<number>>(() => new Set());
+  useEffect(() => setDeliveredShown(new Set()), [articleId]);
 
   // Opening an unread article marks it as read, once per visit to that article. An article that waits for its
   // full content has it asked for: once read, it would no longer be fetched by itself. Its body is shown now, so
@@ -600,8 +613,34 @@ export function ReaderPage({ view }: { view: View }) {
   }, [articleId]);
 
   function toggleDelivered(id: number) {
-    setDeliveredShown((current) => (current === id ? null : id));
+    setDeliveredShown((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   }
+  /** What the article pane and every article of the expanded list are given, whichever article they show. */
+  const articleViewProps = (id: number) => ({
+    id,
+    categoryName,
+    feedName,
+    feedListPath,
+    timeZone,
+    articlePath,
+    onToggleStar: toggleStar,
+    onToggleRead: (article: Article) => setRead(article.id, !article.isRead),
+    onToggleMiss: toggleMiss,
+    onToggleFollowUps: (article: Article) => flags.mutate({ id: article.id, followUpsStopped: !article.followUpsStopped }),
+    onCopyLink: (article: Article) => void copyLink(article),
+    fullContent: {
+      fetching: fullContent.isFetching(id),
+      requestFailed: fullContent.requestFailed(id),
+      showDelivered: deliveredShown.has(id),
+      onFetch: () => fullContent.fetch(id),
+      onToggle: () => toggleDelivered(id),
+    },
+    terms,
+  });
 
   function refresh() {
     setKept({ key: listKey, items: [] });
@@ -754,13 +793,18 @@ export function ReaderPage({ view }: { view: View }) {
   /** Lists the entry in the other order, from its start; the article open stays open. */
   function changeSort(next: ListSort) {
     if (target === null) return;
-    sortChange.mutate({ key: keyOf(target), sort: next });
+    sortChange.mutate({ key: keyOf(target), patch: { sort: next } });
+  }
+  /** Shows the entry in another format; the order and the article open stay. */
+  function changeFormat(next: ListFormat) {
+    if (target === null) return;
+    formatChange.mutate({ key: keyOf(target), patch: { format: next } });
   }
   // A list in another order, and another list, start at the top: every list is drawn by this one page, which
   // would keep the place the last list was scrolled to. Going up reads nothing by scrolling.
   useLayoutEffect(() => {
     if (listScroll.current) listScroll.current.scrollTop = 0;
-  }, [sort, listKey]);
+  }, [sort, listKey, format]);
   const narrowing = searchSlug !== null ? `c:${searchSlug}` : searchFeedId !== undefined ? `f:${searchFeedId}` : "";
 
   const index = current === null ? -1 : items.findIndex((item) => item.id === current);
@@ -783,7 +827,7 @@ export function ReaderPage({ view }: { view: View }) {
    * Past the last article loaded, the next page is loaded first, and its first article opened. A page that did
    * not load leaves the article open and says so; a reader who went elsewhere meanwhile is left there.
    */
-  const moveOn = async () => {
+  const moveOn = async (then: (id: number) => void = (id) => go(id, 1)) => {
     if (loadingMore.current) return;
     loadingMore.current = true;
     const from = { listKey, articleId };
@@ -800,7 +844,7 @@ export function ReaderPage({ view }: { view: View }) {
         failed = true;
       }
       if (place.current.listKey !== from.listKey || place.current.articleId !== from.articleId) return;
-      if (first) go(first.id, 1);
+      if (first) then(first.id);
       else if (failed) toast({ message: "続きを読み込めませんでした。もう一度試してください。" });
     } finally {
       loadingMore.current = false;
@@ -885,26 +929,104 @@ export function ReaderPage({ view }: { view: View }) {
    * article at its end. Shift+Space the other way. Without a body, the article j or k would choose. On the
    * list of annotations, the annotation j or k would choose there.
    */
-  const page = (step: 1 | -1) => {
-    const pane = articlePane.current;
-    const onward = () => (isAnnotations ? annotationMove.current?.(step) : move(step));
-    if (articleId === null || !pane) return onward();
-    const end = step === 1 ? pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 : pane.scrollTop <= 0;
-    if (end) return onward();
+  /** Scrolls a pane by a screen less a line, so the last line read stays in view. */
+  const scrollByScreen = (pane: HTMLElement, step: 1 | -1) => {
     // The line height is in pixels at the browser's default 16px; the text grows with the font size it is set to.
     const rootSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
     const line = lineHeights["body-lg"] * (rootSize > 0 ? rootSize / 16 : 1);
     const by = Math.max(pane.clientHeight - line, line);
     pane.scrollTop = Math.max(0, pane.scrollTop + step * by);
   };
-  const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = opened ?? items[index];
+  const page = (step: 1 | -1) => {
+    // The expanded list is read by scrolling it: its end loads the next page by itself.
+    if (expandedList) return void (listScroll.current && scrollByScreen(listScroll.current, step));
+    const pane = articlePane.current;
+    const onward = () => (isAnnotations ? annotationMove.current?.(step) : move(step));
+    if (articleId === null || !pane) return onward();
+    const end = step === 1 ? pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1 : pane.scrollTop <= 0;
+    if (end) return onward();
+    scrollByScreen(pane, step);
+  };
+
+  // The expanded list: every article in full, one after another, in place of the article pane. An article is
+  // fetched, and what an open article asks for is asked, once it first comes into view. The keys work on the
+  // article at the top of the view, which the mark at the right edge shows.
+  const expandedList = expanded && listShown;
+  const [seen, setSeen] = useState<{ key: string; ids: ReadonlySet<number> }>(() => ({ key: listKey, ids: new Set() }));
+  const seenIds = seen.key === listKey ? seen.ids : NO_IDS;
+  const markSeen = (id: number) =>
+    setSeen((current) => {
+      const ids = current.key === listKey ? current.ids : NO_IDS;
+      return ids.has(id) ? current : { key: listKey, ids: new Set([...ids, id]) };
+    });
+  const [topId, setTopId] = useState<number | null>(null);
+  /** The article at the top of the view: the first one not wholly scrolled past. */
+  const findTop = () => {
+    const pane = listScroll.current;
+    const rows = listRows.current;
+    if (!expandedList || !pane || !rows) return;
+    setTopId(items[firstRowBelow(pane, rows.children)]?.id ?? null);
+  };
+  useLayoutEffect(findTop, [expandedList, items, listKey]);
+  const topItem = expandedList ? (items.find((item) => item.id === topId) ?? items[0]) : undefined;
+  // The article itself, for the keys that need more than its row; fetched already, as it is in view.
+  const topArticle = useArticle(topItem && seenIds.has(topItem.id) ? topItem.id : null).data;
+  const expandedRow = (id: number) => listScroll.current?.querySelector<HTMLElement>(`[data-expanded-article][data-article-id="${id}"]`) ?? null;
+  /** Brings the headline of an article to the top of the view, and reads the article, as opening it would. */
+  const bringToTop = (id: number) => {
+    const pane = listScroll.current;
+    const row = expandedRow(id);
+    if (!pane || !row) return;
+    pane.scrollTop = Math.max(0, row.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop);
+    setTopId(id);
+    markSeen(id);
+    const item = items.find((entry) => entry.id === id);
+    if (item && !item.isRead) setRead(id, true);
+  };
+  // The first article of a page loaded by `j` past the last one, brought to the top once it is drawn.
+  const broughtNext = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const id = broughtNext.current;
+    if (id === null || !expandedRow(id)) return;
+    broughtNext.current = null;
+    bringToTop(id);
+  });
+  /**
+   * `j` and `k`: the headline of the next or the previous article to the top. `k` on an article whose headline is
+   * scrolled past goes back to that headline first. Past the last article loaded, the next page is loaded first.
+   */
+  const expandedMove = (step: 1 | -1) => {
+    if (loadingMore.current) return;
+    const pane = listScroll.current;
+    const at = topItem ? items.indexOf(topItem) : -1;
+    if (step < 0 && topItem && pane) {
+      const row = expandedRow(topItem.id);
+      if (row && row.getBoundingClientRect().top < pane.getBoundingClientRect().top - 1) return bringToTop(topItem.id);
+    }
+    const next = at + step;
+    if (next < 0) return;
+    if (next >= items.length) {
+      if (active.hasNextPage) return void moveOn((id) => (broughtNext.current = id));
+      return reachEnd();
+    }
+    bringToTop(items[next]!.id);
+  };
+  /** An article that came into view and has arrived: what opening it records and asks for. */
+  const shown = (article: Article) => {
+    recordOpened(article);
+    if (article.fullContentStatus === "waiting") fullContent.fetch(article.id);
+  };
+
+  const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = expandedList ? topItem : (opened ?? items[index]);
+  // The article the keys of its body work on: the one in the article pane, or the one at the top of the expanded list.
+  const focused: Article | undefined = expandedList ? topArticle : opened && opened.id === articleId ? opened : undefined;
   // A page not loaded yet may hold unread articles, which marking all as read takes too.
   const canMarkAll = listControls && (view === "unread" || readToggle) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
   useHotkeys(
     {
       // The list of annotations moves through its own rows.
-      j: isAnnotations ? undefined : () => move(1),
-      k: isAnnotations ? undefined : () => move(-1),
+      j: isAnnotations ? undefined : () => (expandedList ? expandedMove(1) : move(1)),
+      k: isAnnotations ? undefined : () => (expandedList ? expandedMove(-1) : move(-1)),
       Space: () => page(1),
       "Shift+Space": () => page(-1),
       // The same as the buttons and the toggle beside the list, and only while they are offered.
@@ -915,14 +1037,14 @@ export function ReaderPage({ view }: { view: View }) {
       s: selected ? () => toggleStar(selected) : undefined,
       m: selected ? () => setRead(selected.id, !selected.isRead) : undefined,
       // The same as the button under the body of a generated article, and only while it is shown.
-      x: opened?.origin === "generated" && opened.id === articleId ? () => toggleMiss(opened) : undefined,
+      x: focused?.origin === "generated" ? () => toggleMiss(focused) : undefined,
       o: selected?.primaryUrl ? () => void window.open(selected.primaryUrl!, "_blank", "noopener,noreferrer") : undefined,
-      // The same as the button under the body, and only while it is shown: for the article in the article pane.
-      c: opened && opened.id === articleId && articleLink(opened) !== null ? () => void copyLink(opened) : undefined,
+      // The same as the button under the body, and only while it is shown.
+      c: focused && articleLink(focused) !== null ? () => void copyLink(focused) : undefined,
       // Fetches the full content of a feed article without one, or switches between it and what the feed delivered.
       w:
-        opened?.origin === "feed" && opened.id === articleId && !fullContent.isFetching(opened.id)
-          ? () => (opened.fullContent !== null ? toggleDelivered(opened.id) : fullContent.fetch(opened.id))
+        focused?.origin === "feed" && !fullContent.isFetching(focused.id)
+          ? () => (focused.fullContent !== null ? toggleDelivered(focused.id) : fullContent.fetch(focused.id))
           : undefined,
     },
     { now },
@@ -936,7 +1058,7 @@ export function ReaderPage({ view }: { view: View }) {
   }
 
   const showList = listShown;
-  const showArticle = layout !== "narrow" || articleId !== null;
+  const showArticle = !alone || articleId !== null;
   // On a narrow screen the list is out of sight: the end of the body leads to the articles beside this one.
   const headline = (item: ArticleSummary) => item.translatedTitle ?? item.title;
   const previousItem = items[index - 1];
@@ -1015,6 +1137,7 @@ export function ReaderPage({ view }: { view: View }) {
             <Checkbox label="重要度4以上だけ" checked={importantOnly} onChange={(event) => toggleParam("min", "4", event.target.checked)} />
           ) : null}
           {sortMenu && target !== null ? <SortMenu sort={sort} options={sortOptionsOf(target)} onChange={changeSort} /> : null}
+          {sortMenu && target !== null ? <FormatMenu format={format} onChange={changeFormat} /> : null}
           {/* Beside the switches rather than beside 読み直す: a third button there leaves the list's name no room.
               An event category lists events by day and takes no feeds; it never reaches this header anyway. */}
           {view === "category" && category?.kind === "news" && categories.data ? <AddFeedDialog categories={categories.data} category={category} /> : null}
@@ -1067,7 +1190,10 @@ export function ReaderPage({ view }: { view: View }) {
       <div
         ref={setListScroll}
         data-list-scroll
-        onScroll={(event) => positions.current.set(listKey, event.currentTarget.scrollTop)}
+        onScroll={(event) => {
+          positions.current.set(listKey, event.currentTarget.scrollTop);
+          findTop();
+        }}
         className="min-h-0 flex-1 overflow-y-auto"
       >
         {/* A next page that could not be loaded is said below the rows, where the reader is. */}
@@ -1088,21 +1214,40 @@ export function ReaderPage({ view }: { view: View }) {
           />
         ) : null}
         <ul ref={listRows}>
-          {items.map((item) => (
-            <ArticleRow
-              key={item.id}
-              article={item}
-              to={articlePath(item.id)}
-              selected={item.id === current}
-              sourceName={sourceName(item)}
-              timeZone={timeZone}
-              now={listMinute}
-              time={recentlyRead ? "read" : "updated"}
-              excerpt={excerpts.get(item.id)?.excerpt ?? null}
-              excerptFromNote={excerpts.get(item.id)?.excerptFromNote ?? false}
-              terms={terms}
-            />
-          ))}
+          {expandedList
+            ? items.map((item) => (
+                <ExpandedArticle
+                  key={item.id}
+                  summary={item}
+                  seen={seenIds.has(item.id)}
+                  target={item.id === topItem?.id}
+                  root={listScrollElement}
+                  sourceName={sourceName(item)}
+                  timeZone={timeZone}
+                  now={listMinute}
+                  onSeen={markSeen}
+                  onShown={shown}
+                  onHeadline={() => bringToTop(item.id)}
+                >
+                  <ArticleView {...articleViewProps(item.id)} backTo={null} onHeadline={() => bringToTop(item.id)} />
+                </ExpandedArticle>
+              ))
+            : items.map((item) => (
+                <ArticleRow
+                  key={item.id}
+                  article={item}
+                  to={articlePath(item.id)}
+                  selected={item.id === current}
+                  sourceName={sourceName(item)}
+                  timeZone={timeZone}
+                  now={listMinute}
+                  time={recentlyRead ? "read" : "updated"}
+                  excerpt={excerpts.get(item.id)?.excerpt ?? null}
+                  excerptFromNote={excerpts.get(item.id)?.excerptFromNote ?? false}
+                  terms={terms}
+                  compact={compact}
+                />
+              ))}
         </ul>
         {active.hasNextPage ? (
           <div ref={moreMark} data-list-more className="flex flex-col items-center gap-sm p-lg">
@@ -1135,7 +1280,7 @@ export function ReaderPage({ view }: { view: View }) {
         {endSaid > 0 ? <span key={endSaid}>一覧の最後です</span> : null}
       </div>
       {showList ? (
-        layout === "narrow" ? (
+        alone ? (
           <div className="min-w-0 flex-1">{listPane}</div>
         ) : (
           <div data-pane="list" className="relative shrink-0 border-r border-outline" style={{ width: panes.shown.list }}>
@@ -1159,27 +1304,9 @@ export function ReaderPage({ view }: { view: View }) {
           ) : (
             <ArticleView
               key={articleId}
-              id={articleId}
-              categoryName={categoryName}
-              feedName={feedName}
-              feedListPath={feedListPath}
-              timeZone={timeZone}
-              backTo={layout === "narrow" ? listPath : null}
-              articlePath={articlePath}
+              {...articleViewProps(articleId)}
+              backTo={alone ? listPath : null}
               neighbors={neighbors}
-              onToggleStar={toggleStar}
-              onToggleRead={(article) => setRead(article.id, !article.isRead)}
-              onToggleMiss={toggleMiss}
-              onToggleFollowUps={(article) => flags.mutate({ id: article.id, followUpsStopped: !article.followUpsStopped })}
-              onCopyLink={(article) => void copyLink(article)}
-              fullContent={{
-                fetching: fullContent.isFetching(articleId),
-                requestFailed: fullContent.requestFailed(articleId),
-                showDelivered: deliveredShown === articleId,
-                onFetch: () => fullContent.fetch(articleId),
-                onToggle: () => toggleDelivered(articleId),
-              }}
-              terms={terms}
               focusAnnotation={focusAnnotation}
             />
           )}

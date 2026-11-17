@@ -120,7 +120,7 @@ function toFileRules(db: Database): SettingsFileRule[] {
 
 /** The list views that differ from the defaults, each entry named as the file names it, the defaults left out. */
 function toFileListViews(db: Database): SettingsFileListView[] {
-  return listViewEntries(db).map(({ target, sort }) => {
+  return listViewEntries(db).map(({ target, sort, format }) => {
     const list: SettingsFileListViewTarget =
       target.list === "category"
         ? { category: findCategory(db, target.categoryId)!.slug }
@@ -129,7 +129,7 @@ function toFileListViews(db: Database): SettingsFileListView[] {
           : target.list === "feed"
             ? { feed: findFeed(db, target.feedId)!.url }
             : target.list;
-    return { list, ...(sort === "newest" ? {} : { sort }) };
+    return { list, ...(sort === "newest" ? {} : { sort }), ...(format === "standard" ? {} : { format }) };
   });
 }
 
@@ -398,7 +398,7 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
     if (entry.sort !== undefined && !sortAllowed(target, entry.sort)) {
       throw refuseAt(`listViews.${index}.sort`, "only the starred articles can be in the order by star time", "not_allowed");
     }
-    const patch = entry.sort === undefined ? {} : { sort: entry.sort };
+    const patch = { ...(entry.sort === undefined ? {} : { sort: entry.sort }), ...(entry.format === undefined ? {} : { format: entry.format }) };
     checkListViewTarget(db, target, patch);
     setListView(db, target, patch);
     result.listViewsUpdated += 1;

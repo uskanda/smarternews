@@ -954,7 +954,48 @@ describe("list views in the settings file", () => {
     const feed = insertFeed(db, { url: FEED, title: "A", categoryId: tools.id }, clock);
     return { db, tools, feed };
   }
-  const views = (db: ReturnType<typeof createTestDb>) => listListViews(db).items;
+  /** The stored views, the standard format left out as the file leaves it out. */
+  const views = (db: ReturnType<typeof createTestDb>) =>
+    listListViews(db).items.map(({ format, ...view }) => (format === "standard" ? view : { ...view, format }));
+
+  it("carry the format of a list, and leave out the standard one", () => {
+    const { db, tools } = changed();
+    updateListView(db, "unread", { format: "compact" });
+    updateListView(db, `category-${tools.id}`, { sort: "oldest", format: "expanded" });
+    updateListView(db, "all", { sort: "oldest" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([
+      { list: "unread", format: "compact" },
+      { list: { category: "tools" }, sort: "oldest", format: "expanded" },
+      { list: "all", sort: "oldest" },
+    ]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(3);
+    const otherTools = listCategories(other).find((category) => category.slug === "tools")!;
+    expect(views(other)).toEqual([
+      { key: "unread", sort: "newest", format: "compact" },
+      { key: `category-${otherTools.id}`, sort: "oldest", format: "expanded" },
+      { key: "all", sort: "oldest" },
+    ]);
+  });
+
+  it("keep the stored format when an entry leaves it out, as a file written before formats does", () => {
+    const { db } = changed();
+    updateListView(db, "unread", { sort: "oldest", format: "expanded" });
+
+    importSettings(db, "version: 1\nlistViews: [{ list: unread, sort: newest }]\n", clock);
+
+    expect(views(db)).toEqual([{ key: "unread", sort: "newest", format: "expanded" }]);
+    importSettings(db, "version: 1\nlistViews: [{ list: unread, format: standard }]\n", clock);
+    expect(views(db)).toEqual([]);
+  });
+
+  it("refuse the whole file for a format it does not know", () => {
+    const { db } = changed();
+    expect(() => importSettings(db, "version: 1\nlistViews: [{ list: unread, format: cards }]\n", clock)).toThrow();
+    expect(views(db)).toEqual([]);
+  });
 
   it("are written for the entries that were changed, a category by its slug and a feed by its URL", () => {
     const { db, tools, feed } = changed();

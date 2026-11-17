@@ -1660,3 +1660,36 @@ describe("the migration to the notes of every rewrite", () => {
     expect(db.prepare("SELECT count(*) AS n FROM article_update_notes").get()).toEqual({ n: 0 });
   });
 });
+
+describe("the migration to list formats", () => {
+  const SHIPPED = join(import.meta.dirname, "migrations");
+  const MIGRATION = "045_list_formats.sql";
+
+  it("gives every list view the standard format, keeps the rows, and refuses an unknown format", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-mig-"));
+    for (const name of readdirSync(SHIPPED).filter((file) => file < MIGRATION)) copyFileSync(join(SHIPPED, name), join(dir, name));
+    const db = openDatabase(":memory:");
+    migrate(db, dir);
+    const insert = db.prepare("INSERT INTO list_views (list, category_id, feed_id, sort) VALUES (?, NULL, NULL, ?)");
+    insert.run("unread", "oldest");
+    insert.run("starred", "starred");
+    const rows = () => db.prepare("SELECT * FROM list_views ORDER BY id").all();
+    const before = rows();
+
+    copyFileSync(join(SHIPPED, MIGRATION), join(dir, MIGRATION));
+    migrate(db, dir);
+
+    expect(rows()).toEqual(before.map((row) => ({ ...row, format: "standard" })));
+    db.prepare("UPDATE list_views SET format = 'expanded' WHERE list = 'unread'").run();
+    db.prepare("INSERT INTO list_views (list, format) VALUES ('all', 'compact')").run();
+    expect(db.prepare("SELECT list, sort, format FROM list_views ORDER BY id").all()).toEqual([
+      { list: "unread", sort: "oldest", format: "expanded" },
+      { list: "starred", sort: "starred", format: "standard" },
+      { list: "all", sort: "newest", format: "compact" },
+    ]);
+    expect(() => db.prepare("UPDATE list_views SET format = 'cards' WHERE list = 'all'").run()).toThrow();
+    // What the table held to before, it still holds to.
+    expect(() => insert.run("unread", "newest")).toThrow();
+    expect(() => insert.run("generated", "starred")).toThrow();
+  });
+});

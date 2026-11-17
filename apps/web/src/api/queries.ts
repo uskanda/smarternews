@@ -10,8 +10,8 @@ import type {
   Feed,
   Highlight,
   HighlightCreate,
-  ListSort,
   ListViews,
+  ListViewUpdate,
 } from "@smarternews/core/api";
 import {
   hashKey,
@@ -24,7 +24,7 @@ import {
   type QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
-import { createTermMatcher, type TermMatcher } from "@smarternews/client";
+import { createTermMatcher, withViewChange, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../app/context.ts";
 
@@ -128,18 +128,17 @@ export function useListViews() {
 }
 
 /**
- * Changes the order of an entry. The screen takes it at once, and goes back to the order it had when the
- * server cannot store it; `onFailed` then says so.
+ * Changes the order or the format of an entry. The screen takes it at once, keeping the setting the change
+ * leaves out, and goes back to the view it had when the server cannot store it; `onFailed` then says so.
  */
-export function useListSortChange(onFailed: () => void) {
+export function useListViewChange(onFailed: () => void) {
   const { api } = useApp();
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, sort }: { key: string; sort: ListSort }) => api.updateListView(key, { sort }),
-    onMutate: ({ key, sort }) => {
+    mutationFn: ({ key, patch }: { key: string; patch: ListViewUpdate }) => api.updateListView(key, patch),
+    onMutate: ({ key, patch }) => {
       const before = client.getQueryData<ListViews>(["list-views"]);
-      const others = (before?.items ?? []).filter((view) => view.key !== key);
-      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      client.setQueryData<ListViews>(["list-views"], { items: withViewChange(before?.items ?? [], key, patch) });
       return { before };
     },
     onError: (_error, _variables, context) => {
@@ -154,11 +153,18 @@ export function useCounts() {
   return useQuery({ queryKey: ["counts"], queryFn: () => api.counts(), refetchInterval: REFRESH_MS });
 }
 
-export function useArticleList(filter: ArticleListQuery, enabled = true) {
+/** How many articles a page of the expanded list holds: each is shown in full. */
+export const EXPANDED_PAGE_SIZE = 10;
+
+/**
+ * The articles of a list, a page at a time: 50 to a page, or `pageSize`. A list of pages of another size is kept
+ * apart, as its pages end elsewhere.
+ */
+export function useArticleList(filter: ArticleListQuery, enabled = true, pageSize = PAGE_SIZE) {
   const { api } = useApp();
   return useInfiniteQuery({
-    queryKey: ["articles", filter],
-    queryFn: ({ pageParam }) => api.articles({ ...filter, limit: PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }),
+    queryKey: pageSize === PAGE_SIZE ? ["articles", filter] : ["articles", filter, { pageSize }],
+    queryFn: ({ pageParam }) => api.articles({ ...filter, limit: pageSize, ...(pageParam ? { cursor: pageParam } : {}) }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     refetchInterval: REFRESH_MS,
