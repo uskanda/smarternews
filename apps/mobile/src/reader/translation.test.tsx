@@ -1,6 +1,6 @@
 import { fireEvent, screen, userEvent, waitFor } from "@testing-library/react-native";
 import { renderApp } from "../testing/app";
-import { eventually } from "../testing/queries";
+import { eventually, rowTitles } from "../testing/queries";
 import { makeServer } from "../testing/server";
 
 const WAITING = "翻訳しています。";
@@ -114,6 +114,23 @@ describe("opening an article of a feed that translates", () => {
     const order = ["訳:First words.", "First words.", "訳:Second words.", "Second words."].map(position);
     expect(order).toEqual([...order].sort((a, b) => a - b));
     await waitFor(() => expect(screen.queryByText(WAITING)).toBeNull());
+  });
+
+  it("puts the translated title on the row the unread list keeps once the article is read", async () => {
+    const { server, blog, id } = await oneArticle({ translation: "gated" });
+    await renderApp({ server, url: `/list/feed-${blog.id}` });
+    await press(/^Original title/);
+    await screen.findByText(WAITING);
+    await eventually(async () => expect((await server.core<{ isRead: boolean }>("getArticle", id)).isRead).toBe(true));
+    // A star fetches the lists again: the unread list no longer returns the article, only the row kept shows it.
+    await press("スターを付ける");
+    await eventually(async () => expect((await server.core<{ starred: boolean }>("getArticle", id)).starred).toBe(true));
+
+    await server.releaseTranslation();
+    expect(await screen.findByRole("header", { name: "訳:Original title" })).toBeOnTheScreen();
+    await press("一覧へ戻る");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["訳:Original title"]));
   });
 
   it("keeps the original and offers to try again when the article cannot be translated now", async () => {

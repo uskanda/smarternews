@@ -328,6 +328,58 @@ describe("the order of a list", () => {
     await eventually(async () => expect((await views(server)).items).toEqual([{ key: `category-${tools.id}`, sort: "oldest" }]));
   });
 
+  it("offers the order by star time in the starred articles alone, lists them last starred first, and stores the choice", async () => {
+    const { server, tools, ids } = await seeded();
+    // First is the oldest article and is starred last: by star time it comes first.
+    await server.core("setArticleFlags", ids[2], { starred: true }, "$now");
+    await server.advance(MINUTE);
+    await server.core("setArticleFlags", ids[0], { starred: true }, "$now");
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
+    await press("並び順：新しい順");
+    expect(screen.queryByRole("button", { name: "スターを付けた順" })).toBeNull();
+    await press("閉じる");
+
+    await press("項目を開く");
+    await press(/^スター/);
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "First"]));
+    await press("並び順：新しい順");
+    await press("スターを付けた順");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Third"]));
+    expect(screen.getByRole("button", { name: "並び順：スターを付けた順" })).toBeOnTheScreen();
+    await eventually(async () => expect((await views(server)).items).toEqual([{ key: "starred", sort: "starred" }]));
+  });
+
+  it("opens the starred articles by star time when the web page stored that order", async () => {
+    const { server, ids } = await seeded();
+    await server.core("setArticleFlags", ids[2], { starred: true }, "$now");
+    await server.advance(MINUTE);
+    await server.core("setArticleFlags", ids[0], { starred: true }, "$now");
+    await server.core("updateListView", "starred", { sort: "starred" });
+    await renderApp({ server, url: "/list/starred" });
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Third"]));
+    expect(screen.getByRole("button", { name: "並び順：スターを付けた順" })).toBeOnTheScreen();
+  });
+
+  it("lists the entry by relevance once that is chosen, and stores the choice", async () => {
+    const server = await makeServer();
+    const tools = await server.category("Tools");
+    // First is the most important: 48 hours later, against 24 for the others.
+    await articles(server, tools.id, [{ title: "First", importance: 5 }, { title: "Second" }, { title: "Third" }]);
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First"]));
+
+    await press("並び順：新しい順");
+    expect(screen.getByRole("button", { name: "関連度順", selected: false })).toBeOnTheScreen();
+    await press("関連度順");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First", "Third", "Second"]));
+    expect(screen.getByRole("button", { name: "並び順：関連度順" })).toBeOnTheScreen();
+    await eventually(async () => expect((await views(server)).items).toEqual([{ key: `category-${tools.id}`, sort: "relevance" }]));
+  });
+
   it("is offered neither for an event category nor for the recently read articles", async () => {
     const server = await makeServer("2026-03-10T12:00:00.000Z");
     const events = await server.category("Local events", "event");

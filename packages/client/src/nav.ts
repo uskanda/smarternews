@@ -125,15 +125,16 @@ export function parseHideRead(stored: string | null): boolean {
 /**
  * The model without the categories, the feeds and the generated articles of a category that have no unread
  * article. The views at the top stay. So do the open entry with the group above it, and a feed whose fetches
- * failed or stopped, with its group: hiding it would hide that something is wrong. A group keeps the
- * `childState` of all its feeds, the hidden ones too. Until the counts have arrived (`counted` false), every
- * entry counts zero and nothing is hidden.
+ * failed or stopped, or whose feed has gone, with its group: hiding it would hide that something is wrong. A
+ * group keeps the `childState` of all its feeds, the hidden ones too. Until the counts have arrived (`counted`
+ * false), every entry counts zero and nothing is hidden.
  */
 export function hideEmptyEntries(model: NavModel, options: { current: ListTarget | null; counted: boolean }): NavModel {
   if (!options.counted) return model;
   const currentKey = options.current === null ? null : listKey(options.current);
   const isCurrent = (entry: NavEntry) => currentKey !== null && listKey(entry.target) === currentKey;
-  const keeps = (entry: NavEntry) => entry.unread > 0 || entry.state === "failed" || entry.state === "stale" || isCurrent(entry);
+  const troubled = (entry: NavEntry) => entry.state === "failed" || entry.state === "stale" || entry.state === "gone";
+  const keeps = (entry: NavEntry) => entry.unread > 0 || troubled(entry) || isCurrent(entry);
   const groups = model.groups.flatMap((group) => {
     const children = group.children.filter(keeps);
     return group.entry.unread > 0 || children.length > 0 || isCurrent(group.entry) ? [{ ...group, children }] : [];
@@ -164,7 +165,7 @@ export function parseListKey(key: string): ListTarget | null {
  * the server's default and is not sent.
  */
 export function targetFilter(target: ListTarget, sort: ListSort = "newest"): ArticleListQuery {
-  return { ...filterOf(target), ...(sort === "oldest" ? { order: "oldest" as const } : {}) };
+  return { ...filterOf(target), ...(sort === "newest" ? {} : { order: sort }) };
 }
 
 function filterOf(target: ListTarget): ArticleListQuery {
@@ -224,14 +225,28 @@ export function hasSortMenu(target: ListTarget, categories: Category[] | undefin
   return target.type !== "recentlyRead" && target.type !== "annotations" && !isEventCategory(target, categories);
 }
 
+/** The labels of the orders, as the menu of the order names them. */
+export const SORT_LABELS: Record<ListSort, string> = { newest: "新しい順", oldest: "古い順", relevance: "関連度順", starred: "スターを付けた順" };
+
+/**
+ * The orders the menu of the list offers: newest and oldest first and by relevance, and for the starred
+ * articles also the order they were starred in.
+ */
+export function sortOptionsOf(target: ListTarget): ListSort[] {
+  const common: ListSort[] = ["newest", "oldest", "relevance"];
+  return target.type === "starred" ? [...common, "starred"] : common;
+}
+
 /**
  * The order the list of the target is shown in: the one its list view keeps, newest first for an entry
- * without one, and always newest first where the order cannot be chosen.
+ * without one, and always newest first where the order cannot be chosen. An order the menu of the entry does
+ * not offer is newest first too.
  */
 export function listSortOf(target: ListTarget, views: ListView[] | undefined, categories: Category[] | undefined): ListSort {
   if (!hasSortMenu(target, categories)) return "newest";
   const key = listKey(target);
-  return views?.find((view) => view.key === key)?.sort ?? "newest";
+  const sort = views?.find((view) => view.key === key)?.sort ?? "newest";
+  return sortOptionsOf(target).includes(sort) ? sort : "newest";
 }
 
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */

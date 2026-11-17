@@ -72,12 +72,23 @@ export function getListView(db: Database, key: string): ListView {
   return { key, sort: sortOf(db, parseKey(key)) };
 }
 
+/** Whether the entry can be in the given order: the order by star time is for the starred articles alone. */
+export function sortAllowed(target: ListViewTarget, sort: ListSort): boolean {
+  return sort !== "starred" || target.list === "starred";
+}
+
 /**
  * Refuses an entry that cannot keep a view: a category or a feed that does not exist is not found, and an
- * event category, whose list is ordered by start, is invalid.
+ * event category, whose list is ordered by start, is invalid. So is the order by star time for an entry
+ * other than the starred articles.
  */
-export function checkListViewTarget(db: Database, target: ListViewTarget): void {
+export function checkListViewTarget(db: Database, target: ListViewTarget, patch: ListViewUpdate = {}): void {
   const key = listViewKey(target);
+  if (patch.sort !== undefined && !sortAllowed(target, patch.sort)) {
+    throw new DomainError("invalid", `the entry ${key} cannot be in the order ${patch.sort}`, [
+      { path: "sort", message: "only the starred articles can be in the order by star time" },
+    ]);
+  }
   if (target.list === "category" || target.list === "category_generated") {
     const row = db.prepare("SELECT kind FROM categories WHERE id = ?").get(target.categoryId);
     if (!row) throw notFound("category", target.categoryId);
@@ -101,6 +112,6 @@ export function setListView(db: Database, target: ListViewTarget, patch: ListVie
 /** Changes the view of the entry a key names. What the change leaves out stays as it is. */
 export function updateListView(db: Database, key: string, patch: ListViewUpdate): ListView {
   const target = parseKey(key);
-  checkListViewTarget(db, target);
+  checkListViewTarget(db, target, patch);
   return { key: listViewKey(target), sort: setListView(db, target, patch) };
 }

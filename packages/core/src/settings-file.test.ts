@@ -5,6 +5,7 @@ import { nextArticleForFullContent, nextArticleToSummarize, recordFullContentFai
 import { insertFeed, listFeeds, moveFeed, updateFeed } from "./db/feeds.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { createFilter, listFilters, updateFilter } from "./db/filters.ts";
+import { createRule, listRules } from "./db/rules.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
 import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
 import { getListView, listListViews, updateListView } from "./db/list-views.ts";
@@ -78,7 +79,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -242,6 +243,85 @@ const condition = (value: string, fields: Array<"title" | "content" | "author" |
   fields,
   match,
   value,
+});
+
+describe("rules in the settings file", () => {
+  function withRules() {
+    const db = seeded();
+    const security = listCategories(db).find((category) => category.slug === "security")!;
+    const feed = insertFeed(db, { url: "https://status.example.org/feed.xml", title: "Status" }, clock);
+    createRule(db, { scope: { type: "all" }, conditions: [condition("障害")], actions: ["notify", "star"] }, clock);
+    createRule(db, { scope: { type: "feed", feedId: feed.id }, conditions: [condition("^v\\d", ["title"], "regex")], actions: ["read"], enabled: false }, clock);
+    createRule(db, { scope: { type: "category", categoryId: security.id }, conditions: [condition("patch", ["title", "content"])], actions: ["summarize"] }, clock);
+    return db;
+  }
+
+  it("writes the rules with their scope by slug or URL, the switch only when off", () => {
+    const file = parse(exportSettings(withRules()));
+    expect(file.rules).toEqual([
+      { scope: "all", conditions: [{ fields: ["title"], match: "contains", value: "障害" }], actions: ["star", "notify"] },
+      { scope: { feed: "https://status.example.org/feed.xml" }, enabled: false, conditions: [{ fields: ["title"], match: "regex", value: "^v\\d" }], actions: ["read"] },
+      { scope: { category: "security" }, conditions: [{ fields: ["title", "content"], match: "contains", value: "patch" }], actions: ["summarize"] },
+    ]);
+  });
+
+  it("reproduces the rules on an empty server", () => {
+    const exported = exportSettings(withRules());
+    const target = createTestDb();
+    expect(importSettings(target, exported, clock)).toMatchObject({ rulesCreated: 3 });
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("adds the rules that are not registered yet and takes the switch of the others", () => {
+    const db = createTestDb();
+    const known = createRule(db, { scope: { type: "all" }, conditions: [condition("障害")], actions: ["star"] }, clock);
+    const text = `version: 1
+rules:
+  - scope: all
+    enabled: false
+    conditions: [{ fields: [title], match: contains, value: 障害 }]
+    actions: [star]
+  - scope: all
+    conditions: [{ fields: [title], match: contains, value: 障害 }]
+    actions: [star, notify]
+`;
+    expect(importSettings(db, text, clock)).toMatchObject({ rulesCreated: 1 });
+    expect(listRules(db).map((rule) => [rule.id === known.id, rule.enabled, rule.actions])).toEqual([
+      [true, false, ["star"]],
+      [false, true, ["star", "notify"]],
+    ]);
+  });
+
+  it("refuses a rule whose scope is nowhere, a wrong regular expression and a rule without an action, and stores nothing", () => {
+    const db = createTestDb();
+    const nowhere = `version: 1
+categories:
+  - slug: tools
+    name: Tools
+    kind: news
+rules:
+  - scope: { feed: https://missing.example.org/feed.xml }
+    conditions: [{ fields: [title], match: contains, value: x }]
+    actions: [star]
+`;
+    expect(() => importSettings(db, nowhere, clock)).toThrow(expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "rules.0.scope.feed" })] }));
+    expect(listCategories(db)).toEqual([]);
+    const wrong = `version: 1
+rules:
+  - scope: all
+    conditions: [{ fields: [title], match: regex, value: "(sale" }]
+    actions: [star]
+`;
+    expect(() => importSettings(db, wrong, clock)).toThrow(expect.objectContaining({ fields: [expect.objectContaining({ path: "rules.0.conditions.0.value" })] }));
+    const none = `version: 1
+rules:
+  - scope: all
+    conditions: [{ fields: [title], match: contains, value: x }]
+    actions: []
+`;
+    expect(() => importSettings(db, none, clock)).toThrow(expect.objectContaining({ fields: [expect.objectContaining({ path: "rules.0.actions" })] }));
+    expect(listRules(db)).toEqual([]);
+  });
 });
 
 describe("subscribed feeds and filters in the settings file", () => {
@@ -575,6 +655,7 @@ describe("the example settings file", () => {
       feedsCreated: 3,
       feedsUpdated: 0,
       filtersCreated: 2,
+      rulesCreated: 1,
       termGroupsCreated: 2,
       highlightTermsCreated: 3,
       listViewsUpdated: 1,
@@ -708,6 +789,44 @@ describe("full content of feeds in the settings file", () => {
 
   it("refuses a setting that is not true or false", () => {
     expect(() => importSettings(createTestDb(), file("    fetchFullContent: sometimes\n"), clock)).toThrow(/expected format/);
+  });
+});
+
+describe("feeds as topic sources in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) =>
+    `version: 1\ncategories:\n  - slug: tools\n    name: Tools\n    kind: news\n    subscriptions:\n      - url: ${A}\n${line}`;
+
+  it("writes the setting for the feeds that are topic sources only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    const news = createCategory(db, { name: "Tools", kind: "news" }, clock);
+    insertFeed(db, { url: A, title: "A", categoryId: news.id, topicSource: true }, clock);
+    insertFeed(db, { url: B, title: "B", categoryId: news.id }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { categories: Array<{ subscriptions: Array<Record<string, unknown>> }> };
+    expect(written.categories[0]!.subscriptions.map((entry) => entry.topicSource)).toEqual([true, undefined]);
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.topicSource])).toEqual([[A, true], [B, false]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without the setting as no topic source, and leaves a known feed as it is", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.topicSource).toBe(false);
+
+    updateFeed(db, listFeeds(db)[0]!.id, { topicSource: true }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.topicSource).toBe(true);
+    importSettings(db, file("        topicSource: false\n"), clock);
+    expect(listFeeds(db)[0]!.topicSource).toBe(false);
+  });
+
+  it("refuses a feed of no category that is a topic source", () => {
+    expect(() => importSettings(createTestDb(), `version: 1\nsubscriptions:\n  - url: ${A}\n    topicSource: true\n`, clock)).toThrow(/topic source/);
   });
 });
 
@@ -866,6 +985,36 @@ describe("list views in the settings file", () => {
     expect(getListView(db, `feed-${feed.id}`).sort).toBe("newest");
   });
 
+  it("carry the starred articles in the order by star time to another server", () => {
+    const { db } = changed();
+    updateListView(db, "starred", { sort: "starred" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([{ list: "starred", sort: "starred" }]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(1);
+    expect(views(other)).toEqual([{ key: "starred", sort: "starred" }]);
+  });
+
+  it("carry the relevance order to another server", () => {
+    const { db, tools } = changed();
+    updateListView(db, "all", { sort: "relevance" });
+    updateListView(db, `category-${tools.id}`, { sort: "relevance" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([
+      { list: "all", sort: "relevance" },
+      { list: { category: "tools" }, sort: "relevance" },
+    ]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(2);
+    const otherTools = listCategories(other).find((category) => category.slug === "tools")!;
+    expect(views(other)).toEqual([
+      { key: "all", sort: "relevance" },
+      { key: `category-${otherTools.id}`, sort: "relevance" },
+    ]);
+  });
+
   it("are not written by a server where nothing was changed", () => {
     expect(parse(exportSettings(changed().db))).not.toHaveProperty("listViews");
   });
@@ -917,6 +1066,8 @@ describe("list views in the settings file", () => {
       ["{ list: unread, sort: oldest }, { list: unread, sort: oldest }", "listViews.1.list"],
       ["{ list: recentlyRead, sort: oldest }", "listViews.0.list"],
       ["{ list: unread, sort: random }", "listViews.0.sort"],
+      ["{ list: starred, sort: oldest }, { list: { category: tools }, sort: starred }", "listViews.1.sort"],
+      ["{ list: all, sort: starred }", "listViews.0.sort"],
     ];
     for (const [entries, path] of refused) {
       const text = `version: 1\nsettings: { readerInfo: changed }\nlistViews: [${entries}]\n`;

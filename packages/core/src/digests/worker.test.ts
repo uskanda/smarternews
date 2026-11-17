@@ -221,3 +221,59 @@ describe("DigestWorker.buildNow", () => {
     expect(s.llm.requests.digest).toHaveLength(0);
   });
 });
+
+describe("DigestWorker.buildFromList", () => {
+  it("makes a digest of the starred articles with their scope, stores the target and the times of the articles, and leaves the period alone", async () => {
+    const s = setup();
+    const old = generated(s.db, s.first, "2026-02-01T00:00:00.000Z", 4);
+    const recent = generated(s.db, s.second, "2026-02-20T00:00:00.000Z");
+    generated(s.db, s.first, "2026-03-01T05:00:00.000Z");
+    s.db.prepare("UPDATE articles SET starred = 1 WHERE id IN (?, ?)").run(old, recent);
+
+    expect(s.worker.buildFromList({ type: "starred" })).toBe("queued");
+    await s.worker.idle();
+
+    const prompt = s.llm.requests.digest[0]!.prompt;
+    expect(prompt).not.toContain("Period:");
+    expect(prompt).toContain("スター");
+    expect(materialLines<{ id: number }>(prompt, 1).map((article) => article.id)).toEqual([recent, old]);
+    const [made] = listDigests(s.db);
+    expect(made).toMatchObject({
+      trigger: "list",
+      target: { type: "starred", label: "スター" },
+      articleCount: 2,
+      periodStart: "2026-02-01T00:00:00.000Z",
+      periodEnd: "2026-02-20T00:00:00.000Z",
+    });
+    expect(getDigest(s.db, made!.id).sections.map((section) => section.categoryName)).toEqual(["First", "Second"]);
+
+    // The next digest of a period still starts a day back: the list digest is not counted.
+    await makeDigest(s.deps, { trigger: "manual", slot: null });
+    expect(listDigests(s.db, { kind: "period" })[0]).toMatchObject({ periodStart: "2026-02-28T06:00:00.000Z" });
+  });
+
+  it("says empty without a call for a list without articles, busy while a digest is made, and limit when the shared allowance is used", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const s = setup({
+      digestsPerDay: 2,
+      handler: async (request) => {
+        await gate;
+        return answerAll(request);
+      },
+    });
+    expect(s.worker.buildFromList({ type: "starred" })).toBe("empty");
+    const article = generated(s.db, s.first, "2026-03-01T05:00:00.000Z");
+    s.db.prepare("UPDATE articles SET starred = 1 WHERE id = ?").run(article);
+
+    expect(s.worker.buildNow()).toBe("queued");
+    expect(s.worker.buildFromList({ type: "starred" })).toBe("busy");
+    release();
+    await s.worker.idle();
+    expect(s.worker.buildFromList({ type: "starred" })).toBe("queued");
+    await s.worker.idle();
+    // A digest of a period and one of a list used the two of the day.
+    expect(s.worker.buildFromList({ type: "starred" })).toBe("limit");
+    expect(s.llm.requests.digest).toHaveLength(2);
+  });
+});
