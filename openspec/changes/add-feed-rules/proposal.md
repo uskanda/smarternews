@@ -35,7 +35,7 @@ Inoreaderから乗り換えるには、条件に合う新しい配信記事へ�
 
 ## Impact
 
-- `packages/core` の移行：`038_rules.sql`（表 `rules`、記事の列 `rule_notify_at` と `rule_summary_requested_at`）。
+- `packages/core` の移行：`041_rules.sql`（表 `rules`、記事の列 `rule_notify_at` と `rule_summary_requested_at`）。
 - `packages/core` の処理：`db/rules.ts`、`feeds/ingest.ts`、`db/articles.ts`（要約の待ち）、`api.ts`（型）、`settings-file.ts`。
 - `apps/server`: `/api/v1/rules` と `/api/v1/rule-notifications` の経路。
 - `packages/client`: APIの呼び出しと、通知する記事の選び方（`planNotifications`）。

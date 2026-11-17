@@ -23,7 +23,7 @@ issueは、カテゴリの画面に「出典のサイト」の区画を足す提
 
 | 決定 | 選択 |
 |---|---|
-| 移行 | 移行（承認時は032、mainとの取り込みで `038_site_hosts.sql` に番号を改めた）で candidates を作り直す。ホスト名の列 `site_host` を足し、理由の種類の CHECK に `blocked-site` を加える。除外の一覧の表 `blocked_sites`（category_id、host、created_at）を作る |
+| 移行 | 移行（承認時は032、mainとの取り込みで `042_site_hosts.sql` に番号を改めた）で candidates を作り直す。ホスト名の列 `site_host` を足し、理由の種類の CHECK に `blocked-site` を加える。除外の一覧の表 `blocked_sites`（category_id、host、created_at）を作る |
 | 保存済みの候補のホスト名 | URL から求めて埋める。news.google.com のまま解決できていない候補は空文字（不明）にする |
 | ホスト名の関数 | `siteHost(url)` を足し、LLM検索のサイト名もこの関数に置き換える |
 | 理由の文 | 「除外したサイト」と "site blocked in this category" |
