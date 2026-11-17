@@ -42,6 +42,8 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   lastError: null,
   failureCount: 0,
   goneAt: null,
+  movedFrom: null,
+  movedAt: null,
   nextFetchAt: null,
   articleCount: 0,
   starredCount: 0,

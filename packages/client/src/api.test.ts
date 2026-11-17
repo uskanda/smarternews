@@ -160,6 +160,9 @@ describe("the API client", () => {
     expect(feed).toMatchObject({ title: "Blog", articleCount: 1 });
     expect(await api.feeds()).toHaveLength(1);
     expect((await api.updateFeed(feed.id, { title: "Mine", enabled: false })).title).toBe("Mine");
+    const https = "https://www.example.org/feed.xml";
+    server.site.set(https, `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>One</title><guid>1</guid><link>https://blog.example.org/1</link></item></channel></rss>`);
+    expect(await api.updateFeed(feed.id, { url: https })).toMatchObject({ url: https, articleCount: 1, movedFrom: null });
     expect(await api.fetchFeed(feed.id)).toMatchObject({ status: "updated", created: 0, feed: { id: feed.id } });
     expect((await api.articles({ feed: feed.id, origin: "feed" })).items.map((item) => item.title)).toEqual(["One"]);
     expect((await api.counts()).feeds).toEqual([{ feedId: feed.id, unread: 1 }]);

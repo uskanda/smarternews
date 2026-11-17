@@ -20,6 +20,7 @@ import {
   articleUpdateSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
+  changeFeedUrl,
   createCategory,
   createTopic,
   deleteCategory,
@@ -423,7 +424,13 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
-  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
+  // A change with a URL fetches it first, as registering does; any other change is stored at once.
+  api.patch("/feeds/:id", async (c) => {
+    const id = idParam(c, "feed");
+    const patch = parse(feedUpdateSchema, await jsonBody(c));
+    if (patch.url === undefined) return c.json(updateFeed(db, id, patch, clock));
+    return c.json(await poller.exclusive(() => changeFeedUrl({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, id, patch)));
+  });
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
     return c.json(listFeeds(db, clock()));

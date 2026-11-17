@@ -918,6 +918,12 @@ export const feedSchema = z.object({
    * other answer. The feed stays enabled.
    */
   goneAt: z.string().nullable(),
+  /**
+   * The URL the feed had before permanent redirects replaced it, and when that happened. Null until then, and
+   * again once the URL changes another way.
+   */
+  movedFrom: z.string().nullable(),
+  movedAt: z.string().nullable(),
   /** When the feed is fetched next, no earlier than a Retry-After of the last failure asked. Null while it is disabled. */
   nextFetchAt: z.string().nullable(),
   articleCount: z.number().int(),
@@ -982,8 +988,11 @@ export const feedCreateSchema = feedFields
   });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
-/** A change to a subscription. The format never changes; selectors are taken only by a web feed. */
-export const feedUpdateSchema = feedFields.omit({ url: true }).extend({ selectors: pageSelectorsSchema.optional() });
+/**
+ * A change to a subscription. The format never changes; selectors are taken only by a web feed. A new URL is
+ * checked the way a subscription is: it is fetched first, and nothing is stored unless it reads.
+ */
+export const feedUpdateSchema = feedFields.partial({ url: true }).extend({ selectors: pageSelectorsSchema.optional() });
 export type FeedUpdate = z.infer<typeof feedUpdateSchema>;
 
 /** Where a category goes: before another one, or last. */

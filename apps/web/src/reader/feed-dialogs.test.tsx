@@ -274,7 +274,7 @@ describe("the settings of a feed from its list", () => {
     expect(view.path()).toBe("/settings/feeds");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const row = (await within(screen.getByRole("region", { name: "購読フィードの一覧" })).findByText("Blog")).closest("li")!;
-    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    await waitFor(() => expect(within(row).getByLabelText("URL")).toHaveFocus());
     expect(within(row).getByRole("checkbox", { name: "翻訳する" })).not.toBeChecked();
     expect(getFeed(server.db, blog.id).translate).toBe(false);
     expect(view.requests.filter((request) => request.startsWith("PATCH"))).toEqual([]);

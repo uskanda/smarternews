@@ -89,6 +89,47 @@ describe("subscribed feeds", () => {
     expect(articles.items).toHaveLength(1);
   });
 
+  it("changes the URL after fetching the new one, and keeps the articles and their stars", async () => {
+    const s = testServer();
+    const moved = "https://blog.example.net/feed.xml";
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const [article] = (await (await s.get("/api/v1/articles")).json()).items;
+    await s.patch(`/api/v1/articles/${article.id}`, { starred: true });
+    s.site.set(moved, rss("Example Blog", [{ key: "b" }, { key: "a" }]));
+
+    const response = await s.patch(`/api/v1/feeds/${feed.id}`, { url: moved, title: "Mine" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ url: moved, title: "Mine", articleCount: 2, starredCount: 1, movedFrom: null, movedAt: null });
+  });
+
+  it("refuses a new URL that is not a feed with 400 and the field, and changes nothing", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    s.site.set("https://blog.example.net/", () => new Response("<html>hello</html>", { headers: { "content-type": "text/html" } }));
+
+    const response = await s.patch(`/api/v1/feeds/${feed.id}`, { url: "https://blog.example.net/", title: "Mine" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/not a feed/), code: "unreachable" }]);
+    expect(await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).toMatchObject({ url: FEED, title: "Example Blog" });
+  });
+
+  it("gives the URL a permanent redirect replaced as movedFrom, with movedAt", async () => {
+    const s = testServer();
+    const moved = "https://blog.example.net/feed.xml";
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    s.site.set(FEED, () => new Response(null, { status: 301, headers: { location: moved } }));
+    s.site.set(moved, rss("Example Blog", [{ key: "a" }]));
+
+    for (let n = 0; n < 3; n++) await s.post(`/api/v1/feeds/${feed.id}/fetch`);
+
+    expect(await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).toMatchObject({ url: moved, movedFrom: FEED, movedAt: s.clock().toISOString() });
+  });
+
   it("deletes a feed with its articles", async () => {
     const s = testServer();
     s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));

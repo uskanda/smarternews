@@ -443,7 +443,7 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/page/candidates` | Propose selectors for a page without a feed, each with a preview. See [Web feeds](#web-feeds) |
 | `POST /api/v1/feeds/page/preview` | Show what a set of selectors takes out of a page |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, and `selectors` of a web feed |
+| `PATCH /api/v1/feeds/:id` | Change `url`, `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, and `selectors` of a web feed |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -471,6 +471,8 @@ Subscribing fetches the URL once and answers when that is done. Status 400 means
 
 `categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize`, `translate` and `fetchFullContent` are `false` unless you send `true`, at registration or in a change.
 
+A change with a `url` other than the feed's is checked the way subscribing is, and answers when the new URL has been fetched: 400 when it is not a feed (or, for a web feed, when the selectors take no article out of the page), and 409 when another feed has it. Then nothing changes. Otherwise the URL and the rest of the change are stored, the items the new URL delivers are stored as for any fetch, and the feed forgets what it knew of the old URL: its `ETag` and `Last-Modified`, the failures, `goneAt`, and `movedFrom` and `movedAt`. The articles stay with their stars, annotations and read marks, since items are recognised by the feed and their `guid` or `id`. An item with neither is recognised by its link, and a relative link resolves against the new URL.
+
 `move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
 `discover` returns `feeds`, a list of `url` and `title`. When the URL is itself a feed, the list holds that one feed. For a page it holds the feeds the page names with `<link rel="alternate">`, and it is empty when there are none.
@@ -491,6 +493,7 @@ Fields of a feed:
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `goneAt` | When the first of the 410 (Gone) answers in a row came, or `null`. Any other answer empties it. The feed stays enabled and goes on being fetched |
+| `movedFrom`, `movedAt` | The URL the feed had before permanent redirects replaced it, and when that happened; `null` until then, and again once the URL is changed by hand |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused. After a 429 or 503 answer with a `Retry-After` header, no earlier than the time it gives, one day ahead at most |
 | `articleCount`, `starredCount` | How many articles it has, and how many of them are starred |
 | `annotatedCount` | How many of its articles have an annotation, each counted once. Deleting the feed deletes them with their annotations |
@@ -499,6 +502,8 @@ Fields of a feed:
 | `recentArticleCount` | How many articles it delivered in the last 30 days: `received` of its stats |
 
 A fetch that fails is recorded on the feed and not in the run history. After each failure in a row the wait before the next try doubles, up to one day; a success brings it back to the interval. A 429 or 503 answer with a `Retry-After` header, in seconds or as a date, also puts the next scheduled try no earlier than the time it gives, one day ahead at most; `fetch` itself does not wait for it. A 410 answer sets `goneAt`, and the feed goes on being fetched like after any failure. `fetch` answers with `status` (`updated`, `not_modified` or `failed`), `created` (the number of new articles), `error` when it failed, and `feed`.
+
+A site that moved for good is followed: when three successful fetches in a row are redirected with `301` or `308` to the same URL, the feed takes that URL and records the old one as `movedFrom`. Only the permanent redirects from the first request count, up to the first temporary one (`302`, `303`, `307`). A fetch that is not redirected for good, or is redirected elsewhere, starts the count again; a failed fetch leaves it as it is. A redirect to the URL of another subscribed feed is not followed.
 
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
