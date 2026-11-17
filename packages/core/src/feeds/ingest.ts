@@ -9,27 +9,31 @@ import {
   checkFeedCategory,
   checkTopicSource,
   FEED_RETENTION_DAYS,
+  feedIconState,
   fetchConditions,
   findFeed,
   findFeedByUrl,
   getFeed,
   insertFeed,
+  recordFeedIcon,
   recordFetchFailure,
   recordFetchSuccess,
 } from "../db/feeds.ts";
-import { num, str } from "../db/rows.ts";
+import { num, str, type Row } from "../db/rows.ts";
 import { getSettings } from "../db/settings.ts";
 import { applyFilters } from "../db/filters.ts";
+import { applyRules } from "../db/rules.ts";
 import { refreshTermMatches } from "../db/term-matches.ts";
 import { deleteArticleTranslation } from "../db/translations.ts";
 import { DomainError } from "../errors.ts";
 import type { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { parseRetryAfter } from "../fetch/retry-after.ts";
-import { normalizeTitle, normalizeUrl } from "../fetch/url.ts";
+import { foldTitle, normalizeTitle, normalizeUrl } from "../fetch/url.ts";
 import { parseSubscription, type ParsedSubscription, type SubscriptionItem } from "../sources/feed.ts";
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent, convertDescription, type ConvertedContent } from "./content.ts";
+import { findFeedIcon, ICON_RECHECK_DAYS, type IconSearch } from "./icon.ts";
 import { extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
@@ -140,6 +144,51 @@ function findKept(db: Database, feedId: number, values: { url: string | null; ti
   return row ? num(row.id) : null;
 }
 
+/** A page without its scheme: an item whose page moved from http to https still points to the same page. */
+function withoutScheme(url: string): string {
+  return url.replace(/^https?:/, "");
+}
+
+interface Listed {
+  item: SubscriptionItem;
+  key: string;
+  url: string | null;
+}
+
+/**
+ * Gives a stored article the identifier the feed replaced its item's with, so that the item does not come
+ * back as new. An item the feed never listed is taken for one whose identifier was replaced when exactly one
+ * stored article of the feed has its page, the scheme aside, that article's identifier is gone from the
+ * document, the titles are the same once folded, and no other such item matches that article. Anything less
+ * certain is left to be stored as new. `stored` follows the new identifiers.
+ */
+function rekeyReplaced(db: Database, listed: Listed[], stored: Map<string, Row>, seenBefore: Set<string>): void {
+  const inDocument = new Set(listed.map((entry) => entry.key));
+  const byPage = new Map<string, Row[]>();
+  for (const row of stored.values()) {
+    if (row.url === null || row.url === undefined) continue;
+    const page = withoutScheme(str(row.url));
+    byPage.set(page, [...(byPage.get(page) ?? []), row]);
+  }
+  const matched = new Map<Row, string[]>();
+  for (const { item, key, url } of listed) {
+    if (url === null || stored.has(key) || seenBefore.has(key)) continue;
+    const rows = byPage.get(withoutScheme(url));
+    if (rows?.length !== 1) continue;
+    const row = rows[0]!;
+    const title = foldTitle(item.title);
+    if (inDocument.has(str(row.item_key)) || title.length === 0 || foldTitle(str(row.title)) !== title) continue;
+    matched.set(row, [...(matched.get(row) ?? []), key]);
+  }
+  const rekey = db.prepare("UPDATE articles SET item_key = ? WHERE id = ?");
+  for (const [row, keys] of matched) {
+    if (keys.length !== 1) continue;
+    rekey.run(keys[0]!, num(row.id));
+    stored.delete(str(row.item_key));
+    stored.set(keys[0]!, row);
+  }
+}
+
 /**
  * Stores the items of a fetched document. New items become unread articles; a known item whose title or
  * content changed is rewritten in place, read or unread as it was, and loses the translation of what
@@ -158,7 +207,7 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
       .all(feed.id)
       .map((row) => str(row.item_key)),
   );
-  const stored = new Map(
+  const stored = new Map<string, Row>(
     db
       .prepare(
         `SELECT a.id, a.item_key, a.title, a.body, a.author, a.attachments, a.duplicate_of, a.dedup_url, a.dedup_title, a.full_content_status,
@@ -183,14 +232,22 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
   // The articles whose titles or summary are new, matched with the highlight terms at the end.
   const toMatch: number[] = [];
 
-  const inDocument = new Set<string>();
-  const fresh: Prepared[] = [];
-  let foundNew = false;
+  // Each identifier once, as the document first lists it.
+  const listed: Listed[] = [];
+  const keys = new Set<string>();
   for (const item of parsed.items) {
     const url = pageUrl(item, feed.url);
     const key = (item.key ?? url)?.slice(0, KEY_CHARS);
-    if (!key || inDocument.has(key)) continue;
-    inDocument.add(key);
+    if (!key || keys.has(key)) continue;
+    keys.add(key);
+    listed.push({ item, key, url });
+  }
+  // Before any item is taken for new: whether an identifier is gone depends on the whole document.
+  rekeyReplaced(db, listed, stored, seenBefore);
+
+  const fresh: Prepared[] = [];
+  let foundNew = false;
+  for (const { item, key, url } of listed) {
     markSeen.run(feed.id, key, nowIso);
 
     const known = stored.get(key);
@@ -280,13 +337,45 @@ function storeItems(db: Database, feed: Feed, parsed: ParsedSubscription, now: D
     );
     setReference(db, id, item.url, feedTitle, item.title);
     applyFilters(db, id);
-    if (kept === null) titled.push(id);
+    if (kept === null) {
+      titled.push(id);
+      // Once, here, after the filters: a hidden duplicate and what a filter hides are left alone.
+      applyRules(db, id, nowIso);
+    }
     toMatch.push(id);
   }
   refreshTermMatches(db, toMatch);
   // What tells a feed that stopped delivering from one that delivers what is too old to store.
   if (foundNew) db.prepare("UPDATE feeds SET last_new_item_at = ? WHERE id = ?").run(nowIso, feed.id);
   return { created: fresh.length, titled: feed.translate ? titled : [] };
+}
+
+/**
+ * Looks for the feed's icon when it was never looked for or was last looked for `ICON_RECHECK_DAYS` ago, and
+ * records what is found, none included. `fetched` is what the fetch brought: the icon the document names, and
+ * the page of a web feed. Without it (a not-modified answer) the icon found last time is tried first instead.
+ * Never throws: a search that breaks records nothing and is tried again on the next fetch. A feed deleted
+ * meanwhile records nothing either.
+ */
+async function refreshIcon(
+  deps: FeedDeps,
+  feedId: number,
+  now: Date,
+  fetched?: { named: string | null; page: IconSearch["page"] },
+): Promise<void> {
+  try {
+    const { iconUrl, checkedAt } = feedIconState(deps.db, feedId);
+    if (checkedAt !== null && now.getTime() - new Date(checkedAt).getTime() < ICON_RECHECK_DAYS * DAY) return;
+    const feed = findFeed(deps.db, feedId, now);
+    if (!feed) return;
+    const found = await findFeedIcon(
+      { fetcher: deps.fetcher, pages: pageFetcherOf(deps) },
+      { feedUrl: feed.url, siteUrl: feed.siteUrl, named: fetched ? fetched.named : iconUrl, page: fetched?.page },
+    );
+    recordFeedIcon(deps.db, feedId, { iconUrl: found, checkedAt: now.toISOString() });
+  } catch {
+    // The icon is no part of the fetch: the feed is shown without one until a later search finds it.
+  }
 }
 
 /** The site answered with an HTTP failure. The message is the reason recorded on the feed. */
@@ -321,7 +410,7 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   const response = await deps.fetcher.get(url, { headers });
   if (response.status === 304) return null;
   if (response.status < 200 || response.status >= 300) throw new FeedHttpError(response.status, url, response.headers["retry-after"]);
-  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null };
+  return { parsed: parseSubscription(response.text, url), etag: response.headers.etag ?? null, lastModified: response.headers["last-modified"] ?? null, page: undefined };
 }
 
 /**
@@ -333,7 +422,7 @@ async function downloadPage(deps: FeedDeps, url: string, selectors: PageSelector
   const page = await pageFetcherOf(deps).fetchPage(url);
   if (!page.ok && page.reason === "http") throw new FeedHttpError(page.status, url, page.retryAfter);
   if (!page.ok) throw new Error(pageFailureReason(page, url));
-  return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined };
+  return { parsed: parsePage(page.html, page.url, selectors, getSettings(deps.db).timeZone), etag: undefined, lastModified: undefined, page: { html: page.html, url: page.url } };
 }
 
 /** Fetches one subscribed feed and stores what is new. A failure is recorded on the feed, never thrown. */
@@ -350,6 +439,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
     if (!findFeed(db, feedId)) return { status: "failed", created: 0, error: "the feed was deleted" };
     if (result === null) {
       recordFetchSuccess(db, feedId, { now: now.toISOString() });
+      await refreshIcon(deps, feedId, now);
       return { status: "not_modified", created: 0 };
     }
     const stored = transaction(db, () => {
@@ -367,6 +457,7 @@ export async function fetchFeed(deps: FeedDeps, feedId: number): Promise<FetchOu
     // After the articles are stored, and never failing the fetch: an article without a translated title is
     // translated when it is opened.
     if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
+    await refreshIcon(deps, feedId, now, { named: result.parsed.iconUrl, page: result.page });
     return { status: "updated", created: stored.created };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -398,7 +489,7 @@ async function firstPage(deps: FeedDeps, url: string, selectors: PageSelectors) 
     const message = "no article could be taken out of the page with these selectors";
     throw new DomainError("invalid", message, [{ path: "selectors.item", message, code: "no_items" }]);
   }
-  return { parsed: { title: extracted.title, siteUrl: page.url, items: extracted.items }, etag: undefined, lastModified: undefined };
+  return { parsed: { title: extracted.title, siteUrl: page.url, iconUrl: null, items: extracted.items }, etag: undefined, lastModified: undefined, page: { html: page.html, url: page.url } };
 }
 
 /**
@@ -440,5 +531,6 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
     return { feed: getFeed(db, feed.id, now), titled };
   });
   if (stored.titled.length > 0) await deps.translation?.translateTitles(stored.titled);
-  return stored.feed;
+  await refreshIcon(deps, stored.feed.id, now, { named: result.parsed.iconUrl, page: result.page });
+  return findFeed(db, stored.feed.id, now) ?? stored.feed;
 }

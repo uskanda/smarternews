@@ -21,6 +21,39 @@ interface LinkElement {
   getAttribute(name: string): string | null;
 }
 
+/** A `<link>` of a page whose target is on the web. */
+export interface PageLink {
+  /** The words of `rel`, in lower case. */
+  rel: string[];
+  /** `type` in lower case, or "" without one. */
+  type: string;
+  title: string;
+  /** The target as an absolute HTTP or HTTPS address. */
+  url: string;
+}
+
+/** The `<link>` elements of a page, in document order, with their targets resolved against `baseUrl`. */
+export function pageLinks(page: string, baseUrl: string): PageLink[] {
+  const { document } = parseHTML(page) as unknown as { document: { querySelectorAll(selector: string): Iterable<LinkElement> } };
+  const links: PageLink[] = [];
+  for (const link of document.querySelectorAll("link[href]")) {
+    let target: URL;
+    try {
+      target = new URL(link.getAttribute("href") ?? "", baseUrl);
+    } catch {
+      continue;
+    }
+    if (target.protocol !== "http:" && target.protocol !== "https:") continue;
+    links.push({
+      rel: (link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/),
+      type: (link.getAttribute("type") ?? "").toLowerCase().trim(),
+      title: (link.getAttribute("title") ?? "").replace(/\s+/g, " ").trim(),
+      url: target.toString(),
+    });
+  }
+  return links;
+}
+
 function refuse(message: string): DomainError {
   return new DomainError("invalid", message, [{ path: "url", message, code: "unreachable" }]);
 }
@@ -57,21 +90,11 @@ export async function discoverFeeds(fetcher: Fetcher, url: string): Promise<Disc
   } catch {
     // not a feed, so read it as a page
   }
-  const { document } = parseHTML(response.text) as unknown as { document: { querySelectorAll(selector: string): Iterable<LinkElement> } };
   const found = new Map<string, DiscoveredFeed>();
-  for (const link of document.querySelectorAll("link[href]")) {
-    const rel = (link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/);
-    const type = (link.getAttribute("type") ?? "").toLowerCase().trim();
-    if (!rel.includes("alternate") || !FEED_TYPES.has(type)) continue;
-    let target: URL;
-    try {
-      target = new URL(link.getAttribute("href") ?? "", response.url);
-    } catch {
-      continue;
-    }
-    if (target.protocol !== "http:" && target.protocol !== "https:") continue;
-    const feedUrl = normalizeUrl(target.toString());
-    if (!found.has(feedUrl)) found.set(feedUrl, { url: feedUrl, title: (link.getAttribute("title") ?? "").replace(/\s+/g, " ").trim() });
+  for (const link of pageLinks(response.text, response.url)) {
+    if (!link.rel.includes("alternate") || !FEED_TYPES.has(link.type)) continue;
+    const feedUrl = normalizeUrl(link.url);
+    if (!found.has(feedUrl)) found.set(feedUrl, { url: feedUrl, title: link.title });
   }
   if (found.size > 0) return [...found.values()];
   const common = await commonFeed(fetcher, response.url);

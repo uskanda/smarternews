@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { ApiError, checkText, fieldMessage, TERM_COLOR_LABEL } from "@smarternews/client";
 import { useTermGroups } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Button, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
@@ -87,10 +88,14 @@ function AddGroup() {
   const [color, setColor] = useState<TermColor>("green");
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [adding, run] = usePending();
   useUnsaved("語のまとまりの追加", name.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(name, { label: GROUP_NAME, max: TERM_GROUP_NAME_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -106,7 +111,7 @@ function AddGroup() {
   }
 
   return (
-    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+    <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
       <Field
         label={GROUP_NAME}
         value={name}
@@ -119,7 +124,7 @@ function AddGroup() {
       <ColorChoice value={color} onChange={setColor} />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div>
-        <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
+        <Button type="submit" variant="primary" disabled={adding || name.trim().length === 0}>
           まとまりを追加
         </Button>
       </div>
@@ -135,10 +140,14 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   const [color, setColor] = useState<TermColor>(group.color);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   useUnsaved(`まとまり『${group.name}』の編集`, name !== group.name || color !== group.color);
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const found = checkText(name, { label: GROUP_NAME, max: TERM_GROUP_NAME_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -152,7 +161,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
   }
 
   return (
-    <form noValidate onSubmit={save} className="flex flex-col gap-md">
+    <form noValidate onSubmit={submit} className="flex flex-col gap-md">
       <Field
         label={GROUP_NAME}
         value={name}
@@ -165,7 +174,7 @@ function EditGroup({ group, onDone }: { group: TermGroup; onDone: () => void }) 
       <ColorChoice value={color} onChange={setColor} />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
-        <Button type="submit" variant="primary" disabled={name.trim().length === 0}>
+        <Button type="submit" variant="primary" disabled={saving || name.trim().length === 0}>
           保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
@@ -181,10 +190,14 @@ function AddTerm({ group, inputRef }: { group: TermGroup; inputRef: Ref<HTMLInpu
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const label = `「${group.name}」に足す語`;
+  const [adding, run] = usePending();
   useUnsaved(`まとまり『${group.name}』への語の追加`, text.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(text, { label: "語", max: HIGHLIGHT_TERM_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -198,7 +211,7 @@ function AddTerm({ group, inputRef }: { group: TermGroup; inputRef: Ref<HTMLInpu
   }
 
   return (
-    <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-sm">
+    <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-sm">
       <Field
         ref={inputRef}
         label={label}
@@ -211,11 +224,21 @@ function AddTerm({ group, inputRef }: { group: TermGroup; inputRef: Ref<HTMLInpu
       />
       {error && !(error instanceof ApiError && (error.kind === "invalid" || error.kind === "conflict")) ? <ErrorNotice error={error} /> : null}
       <div>
-        <Button type="submit" disabled={text.trim().length === 0}>
+        <Button type="submit" disabled={adding || text.trim().length === 0}>
           語を追加
         </Button>
       </div>
     </form>
+  );
+}
+
+/** The delete button of one term. It waits for its own answer only, so that the other terms can be deleted meanwhile. */
+function RemoveTerm({ text, onRemove }: { text: string; onRemove: () => Promise<void> }) {
+  const [removing, run] = usePending();
+  return (
+    <Button variant="quiet" aria-label={`「${text}」を削除`} disabled={removing} onClick={() => void run(onRemove)}>
+      削除
+    </Button>
   );
 }
 
@@ -244,6 +267,7 @@ function GroupRow({
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [removing, run] = usePending();
   const focus = useInlineEditFocus(editing);
   const up = useRef<HTMLButtonElement>(null);
   const down = useRef<HTMLButtonElement>(null);
@@ -299,9 +323,7 @@ function GroupRow({
           {group.terms.map((term) => (
             <li key={term.id} className="inline-flex min-w-0 items-center gap-xs rounded-sm border border-outline pl-sm">
               <span className="min-w-0 break-words">{term.text}</span>
-              <Button variant="quiet" aria-label={`「${term.text}」を削除`} onClick={() => void removeTerm(term.id, term.text)}>
-                削除
-              </Button>
+              <RemoveTerm text={term.text} onRemove={() => removeTerm(term.id, term.text)} />
             </li>
           ))}
         </ul>
@@ -336,7 +358,7 @@ function GroupRow({
         returnFocus={() => (removed.current ? afterRemoval() : null)}
         actions={
           <>
-            <Button variant="danger" onClick={() => void removeGroup()}>
+            <Button variant="danger" disabled={removing} onClick={() => void run(removeGroup)}>
               削除する
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>

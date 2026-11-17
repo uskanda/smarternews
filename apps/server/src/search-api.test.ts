@@ -63,6 +63,18 @@ describe("GET /api/v1/search", () => {
     expect(ids(await (await s.get(`/api/v1/search?q=${q}&unread=true`)).json()).sort()).toEqual([inA, inB].sort());
   });
 
+  it("narrows to starred articles", async () => {
+    const s = testServer();
+    const category = s.category();
+    s.article(category.id, { title: "電池 A" });
+    const starred = s.article(category.id, { title: "電池 B" });
+    await s.patch(`/api/v1/articles/${starred}`, { starred: true });
+    const q = encodeURIComponent("電池");
+
+    expect(ids(await (await s.get(`/api/v1/search?q=${q}&starred=true`)).json())).toEqual([starred]);
+    expect((await s.get(`/api/v1/search?q=${q}&starred=false`)).status).toBe(400);
+  });
+
   it("pages through 120 results without repeating any", async () => {
     const s = testServer();
     const category = s.category();

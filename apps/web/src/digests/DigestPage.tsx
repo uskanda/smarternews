@@ -6,9 +6,10 @@ import { Link, useNavigate, useParams } from "react-router";
 import { useDigest, useDigests, useSettings, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useLayout } from "../lib/layout.ts";
+import { useScrollMemory } from "../lib/scroll-memory.ts";
 import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 
-const TRIGGER_LABEL: Record<DigestTrigger, string> = { schedule: "定時", "catch-up": "補完", manual: "手動" };
+const TRIGGER_LABEL: Record<DigestTrigger, string> = { schedule: "定時", "catch-up": "補完", manual: "手動", list: "一覧" };
 
 /** Why asking for a digest now made none, in the app's words. */
 const REFUSAL: Record<Exclude<DigestRequestResult["status"], "queued">, string> = {
@@ -35,7 +36,9 @@ function DigestList({ items, selected, timeZone }: { items: DigestSummary[]; sel
               className={`tap flex min-w-0 flex-1 items-baseline justify-between gap-sm rounded-md px-sm py-xs type-body-md ${item.id === selected ? "bg-selected font-semibold" : ""}`}
             >
               <span className="tabular-nums">{formatFull(item.createdAt, timeZone)}</span>
-              <span className="type-label-sm text-on-surface-muted">{TRIGGER_LABEL[item.trigger]}</span>
+              <span className="min-w-0 truncate type-label-sm text-on-surface-muted">
+                {item.target === null ? TRIGGER_LABEL[item.trigger] : `${TRIGGER_LABEL[item.trigger]}・${item.target.label}`}
+              </span>
             </Link>
           </li>
         ))}
@@ -51,7 +54,10 @@ function DigestView({ digest, timeZone }: { digest: Digest; timeZone: string }) 
       <header className="flex flex-col gap-xs">
         <h2 className="type-headline-lg">{formatFull(digest.createdAt, timeZone)} のダイジェスト</h2>
         <p className="type-label-sm tabular-nums text-on-surface-muted">
-          期間 {formatFull(digest.periodStart, timeZone)} から {formatFull(digest.periodEnd, timeZone)} まで・記事 {digest.articleCount}件
+          {digest.target === null
+            ? `期間 ${formatFull(digest.periodStart, timeZone)} から ${formatFull(digest.periodEnd, timeZone)} まで`
+            : `対象 ${digest.target.label}`}
+          ・記事 {digest.articleCount}件
         </p>
       </header>
       <p className="whitespace-pre-line type-body-lg">{digest.executiveSummary}</p>
@@ -154,6 +160,12 @@ export function DigestPage() {
   const selected = named ?? items[0]?.id ?? null;
   const digest = useDigest(selected);
   const notFound = digest.error instanceof ApiError && digest.error.kind === "not_found";
+  // Back from a source article, the digest and the list are where they were left. They are ready to be put
+  // back once the digest shown has come, or will not come.
+  const ready = digests.isSuccess && (selected === null || !digest.isPending);
+  const narrowRegion = useScrollMemory("digest", ready);
+  const listRegion = useScrollMemory("digest-list", ready);
+  const bodyRegion = useScrollMemory("digest-body", ready);
 
   const list = items.length > 0 ? <DigestList items={items} selected={selected} timeZone={timeZone} /> : null;
   const shown = notFound ? (
@@ -181,14 +193,18 @@ export function DigestPage() {
       ) : null}
       {items.length > 0 ? (
         layout === "narrow" ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-2xl overflow-y-auto px-lg py-xl">
+          <div ref={narrowRegion} className="flex min-h-0 flex-1 flex-col gap-2xl overflow-y-auto px-lg py-xl">
             {shown}
             {list}
           </div>
         ) : (
           <div className="flex min-h-0 flex-1">
-            <div className="w-list-min shrink-0 overflow-y-auto border-r border-outline p-sm">{list}</div>
-            <div className="min-w-0 flex-1 overflow-y-auto px-2xl py-xl">{shown}</div>
+            <div ref={listRegion} className="w-list-min shrink-0 overflow-y-auto border-r border-outline p-sm">
+              {list}
+            </div>
+            <div ref={bodyRegion} className="min-w-0 flex-1 overflow-y-auto px-2xl py-xl">
+              {shown}
+            </div>
           </div>
         )
       ) : null}

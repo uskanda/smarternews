@@ -94,6 +94,7 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     selectors: selectorsOf(row),
     title: str(row.title),
     siteUrl: strOrNull(row.site_url),
+    iconUrl: strOrNull(row.icon_url),
     categoryId: numOrNull(row.category_id),
     intervalMinutes: numOrNull(row.interval_minutes),
     enabled,
@@ -477,4 +478,15 @@ export function deleteSeenItemsBefore(db: Database, before: string): number {
 export function fetchConditions(db: Database, id: number): { etag: string | null; lastModified: string | null } {
   const row = db.prepare("SELECT etag, last_modified FROM feeds WHERE id = ?").get(id);
   return { etag: strOrNull(row?.etag), lastModified: strOrNull(row?.last_modified) };
+}
+
+/** Where the feed's icon was found and when it was last looked for. Both are null until the first search. */
+export function feedIconState(db: Database, id: number): { iconUrl: string | null; checkedAt: string | null } {
+  const row = db.prepare("SELECT icon_url, icon_checked_at FROM feeds WHERE id = ?").get(id);
+  return { iconUrl: strOrNull(row?.icon_url), checkedAt: strOrNull(row?.icon_checked_at) };
+}
+
+/** Records what a search for the feed's icon found: its address, or null when it found none. */
+export function recordFeedIcon(db: Database, id: number, result: { iconUrl: string | null; checkedAt: string }): void {
+  db.prepare("UPDATE feeds SET icon_url = ?, icon_checked_at = ? WHERE id = ?").run(result.iconUrl, result.checkedAt, id);
 }

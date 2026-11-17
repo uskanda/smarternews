@@ -66,19 +66,30 @@ function PageChoice({
 }
 
 /**
- * The fields for subscribing to a feed or a page, on the page of feeds and in the dialog above the list of a
- * category, of feeds or of uncategorized feeds.
- * It starts in `categoryId` when given, and tells `onAdded` once a feed is subscribed.
+ * The fields for subscribing to a feed or a page, on the page of feeds, in the dialog above the list of a category,
+ * of feeds or of uncategorized feeds, and in the dialog of a site on a category's page.
+ * It starts in `categoryId` when given, and tells `onAdded` once a feed is subscribed. Given `discoverUrl`, it starts with
+ * that URL and looks for its feeds at once; what it finds waits for the reader to add it, even a single feed.
  */
-export function AddFeedForm({ categories, categoryId = null, onAdded }: { categories: Category[]; categoryId?: number | null; onAdded?: () => void }) {
+export function AddFeedForm({
+  categories,
+  categoryId = null,
+  discoverUrl,
+  onAdded,
+}: {
+  categories: Category[];
+  categoryId?: number | null;
+  discoverUrl?: string;
+  onAdded?: () => void;
+}) {
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
   const id = useId();
   const initialCategory = categoryId === null ? NO_CATEGORY : String(categoryId);
-  const [url, setUrl] = useState("");
-  // The page of feeds asks before it is left, and the dialog above a list before it is closed.
-  useUnsaved("購読フィードの追加", url.trim() !== "");
+  const [url, setUrl] = useState(discoverUrl ?? "");
+  // The page of feeds asks before it is left, and a dialog before it is closed. The URL a dialog starts with is not input.
+  useUnsaved("購読フィードの追加", url.trim() !== "" && url !== discoverUrl);
   const [category, setCategory] = useState(initialCategory);
   const [found, setFound] = useState<Array<{ url: string; title: string }> | null>(null);
   const [chosen, setChosen] = useState("");
@@ -177,19 +188,36 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
         return selectors ? subscribe(page, selectors) : undefined;
       }
       if (found !== null && chosen) return subscribe(chosen);
-      // The URL may be a feed or a page that points to feeds; the server tells which.
-      const { feeds } = await api.discoverFeeds(url.trim());
-      if (feeds.length === 0) {
-        setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
-        // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
-        setNoFeed(url.trim());
-        return;
-      }
-      if (feeds.length === 1) return subscribe(feeds[0]!.url);
-      setFound(feeds);
-      setChosen(feeds[0]!.url);
+      return findFeeds(url.trim(), true);
     });
   }
+
+  /**
+   * Looks for the feeds of a URL. A single one is subscribed to at once when the reader sent the URL, and offered
+   * like several when the form looked by itself.
+   */
+  async function findFeeds(target: string, subscribeOne: boolean) {
+    // The URL may be a feed or a page that points to feeds; the server tells which.
+    const { feeds } = await api.discoverFeeds(target);
+    if (feeds.length === 0) {
+      setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
+      // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
+      setNoFeed(target);
+      return;
+    }
+    if (feeds.length === 1 && subscribeOne) return subscribe(feeds[0]!.url);
+    setFound(feeds);
+    setChosen(feeds[0]!.url);
+  }
+
+  // Once only, though an effect may run twice while developing.
+  const discovered = useRef(false);
+  useEffect(() => {
+    if (discoverUrl === undefined || discovered.current) return;
+    discovered.current = true;
+    void run(() => findFeeds(discoverUrl, false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the URL it was opened with, looked for once
+  }, []);
 
   return (
     <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">

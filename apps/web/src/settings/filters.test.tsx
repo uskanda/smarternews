@@ -301,6 +301,40 @@ describe("changing a filter", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "一覧" })).toHaveFocus());
   });
 
+  it("removes a filter once when 削除する is pressed twice, and says it was removed", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user, requests, hold } = renderApp({ server, route: "/settings/filters" });
+    const held = hold(/^DELETE \/api\/v1\/filters\/\d+$/);
+
+    await user.click(await screen.findByRole("button", { name: "隠すフィルター（全体）を削除" }));
+    const remove = within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("フィルターを削除しました。3件が一覧に戻りました。")).toBeInTheDocument();
+    expect(screen.queryByText("削除できませんでした。もう一度試してください。")).not.toBeInTheDocument();
+  });
+
+  it("switches a filter once while the answer waits", async () => {
+    const { server } = withArticles();
+    createFilter(server.db, hide("特売"), server.clock);
+    const { user, requests, hold } = renderApp({ server, route: "/settings/filters" });
+    const held = hold(/^PATCH \/api\/v1\/filters\/\d+$/);
+
+    const toggle = await screen.findByRole("button", { name: "隠すフィルター（全体）を無効にする" });
+    await user.click(toggle);
+    await user.click(toggle);
+
+    expect(toggle).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("フィルターを無効にしました。3件が一覧に戻りました。")).toBeInTheDocument();
+  });
+
   it("keeps the filter when the removal is called off", async () => {
     const { server } = withArticles();
     createFilter(server.db, hide("特売"), server.clock);
@@ -348,6 +382,70 @@ describe("the articles a filter hides", () => {
     expect(path()).toMatch(new RegExp(`^/f/${feed.id}/\\d+$`));
     const article = await screen.findByRole("article", { name: "記事" });
     expect(await within(article).findByRole("heading", { name: "夏の特売" })).toBeInTheDocument();
+  });
+
+  it("comes back with the list still open and where it was left after opening an article", async () => {
+    const { server } = withArticles();
+    const filter = createFilter(server.db, hide("特売"), server.clock);
+    const { user, path, back } = renderApp({ server, route: "/settings/filters" });
+    const button = await screen.findByRole("button", { name: "隠すフィルター（全体）が隠している記事" });
+
+    await user.click(button);
+    expect(path()).toBe(`/settings/filters?shown=${filter.id}`);
+    const hidden = await section("隠している記事");
+    const links = await within(hidden).findAllByRole("link");
+    const page = (await section("フィルターの一覧")).parentElement!;
+    page.scrollTop = 510;
+    fireEvent.scroll(page);
+    await user.click(links[0]!);
+    await screen.findByRole("article", { name: "記事" });
+    await back();
+
+    const again = await section("隠している記事");
+    expect(await within(again).findAllByRole("link")).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "隠すフィルター（全体）が隠している記事" })).toHaveAttribute("aria-expanded", "true");
+    expect((await section("フィルターの一覧")).parentElement!.scrollTop).toBe(510);
+  });
+
+  it("opens and closes the list without adding to the history", async () => {
+    const { server } = withArticles();
+    const filter = createFilter(server.db, hide("特売"), server.clock);
+    const { user, path, back } = renderApp({ server, route: "/settings" });
+    await user.click(await screen.findByRole("link", { name: "フィルターを設定する" }));
+
+    const button = await screen.findByRole("button", { name: "隠すフィルター（全体）が隠している記事" });
+    await user.click(button);
+    expect(path()).toBe(`/settings/filters?shown=${filter.id}`);
+    await section("隠している記事");
+    await user.click(button);
+
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "隠している記事" })).not.toBeInTheDocument();
+    expect(path()).toBe("/settings/filters");
+    await back();
+    expect(path()).toBe("/settings");
+  });
+
+  it("opens the lists named in the address, and passes over what names no filter", async () => {
+    const { server } = withArticles();
+    const sale = createFilter(server.db, hide("特売"), server.clock);
+    createFilter(server.db, hide("新製品"), server.clock);
+    renderApp({ server, route: `/settings/filters?shown=9999,x,${sale.id}` });
+
+    const hidden = await section("隠している記事");
+    expect(await within(hidden).findAllByRole("link")).toHaveLength(3);
+    expect(screen.getAllByRole("region", { name: "隠している記事" })).toHaveLength(1);
+  });
+
+  it("does not open the list of a disabled filter named in the address", async () => {
+    const { server } = withArticles();
+    const sale = createFilter(server.db, hide("特売"), server.clock);
+    updateFilter(server.db, sale.id, { enabled: false });
+    renderApp({ server, route: `/settings/filters?shown=${sale.id}` });
+
+    const button = await screen.findByRole("button", { name: "隠すフィルター（全体）が隠している記事" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "隠している記事" })).not.toBeInTheDocument();
   });
 
   it("reads in more of them with the same button name as the article list", async () => {

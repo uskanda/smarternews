@@ -1,6 +1,6 @@
 import type { Kind } from "../api.ts";
 import type { PageFetcher } from "../fetch/pages.ts";
-import { normalizeUrl } from "../fetch/url.ts";
+import { normalizeUrl, siteHost } from "../fetch/url.ts";
 import type { CallBudget, TaskRunner } from "../llm/runner.ts";
 import { extractArticle } from "./extract.ts";
 import type { RawCandidate } from "./types.ts";
@@ -65,7 +65,7 @@ export async function collectLlmSearch(deps: LlmSearchDeps, input: LlmSearchInpu
       fetchable: true,
       title: result.title.trim() || extracted.title,
       snippet: result.snippet.trim(),
-      siteName: new URL(url).hostname.replace(/^www\./, ""),
+      siteName: siteHost(url),
       publishedAt: extracted.publishedAt,
       sourceKind: "llm-search",
     });

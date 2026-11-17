@@ -80,15 +80,19 @@ export const SUMMARY_ATTEMPTS = 2;
  * A feed article `a` that waits for a summary: its feed summarises, it was stored after the feed began to,
  * and it is unread, visible, without a summary and not given up on.
  */
-/** Everything that makes a feed article one that gets a summary, apart from whether it has been read. */
+/**
+ * Everything that makes a feed article one that gets a summary, apart from whether it has been read. A rule
+ * that asked for the summary makes it one whatever its feed says.
+ */
 const CAN_BE_SUMMARIZED = `a.origin = 'feed' AND a.auto_summary IS NULL AND a.auto_summary_skipped = 0
   AND a.auto_summary_attempts < ${SUMMARY_ATTEMPTS} AND NOT ${hiddenByFilters("a")}
-  AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since)`;
+  AND (a.rule_summary_requested_at IS NOT NULL
+    OR EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.auto_summarize = 1 AND a.created_at > f.auto_summarize_since))`;
 
 // An article that was read is left out, and so is a hidden duplicate, whose summary the kept article has;
-// either is in, though, when a reader opened it while its summary was waited for.
+// either is in, though, when a reader opened it while its summary was waited for, or a rule asked for it.
 const WAITING_FOR_SUMMARY = `${CAN_BE_SUMMARIZED}
-  AND ((a.is_read = 0 AND NOT ${hiddenDuplicate("a")}) OR a.auto_summary_requested_at IS NOT NULL)`;
+  AND ((a.is_read = 0 AND NOT ${hiddenDuplicate("a")}) OR a.auto_summary_requested_at IS NOT NULL OR a.rule_summary_requested_at IS NOT NULL)`;
 
 /**
  * A feed article `a` that waits for its full content: its feed fetches full content, it was stored after the
@@ -100,9 +104,41 @@ const WAITING_FOR_FULL_CONTENT = `a.origin = 'feed' AND a.full_content_status IS
   AND NOT ${hiddenByFilters("a")} AND NOT ${hiddenDuplicate("a")}
   AND EXISTS (SELECT 1 FROM feeds f WHERE f.id = a.feed_id AND f.fetch_full_content = 1 AND a.created_at > f.fetch_full_content_since)`;
 
-const SUMMARY_COLUMNS = `a.*,
+/** How many steps the chain of a story is followed at most, back or forward, and how many articles it gives. */
+const CHAIN_LIMIT = 20;
+
+/**
+ * Whether the generated article of the given table alias follows a starred one up: one of the articles its chain
+ * of earlier articles reaches in at most `CHAIN_LIMIT` steps, itself left out, has a star.
+ */
+function followsStarred(alias: string): string {
+  return `(${alias}.origin = 'generated' AND ${alias}.previous_article_id IS NOT NULL AND EXISTS (
+    WITH RECURSIVE up(id, depth) AS (
+      SELECT ${alias}.previous_article_id, 1
+      UNION SELECT p.previous_article_id, up.depth + 1 FROM up JOIN articles p ON p.id = up.id
+       WHERE up.depth < ${CHAIN_LIMIT} AND p.previous_article_id IS NOT NULL
+    )
+    SELECT 1 FROM up JOIN articles s ON s.id = up.id WHERE s.starred = 1 AND s.id <> ${alias}.id))`;
+}
+
+/**
+ * For a starred generated article `a`, the unread articles among those that follow it up, followed forward at most
+ * `CHAIN_LIMIT` steps, itself left out. Zero for any other article.
+ */
+const UNREAD_FOLLOW_UPS = `CASE WHEN a.origin = 'generated' AND a.starred = 1 THEN (
+    WITH RECURSIVE down(id, depth) AS (
+      SELECT c.id, 1 FROM articles c WHERE c.previous_article_id = a.id
+      UNION SELECT c.id, down.depth + 1 FROM down JOIN articles c ON c.previous_article_id = down.id
+       WHERE down.depth < ${CHAIN_LIMIT}
+    )
+    SELECT count(DISTINCT d.id) FROM down d JOIN articles r ON r.id = d.id WHERE r.is_read = 0 AND d.id <> a.id
+  ) ELSE 0 END`;
+
+export const SUMMARY_COLUMNS = `a.*,
   (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS primary_url,
-  (SELECT count(*) FROM article_refs r WHERE r.article_id = a.id) AS ref_count`;
+  (SELECT count(*) FROM article_refs r WHERE r.article_id = a.id) AS ref_count,
+  ${followsStarred("a")} AS follows_starred,
+  ${UNREAD_FOLLOW_UPS} AS unread_follow_ups`;
 
 function toEvent(row: Row): ArticleEvent | null {
   const startsAt = strOrNull(row.event_starts_at);
@@ -117,7 +153,7 @@ function toEvent(row: Row): ArticleEvent | null {
   };
 }
 
-function toSummary(row: Row): ArticleSummary {
+export function toSummary(row: Row): ArticleSummary {
   return {
     id: num(row.id),
     categoryId: numOrNull(row.category_id),
@@ -140,6 +176,9 @@ function toSummary(row: Row): ArticleSummary {
     readAt: strOrNull(row.read_at),
     openedAt: strOrNull(row.opened_at),
     starred: bool(row.starred),
+    starredAt: strOrNull(row.starred_at),
+    followsStarred: bool(row.follows_starred),
+    unreadFollowUps: num(row.unread_follow_ups),
     primaryUrl: strOrNull(row.primary_url),
     refCount: num(row.ref_count),
     event: toEvent(row),
@@ -185,16 +224,13 @@ function updateNotesOf(db: Database, row: Row): Article["updateNotes"] {
     .map((note) => ({ note: str(note.note), createdAt: str(note.created_at) }));
 }
 
-/** How many earlier articles the chain of an article gives at most. */
-const PREVIOUS_ARTICLES_LIMIT = 20;
-
 /** The earlier articles on the story, newest first, followed one by one until one is gone or the chain comes back. */
 function previousArticlesOf(db: Database, row: Row): Article["previousArticles"] {
   const statement = db.prepare("SELECT id, title, first_published_at, previous_article_id FROM articles WHERE id = ?");
   const seen = new Set([num(row.id)]);
   const chain: Article["previousArticles"] = [];
   let next = numOrNull(row.previous_article_id);
-  while (next !== null && !seen.has(next) && chain.length < PREVIOUS_ARTICLES_LIMIT) {
+  while (next !== null && !seen.has(next) && chain.length < CHAIN_LIMIT) {
     const earlier = statement.get(next);
     if (!earlier) break;
     seen.add(next);
@@ -202,6 +238,37 @@ function previousArticlesOf(db: Database, row: Row): Article["previousArticles"]
     next = numOrNull(earlier.previous_article_id);
   }
   return chain;
+}
+
+/** How many later articles are looked at, at most, before the newest of them are chosen. */
+const LATER_ARTICLES_SCAN = 200;
+
+/**
+ * The later articles on the story, newest first by first publication, at most `CHAIN_LIMIT`: every article that
+ * follows this one up, and those that follow them up, found one step at a time. An article already found is not
+ * followed again, so a chain that comes back on itself ends.
+ */
+function laterArticlesOf(db: Database, id: number): Article["laterArticles"] {
+  const statement = db.prepare("SELECT id, title, first_published_at FROM articles WHERE previous_article_id = ? ORDER BY id");
+  const seen = new Set([id]);
+  const found: Article["laterArticles"] = [];
+  let step = [id];
+  while (step.length > 0 && found.length < LATER_ARTICLES_SCAN) {
+    const next: number[] = [];
+    for (const from of step) {
+      for (const later of statement.all(from)) {
+        const laterId = num(later.id);
+        if (seen.has(laterId)) continue;
+        seen.add(laterId);
+        found.push({ id: laterId, title: str(later.title), firstPublishedAt: str(later.first_published_at) });
+        next.push(laterId);
+      }
+    }
+    step = next;
+  }
+  return found
+    .sort((a, b) => b.firstPublishedAt.localeCompare(a.firstPublishedAt) || b.id - a.id)
+    .slice(0, CHAIN_LIMIT);
 }
 
 /** The duplicates recorded against an article, with their feed, in the order they were stored. */
@@ -308,6 +375,7 @@ function toArticle(db: Database, row: Row): Article {
     snippetOnly: bool(row.snippet_only),
     previousArticleId: numOrNull(row.previous_article_id),
     previousArticles: previousArticlesOf(db, row),
+    laterArticles: laterArticlesOf(db, id),
     otherFeeds: otherFeedsOf(db, id),
     summarizedIn: summarizedInOf(db, row),
     feedArticles: str(row.origin) === "generated" ? feedArticlesOf(db, id) : [],
@@ -527,6 +595,45 @@ export function recentNewsArticles(db: Database, categoryId: number, since: stri
 }
 
 /**
+ * What a new page could be a follow-up to on the stories the reader starred: the starred news articles of the
+ * category updated since the given time, most recently updated first, each replaced by the newest article of its
+ * chain of later articles, so that the story stays one chain. Where the chain forks it goes on with the article
+ * first published last; it stops after `CHAIN_LIMIT` steps and where it comes back. An article in `exclude`, which
+ * the caller has already, is left out without counting; so is one found twice. At most `limit` articles.
+ */
+export function starredStoryTips(db: Database, categoryId: number, since: string, limit: number, exclude: ReadonlySet<number> = new Set()): ArticleDigest[] {
+  const starred = db
+    .prepare(
+      `SELECT id FROM articles WHERE ${GENERATED} AND category_id = ? AND kind = 'news' AND starred = 1 AND updated_at >= ?
+        ORDER BY updated_at DESC, id DESC`,
+    )
+    .all(categoryId, since)
+    .map((row) => num(row.id));
+  const laterOne = db.prepare(
+    `SELECT id FROM articles WHERE ${GENERATED} AND category_id = ? AND previous_article_id = ?
+      ORDER BY first_published_at DESC, id DESC LIMIT 1`,
+  );
+  const read = db.prepare(`SELECT ${DIGEST_COLUMNS} FROM articles a WHERE a.id = ?`);
+  const tips: ArticleDigest[] = [];
+  const taken = new Set<number>();
+  for (const id of starred) {
+    if (tips.length >= limit) break;
+    let tip = id;
+    const seen = new Set([id]);
+    for (let step = 0; step < CHAIN_LIMIT; step += 1) {
+      const later = laterOne.get(categoryId, tip);
+      if (!later || seen.has(num(later.id))) break;
+      tip = num(later.id);
+      seen.add(tip);
+    }
+    if (taken.has(tip) || exclude.has(tip)) continue;
+    taken.add(tip);
+    tips.push(toDigest(read.get(tip)!));
+  }
+  return tips;
+}
+
+/**
  * The headlines of the generated articles of a topic, the latest written or updated first, at most `limit`.
  * Feed articles are left out. No time limit applies.
  */
@@ -566,14 +673,18 @@ export interface ArticleToSummarize {
   contentText: string;
 }
 
-/** The feed article that is summarised next: of those that wait, the newest by the time the lists sort by. */
+/**
+ * The feed article that is summarised next: of those that wait, what a reader asked for last, then what a rule
+ * asked for last, then the newest by the time the lists sort by.
+ */
 export function nextArticleToSummarize(db: Database): ArticleToSummarize | null {
   const row = db
     .prepare(
       `SELECT a.id, a.title, a.content_text,
               (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
          FROM articles a WHERE ${WAITING_FOR_SUMMARY}
-        ORDER BY a.auto_summary_requested_at IS NULL, a.auto_summary_requested_at DESC, a.updated_at DESC, a.id DESC LIMIT 1`,
+        ORDER BY a.auto_summary_requested_at IS NULL, a.auto_summary_requested_at DESC,
+                 a.rule_summary_requested_at IS NULL, a.rule_summary_requested_at DESC, a.updated_at DESC, a.id DESC LIMIT 1`,
     )
     .get();
   return row ? { id: num(row.id), title: str(row.title), url: strOrNull(row.url), contentText: str(row.content_text) } : null;
@@ -689,9 +800,10 @@ export function recordFullContentFailure(db: Database, id: number, failure: { re
 type CursorValue = [string, number];
 
 /**
- * A cursor holds the time and id of the last article of a page and, for a list oldest first or by relevance,
- * that order; by relevance the time is `rank_at`. A cursor without an order is of a list newest first, as every
- * cursor was before lists had an order, or of a list whose order is fixed.
+ * A cursor holds the time and id of the last article of a page and, for a list oldest first, by relevance or by
+ * star time, that order; by relevance the time is `rank_at`, by star time `starred_at`. A cursor without an
+ * order is of a list newest first, as every cursor was before lists had an order, or of a list whose order is
+ * fixed.
  */
 function encodeCursor(value: CursorValue, order: ListSort = "newest"): string {
   return Buffer.from(JSON.stringify(order === "newest" ? value : [...value, order])).toString("base64url");
@@ -713,7 +825,7 @@ function decodeCursor(cursor: string, order: ListSort = "newest"): CursorValue {
   ) {
     const given = (value[2] as ListSort | undefined) ?? "newest";
     if (given !== order) {
-      throw new DomainError("invalid", `the cursor is of a list ${given} first, and the list asked for is ${order} first`, [
+      throw new DomainError("invalid", `the cursor is of a list in the order ${given}, and the list asked for is in the order ${order}`, [
         { path: "cursor", message: "the cursor is of a list in another order" },
       ]);
     }
@@ -733,7 +845,7 @@ function refuseOrder(query: ArticleListQuery, list: string): void {
 export const RECENTLY_READ_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** What narrows the article list, none of which the list of recently read articles is combined with. */
-const NARROWING = ["category", "uncategorized", "origin", "feed", "kind", "unread", "starred", "minImportance"] as const;
+const NARROWING = ["category", "uncategorized", "origin", "feed", "kind", "unread", "starred", "starredStory", "minImportance"] as const;
 
 /**
  * A page of the articles read in the last seven days, last read first, ended events included. What filters
@@ -776,20 +888,34 @@ function listRecentlyRead(db: Database, query: ArticleListQuery, now: string): A
   };
 }
 
+/** How a list in an order other than by event start is sorted and paged: by which column, in which direction. */
+const ORDERS: Record<ListSort, { column: string; direction: "ASC" | "DESC" }> = {
+  newest: { column: "updated_at", direction: "DESC" },
+  oldest: { column: "updated_at", direction: "ASC" },
+  // By `rank_at`: the time moved later by the relevance. Its value changes only when the scores are worked out
+  // again or the terms match differently, so a cursor keeps its place as any other does.
+  relevance: { column: "rank_at", direction: "DESC" },
+  starred: { column: "starred_at", direction: "DESC" },
+};
+
 /**
  * A page of articles, without events that have ended unless they are asked for. A list of events is ordered
  * by start time, soonest first; every other list by last update, newest first unless oldest first or relevance
- * is asked for. The recently read articles are a list of their own. `asOf` is `now`, when the list was read.
+ * is asked for. The starred articles may be ordered by star time instead, last starred first. The recently
+ * read articles are a list of their own. `asOf` is `now`, when the list was read.
  */
 export function listArticles(db: Database, query: ArticleListQuery, now: string): ArticleList {
   if (query.recentlyRead === "true") return listRecentlyRead(db, query, now);
   const limit = query.limit ?? 50;
   const byEventStart = query.kind === "event";
   if (byEventStart) refuseOrder(query, "kind=event");
-  const oldestFirst = query.order === "oldest";
-  // By `rank_at`: the time moved later by the relevance. Its value changes only when the scores are worked out
-  // again or the terms match differently, so a cursor keeps its place as any other does.
-  const byRelevance = query.order === "relevance";
+  if (query.order === "starred" && query.starred !== "true") {
+    throw new DomainError("invalid", "only the starred articles can be listed by star time", [
+      { path: "order", message: "starred is allowed with starred=true only" },
+    ]);
+  }
+  const sorting = ORDERS[query.order ?? "newest"];
+  const before = sorting.direction === "DESC" ? "<" : ">";
   const params: Array<string | number> = [];
   // A feed article that filters hide is in no list.
   const where: string[] = [`NOT ${hiddenByFilters("a")}`];
@@ -814,6 +940,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   }
   if (query.unread !== undefined) where.push(`a.is_read = ${query.unread === "true" ? 0 : 1}`);
   if (query.starred !== undefined) where.push(`a.starred = ${query.starred === "true" ? 1 : 0}`);
+  if (query.starredStory === "true") where.push(`(a.starred = 1 OR ${followsStarred("a")})`);
   if (query.minImportance !== undefined) {
     // Feed articles have no importance, so a lower bound leaves them out.
     where.push("a.importance >= ?");
@@ -828,21 +955,13 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
     where.push(
       byEventStart
         ? "(a.event_starts_at > ? OR (a.event_starts_at = ? AND a.id > ?))"
-        : oldestFirst
-          ? "(a.updated_at > ? OR (a.updated_at = ? AND a.id > ?))"
-          : byRelevance
-            ? "(a.rank_at < ? OR (a.rank_at = ? AND a.id < ?))"
-            : "(a.updated_at < ? OR (a.updated_at = ? AND a.id < ?))",
+        : `(a.${sorting.column} ${before} ? OR (a.${sorting.column} = ? AND a.id ${before} ?))`,
     );
     params.push(value, value, id);
   }
   const order = byEventStart
     ? "a.event_starts_at ASC, a.id ASC"
-    : oldestFirst
-      ? "a.updated_at ASC, a.id ASC"
-      : byRelevance
-        ? "a.rank_at DESC, a.id DESC"
-        : "a.updated_at DESC, a.id DESC";
+    : `a.${sorting.column} ${sorting.direction}, a.id ${sorting.direction}`;
   const rows = db
     .prepare(
       `SELECT ${SUMMARY_COLUMNS} FROM articles a WHERE ${where.join(" AND ")}
@@ -853,7 +972,7 @@ export function listArticles(db: Database, query: ArticleListQuery, now: string)
   const last = page.at(-1);
   const nextCursor =
     rows.length > limit && last
-      ? encodeCursor([str(byEventStart ? last.event_starts_at : byRelevance ? last.rank_at : last.updated_at), num(last.id)], query.order)
+      ? encodeCursor([str(byEventStart ? last.event_starts_at : last[sorting.column]), num(last.id)], query.order)
       : null;
   return { items: page.map(toSummary), nextCursor, asOf: now };
 }
@@ -895,7 +1014,8 @@ function likePattern(term: string): string {
  * A page of the articles that have every term of the query, newest first by last update, generated and
  * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
  * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
- * hidden duplicates unless a feed is named, as in the article list. Each article comes with an excerpt, taken
+ * hidden duplicates unless a feed is named or only starred articles are asked for, as in the article list.
+ * Starred articles are found newest first by last update too. Each article comes with an excerpt, taken
  * from the reader's notes when no field of the article has the terms. The index holds the highlighted texts
  * and notes of every article, so they are matched like the fields.
  * `asOf` is `now`, when the result was read, as in the article list.
@@ -915,7 +1035,8 @@ export function searchArticles(db: Database, query: ArticleSearchQuery, now: str
     params.push(likePattern(term));
   }
   where.push(`NOT ${hiddenByFilters("a")}`);
-  if (query.feed === undefined) where.push(`NOT ${hiddenDuplicate("a")}`);
+  // A duplicate is found with its own feed and among the starred, as it is listed.
+  if (query.feed === undefined && query.starred !== "true") where.push(`NOT ${hiddenDuplicate("a")}`);
   if (query.category !== undefined) {
     where.push("a.category_id = ?");
     params.push(query.category);
@@ -925,6 +1046,7 @@ export function searchArticles(db: Database, query: ArticleSearchQuery, now: str
     params.push(query.feed);
   }
   if (query.unread === "true") where.push("a.is_read = 0");
+  if (query.starred === "true") where.push("a.starred = 1");
   const page = pageArticles(db, where.join(" AND "), params, query);
   const ids = page.items.map((item) => item.id);
   const fields = new Map(
@@ -988,7 +1110,8 @@ function readDuplicatesOf(db: Database, keptIds: number[], now: string): number[
 
 /**
  * Changes whether an article is read or starred. An article that becomes read records `now` as its read time;
- * one that was read already keeps its time, and one put back to unread loses it. Marking a generated article as a
+ * one that was read already keeps its time, and one put back to unread loses it. Stars keep their time the same
+ * way: given now, kept when given again, lost when taken away. Marking a generated article as a
  * miss marks it read too, unless the same patch says whether it is read; taking the mark away leaves that alone.
  * Stopping the follow-ups of a generated article, or taking that back, leaves whether it is read alone.
  */
@@ -1024,7 +1147,10 @@ export function setArticleFlags(db: Database, id: number, patch: ArticleUpdate, 
       );
       if (isRead && changed > 0) readDuplicatesOf(db, [id], now);
     }
-    if (patch.starred !== undefined) db.prepare("UPDATE articles SET starred = ? WHERE id = ?").run(patch.starred ? 1 : 0, id);
+    if (patch.starred === true) {
+      db.prepare("UPDATE articles SET starred = 1, starred_at = CASE WHEN starred = 1 THEN starred_at ELSE ? END WHERE id = ?").run(now, id);
+    }
+    if (patch.starred === false) db.prepare("UPDATE articles SET starred = 0, starred_at = NULL WHERE id = ?").run(id);
   });
   return getArticle(db, id);
 }
