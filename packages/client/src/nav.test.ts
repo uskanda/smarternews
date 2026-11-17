@@ -7,7 +7,7 @@ import {
   parseHideRead,
   hasImportanceFilter,
   hasListControls,
-  hideEmptyEntries, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, sortOptionsOf, targetFilter, targetScope, type ListTarget } from "./nav.ts";
+  hideEmptyEntries, hasReadToggle, hasSortMenu, listFormatOf, withViewChange, FORMAT_LABELS, FORMAT_OPTIONS, listKey, listSortOf, parseListKey, sortOptionsOf, targetFilter, targetScope, type ListTarget } from "./nav.ts";
 
 const category = (id: number, name: string, overrides: Partial<Category> = {}): Category => ({
   id,
@@ -386,6 +386,51 @@ describe("the order of a list", () => {
     ];
     expect(listSortOf({ type: "starred" }, starredViews, categories)).toBe("starred");
     expect(listSortOf({ type: "all" }, starredViews, categories)).toBe("newest");
+  });
+});
+
+describe("the format of a list", () => {
+  const categories = [category(1, "Tools"), category(2, "Events", { kind: "event" })];
+  const views = [
+    { key: "feed-12", sort: "oldest" as const, format: "expanded" as const },
+    { key: "category-1", sort: "newest" as const, format: "compact" as const },
+    { key: "all", sort: "oldest" as const },
+    // The server would refuse these; a list whose format cannot be chosen ignores them all the same.
+    { key: "category-2", sort: "newest" as const, format: "expanded" as const },
+    { key: "recently-read", sort: "newest" as const, format: "compact" as const },
+  ];
+
+  it("follows the view of the entry, and is the standard one for an entry without one", () => {
+    expect(listFormatOf({ type: "feed", feedId: 12 }, views, categories)).toBe("expanded");
+    expect(listFormatOf({ type: "category", categoryId: 1, generatedOnly: false }, views, categories)).toBe("compact");
+    expect(listFormatOf({ type: "category", categoryId: 1, generatedOnly: true }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "all" }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "unread" }, undefined, categories)).toBe("standard");
+  });
+
+  it("is the standard one where the order cannot be chosen either", () => {
+    expect(listFormatOf({ type: "category", categoryId: 2, generatedOnly: false }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "recentlyRead" }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "annotations" }, views, categories)).toBe("standard");
+  });
+
+  it("is changed at once on the screen, keeping the setting the change leaves out", () => {
+    const stored = [
+      { key: "all", sort: "oldest" as const, format: "expanded" as const },
+      { key: "unread", sort: "newest" as const, format: "compact" as const },
+    ];
+    expect(withViewChange(stored, "all", { sort: "newest" })).toEqual([
+      { key: "unread", sort: "newest", format: "compact" },
+      { key: "all", sort: "newest", format: "expanded" },
+    ]);
+    expect(withViewChange(stored, "unread", { format: "standard" })).toEqual([{ key: "all", sort: "oldest", format: "expanded" }]);
+    expect(withViewChange([], "feeds", { format: "compact" })).toEqual([{ key: "feeds", sort: "newest", format: "compact" }]);
+    // A view answered before there were formats is in the standard one.
+    expect(withViewChange([{ key: "all", sort: "oldest" }], "all", { sort: "newest" })).toEqual([]);
+  });
+
+  it("offers the three formats under their labels", () => {
+    expect(FORMAT_OPTIONS.map((format) => FORMAT_LABELS[format])).toEqual(["標準", "タイトルのみ", "展開"]);
   });
 
   it("is kept under a key the server reads for every entry of the list but the recently read articles", () => {

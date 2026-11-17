@@ -901,10 +901,19 @@ export function listViewKey(target: ListViewTarget): string {
 }
 
 /**
- * How one entry shows its articles. An entry the server does not answer has every default: newest first. Only
- * the entry of starred articles can be in the order by star time.
+ * The format of an article list on the web: `standard`, three lines a row beside the article pane; `compact`,
+ * the title alone on one line beside the article pane; `expanded`, each article in full, one after another,
+ * without the article pane. The Android app shows every list in its own format and keeps this one as it is.
  */
-export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema });
+export const listFormatSchema = z.enum(["standard", "compact", "expanded"]);
+export type ListFormat = z.infer<typeof listFormatSchema>;
+
+/**
+ * How one entry shows its articles. An entry the server does not answer has every default: newest first, in the
+ * standard format. Only the entry of starred articles can be in the order by star time. A view stored before
+ * there were formats is answered in the standard format.
+ */
+export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema, format: listFormatSchema.default("standard") });
 export type ListView = z.infer<typeof listViewSchema>;
 
 /** The entries whose view differs from the defaults. */
@@ -912,7 +921,7 @@ export const listViewsSchema = z.object({ items: z.array(listViewSchema) });
 export type ListViews = z.infer<typeof listViewsSchema>;
 
 /** A change to one entry's view. What is left out stays as it is. */
-export const listViewUpdateSchema = z.object({ sort: listSortSchema }).partial();
+export const listViewUpdateSchema = z.object({ sort: listSortSchema, format: listFormatSchema }).partial();
 export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 
 // ---- subscribed feeds --------------------------------------------------------------------------
@@ -1904,6 +1913,7 @@ export type SettingsFileListViewTarget = z.infer<typeof settingsFileListViewTarg
 const settingsFileListViewSchema = z.object({
   list: settingsFileListViewTargetSchema,
   sort: listSortSchema.optional(),
+  format: listFormatSchema.optional(),
 });
 export type SettingsFileListView = z.infer<typeof settingsFileListViewSchema>;
 

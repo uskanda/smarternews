@@ -245,7 +245,7 @@ describe("the list an entry opens", () => {
     await user.click(within(screen.getByRole("menu", { name: "並び順" })).getByRole("menuitemradio", { name: "古い順" }));
 
     await waitFor(() => expect(rowTitles()).toEqual(["Old post", "Stray", "Release 2", "New post"]));
-    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "feeds", sort: "oldest" }]));
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "feeds", sort: "oldest", format: "standard" }]));
   });
 
   it("shows 購読フィード at the top without a number when no feed is subscribed", async () => {

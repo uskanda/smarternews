@@ -1711,7 +1711,7 @@ describe("the link of an article", () => {
     await user.keyboard("c");
 
     expect(screen.queryByRole("button", { name: "リンクをコピー" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
     expect(screen.queryByText("リンクをコピーしました")).not.toBeInTheDocument();
     expect(await navigator.clipboard.readText()).toBe("before");
   });
@@ -2745,7 +2745,7 @@ describe("the order of a list", () => {
     await waitFor(() => expect(rowTitles()).toEqual(["Blog old", "Blog new", "First", "Second", "Third"]));
     expect(sortButton()).toHaveAccessibleName("並び順：古い順");
     expect(screen.getByRole("heading", { level: 2, name: "Second" })).toBeInTheDocument();
-    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "oldest" }]));
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "oldest", format: "standard" }]));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
@@ -2763,7 +2763,7 @@ describe("the order of a list", () => {
 
     await waitFor(() => expect(rowTitles()).toEqual(["First", "Third", "Second", "Blog old", "Blog new"]));
     expect(sortButton()).toHaveAccessibleName("並び順：関連度順");
-    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "relevance" }]));
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: `category-${tools.id}`, sort: "relevance", format: "standard" }]));
     // The rows read as they did: the same texts, in another order.
     expect(within(list()).getAllByRole("link").map((row) => row.textContent).sort()).toEqual([...rowsBefore].sort());
   });
@@ -2926,7 +2926,7 @@ describe("the order of a list", () => {
 
     await waitFor(() => expect(rowTitles()).toEqual(["First", "Third"]));
     expect(sortButton()).toHaveAccessibleName("並び順：スターを付けた順");
-    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "starred", sort: "starred" }]));
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "starred", sort: "starred", format: "standard" }]));
     void tools;
   });
 

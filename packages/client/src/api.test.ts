@@ -545,9 +545,10 @@ describe("list views", () => {
     expect(await api.listViews()).toEqual({ items: [] });
     expect(seen.at(-1)!.url).toBe("/api/v1/list-views");
 
-    expect(await api.updateListView("unread", { sort: "oldest" })).toEqual({ key: "unread", sort: "oldest" });
+    expect(await api.updateListView("unread", { sort: "oldest" })).toEqual({ key: "unread", sort: "oldest", format: "standard" });
     expect(seen.at(-1)!.url).toBe("/api/v1/list-views/unread");
-    expect(await api.listViews()).toEqual({ items: [{ key: "unread", sort: "oldest" }] });
+    expect(await api.updateListView("unread", { format: "compact" })).toEqual({ key: "unread", sort: "oldest", format: "compact" });
+    expect(await api.listViews()).toEqual({ items: [{ key: "unread", sort: "oldest", format: "compact" }] });
     await expect(api.updateListView("recently-read", { sort: "oldest" })).rejects.toMatchObject({ kind: "invalid" });
   });
 
