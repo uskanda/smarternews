@@ -131,7 +131,12 @@ export class TranslationService {
     return promise;
   }
 
-  async #translateArticle(id: number): Promise<ArticleTranslation> {
+  /**
+   * One attempt, and one more when the text changed while the first was under way: the feed may have rewritten
+   * the item, or the full content may have arrived. The second is made from the text as it is then, inside the
+   * promise that requests for the same article wait for, so that they get the new translation too.
+   */
+  async #translateArticle(id: number, again = false): Promise<ArticleTranslation> {
     const { db, clock, maxCharsPerArticle } = this.#options;
     const article = getArticle(db, id);
     if (!article.translatable) {
@@ -152,11 +157,13 @@ export class TranslationService {
 
     const texts = [...output.texts];
     const title = needsTitle ? texts.shift()! : null;
-    return transaction(db, () => {
-      // The feed may have rewritten the item, or the full content may have arrived, while the translation was
-      // under way: what was translated must still be what the article shows.
+    const stored = transaction(db, () => {
+      // What was translated must still be what the article shows.
       const now = db.prepare("SELECT title, CASE WHEN full_content_status = 'fetched' THEN full_content ELSE body END AS source FROM articles WHERE id = ?").get(id);
-      if (!now || str(now.title) !== article.title || str(now.source) !== source) throw unavailable();
+      if (!now || str(now.title) !== article.title || str(now.source) !== source) {
+        if (again || !now) throw unavailable();
+        return null;
+      }
       if (title !== null) saveTranslatedTitle(db, id, { original: article.title, title, sourceLanguage: output.sourceLanguage });
       if (split !== null) {
         const segments: StoredSegment[] = split.segments.map((segment) => ({ original: segment.original, translated: segment.translate ? texts.shift()! : null }));
@@ -164,5 +171,6 @@ export class TranslationService {
       }
       return getArticle(db, id).translation!;
     });
+    return stored ?? this.#translateArticle(id, true);
   }
 }

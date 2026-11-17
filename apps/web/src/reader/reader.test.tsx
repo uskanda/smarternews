@@ -1816,7 +1816,7 @@ describe("the link of an article", () => {
     await user.keyboard("c");
 
     expect(screen.queryByRole("button", { name: "リンクをコピー" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
+    expect((await actions()).getByRole("button", { name: "スターを付ける" })).toBeInTheDocument();
     expect(screen.queryByText("リンクをコピーしました")).not.toBeInTheDocument();
     expect(await navigator.clipboard.readText()).toBe("before");
   });

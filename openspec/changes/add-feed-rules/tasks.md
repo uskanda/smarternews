@@ -2,7 +2,7 @@
 
 ## 1. ルールの保存と照合（packages/core）
 
-- [x] 1.1移行 `038_rules.sql` で表 `rules` と記事の列2つを足す。`database.test.ts` が通ることで確かめる
+- [x] 1.1移行 `041_rules.sql` で表 `rules` と記事の列2つを足す。`database.test.ts` が通ることで確かめる
 - [x] 1.2 `api.ts` にルールの型を足す。型検査が通ることで確かめる
 - [x] 1.3 `db/rules.ts` に一覧、登録、変更、削除、件数の確認を作る。`db/rules.test.ts` で照合、範囲、検査、同じルールの拒否、範囲の対象の削除を確かめる
 

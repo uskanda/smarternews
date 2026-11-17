@@ -260,13 +260,14 @@ export function useArticlePatchListener(listener: ArticlePatchListener): void {
 /**
  * The translation of a feed article's content. It is asked for when an article of a feed that translates is
  * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
- * put into the article and into the lists, which show the translated title.
+ * put into the article and into the lists, which show the translated title. While `wait` is set, as it is while
+ * the full content is on its way, nothing is asked: what the feed delivered would be translated for nothing.
  */
-export function useArticleTranslation(article: Article | undefined) {
+export function useArticleTranslation(article: Article | undefined, { wait = false }: { wait?: boolean } = {}) {
   const { api } = useApp();
   const client = useQueryClient();
   const id = article?.id ?? null;
-  const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  const wanted = !wait && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
     // The full content, once it arrives, is translated anew: the server dropped the translation of the excerpt.
     queryKey: ["article-translation", id, article?.fullContent?.fetchedAt ?? null],
