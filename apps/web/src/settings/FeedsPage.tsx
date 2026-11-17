@@ -112,6 +112,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
+  const [url, setUrl] = useState(feed.url);
   const [title, setTitle] = useState(feed.title);
   const [category, setCategory] = useState(feed.categoryId === null ? NO_CATEGORY : String(feed.categoryId));
   const [ownInterval, setOwnInterval] = useState(feed.intervalMinutes !== null);
@@ -127,9 +128,13 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [titleProblem, setTitleProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [saving, run] = usePending();
+  // Set while the server fetches a new URL, which can take as long as that site does.
+  const [checking, setChecking] = useState(false);
+  const urlChanged = url.trim() !== feed.url;
   useUnsaved(
     `購読フィード『${feed.title}』の編集`,
-    title !== feed.title ||
+    urlChanged ||
+      title !== feed.title ||
       category !== (feed.categoryId === null ? NO_CATEGORY : String(feed.categoryId)) ||
       ownInterval !== (feed.intervalMinutes !== null) ||
       (ownInterval && minutes.trim() !== String(feed.intervalMinutes)) ||
@@ -155,8 +160,12 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
     if (titleError !== null || (ownInterval && intervalMinutes === null)) return;
     const chosenSelectors = feed.format === "page" ? selectorsOf(selectors) : null;
     const chosenContentSelector = contentSelectorOf(contentSelector);
+    setError(null);
+    setChecking(urlChanged);
     try {
       await api.updateFeed(feed.id, {
+        // Sent only when it changed: the server then fetches it before it stores anything.
+        ...(urlChanged ? { url: url.trim() } : {}),
         ...(title.trim() !== feed.title ? { title: title.trim() } : {}),
         // Only a web feed has selectors; they are sent when they changed, and apply from the next fetch.
         ...(chosenSelectors !== null && JSON.stringify(chosenSelectors) !== JSON.stringify(feed.selectors) ? { selectors: chosenSelectors } : {}),
@@ -176,15 +185,32 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       onDone();
     } catch (caught) {
       setError(caught);
+    } finally {
+      setChecking(false);
     }
   }
 
   const id = `feed-${feed.id}`;
   const categoryProblem = fieldMessage(error, "categoryId", "カテゴリ");
+  // Another feed has the URL: said under the field, in the words the add form uses.
+  const urlTaken = error instanceof ApiError && error.kind === "conflict" ? conflictLabel(error.message) : null;
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
     <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md pt-sm">
       <FeedStatsSection feed={feed} />
+      <Field
+        label="URL"
+        type="url"
+        inputMode="url"
+        autoComplete="off"
+        value={url}
+        onChange={(event) => {
+          setUrl(event.target.value);
+          setError(null);
+        }}
+        hint="変えると、保存の前に新しいURLを取得して確かめます。記事、スター、注釈はそのまま残ります。"
+        error={urlTaken ?? fieldMessage(error, "url", "URL")}
+      />
       <Field
         label="名前"
         value={title}
@@ -234,14 +260,14 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       <ContentSelectorField feedId={feed.id} value={contentSelector} onChange={setContentSelector} error={error} />
       {category !== NO_CATEGORY ? <TopicSource id={`${id}-topic-source-hint`} checked={topicSource} onChange={setTopicSource} /> : null}
       {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
-      {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
+      {error && !(error instanceof ApiError && error.kind === "invalid") && urlTaken === null ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
         <Button
           type="submit"
           variant="primary"
-          disabled={saving || title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}
+          disabled={saving || url.trim().length === 0 || title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}
         >
-          保存する
+          {checking ? "確かめています…" : "保存する"}
         </Button>
         <Button onClick={onDone}>やめる</Button>
       </div>
@@ -319,6 +345,12 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.lastError ? (
         <span className="break-all text-error" title={feed.lastError}>
           理由: {feedErrorLabel(feed.lastError)}
+        </span>
+      ) : null}
+      {/* Not a problem: the fetches work. Shown until the URL changes again, so that a wrong move can be undone by hand. */}
+      {feed.movedAt && feed.movedFrom ? (
+        <span className="break-all">
+          転送によりURLを変更 <span className="tabular-nums">{at(feed.movedAt)}</span>（元: {feed.movedFrom}）
         </span>
       ) : null}
     </span>

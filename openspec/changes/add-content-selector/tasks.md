@@ -9,7 +9,7 @@
 
 - [x] 2.1 `db/feeds.test.ts` と `api.test.ts` に、値の保存と解除、使えないセレクターの拒否のテストを書き、失敗を確かめる
 - [x] 2.2 `db/feeds.test.ts` に、値が変わったときだけ未読の記事の全文と訳を消すテストを書き、失敗を確かめる。既読の記事とほかのフィードの記事は残る
-- [x] 2.3 `041_feed_content_selector.sql` の移行と、`feedSchema` と `feedFields` の `contentSelector` を足す
+- [x] 2.3 `045_feed_content_selector.sql` の移行と、`feedSchema` と `feedFields` の `contentSelector` を足す
 - [x] 2.4 `insertFeed` と `updateFeed` に、保存と消去を足す
 
 ## 3. 全文と要約

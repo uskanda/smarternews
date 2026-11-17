@@ -22,6 +22,7 @@ import {
   previewContent,
   categoryCreateSchema,
   categoryUpdateSchema,
+  changeFeedUrl,
   createCategory,
   createTopic,
   deleteCategory,
@@ -464,8 +465,14 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/feeds/:id", (c) => c.json(feedAnswer(getFeed(db, idParam(c, "feed"), clock()))));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
+  // A change with a URL fetches it first, as registering does; any other change is stored at once.
   api.patch("/feeds/:id", async (c) => {
-    const feed = updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock);
+    const id = idParam(c, "feed");
+    const patch = parse(feedUpdateSchema, await jsonBody(c));
+    const feed =
+      patch.url === undefined
+        ? updateFeed(db, id, patch, clock)
+        : await poller.exclusive(() => changeFeedUrl({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, id, patch));
     // A changed content selector forgot the full content of unread articles: those that wait for it again are
     // fetched now rather than at the next look. Nothing waits after any other change, and the look is cheap.
     fullContent.tick();
