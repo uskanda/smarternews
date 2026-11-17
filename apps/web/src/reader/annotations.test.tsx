@@ -6,7 +6,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@te
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
-import { useBodyAnnotations } from "./Annotations.tsx";
+import { placeMenu, useBodyAnnotations } from "./Annotations.tsx";
 import { SKIP_ATTRIBUTE } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -127,7 +127,7 @@ describe("highlighting a selection", () => {
     selectText(article.querySelector(".article-body")!, QUOTE);
     // A topic can be added too, as the article's category holds topics.
     await waitFor(() =>
-      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを足す…"]),
+      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを追加…"]),
     );
     await user.click(within(menu()!).getByRole("button", { name: "ハイライト" }));
 
@@ -239,6 +239,96 @@ describe("highlighting a selection", () => {
     await user.keyboard("h");
     await waitFor(() => expect(marked(article)).toEqual(["最後の段落"]));
     expect(stored(server)).toMatchObject([{ quote: "最後の段落", note: null }]);
+  });
+
+  it("makes one highlight while the answer waits, whether by the button, h or the menu", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    const { user, requests, hold } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await within(article).findByText(/電池の工場/);
+    const held = hold(`POST /api/v1/articles/${id}/highlights`);
+
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    const button = within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "ハイライト" });
+    await user.click(button);
+    await user.click(button);
+    expect(button).toBeDisabled();
+    // jsdom drops the selection on a click, which a browser keeps: the text is selected again for the key and the menu.
+    (document.activeElement as HTMLElement).blur();
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    await screen.findByRole("toolbar", { name: "選んだ文字列" });
+    await user.keyboard("h");
+    fireEvent.contextMenu(article.querySelector(".article-body")!, { button: 2, clientX: 40, clientY: 50 });
+    const item = within(await screen.findByRole("menu", { name: "選んだ文字列の操作" })).getByRole("menuitem", { name: "ハイライト" });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Escape}");
+
+    expect(requests.filter((request) => request === `POST /api/v1/articles/${id}/highlights`)).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(marked(article)).toEqual([QUOTE]));
+    expect(stored(server)).toHaveLength(1);
+  });
+
+  describe("a selection longer than a highlight can be", () => {
+    const TOO_LONG = "ハイライトする文字列は5000文字以内にしてください。選ぶ範囲を狭めてください。";
+    const LONG = "長".repeat(5001);
+
+    /** An article with a paragraph of 5001 characters, all of them selected. */
+    async function selectedTooLong() {
+      const server = makeServer();
+      const id = generated(server, `最初の段落です。\n\n${LONG}\n\n最後の段落です。`);
+      const view = renderApp({ server, route: `/all/${id}` });
+      const article = await opened();
+      const paragraph = await within(article).findByText(LONG);
+      selectText(article.querySelector(".article-body")!, LONG);
+      const toolbar = await screen.findByRole("toolbar", { name: "選んだ文字列" });
+      return { ...view, article, paragraph, toolbar };
+    }
+    const toldWhy = async () => expect(await screen.findByRole("status")).toHaveTextContent(TOO_LONG);
+    const sent = (requests: string[]) => requests.filter((request) => request.endsWith("/highlights"));
+
+    it("is not sent from the menu, and the reason is told", async () => {
+      const { server, user, requests, toolbar } = await selectedTooLong();
+      await user.click(within(toolbar).getByRole("button", { name: "ハイライト" }));
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("is not sent with h", async () => {
+      const { server, user, requests } = await selectedTooLong();
+      await user.keyboard("h");
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("is not sent from the menu of a right click", async () => {
+      const { server, user, requests, paragraph } = await selectedTooLong();
+      expect(fireEvent.contextMenu(paragraph, { button: 2, clientX: 40, clientY: 50 })).toBe(false);
+      await user.click(within(await screen.findByRole("menu", { name: "選んだ文字列の操作" })).getByRole("menuitem", { name: "ハイライト" }));
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("opens no dialog for a note, so that no note is written for nothing", async () => {
+      const { user, requests, toolbar } = await selectedTooLong();
+      await user.click(within(toolbar).getByRole("button", { name: "メモを書く" }));
+      await toldWhy();
+      expect(screen.queryByRole("dialog", { name: "メモを書いてハイライトする" })).toBeNull();
+      expect(sent(requests)).toEqual([]);
+    });
+
+    it("can be narrowed to as many characters as a highlight takes, and highlighted", async () => {
+      const { server, user, article } = await selectedTooLong();
+      selectText(article.querySelector(".article-body")!, LONG.slice(1));
+      await waitFor(() => expect(document.getSelection()?.toString()).toBe(LONG.slice(1)));
+      await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "ハイライト" }));
+      await waitFor(() => expect(stored(server)).toMatchObject([{ quote: LONG.slice(1) }]));
+      expect(screen.queryByRole("status")).toBeNull();
+    });
   });
 
   it("is listed among the keys", async () => {
@@ -963,13 +1053,13 @@ describe("a dialog of an annotation when the body shown changes", () => {
   it("keeps the dialog of a topic when the translation arrives", async () => {
     const { server, route, release } = translating();
     const { user } = renderApp({ server, route });
-    await choose(user, "The plant opens", "トピックを足す…");
-    const dialog = await screen.findByRole("dialog", { name: "トピックを足す" });
+    await choose(user, "The plant opens", "トピックを追加…");
+    const dialog = await screen.findByRole("dialog", { name: "トピックを追加" });
     await user.type(within(dialog).getByLabelText("文章"), " in Ohio");
 
     await arrives(release);
 
-    expect(screen.getByRole("dialog", { name: "トピックを足す" })).toBe(dialog);
+    expect(screen.getByRole("dialog", { name: "トピックを追加" })).toBe(dialog);
     expect(within(dialog).getByLabelText("文章")).toHaveValue("The plant opens in Ohio");
   });
 
@@ -1056,5 +1146,69 @@ describe("keys while a dialog of a highlight is open", () => {
 
     expect(getArticle(server.db, id)?.starred).toBe(false);
     expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBeInTheDocument();
+  });
+});
+
+describe("where the menu of a selection is placed", () => {
+  const phone = { width: 390, height: 800 };
+  const menuSize = { width: 210, height: 40 };
+
+  it("is below the selection, at its left, when it fits", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 50 }, menuSize, phone)).toEqual({ top: 126, left: 50 });
+  });
+
+  it("moves left as far as it would go past the right edge", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 249 }, menuSize, phone)).toEqual({ top: 126, left: 172 });
+  });
+
+  it("keeps 8 pixels from the left edge, even for a menu wider than the screen", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 2 }, menuSize, phone).left).toBe(8);
+    expect(placeMenu({ top: 100, bottom: 120, left: 100 }, { width: 500, height: 40 }, phone).left).toBe(8);
+  });
+
+  it("is above the selection when it would go past the bottom edge", () => {
+    expect(placeMenu({ top: 700, bottom: 780, left: 50 }, menuSize, phone)).toEqual({ top: 654, left: 50 });
+  });
+
+  it("stays on the screen when it fits neither below nor above", () => {
+    expect(placeMenu({ top: 20, bottom: 780, left: 50 }, menuSize, phone)).toEqual({ top: 752, left: 50 });
+  });
+});
+
+describe("the menu of a selection while the body scrolls", () => {
+  it("follows the selection, and is hidden while the selection is out of the pane", async () => {
+    let box = { top: 200, bottom: 220, left: 100, right: 200 };
+    const rect = (edges: { top: number; bottom: number; left: number; right: number }) =>
+      ({ ...edges, x: edges.left, y: edges.top, width: edges.right - edges.left, height: edges.bottom - edges.top, toJSON: () => edges }) as DOMRect;
+    const had = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+    Range.prototype.getBoundingClientRect = () => rect(box);
+    try {
+      const server = makeServer();
+      const id = generated(server);
+      renderApp({ server, route: `/all/${id}` });
+      const article = await opened();
+      await within(article).findByText(/電池の工場/);
+      const scroller = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+      vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect({ top: 100, bottom: 700, left: 0, right: 1024 }));
+
+      selectText(article.querySelector(".article-body")!, QUOTE);
+      await waitFor(() => expect(menu()?.style.top).toBe("226px"));
+
+      box = { top: 150, bottom: 170, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()?.style.top).toBe("176px"));
+
+      // Above the pane, behind the heading of the article.
+      box = { top: 40, bottom: 60, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()).toBeNull());
+
+      box = { top: 300, bottom: 320, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()?.style.top).toBe("326px"));
+    } finally {
+      if (had) Object.defineProperty(Range.prototype, "getBoundingClientRect", had);
+      else delete (Range.prototype as Partial<Range>).getBoundingClientRect;
+    }
   });
 });

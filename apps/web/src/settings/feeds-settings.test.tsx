@@ -255,6 +255,33 @@ describe("the way from a row to the feed's articles", () => {
   });
 });
 
+describe("the way from a row to the feed's site", () => {
+  it("opens the site the feed belongs to in a new tab, beside the way to its articles", async () => {
+    const server = makeServer();
+    insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", siteUrl: "https://blog.example.org/" }, server.clock);
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    const site = within(row).getByRole("link", { name: "Blogのサイトを開く" });
+    expect(site).toHaveTextContent("サイトを開く");
+    expect(site).toHaveAttribute("href", "https://blog.example.org/");
+    expect(site).toHaveAttribute("target", "_blank");
+    expect(site).toHaveAttribute("rel", "noopener noreferrer");
+    const articles = within(row).getByRole("link", { name: "Blogの記事の一覧" });
+    expect(articles.compareDocumentPosition(site) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is not shown for a feed whose site is not known", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).getByRole("link", { name: "Blogの記事の一覧" })).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "Blogのサイトを開く" })).not.toBeInTheDocument();
+  });
+});
+
 describe("a feed named in the address to be edited", () => {
   it("opens that row's form with the focus in it, and scrolls to the row once the list is in", async () => {
     const server = makeServer();
@@ -514,6 +541,65 @@ describe("OPML", () => {
   });
 });
 
+describe("a change to feeds waiting for the server's answer", () => {
+  it("saves an edited feed once", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const held = hold(/^PATCH \/api\/v1\/feeds\/\d+$/);
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const save = within(row).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+  });
+
+  it("saves the base interval once", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("取得周期");
+    await within(form).findByLabelText("基本の取得周期（分）");
+    const held = hold("PATCH /api/v1/settings");
+
+    const save = within(form).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request === "PATCH /api/v1/settings")).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("取得周期を保存しました")).toBeInTheDocument();
+  });
+
+  it("loads an OPML file once", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const held = hold("POST /api/v1/feeds/opml");
+    const file = new File(
+      ['<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" text="A" xmlUrl="https://a.example.org/feed.xml"/></body></opml>'],
+      "feeds.opml",
+    );
+
+    const opml = await section("OPML");
+    await user.upload(within(opml).getByLabelText("読み込むOPMLファイル"), file);
+    const load = within(opml).getByRole("button", { name: "読み込む" });
+    await user.click(load);
+    await waitFor(() => expect(load).toBeDisabled());
+    await user.click(load);
+
+    expect(requests.filter((request) => request === "POST /api/v1/feeds/opml")).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(within(opml).getByRole("status")).toHaveTextContent("1件を登録し、0件を飛ばしました。"));
+    expect(listFeeds(server.db)).toHaveLength(1);
+  });
+});
+
 describe("deleting a category that has feeds", () => {
   it("says in the question that its feeds stay and move to 未分類", async () => {
     const server = makeServer();
@@ -618,8 +704,40 @@ describe("summaries of a feed", () => {
   });
 });
 
+describe("a feed as a topic source", () => {
+  it("is switched on in the edit form of a feed of a category, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const feed = feedOf(server, "Blog", tools.id);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "トピックの取得元にする" });
+    expect(choice).not.toBeChecked();
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(await rowOf("Blog")).findByText("トピックの取得元")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).topicSource).toBe(true);
+  });
+
+  it("is offered only while the form has a category chosen", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    expect(within(row).queryByRole("checkbox", { name: "トピックの取得元にする" })).not.toBeInTheDocument();
+    await user.selectOptions(within(row).getByLabelText("カテゴリ"), String(tools.id));
+    expect(within(row).getByRole("checkbox", { name: "トピックの取得元にする" })).toBeInTheDocument();
+  });
+});
+
 describe("translation of a feed", () => {
-  const HINT = "記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
+  const HINT ="記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
 
   it("is switched on in the edit form, and the list then marks the feed", async () => {
     const server = makeServer();
@@ -926,7 +1044,9 @@ describe("fetching every feed now", () => {
 
     expect(await screen.findByText("1件の取得に失敗しました。サイトの指定で待っている1件は飛ばしました。")).toBeInTheDocument();
     expect(await rowOf("Down")).toHaveTextContent("取得に失敗");
-    expect(server.site.requests.slice(before).map((request) => request.url).sort()).toEqual(["https://blog.example.org/feed.xml", "https://down.example.org/feed.xml"]);
+    // Only the feeds themselves: the icon of the feed fetched first is looked for too.
+    const feedsFetched = server.site.requests.slice(before).map((request) => request.url).filter((url) => url.endsWith("/feed.xml"));
+    expect(feedsFetched.sort()).toEqual(["https://blog.example.org/feed.xml", "https://down.example.org/feed.xml"]);
   });
 
   it("starts nothing and says so when every feed is paused", async () => {

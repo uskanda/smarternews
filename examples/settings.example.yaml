@@ -59,6 +59,7 @@ categories:
         autoSummarize: true    # a model summarises the articles this feed delivers from now on
         translate: true        # titles and contents are translated into outputLanguage; they leave this server for that
         fetchFullContent: true # the page of each new article is fetched and its text kept as the full content
+        topicSource: true      # runs of this category judge its articles as candidates of every topic; a feed of a category only
   - slug: local-events
     name: Local events
     kind: event
@@ -91,6 +92,16 @@ filters:
       - fields: [title]
         match: regex
         value: "^RFC \\d+: (HTTP|TLS)"
+# Rules act on a feed article once, when it is first stored and no filter hides it: they star it, mark it
+# read, have the Android app notify it, or ask for its summary, even when its feed does not summarise. They
+# take the conditions and scope of filters, and one or more of the actions star, read, notify and summarize.
+rules:
+  - scope: { feed: "https://www.rfc-editor.org/rfcrss.xml" }
+    conditions:
+      - fields: [title]
+        match: contains
+        value: HTTP
+    actions: [star, notify]
 # Term groups colour their terms wherever they occur in the lists and the texts of articles, generated and
 # delivered alike; nothing is hidden. Each group has a name and one colour of four: green, purple, pink or
 # orange. Terms match as filters do: as a part of the text, whatever the case and the width. Where terms of two

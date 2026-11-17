@@ -144,6 +144,11 @@ export interface ParsedSubscription {
   title: string;
   /** The page the feed belongs to. */
   siteUrl: string | null;
+  /**
+   * The small square icon the feed names: Atom's `<icon>` or JSON Feed's `favicon`, as an absolute address.
+   * Null for RSS and RDF, whose `<image>` is mostly a wide logo.
+   */
+  iconUrl: string | null;
   items: SubscriptionItem[];
 }
 
@@ -394,8 +399,8 @@ function jsonItem(item: Node): SubscriptionItem {
   };
 }
 
-/** A JSON Feed read in full, or null when the text is not one. */
-export function parseJsonFeed(text: string): ParsedSubscription | null {
+/** A JSON Feed read in full, or null when the text is not one. `feedUrl` resolves a relative favicon. */
+export function parseJsonFeed(text: string, feedUrl: string | null = null): ParsedSubscription | null {
   if (!text.trimStart().startsWith("{")) return null;
   let root: unknown;
   try {
@@ -409,17 +414,19 @@ export function parseJsonFeed(text: string): ParsedSubscription | null {
   return {
     title: plainText(stringOf(feed.title), 200),
     siteUrl: siteLink(feed.home_page_url, (link) => stringOf(link).trim()),
+    // `icon` is a picture of 512 by 512 for a list of feeds; `favicon` is the one for a small place.
+    iconUrl: absoluteUrl(stringOf(feed.favicon).trim(), feedUrl),
     items: items.map(jsonItem),
   };
 }
 
 /**
  * Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author, content,
- * feed categories and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the relative
- * pages of items.
+ * feed categories and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the
+ * relative pages of items. It also resolves a relative icon.
  */
 export function parseSubscription(xml: string, feedUrl: string | null = null): ParsedSubscription {
-  const json = parseJsonFeed(xml);
+  const json = parseJsonFeed(xml, feedUrl);
   if (json) return json;
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
@@ -427,6 +434,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
     return {
       title: plainText(textOf(rss.title), 200),
       siteUrl: siteLink(rss.link, rssLink),
+      iconUrl: null,
       items: ((rss.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl)),
     };
   }
@@ -436,6 +444,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
     return {
       title: plainText(textOf(channel?.title), 200),
       siteUrl: siteLink(channel?.link, rssLink),
+      iconUrl: null,
       items: ((rdf.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl)),
     };
   }
@@ -447,6 +456,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
     return {
       title: plainText(textOf(atom.title), 200),
       siteUrl: siteLink(atom.link, atomLink),
+      iconUrl: absoluteUrl(textOf(atom.icon).trim(), feedUrl),
       items: entries.map((entry, index) => {
         const read = atomEntry(entry);
         const contentHtml = atomContent(entry, rawEntries[index]);

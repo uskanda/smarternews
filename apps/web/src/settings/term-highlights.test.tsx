@@ -378,3 +378,88 @@ describe("changes to term groups not saved yet", () => {
     expect(await question()).toHaveTextContent("まとまり『通商』への語の追加");
   });
 });
+
+describe("a change waiting for the server's answer", () => {
+  it("deletes a group once when 削除する is pressed twice", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange", "関税");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+    const held = hold(/^DELETE \/api\/v1\/term-groups\/\d+$/);
+    const item = await waitFor(() => groupItem("通商"));
+
+    await user.click(within(item).getByRole("button", { name: "通商を削除" }));
+    const remove = within(await screen.findByRole("alertdialog")).getByRole("button", { name: "削除する" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("まとまり「通商」を削除しました");
+  });
+
+  it("deletes a term once when its 削除 is pressed twice", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange", "関税", "輸出");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+    const held = hold(/^DELETE \/api\/v1\/term-groups\/\d+\/terms\/\d+$/);
+    const item = await waitFor(() => groupItem("通商"));
+
+    const remove = within(item).getByRole("button", { name: "「関税」を削除" });
+    await user.click(remove);
+    await user.click(remove);
+
+    expect(remove).toBeDisabled();
+    // Another term can be deleted meanwhile: only the pressed one waits.
+    expect(within(item).getByRole("button", { name: "「輸出」を削除" })).toBeEnabled();
+    expect(requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("語「関税」を削除しました");
+  });
+
+  it("adds a group and a term once when their buttons are pressed twice", async () => {
+    const server = makeServer();
+    group(server, "通商", "orange");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+    const form = await section("語のまとまりの追加");
+
+    const groupHeld = hold("POST /api/v1/term-groups");
+    await user.type(within(form).getByLabelText("まとまりの名前"), "半導体");
+    const addGroup = within(form).getByRole("button", { name: "まとまりを追加" });
+    await user.click(addGroup);
+    await user.click(addGroup);
+    expect(addGroup).toBeDisabled();
+    expect(requests.filter((request) => request === "POST /api/v1/term-groups")).toHaveLength(1);
+    await groupHeld.release();
+    await waitFor(async () => expect(await shown()).toEqual(["通商 橙色", "半導体 緑"]));
+
+    const termHeld = hold(/^POST \/api\/v1\/term-groups\/\d+\/terms$/);
+    const item = await groupItem("通商");
+    await user.type(within(item).getByLabelText("「通商」に足す語"), "関税");
+    const addTerm = within(item).getByRole("button", { name: "語を追加" });
+    await user.click(addTerm);
+    await user.click(addTerm);
+    expect(addTerm).toBeDisabled();
+    expect(requests.filter((request) => /terms$/.test(request))).toHaveLength(1);
+    await termHeld.release();
+    await waitFor(async () => expect(await shown()).toEqual(["通商 橙色 関税", "半導体 緑"]));
+  });
+
+  it("saves an edited group once when 保存する is pressed twice", async () => {
+    const server = makeServer();
+    group(server, "A", "green");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/term-highlights" });
+
+    const saveHeld = hold(/^PATCH \/api\/v1\/term-groups\/\d+$/);
+    const a = await waitFor(() => groupItem("A"));
+    await user.click(within(a).getByRole("button", { name: "Aを編集" }));
+    await user.click(within(a).getByRole("radio", { name: "桃色" }));
+    const save = within(a).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await saveHeld.release();
+    expect(await screen.findByRole("status")).toHaveTextContent("まとまりを保存しました");
+  });
+});

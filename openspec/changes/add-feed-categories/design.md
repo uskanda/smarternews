@@ -39,7 +39,7 @@ XMLのパーサーの `isArray` に `category` と `dc:subject` を足し、要�
 
 ### 分類は articles の feed_categories の列にJSONで置く
 
-`037_article_feed_categories.sql` で `articles` に `feed_categories TEXT` を足す。中身は文字列のJSONの配列で、分類がないときはNULLにする。
+`041_article_feed_categories.sql` で `articles` に `feed_categories TEXT` を足す。中身は文字列のJSONの配列で、分類がないときはNULLにする。
 生成記事と、変更の前に保存した記事はNULLのままである。読み出し（`getArticle`）は、NULL、読めないJSON、配列でない値を空の配列にし、文字列でない要素を捨てる。
 
 ### 分類の変化は書き換えとして照合し直す
@@ -54,6 +54,7 @@ XMLのパーサーの `isArray` に `category` と `dc:subject` を足し、要�
 `MatchableArticle` に `feedCategories: string[]` を足す。`Texts` は、文字列の欄と並びの欄を分けずに、どの欄も「値の並び」として持つ。文字列の欄は値が1つの並びで、値のない欄は空の並びである。
 条件は、並びの値のどれかが合えば合ったとみなす。正規表現は値ごとに試すので、`^` と `$` は1つの値の両端を指す（`grilling.md` のQ2）。値をつないで照合しないので、値をまたぐ部分一致は起きない。
 `articleTexts` は `feed_categories` を読み、読めない値を空の並びにする。
+add-feed-rules のルールは、フィルターと同じ条件と照合を使う。そのため、ルールの照合で記事を読む `ruleArticles` も `feed_categories` を読み、ルールの条件にも「分類」の欄を書ける。
 
 ### 画面の表示
 

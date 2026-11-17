@@ -12,6 +12,7 @@ import {
   type SettingsFileFilter,
   type SettingsFileFilterScope,
   type SettingsFileInput,
+  type SettingsFileRule,
   type ListViewTarget,
   type SettingsFileListView,
   type SettingsFileListViewTarget,
@@ -22,7 +23,8 @@ import { createCategory, findCategory, findCategoryBySlug, listCategories, order
 import { transaction, type Database } from "./db/database.ts";
 import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed } from "./db/feeds.ts";
 import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
-import { checkListViewTarget, listViewEntries, setListView } from "./db/list-views.ts";
+import { createRule, findSameRule, listRules, updateRule } from "./db/rules.ts";
+import { checkListViewTarget, listViewEntries, setListView, sortAllowed } from "./db/list-views.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
 import { normalizeForMatch } from "./search/text.ts";
@@ -83,6 +85,7 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     ...(feed.autoSummarize ? { autoSummarize: true } : {}),
     ...(feed.translate ? { translate: true } : {}),
     ...(feed.fetchFullContent ? { fetchFullContent: true } : {}),
+    ...(feed.topicSource ? { topicSource: true } : {}),
     // OPML cannot hold them: the settings file is where a web feed is carried to another server.
     ...(feed.selectors !== null ? { selectors: feed.selectors } : {}),
   };
@@ -102,6 +105,16 @@ function toFileFilters(db: Database): SettingsFileFilter[] {
     // Written only when it is off: a filter is enabled unless the file says otherwise.
     ...(filter.enabled ? {} : { enabled: false }),
     conditions: filter.conditions,
+  }));
+}
+
+function toFileRules(db: Database): SettingsFileRule[] {
+  return listRules(db).map((rule) => ({
+    scope: toFileScope(db, rule.scope),
+    // Written only when it is off: a rule is enabled unless the file says otherwise.
+    ...(rule.enabled ? {} : { enabled: false }),
+    conditions: rule.conditions,
+    actions: rule.actions,
   }));
 }
 
@@ -131,6 +144,7 @@ export function exportSettings(db: Database): string {
     return list.length > 0 ? { subscriptions: list } : {};
   };
   const filters = toFileFilters(db);
+  const rules = toFileRules(db);
   const termGroups = listTermGroups(db).map((group) => ({ name: group.name, color: group.color, terms: group.terms.map((term) => term.text) }));
   const listViews = toFileListViews(db);
   const file: SettingsFileInput = {
@@ -158,6 +172,7 @@ export function exportSettings(db: Database): string {
     })),
     ...subscriptionsOf(null),
     ...(filters.length > 0 ? { filters } : {}),
+    ...(rules.length > 0 ? { rules } : {}),
     ...(termGroups.length > 0 ? { termGroups } : {}),
     ...(listViews.length > 0 ? { listViews } : {}),
   };
@@ -221,6 +236,7 @@ function importSubscriptions(
             ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
             // Likewise full content: only articles stored from now on have it fetched.
             ...(entry.fetchFullContent !== undefined ? { fetchFullContent: entry.fetchFullContent } : {}),
+            ...(entry.topicSource !== undefined ? { topicSource: entry.topicSource } : {}),
             ...(entry.selectors !== undefined ? { selectors: entry.selectors } : {}),
           },
           clock,
@@ -240,6 +256,7 @@ function importSubscriptions(
           autoSummarize: entry.autoSummarize,
           translate: entry.translate,
           fetchFullContent: entry.fetchFullContent,
+          topicSource: entry.topicSource,
           format,
           selectors: entry.selectors,
         },
@@ -268,6 +285,39 @@ function refuseAt(path: string, message: string, code: FieldErrorCode = "no_such
   return new DomainError("invalid", `${path}: ${message}`, [{ path, message, code }]);
 }
 
+/** The scope of a filter or a rule of the file, tied to the category of that slug or the feed of that URL. */
+function fromFileScope(db: Database, scope: SettingsFileFilterScope, path: string): FilterScope {
+  if (scope === "all") return { type: "all" };
+  if ("category" in scope) {
+    const category = findCategoryBySlug(db, scope.category);
+    if (!category) throw refuseAt(`${path}.scope.category`, `no category "${scope.category}" in the file or on the server`);
+    return { type: "category", categoryId: category.id };
+  }
+  const feed = findFeedByUrl(db, scope.feed);
+  if (!feed) throw refuseAt(`${path}.scope.feed`, `no feed ${scope.feed} in the file or on the server`);
+  return { type: "feed", feedId: feed.id };
+}
+
+/**
+ * Stores the rules of the file, once its categories and feeds are stored. A rule that is registered already,
+ * with the same scope, conditions and actions, only takes the file's switch.
+ */
+function importRules(db: Database, file: SettingsFile, result: ImportResult, clock: Clock): void {
+  file.rules.forEach((rule, index) => {
+    const path = `rules.${index}`;
+    const problems = conditionProblems(rule.conditions, `${path}.conditions`);
+    if (problems.length > 0) throw new DomainError("invalid", `${problems[0]!.path}: ${problems[0]!.message}`, problems);
+    const input = { scope: fromFileScope(db, rule.scope, path), conditions: rule.conditions, actions: rule.actions, enabled: rule.enabled ?? true };
+    const same = findSameRule(db, input);
+    if (same) {
+      if (same.enabled !== input.enabled) updateRule(db, same.id, { enabled: input.enabled });
+      return;
+    }
+    createRule(db, input, clock);
+    result.rulesCreated += 1;
+  });
+}
+
 /**
  * Stores the filters of the file, once its categories and feeds are stored. A scope is tied to the category
  * of that slug, or the feed of that URL, on the server. A filter that is registered already only takes the
@@ -281,16 +331,7 @@ function importFilters(db: Database, file: SettingsFile, result: ImportResult, c
   for (const { filter, path, switchable } of entries) {
     const problems = conditionProblems(filter.conditions, `${path}.conditions`);
     if (problems.length > 0) throw new DomainError("invalid", `${problems[0]!.path}: ${problems[0]!.message}`, problems);
-    let scope: FilterScope = { type: "all" };
-    if (filter.scope !== "all" && "category" in filter.scope) {
-      const category = findCategoryBySlug(db, filter.scope.category);
-      if (!category) throw refuseAt(`${path}.scope.category`, `no category "${filter.scope.category}" in the file or on the server`);
-      scope = { type: "category", categoryId: category.id };
-    } else if (filter.scope !== "all") {
-      const feed = findFeedByUrl(db, filter.scope.feed);
-      if (!feed) throw refuseAt(`${path}.scope.feed`, `no feed ${filter.scope.feed} in the file or on the server`);
-      scope = { type: "feed", feedId: feed.id };
-    }
+    const scope = fromFileScope(db, filter.scope, path);
     const input: FilterCreate = { action: filter.action, scope, conditions: filter.conditions, enabled: filter.enabled ?? true };
     const same = findSameFilter(db, input);
     if (same) {
@@ -328,8 +369,9 @@ function importTermGroups(db: Database, file: SettingsFile, result: ImportResult
 
 /**
  * Stores the list views of the file, once its categories and feeds are stored: a category is tied to the one
- * of that slug, a feed to the one of that URL, on the server. An entry found nowhere, an event category, and
- * an entry named twice refuse the file. What an entry leaves out, and every entry the file does not name, stays.
+ * of that slug, a feed to the one of that URL, on the server. An entry found nowhere, an event category, an
+ * entry named twice, and the order by star time for an entry other than the starred articles refuse the file.
+ * What an entry leaves out, and every entry the file does not name, stays.
  */
 function importListViews(db: Database, file: SettingsFile, result: ImportResult): void {
   const seen = new Set<string>();
@@ -353,8 +395,12 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
     const key = listViewKey(target);
     if (seen.has(key)) throw refuseAt(path, "the entry is named twice", "not_allowed");
     seen.add(key);
-    checkListViewTarget(db, target);
-    setListView(db, target, entry.sort === undefined ? {} : { sort: entry.sort });
+    if (entry.sort !== undefined && !sortAllowed(target, entry.sort)) {
+      throw refuseAt(`listViews.${index}.sort`, "only the starred articles can be in the order by star time", "not_allowed");
+    }
+    const patch = entry.sort === undefined ? {} : { sort: entry.sort };
+    checkListViewTarget(db, target, patch);
+    setListView(db, target, patch);
     result.listViewsUpdated += 1;
   });
 }
@@ -374,6 +420,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     feedsCreated: 0,
     feedsUpdated: 0,
     filtersCreated: 0,
+    rulesCreated: 0,
     termGroupsCreated: 0,
     highlightTermsCreated: 0,
     listViewsUpdated: 0,
@@ -428,6 +475,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     importSubscriptions(db, file.subscriptions, null, "subscriptions", result, clock);
 
     importFilters(db, file, result, clock);
+    importRules(db, file, result, clock);
     importTermGroups(db, file, result, clock);
     importListViews(db, file, result);
   });

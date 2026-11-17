@@ -30,6 +30,7 @@ function setup() {
       reasonCode?: ReasonCode | null;
       sourceKind?: SourceKind;
       siteName?: string;
+      host?: string;
       at?: string;
       topicIds?: number[];
       category?: number;
@@ -44,6 +45,7 @@ function setup() {
       title: `Story ${serial}`,
       snippet: "",
       siteName: options.siteName ?? "",
+      siteHost: options.host ?? "",
       publishedAt: null,
       sourceKind: options.sourceKind ?? "feed",
       status: options.status === "accepted" ? "pending" : (options.status ?? "rejected"),
@@ -87,12 +89,13 @@ describe("topicStats", () => {
     expect(result.topics[1]).toEqual({
       topicId: s.quiet.id,
       text: "Quiet topic",
-      collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0 } },
+      collected: { total: 0, bySource: { feed: 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 0,
       belowMinimum: 0,
       overLimit: 0,
       rejectedByDate: 0,
       rejectedByMark: 0,
+      blockedSite: 0,
       created: 0,
       updated: 0,
       opened: 0,
@@ -109,9 +112,10 @@ describe("topicStats", () => {
     s.candidate({ sourceKind: "news-search", status: "accepted" });
     s.candidate({ sourceKind: "llm-search" });
     s.candidate({ sourceKind: "llm-search", topicIds: [s.topic.id, s.quiet.id] });
+    s.candidate({ sourceKind: "subscription", topicIds: [s.topic.id, s.quiet.id] });
 
-    expect(s.of(s.topic.id).collected).toEqual({ total: 5, bySource: { feed: 2, "news-search": 1, "llm-search": 2 } });
-    expect(s.of(s.quiet.id).collected).toEqual({ total: 1, bySource: { feed: 0, "news-search": 0, "llm-search": 1 } });
+    expect(s.of(s.topic.id).collected).toEqual({ total: 6, bySource: { feed: 2, "news-search": 1, "llm-search": 2, subscription: 1 } });
+    expect(s.of(s.quiet.id).collected).toEqual({ total: 2, bySource: { feed: 0, "news-search": 0, "llm-search": 1, subscription: 1 } });
   });
 
   it("counts the rejections by the kind of their reason, the three kinds about dates together", () => {
@@ -124,9 +128,11 @@ describe("topicStats", () => {
     s.candidate({ reasonCode: "no-date" });
     s.candidate({ reasonCode: "event-outside-window" });
     s.candidate({ reasonCode: "event-no-date" });
+    s.candidate({ reasonCode: "blocked-site" });
+    s.candidate({ reasonCode: "blocked-site" });
     s.candidate({ status: "pending" });
 
-    expect(s.of(s.topic.id)).toMatchObject({ rejectedByJudge: 2, belowMinimum: 1, overLimit: 2, rejectedByDate: 3, rejectedByMark: 0 });
+    expect(s.of(s.topic.id)).toMatchObject({ rejectedByJudge: 2, belowMinimum: 1, overLimit: 2, rejectedByDate: 3, rejectedByMark: 0, blockedSite: 2 });
   });
 
   it("counts the follow-ups to marked articles together, as candidates no article came from", () => {
@@ -214,19 +220,27 @@ describe("topicStats", () => {
     expect(s.of(s.quiet.id)).toMatchObject({ created: 1, missed: 1 });
   });
 
-  it("names the three sites with the most rejected candidates, without the candidates that have no site", () => {
+  it("names the three hosts with the most rejected candidates, without the candidates that have no host", () => {
     const s = setup();
-    for (const [site, count] of [["a.example", 1], ["b.example", 3], ["c.example", 2], ["d.example", 2], ["", 5]] as const) {
-      for (let i = 0; i < count; i += 1) s.candidate({ siteName: site, reasonCode: i % 2 === 0 ? null : "below-minimum" });
+    for (const [host, count] of [["a.example", 1], ["b.example", 3], ["c.example", 2], ["d.example", 2], ["", 5]] as const) {
+      for (let i = 0; i < count; i += 1) s.candidate({ host, siteName: `Name ${i}`, reasonCode: i % 2 === 0 ? null : "below-minimum" });
     }
-    s.candidate({ siteName: "a.example", status: "pending" });
-    s.candidate({ siteName: "a.example", status: "accepted" });
+    s.candidate({ host: "a.example", status: "pending" });
+    s.candidate({ host: "a.example", status: "accepted" });
 
     expect(s.of(s.topic.id).topRejectedSites).toEqual([
-      { siteName: "b.example", count: 3 },
-      { siteName: "c.example", count: 2 },
-      { siteName: "d.example", count: 2 },
+      { host: "b.example", count: 3 },
+      { host: "c.example", count: 2 },
+      { host: "d.example", count: 2 },
     ]);
+  });
+
+  it("leaves the candidates of a blocked site out of the sites rejected most", () => {
+    const s = setup();
+    for (let i = 0; i < 3; i += 1) s.candidate({ host: "blocked.example", reasonCode: "blocked-site" });
+    s.candidate({ host: "a.example" });
+
+    expect(s.of(s.topic.id).topRejectedSites).toEqual([{ host: "a.example", count: 1 }]);
   });
 
   it("refuses a category that does not exist", () => {
@@ -251,8 +265,8 @@ describe("topicStats around the last version", () => {
     const id = s.versioned.id;
     updateTopic(s.db, id, { text: "Ransomware gangs" }, fakeClock(daysAgo(20)));
     applyInterpretation(s.db, id, interpretation("B"), daysAgo(10));
-    s.candidate({ topicIds: [id], at: daysAgo(15), sourceKind: "news-search", siteName: "a.example" });
-    s.candidate({ topicIds: [id], at: daysAgo(15), reasonCode: "below-minimum", siteName: "a.example" });
+    s.candidate({ topicIds: [id], at: daysAgo(15), sourceKind: "news-search", host: "a.example" });
+    s.candidate({ topicIds: [id], at: daysAgo(15), reasonCode: "below-minimum", host: "a.example" });
     s.candidate({ topicIds: [id], at: daysAgo(5), status: "accepted" });
     const missedBefore = s.article({ topicIds: [id], at: daysAgo(12) });
     s.article({ topicIds: [id], at: daysAgo(11) });
@@ -265,18 +279,19 @@ describe("topicStats around the last version", () => {
     expect(entry.boundary).toEqual({ at: daysAgo(10), trigger: "interpreted" });
     expect(entry).toMatchObject({ collected: { total: 3 }, created: 3, missed: 1 });
     expect(entry.before).toEqual({
-      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0 } },
+      collected: { total: 2, bySource: { feed: 1, "news-search": 1, "llm-search": 0, subscription: 0 } },
       rejectedByJudge: 1,
       belowMinimum: 1,
       overLimit: 0,
       rejectedByDate: 0,
       rejectedByMark: 0,
+      blockedSite: 0,
       created: 2,
       updated: 0,
       opened: 0,
       starred: 0,
       missed: 1,
-      topRejectedSites: [{ siteName: "a.example", count: 2 }],
+      topRejectedSites: [{ host: "a.example", count: 2 }],
     });
     expect(entry.after).toMatchObject({ collected: { total: 1 }, rejectedByJudge: 0, created: 1, missed: 0, topRejectedSites: [] });
   });
@@ -318,12 +333,13 @@ function entry(topicId: number, values: { collected?: number; rejected?: number;
   return {
     topicId,
     text: `Topic ${topicId}`,
-    collected: { total: values.collected ?? 0, bySource: { feed: values.collected ?? 0, "news-search": 0, "llm-search": 0 } },
+    collected: { total: values.collected ?? 0, bySource: { feed: values.collected ?? 0, "news-search": 0, "llm-search": 0, subscription: 0 } },
     rejectedByJudge: values.rejected ?? 0,
     belowMinimum: 0,
     overLimit: 0,
     rejectedByDate: 0,
     rejectedByMark: 0,
+    blockedSite: 0,
     created: values.created ?? 0,
     updated: 0,
     opened: 0,

@@ -1,10 +1,17 @@
 // Digests: at the times of the settings, one call of the digest task sums up the articles of a period. Like the
 // summaries of feed articles, they are made in a line of their own, apart from the queue of runs.
-import type { DigestRequestResult, DigestSection, DigestTrigger } from "../api.ts";
+import type { DigestRequestResult, DigestSection, DigestTarget, DigestTargetRequest, DigestTrigger } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { listCategories } from "../db/categories.ts";
 import type { Database } from "../db/database.ts";
-import { digestArticles, digestPeriodStart, hasDigestForSlot, saveDigest } from "../db/digests.ts";
+import {
+  digestArticles,
+  digestPeriodStart,
+  hasDigestForSlot,
+  listDigestArticles,
+  saveDigest,
+  type DigestArticle,
+} from "../db/digests.ts";
 import { getSettings } from "../db/settings.ts";
 import { LlmLimitError, type TaskRunner } from "../llm/runner.ts";
 import { CATCH_UP_MS, latestSlot } from "../runs/scheduler.ts";
@@ -22,17 +29,24 @@ export interface DigestDeps {
  */
 export type DigestOutcome = { status: "created"; id: number } | { status: "empty" | "limit" | "budget" | "failed" };
 
+/** What made a digest, the scheduled time it is for, and, for a digest of a list, the list. */
+export interface DigestRequestOptions {
+  trigger: DigestTrigger;
+  slot: string | null;
+  target?: DigestTargetRequest;
+}
+
 /**
- * Makes one digest of the period that ends now and stores it. The model is not called for a period without
- * articles, nor once an allowance is used up. Ids of source articles that were not in the input are dropped, and
+ * Makes one digest of the period that ends now, or of the list given, and stores it. The model is not called
+ * for a period or a list without articles, nor once an allowance is used up. Ids of source articles that were not in the input are dropped, and
  * the sections are put in the order of the categories. Nothing is thrown: a failure is recorded with the call.
  */
-export async function makeDigest(deps: DigestDeps, options: { trigger: DigestTrigger; slot: string | null }): Promise<DigestOutcome> {
+export async function makeDigest(deps: DigestDeps, options: DigestRequestOptions): Promise<DigestOutcome> {
   const { db, clock, runner } = deps;
-  const end = clock();
-  const start = digestPeriodStart(db, end);
-  const articles = digestArticles(db, { start: start.toISOString(), end: end.toISOString() });
-  if (articles.length === 0) return { status: "empty" };
+  const now = clock();
+  const gathered = gather(db, now, options.target);
+  if (gathered === null) return { status: "empty" };
+  const { articles, period, target } = gathered;
   const blocked = runner.digestBlocked();
   if (blocked !== null) return { status: blocked };
 
@@ -46,10 +60,11 @@ export async function makeDigest(deps: DigestDeps, options: { trigger: DigestTri
       {
         outputLanguage: settings.outputLanguage,
         readerInfo: settings.readerInfo,
-        now: end.toISOString(),
+        now: now.toISOString(),
         timeZone: settings.timeZone,
-        periodStart: start.toISOString(),
-        periodEnd: end.toISOString(),
+        periodStart: period.start,
+        periodEnd: period.end,
+        ...(target === null ? {} : { scope: target.label }),
         categories: categories.map((category) => ({ id: category.id, name: category.name })),
         articles,
       },
@@ -73,16 +88,36 @@ export async function makeDigest(deps: DigestDeps, options: { trigger: DigestTri
   // A scheduled time made up for by another path in the meantime keeps the digest it has.
   if (options.slot !== null && hasDigestForSlot(db, options.slot)) return { status: "failed" };
   const id = saveDigest(db, {
-    periodStart: start.toISOString(),
-    periodEnd: end.toISOString(),
+    periodStart: period.start,
+    periodEnd: period.end,
     createdAt: clock().toISOString(),
     trigger: options.trigger,
     slot: options.slot,
     executiveSummary: output.executiveSummary,
     sections,
     articleCount: articles.length,
+    target,
   });
   return { status: "created", id };
+}
+
+/**
+ * What a digest is made of: the articles of the period that ends `now`, or those of the list. Null when there
+ * is no article. The period of a list runs from its oldest article to its newest.
+ */
+function gather(
+  db: Database,
+  now: Date,
+  request: DigestTargetRequest | undefined,
+): { articles: DigestArticle[]; period: { start: string; end: string }; target: DigestTarget | null } | null {
+  if (request !== undefined) {
+    const list = listDigestArticles(db, request, now.toISOString());
+    if (list.period === null || list.articles.length === 0) return null;
+    return { articles: list.articles, period: list.period, target: list.target };
+  }
+  const period = { start: digestPeriodStart(db, now).toISOString(), end: now.toISOString() };
+  const articles = digestArticles(db, period);
+  return articles.length === 0 ? null : { articles, period, target: null };
 }
 
 /**
@@ -139,18 +174,28 @@ export class DigestWorker {
    * `busy` while one is being made, and why none is started when the allowance, the budget or the period says so.
    */
   buildNow(): DigestRequestResult["status"] | "busy" {
+    return this.#request({ trigger: "manual", slot: null });
+  }
+
+  /**
+   * Starts a digest of the newest articles of a list, at most 200, and does not wait for it. It shares the day's
+   * allowance with the digests of a period, and says `busy`, `empty`, `limit` and `budget` as `buildNow` does.
+   */
+  buildFromList(target: DigestTargetRequest): DigestRequestResult["status"] | "busy" {
+    return this.#request({ trigger: "list", slot: null, target });
+  }
+
+  #request(options: DigestRequestOptions): DigestRequestResult["status"] | "busy" {
     if (this.building) return "busy";
     const { db, clock, runner } = this.#deps;
-    const end = clock();
-    const start = digestPeriodStart(db, end);
-    if (digestArticles(db, { start: start.toISOString(), end: end.toISOString() }).length === 0) return "empty";
+    if (gather(db, clock(), options.target) === null) return "empty";
     const blocked = runner.digestBlocked();
     if (blocked !== null) return blocked;
-    this.#enqueue({ trigger: "manual", slot: null });
+    this.#enqueue(options);
     return "queued";
   }
 
-  #enqueue(options: { trigger: DigestTrigger; slot: string | null }): void {
+  #enqueue(options: DigestRequestOptions): void {
     this.#pending += 1;
     this.#tail = this.#tail.then(async () => {
       try {

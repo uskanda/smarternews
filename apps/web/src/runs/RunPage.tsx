@@ -1,7 +1,6 @@
 import type { Candidate, TaskName } from "@smarternews/core/api";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import {
   ApiError,
   formatFull,
@@ -19,6 +18,7 @@ import {
 import { useCategories, useProviders, useRun, useTimeZone } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { topicEditPath, topicStatsPath } from "../lib/paths.ts";
+import { useScrollMemory } from "../lib/scroll-memory.ts";
 import { Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
 
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -36,6 +36,8 @@ function CandidateItem({ candidate, showTopics, categoryId = null }: { candidate
       <span className="type-body-md">{candidate.reason}</span>
       <span className="flex flex-wrap gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
         {candidate.siteName ? <span>{candidate.siteName}</span> : null}
+        {/* A page a subscribed feed delivered, not one a topic's own sources found. */}
+        {candidate.sourceKind === "subscription" ? <span>購読フィード</span> : null}
         {showTopics
           ? candidate.topics.map((topic) =>
               categoryId === null ? (
@@ -81,7 +83,21 @@ export function RunPage() {
   const categories = useCategories().data ?? [];
   const timeZone = useTimeZone();
   const budget = useProviders().data?.budget;
-  const [grouped, setGrouped] = useState(false);
+  // Kept in the address, so that coming back from fixing a topic finds the candidates grouped as they were.
+  const [search, setSearch] = useSearchParams();
+  const grouped = search.get("group") === "topic";
+  function setGrouped(next: boolean) {
+    setSearch(
+      (current) => {
+        const changed = new URLSearchParams(current);
+        if (next) changed.set("group", "topic");
+        else changed.delete("group");
+        return changed;
+      },
+      { replace: true },
+    );
+  }
+  const page = useScrollMemory("run", run.isSuccess && !candidates.isPending);
 
   if (id === null || (run.isError && run.error instanceof ApiError && run.error.kind === "not_found")) {
     return (
@@ -105,7 +121,7 @@ export function RunPage() {
   });
 
   return (
-    <div className="h-full overflow-y-auto bg-surface">
+    <div ref={page} className="h-full overflow-y-auto bg-surface">
       <header className="flex flex-col gap-xs border-b border-outline px-lg py-md md:px-2xl">
         <Link to="/runs" className={`type-label-sm ${LINK}`}>
           実行履歴へ戻る

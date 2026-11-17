@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { useTimeZone, useTopicVersions } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { usePending } from "../lib/pending.ts";
 import { useToast } from "../shell/toast.tsx";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { Badge, Button, ErrorNotice, Loading } from "../ui/controls.tsx";
@@ -62,6 +63,8 @@ export function TopicHistory({
   const headingId = useId();
   const hintId = useId();
   const [target, setTarget] = useState<TopicVersion | null>(null);
+  // Going back to any version holds every way back until the server answers.
+  const [restoring, run] = usePending();
   const list = versions.data ?? [];
 
   async function restore(version: TopicVersion) {
@@ -121,7 +124,7 @@ export function TopicHistory({
               </dl>
               {index === 0 ? null : (
                 <div>
-                  <Button disabled={dirty} aria-describedby={dirty ? hintId : undefined} onClick={() => setTarget(version)}>
+                  <Button disabled={dirty || restoring} aria-describedby={dirty ? hintId : undefined} onClick={() => setTarget(version)}>
                     この版に戻す
                   </Button>
                 </div>
@@ -136,7 +139,7 @@ export function TopicHistory({
         onDismiss={() => setTarget(null)}
         actions={
           <>
-            <Button variant="primary" onClick={() => target && void restore(target)}>
+            <Button variant="primary" disabled={restoring} onClick={() => target && void run(() => restore(target))}>
               戻す
             </Button>
             <Button onClick={() => setTarget(null)}>やめる</Button>

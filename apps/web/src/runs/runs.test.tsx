@@ -10,7 +10,7 @@ import {
   type RetrySkipped,
   type RunOutcome,
 } from "@smarternews/core";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
@@ -68,10 +68,10 @@ describe("running a category now", () => {
     const category = server.category("Security");
     const { user, requests } = renderApp({ server, route: `/settings/categories/${category.id}` });
 
-    await user.click(await screen.findByRole("button", { name: "いますぐ実行" }));
+    await user.click(await screen.findByRole("button", { name: "いま実行" }));
 
     expect(await screen.findByText(/実行中です/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "いますぐ実行" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "いま実行" })).toBeDisabled());
     expect(requests.filter((request) => request === `POST /api/v1/categories/${category.id}/runs`)).toHaveLength(1);
   });
 });
@@ -116,7 +116,7 @@ describe("the latest run on the category page", () => {
     const section = await latest();
     await waitFor(() => expect(section).toHaveTextContent("成功"));
 
-    await user.click(within(section).getByRole("button", { name: "いますぐ実行" }));
+    await user.click(within(section).getByRole("button", { name: "いま実行" }));
 
     await waitFor(() => expect(section).toHaveTextContent(/待機中|実行中/));
     expect(section).not.toHaveTextContent("成功");
@@ -432,6 +432,34 @@ describe("one run", () => {
     expect(item).toHaveTextContent("Example News");
     expect(item).toHaveTextContent("exploited flaws");
     expect(item).toHaveTextContent("advertising without new information");
+    expect(item).not.toHaveTextContent("購読フィード");
+  });
+
+  it("marks a rejected candidate that a subscribed feed delivered", async () => {
+    const { server, category, id, flaws } = withRejections();
+    insertCandidate(server.db, {
+      categoryId: category.id,
+      runId: id,
+      url: "https://example.org/subscribed",
+      fetchable: true,
+      title: "From a subscribed feed",
+      snippet: "",
+      siteName: "Lang News",
+      publishedAt: null,
+      sourceKind: "subscription",
+      status: "rejected",
+      reason: "about another product",
+      reasonCode: null,
+      importance: 1,
+      topicIds: [flaws.id],
+      now: server.clock().toISOString(),
+    });
+    renderApp({ server, route: `/runs/${id}` });
+
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    const item = (await within(rejected).findByRole("link", { name: "From a subscribed feed" })).closest("li")!;
+    expect(item).toHaveTextContent("Lang News");
+    expect(item).toHaveTextContent("購読フィード");
   });
 
   it("leads from the topic of each rejected candidate to the editor of that topic", async () => {
@@ -492,6 +520,54 @@ describe("one run", () => {
     const region = await screen.findByRole("region", { name: "トピックの成績" });
     await waitFor(() => expect(scroll.mock.contexts).toContain(region.querySelector(`#topic-stats-${flaws.id}`)));
     scroll.mockRestore();
+  });
+
+  it("comes back grouped and where it was left after fixing a topic", async () => {
+    const { server, category, id } = withRejections();
+    const { user, path, back } = renderApp({ server, route: `/runs/${id}` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    await within(rejected).findByRole("link", { name: "Rejected 0" });
+    await user.click(within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" }));
+    expect(path()).toBe(`/runs/${id}?group=topic`);
+    const page = rejected.parentElement!;
+    page.scrollTop = 420;
+    fireEvent.scroll(page);
+
+    await user.click(within(rejected).getByRole("link", { name: "exploited flaws を直す" }));
+    expect(path()).toBe(`/settings/categories/${category.id}`);
+    await back();
+
+    const again = await screen.findByRole("region", { name: "除外した候補" });
+    await within(again).findByRole("link", { name: "Rejected 0" });
+    expect(within(again).getByRole("checkbox", { name: "トピックごとにまとめる" })).toBeChecked();
+    expect(within(again).getAllByRole("group")).toHaveLength(2);
+    expect(again.parentElement!.scrollTop).toBe(420);
+  });
+
+  it("does not add to the history when grouping is switched", async () => {
+    const { server, id } = withRejections();
+    const { user, path, back } = renderApp({ server, route: "/runs" });
+    const table = await screen.findByRole("table");
+    await user.click(await within(table).findByRole("link", { name: /\d{2}:\d{2}/ }));
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+    await within(rejected).findByRole("link", { name: "Rejected 0" });
+    const checkbox = within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" });
+
+    await user.click(checkbox);
+    await user.click(checkbox);
+    expect(path()).toBe(`/runs/${id}`);
+    await back();
+
+    expect(path()).toBe("/runs");
+  });
+
+  it("opens grouped from the address", async () => {
+    const { server, id } = withRejections();
+    renderApp({ server, route: `/runs/${id}?group=topic` });
+    const rejected = await screen.findByRole("region", { name: "除外した候補" });
+
+    await waitFor(() => expect(within(rejected).getAllByRole("group")).toHaveLength(2));
+    expect(within(rejected).getByRole("checkbox", { name: "トピックごとにまとめる" })).toBeChecked();
   });
 
   it("says that a run does not exist", async () => {

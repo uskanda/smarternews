@@ -227,6 +227,27 @@ describe("GET /api/v1/articles/:id", () => {
     expect((await (await s.get(`/api/v1/articles/${id}`)).json()).otherFeeds).toEqual([]);
   });
 
+  it("links a feed article and the generated article a run wrote it into, both ways", async () => {
+    const s = testServer();
+    const category = s.category("Tools");
+    const [a, b] = ["Feed A", "Feed B"].map((title) => seedFeed(s.db, { title, categoryId: category.id }));
+    const fromA = seedFeedArticle(s.db, a!, { title: "From A", storedAt: "2026-03-01T01:00:00.000Z" });
+    const fromB = seedFeedArticle(s.db, b!, { title: "From B", storedAt: "2026-03-01T02:00:00.000Z" });
+    const alone = seedFeedArticle(s.db, b!, { title: "Alone" });
+    const generated = s.article(category.id, { title: "The story" });
+    s.db.prepare("UPDATE articles SET summarized_in = ? WHERE id IN (?, ?)").run(generated, fromA, fromB);
+
+    const story = await (await s.get(`/api/v1/articles/${generated}`)).json();
+    expect(story.summarizedIn).toBeNull();
+    expect(story.feedArticles).toEqual([
+      { articleId: fromA, feedId: a, feedTitle: "Feed A", title: "From A" },
+      { articleId: fromB, feedId: b, feedTitle: "Feed B", title: "From B" },
+    ]);
+    const delivered = await (await s.get(`/api/v1/articles/${fromA}`)).json();
+    expect(delivered).toMatchObject({ summarizedIn: { id: generated, title: "The story" }, feedArticles: [] });
+    expect((await (await s.get(`/api/v1/articles/${alone}`)).json()).summarizedIn).toBeNull();
+  });
+
   it("answers 404 for an article that does not exist", async () => {
     const s = testServer();
     const response = await s.get("/api/v1/articles/4242");
@@ -282,6 +303,23 @@ describe("read state and stars", () => {
 
     const body = await (await s.get("/api/v1/articles?starred=true")).json();
     expect(body.items.map((item: { id: number }) => item.id)).toEqual([starred]);
+  });
+
+  it("lists the starred articles by star time, and refuses that order for any other list", async () => {
+    const s = testServer();
+    const category = s.category();
+    const first = s.article(category.id);
+    const second = s.article(category.id);
+
+    const starred = await (await s.patch(`/api/v1/articles/${second}`, { starred: true })).json();
+    s.clock.advance(60_000);
+    await s.patch(`/api/v1/articles/${first}`, { starred: true });
+
+    expect(starred.starredAt).toEqual(expect.any(String));
+    const body = await (await s.get("/api/v1/articles?starred=true&order=starred")).json();
+    expect(body.items.map((item: { id: number }) => item.id)).toEqual([first, second]);
+    expect((await s.get("/api/v1/articles?order=starred")).status).toBe(400);
+    expect((await s.get(`/api/v1/articles?category=${category.id}&order=starred`)).status).toBe(400);
   });
 
   it("refuses a change with a field of the wrong type", async () => {

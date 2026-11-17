@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
 import { saveBlob } from "../lib/download.ts";
 import { useFetchAllFeedsNow, useFetchFeedNow } from "../lib/fetch-now.ts";
+import { usePending } from "../lib/pending.ts";
 import { ApiError, checkText, conflictLabel, feedErrorLabel, fieldMessage, formatClock, formatDay, UNCATEGORIZED_LABEL } from "@smarternews/client";
 import { useCategories, useFeeds, useSettings, useTimeZone, useTranslationStatus } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
@@ -11,7 +12,7 @@ import { useToast } from "../shell/toast.tsx";
 import { FeedDeletionDialog } from "./FeedDeletionDialog.tsx";
 import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
-import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
+import { AutoSummarize, FetchFullContent, TopicSource, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
 import { UnsavedGuard, useUnsaved } from "../ui/unsaved.tsx";
@@ -118,10 +119,12 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [autoSummarize, setAutoSummarize] = useState(feed.autoSummarize);
   const [translate, setTranslate] = useState(feed.translate);
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
+  const [topicSource, setTopicSource] = useState(feed.topicSource);
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [titleProblem, setTitleProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
   useUnsaved(
     `購読フィード『${feed.title}』の編集`,
     title !== feed.title ||
@@ -132,11 +135,16 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       autoSummarize !== feed.autoSummarize ||
       translate !== feed.translate ||
       fetchFullContent !== feed.fetchFullContent ||
+      topicSource !== feed.topicSource ||
       JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
   );
 
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const intervalMinutes = ownInterval ? minutesOf(minutes) : null;
     const titleError = checkText(title, { label: "名前", max: FEED_TITLE_MAX_CHARS });
     setTitleProblem(titleError);
@@ -154,6 +162,8 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
         autoSummarize,
         translate,
         fetchFullContent,
+        // Only a feed of a category can be a source of its topics: a feed moved to none keeps what it had.
+        ...(category !== NO_CATEGORY ? { topicSource } : {}),
       });
       refresh("feeds", "counts", "articles", "filters");
       toast({ message: "購読フィードを保存しました" });
@@ -167,7 +177,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const categoryProblem = fieldMessage(error, "categoryId", "カテゴリ");
   // The form checks the range itself, so that the reason is shown in the app's words beside the field.
   return (
-    <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md pt-sm">
+    <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md pt-sm">
       <FeedStatsSection feed={feed} />
       <Field
         label="名前"
@@ -215,10 +225,15 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
+      {category !== NO_CATEGORY ? <TopicSource id={`${id}-topic-source-hint`} checked={topicSource} onChange={setTopicSource} /> : null}
       {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
       {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
       <div className="flex flex-wrap gap-sm">
-        <Button type="submit" variant="primary" disabled={title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}>
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={saving || title.trim().length === 0 || (feed.format === "page" && selectorsOf(selectors) === null)}
+        >
           保存する
         </Button>
         <Button onClick={onDone}>やめる</Button>
@@ -287,6 +302,7 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.autoSummarize ? <Badge>自動で要約</Badge> : null}
       {feed.translate ? <Badge>翻訳</Badge> : null}
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
+      {feed.topicSource && feed.categoryId !== null ? <Badge>トピックの取得元</Badge> : null}
       {/* A feed the site answers is gone is told apart from a failing one: unsubscribing is what fixes it. */}
       {feed.goneAt ? <Badge tone="error">配信終了</Badge> : feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
       {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}
@@ -359,6 +375,17 @@ function FeedRow({
           <Link to={`/f/${feed.id}`} aria-label={`${feed.title}の記事の一覧`} className="tap text-primary underline underline-offset-4">
             記事の一覧
           </Link>
+          {feed.siteUrl ? (
+            <a
+              href={feed.siteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${feed.title}のサイトを開く`}
+              className="tap text-primary underline underline-offset-4"
+            >
+              サイトを開く
+            </a>
+          ) : null}
           <Button aria-label={`${feed.title}をいま取得`} onClick={() => void fetchNow()} disabled={fetching}>
             {fetching ? "取得中…" : "いま取得"}
           </Button>
@@ -384,10 +411,14 @@ function BaseInterval({ settings }: { settings: Settings }) {
   const toast = useToast();
   const [minutes, setMinutes] = useState(String(settings.feedIntervalMinutes));
   const [problem, setProblem] = useState<string | null>(null);
+  const [saving, run] = usePending();
   useUnsaved("基本の取得周期", minutes.trim() !== String(settings.feedIntervalMinutes));
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const value = minutesOf(minutes);
     if (value === null) {
       setProblem(RANGE);
@@ -406,7 +437,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
   return (
     <section aria-label="取得周期" className={SECTION}>
       <h2 className="type-headline-md">取得周期</h2>
-      <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
         <Field
           label="基本の取得周期（分）"
           type="number"
@@ -422,7 +453,7 @@ function BaseInterval({ settings }: { settings: Settings }) {
           hint="周期を個別に決めていない購読フィードを、この間隔で取得します。取得に失敗したフィードは、成功するまで間隔を延ばします。"
         />
         <div>
-          <Button type="submit" variant="primary">
+          <Button type="submit" variant="primary" disabled={saving}>
             保存する
           </Button>
         </div>
@@ -439,6 +470,7 @@ function Opml() {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [loading, run] = usePending();
 
   async function download() {
     try {
@@ -449,8 +481,12 @@ function Opml() {
     }
   }
 
-  async function upload(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(upload);
+  };
+
+  async function upload() {
     if (!file) return;
     setResult(null);
     try {
@@ -475,7 +511,7 @@ function Opml() {
       <div>
         <Button onClick={() => void download()}>書き出す</Button>
       </div>
-      <form noValidate onSubmit={upload} className="flex max-w-measure flex-col gap-sm">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-sm">
         <label className="flex flex-col gap-xs type-label-md">
           読み込むOPMLファイル
           <input type="file" accept=".opml,.xml,text/x-opml,text/xml,application/xml" className="type-body-md" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
@@ -485,7 +521,7 @@ function Opml() {
           」に入ります。すでに購読しているフィードは飛ばします。いま購読しているフィードは消えません。
         </p>
         <div>
-          <Button type="submit" disabled={!file}>
+          <Button type="submit" disabled={loading || !file}>
             読み込む
           </Button>
         </div>

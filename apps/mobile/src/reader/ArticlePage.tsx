@@ -93,7 +93,10 @@ export interface ArticlePageProps {
   sourceName: string;
   onRead: (article: Article) => void;
   onOpenArticle: (id: number) => void;
-  /** Opens the copy of the article that another feed delivered, with that feed's list behind it. */
+  /**
+   * Opens an article of a feed with that feed's list behind it: the copy another feed delivered, or an article a
+   * generated article was written from.
+   */
   onOpenCopy: (copy: Article["otherFeeds"][number]) => void;
   /** Opens the list of the articles of a name found in the article. */
   onOpenMention: (name: string) => void;
@@ -280,6 +283,24 @@ export const ArticlePage = memo(function ArticlePage({
           ))}
         </View>
       ) : null}
+      {article.summarizedIn ? (
+        // The generated article a run wrote this feed article into: the same story, gathered from more pages.
+        <View testID="summarized-in" style={{ gap: theme.spacing.xs }}>
+          <Txt variant="label-sm" color="on-surface-muted" heading>
+            この記事をまとめた生成記事
+          </Txt>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel={article.summarizedIn.title}
+            onPress={() => onOpenArticle(article.summarizedIn!.id)}
+            style={{ minHeight: theme.spacing["touch-android"], justifyContent: "center", alignSelf: "flex-start" }}
+          >
+            <Txt variant="body-md" color="primary" style={{ textDecorationLine: "underline" }}>
+              {article.summarizedIn.title}
+            </Txt>
+          </Pressable>
+        </View>
+      ) : null}
       {article.autoSummary ? (
         // Text a model wrote: shown as plain words, never as markup, and marked as the model's by its heading.
         <View
@@ -378,6 +399,30 @@ export const ArticlePage = memo(function ArticlePage({
         ))}
       </View>
       )}
+      {article.feedArticles.length > 0 ? (
+        // The articles of subscribed feeds this article was written from; each opens with its feed's list behind it.
+        <View testID="feed-articles" style={{ gap: theme.spacing.xs }}>
+          <Txt variant="label-sm" color="on-surface-muted" heading>
+            まとめた配信記事
+          </Txt>
+          {article.feedArticles.map((delivered) => (
+            <Pressable
+              key={delivered.articleId}
+              accessibilityRole="link"
+              accessibilityLabel={`${delivered.title}、${delivered.feedTitle}`}
+              onPress={() => onOpenCopy(delivered)}
+              style={{ minHeight: theme.spacing["touch-android"], justifyContent: "center" }}
+            >
+              <Txt variant="body-md" color="primary" style={{ textDecorationLine: "underline" }}>
+                {delivered.title}
+              </Txt>
+              <Txt variant="label-sm" color="on-surface-muted">
+                {delivered.feedTitle}
+              </Txt>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
     </ScrollView>
   );
 });

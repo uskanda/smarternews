@@ -5,6 +5,7 @@ import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetHideReadState } from "../lib/hide-read.ts";
 import { resetHotkeys } from "../lib/keys.ts";
 import { resetPaneState } from "../lib/panes.ts";
+import { resetScrollMemory } from "../lib/scroll-memory.ts";
 import { resetScrollReadState } from "../lib/scroll-read.ts";
 import { resetThemeState } from "../lib/theme.ts";
 
@@ -19,6 +20,7 @@ afterEach(() => {
   resetCollapsedState();
   resetThemeState();
   resetScrollReadState();
+  resetScrollMemory();
   resetHideReadState();
   resetHotkeys();
 });

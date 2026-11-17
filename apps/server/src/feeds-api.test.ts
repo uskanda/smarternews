@@ -15,6 +15,36 @@ function rss(title: string, items: Array<{ key: string; title?: string; publishe
   return `<?xml version="1.0"?><rss version="2.0"><channel><title>${title}</title><link>https://blog.example.org/</link>${body}</channel></rss>`;
 }
 
+describe("a subscribed feed as a topic source", () => {
+  it("is off unless asked for, and only a feed of a category can be one", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const category = s.category("Tools");
+    const refused = await s.post("/api/v1/feeds", { url: FEED, topicSource: true });
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error.fields).toEqual([expect.objectContaining({ path: "topicSource", code: "not_allowed" })]);
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([]);
+
+    const created = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    expect(created.topicSource).toBe(false);
+    expect((await s.patch(`/api/v1/feeds/${created.id}`, { topicSource: true })).status).toBe(400);
+    expect((await s.patch(`/api/v1/feeds/${created.id}`, { topicSource: "yes" })).status).toBe(400);
+    const moved = await s.patch(`/api/v1/feeds/${created.id}`, { categoryId: category.id, topicSource: true });
+    expect(moved.status).toBe(200);
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([expect.objectContaining({ id: created.id, topicSource: true })]);
+    expect((await (await s.get(`/api/v1/feeds/${created.id}`)).json()).topicSource).toBe(true);
+  });
+
+  it("can be switched on at registration in a category", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const category = s.category("Tools");
+    const created = await s.post("/api/v1/feeds", { url: FEED, categoryId: category.id, topicSource: true });
+    expect(created.status).toBe(201);
+    expect((await created.json()).topicSource).toBe(true);
+  });
+});
+
 describe("subscribed feeds", () => {
   it("registers a feed and lists it with its category, interval and fetch state", async () => {
     const s = testServer();
@@ -240,7 +270,7 @@ describe("subscribed feeds", () => {
     }
     await s.post(`/api/v1/feeds/${feed.id}/fetch`);
 
-    expect(s.site.requests.length).toBe(12);
+    expect(s.site.requests.filter((request) => request.url === FEED)).toHaveLength(12);
     expect(await (await s.get("/api/v1/runs")).json()).toEqual([]);
     expect((await (await s.get("/api/v1/providers")).json()).llmCallsToday).toBe(0);
   });

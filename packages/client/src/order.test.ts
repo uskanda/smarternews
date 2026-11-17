@@ -1,7 +1,21 @@
 import type { Category, Feed } from "@smarternews/core/api";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildNav, hideEmptyEntries, listKey, type ListTarget, type NavModel } from "./nav.ts";
-import { applyMove, dropAt, edgeScroll, groupAt, jumpCandidates, movableOf, nextEventCategory, nextTarget, stepMove, stepTarget, type Row } from "./order.ts";
+import {
+  applyMove,
+  createMoveQueue,
+  dropAt,
+  edgeScroll,
+  groupAt,
+  jumpCandidates,
+  movableOf,
+  nextEventCategory,
+  nextTarget,
+  stepMove,
+  stepTarget,
+  type MoveAnswer,
+  type Row,
+} from "./order.ts";
 
 const category = (id: number, name: string, kind: Category["kind"] = "news"): Category => ({
   id,
@@ -24,12 +38,14 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   selectors: null,
   title,
   siteUrl: null,
+  iconUrl: null,
   categoryId,
   intervalMinutes: null,
   enabled: true,
   autoSummarize: false,
   translate: false,
   fetchFullContent: false,
+  topicSource: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,
@@ -339,6 +355,99 @@ describe("nextEventCategory", () => {
     expect(nextEventCategory(model(), cat(4))).toEqual(cat(4));
     expect(nextEventCategory(model(), null)).toEqual(cat(4));
     expect(nextEventCategory(buildNav({ categories: [category(1, "A")], feeds: [], counts: undefined }), null)).toBeNull();
+  });
+});
+
+describe("createMoveQueue", () => {
+  /** A send whose answer the test gives by hand. */
+  function deferred() {
+    let resolve!: (answer: MoveAnswer) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<MoveAnswer>((ok, fail) => {
+      resolve = ok;
+      reject = fail;
+    });
+    return { send: vi.fn(() => promise), resolve, reject };
+  }
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  it("sends one move at a time, in the order they came", async () => {
+    const queue = createMoveQueue({ onSettled: () => {}, onFailed: () => {} });
+    const first = deferred();
+    const second = deferred();
+    queue.push(first.send);
+    queue.push(second.send);
+
+    expect(first.send).toHaveBeenCalledTimes(1);
+    expect(second.send).not.toHaveBeenCalled();
+    expect(queue.busy()).toBe(true);
+
+    first.resolve({ categories: [category(2, "B"), category(1, "A")] });
+    await flush();
+    expect(second.send).toHaveBeenCalledTimes(1);
+    expect(queue.busy()).toBe(true);
+  });
+
+  it("gives the last answer of each list once, when nothing is left to send", async () => {
+    const onSettled = vi.fn();
+    const queue = createMoveQueue({ onSettled, onFailed: () => {} });
+    const first = deferred();
+    const second = deferred();
+    const third = deferred();
+    queue.push(first.send);
+    queue.push(second.send);
+    queue.push(third.send);
+
+    first.resolve({ categories: [category(2, "B"), category(1, "A")] });
+    await flush();
+    second.resolve({ feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    await flush();
+    expect(onSettled).not.toHaveBeenCalled();
+    third.resolve({ categories: [category(1, "A"), category(2, "B")] });
+    await flush();
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledWith({ categories: [category(1, "A"), category(2, "B")], feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    expect(queue.busy()).toBe(false);
+  });
+
+  it("drops the moves still waiting when one fails, and says so once", async () => {
+    const onSettled = vi.fn();
+    const onFailed = vi.fn();
+    const queue = createMoveQueue({ onSettled, onFailed });
+    const first = deferred();
+    const second = deferred();
+    const third = deferred();
+    queue.push(first.send);
+    queue.push(second.send);
+    queue.push(third.send);
+
+    first.resolve({ feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    await flush();
+    second.reject(new TypeError("fetch failed"));
+    await flush();
+
+    expect(third.send).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(onFailed).toHaveBeenCalledWith(new TypeError("fetch failed"), { feeds: [feed(12, "Y", 1), feed(11, "X", 1)] });
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(queue.busy()).toBe(false);
+  });
+
+  it("starts afresh after a failure", async () => {
+    const onSettled = vi.fn();
+    const queue = createMoveQueue({ onSettled, onFailed: () => {} });
+    const failing = deferred();
+    queue.push(failing.send);
+    failing.reject(new TypeError("fetch failed"));
+    await flush();
+
+    const next = deferred();
+    queue.push(next.send);
+    expect(next.send).toHaveBeenCalledTimes(1);
+    next.resolve({ feeds: [feed(11, "X", 1)] });
+    await flush();
+    expect(onSettled).toHaveBeenCalledWith({ feeds: [feed(11, "X", 1)] });
   });
 });
 

@@ -10,7 +10,8 @@ import type { LlmRequest } from "../llm/adapter.ts";
 import type { ModelPricing } from "../llm/pricing.ts";
 import type { JudgeOutput, WriteOutput } from "../llm/tasks.ts";
 import { executeRun, type PipelineConfig } from "../pipeline/run.ts";
-import { createTestDb, fakeClock } from "./db.ts";
+import { insertFeed } from "../db/feeds.ts";
+import { createTestDb, fakeClock, seedFeedArticle } from "./db.ts";
 import { fakeFetch, html, xml } from "./http.ts";
 import { fakeLlm, materialLines, type FakeHandler } from "./llm.ts";
 
@@ -156,6 +157,8 @@ export function sourcesIn(request: LlmRequest): Array<{ title: string; site: str
   }));
 }
 
+let feedSerial = 0;
+
 export interface HarnessOptions {
   kind?: Kind;
   category?: Partial<CategoryCreate>;
@@ -190,7 +193,7 @@ export function pipelineHarness(options: HarnessOptions = {}) {
   const handlers: Partial<Record<TaskName, FakeHandler>> = { ...defaultHandlers };
   const llm = fakeLlm(db, clock, handlers, { limits: options.llmLimits, webSearch: options.webSearch, pricing: options.llmPricing });
   const config: PipelineConfig = {
-    limits: { judgeBatchSize: 30, pagesPerRun: 20, ...options.config },
+    limits: { judgeBatchSize: 30, pagesPerRun: 20, subscriptionCandidatesPerRun: 60, ...options.config },
     newsSearch: { engines: ["bing-news"], maxResultsPerQuery: 20, ...options.newsSearch },
   };
 
@@ -264,8 +267,31 @@ export function pipelineHarness(options: HarnessOptions = {}) {
     execute(runId: number): Promise<Run> {
       return executeRun({ db, clock, runner: llm.runner, fetcher, config }, runId);
     },
+    /** The generated articles of the category. */
     articles(): Article[] {
-      return listArticleIds(db, category.id).map((id) => getArticle(db, id));
+      return listArticleIds(db, category.id)
+        .map((id) => getArticle(db, id))
+        .filter((article) => article.origin === "generated");
+    },
+    /** Subscribes a feed of the category, a topic source unless said otherwise. Returns its id. */
+    subscribe(feed: { title?: string; topicSource?: boolean } = {}): number {
+      feedSerial += 1;
+      const url = `https://feeds.example.org/${feedSerial}.xml`;
+      return insertFeed(db, { url, title: feed.title ?? `Feed ${feedSerial}`, categoryId: category.id, topicSource: feed.topicSource ?? true }, clock).id;
+    },
+    /**
+     * Stores an article the feed delivered, linking to `link`. It is stored and published one hour before the
+     * harness clock unless said otherwise. Returns its id.
+     */
+    deliver(feedId: number, item: { title: string; link: string; content?: string; storedAt?: string; publishedAt?: string }): number {
+      const hourAgo = new Date(clock().getTime() - 3_600_000).toISOString();
+      return seedFeedArticle(db, feedId, {
+        title: item.title,
+        url: item.link,
+        body: item.content,
+        at: item.publishedAt ?? item.storedAt ?? hourAgo,
+        storedAt: item.storedAt ?? hourAgo,
+      });
     },
     candidates(runId: number, status?: Candidate["status"]): Candidate[] {
       return listRunCandidates(db, runId, status);

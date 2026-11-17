@@ -21,6 +21,7 @@ interface SearchResult {
   title: string;
   snippet: string;
   siteName: string;
+  siteUrl?: string;
   publishedAt: Date | null;
 }
 
@@ -52,6 +53,8 @@ function googleUrl(query: string, locale: SearchLocale, hours: number | null): s
 function googleResults(xml: string): SearchResult[] {
   return items(xml).map((item) => {
     const siteName = plainText(textOf(item.source), 200);
+    const source = item.source as Node | undefined;
+    const siteUrl = typeof source === "object" && source !== null && typeof source["@_url"] === "string" ? source["@_url"].trim() : "";
     const title = plainTitle(textOf(item.title));
     const suffix = ` - ${siteName}`;
     return {
@@ -60,6 +63,7 @@ function googleResults(xml: string): SearchResult[] {
       title: siteName.length > 0 && title.endsWith(suffix) ? title.slice(0, -suffix.length) : title,
       snippet: "",
       siteName,
+      ...(siteUrl ? { siteUrl } : {}),
       publishedAt: parseDate(textOf(item.pubDate)),
     };
   });
@@ -143,6 +147,7 @@ export async function searchNews(
       title: result.title,
       snippet: result.snippet,
       siteName: result.siteName,
+      ...(result.siteUrl ? { siteUrl: result.siteUrl } : {}),
       publishedAt: result.publishedAt,
       sourceKind: "news-search" as const,
     };
