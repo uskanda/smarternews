@@ -75,3 +75,71 @@ describe("extractArticle", () => {
     expect(extractArticle("<html><body><script>app()</script></body></html>", "https://example.org/a").html).toBe("");
   });
 });
+
+describe("extractArticle with a content selector", () => {
+  const STORY = "The council approved the new budget on Monday after a long debate about the cost of repairs to the old bridge.";
+  const RELATED = "Read also: ten other stories about bridges, budgets and councils from the archive of this site.";
+  const SECOND = "A second block that the selector also matches, further down the page.";
+  const body = `
+<article>
+  <div class="story"><p>${STORY}</p></div>
+  <section class="related"><p>${RELATED}</p><p>${RELATED}</p><p>${RELATED}</p></section>
+  <div class="story"><p>${SECOND}</p></div>
+</article>`;
+
+  it("takes the first element the selector matches instead of what Readability finds", () => {
+    const extracted = extractArticle(page("", body), "https://example.org/a", 8000, ".story");
+    expect(extracted.matched).toBe(true);
+    expect(extracted.text).toBe(STORY);
+    expect(extracted.html).toContain(`<p>${STORY}</p>`);
+    expect(extracted.html).not.toContain("Read also");
+    expect(extracted.html).not.toContain(SECOND);
+  });
+
+  it("takes an element once when the elements it matches are nested", () => {
+    const nested = `<div class="part"><p>${STORY}</p><div class="part"><p>${SECOND}</p></div></div>`;
+    const extracted = extractArticle(page("", nested), "https://example.org/a", 8000, ".part");
+    expect(extracted.text.split(STORY)).toHaveLength(2);
+    expect(extracted.text.split(SECOND)).toHaveLength(2);
+    expect(extracted.html.split(SECOND)).toHaveLength(2);
+  });
+
+  it("keeps the title and the publication time it reads without a selector", () => {
+    const head = '<meta property="article:published_time" content="2026-03-01T09:00:00Z">';
+    const extracted = extractArticle(page(head, ARTICLE_BODY), "https://example.org/a", 8000, "article p");
+    expect(extracted.publishedAt).toEqual(new Date("2026-03-01T09:00:00Z"));
+    expect(extracted.title).toContain("Vendor ships fix");
+  });
+
+  it("cuts the text at the limit, not the HTML", () => {
+    const extracted = extractArticle(page("", body), "https://example.org/a", 20, ".story");
+    expect(extracted.text).toHaveLength(20);
+    expect(extracted.html).toContain(STORY);
+  });
+
+  it("falls back to Readability when nothing matches", () => {
+    const without = extractArticle(page("", ARTICLE_BODY), "https://example.org/a");
+    const extracted = extractArticle(page("", ARTICLE_BODY), "https://example.org/a", 8000, ".missing");
+    expect(extracted.matched).toBe(false);
+    expect(extracted.text).toBe(without.text);
+    expect(extracted.html).toBe(without.html);
+  });
+
+  it("falls back to Readability when the element it matches has no text", () => {
+    const empty = `${ARTICLE_BODY}<div class="story"><img src="https://example.org/a.png"></div>`;
+    const extracted = extractArticle(page("", empty), "https://example.org/a", 8000, ".story");
+    expect(extracted.matched).toBe(false);
+    expect(extracted.text).toContain("released a patch on Sunday");
+  });
+
+  it("falls back to Readability when the selector cannot be used", () => {
+    const extracted = extractArticle(page("", ARTICLE_BODY), "https://example.org/a", 8000, "p:unknown-thing");
+    expect(extracted.matched).toBe(false);
+    expect(extracted.text).toContain("released a patch on Sunday");
+  });
+
+  it("says nothing matched when no selector is given", () => {
+    expect(extractArticle(page("", ARTICLE_BODY), "https://example.org/a").matched).toBe(false);
+    expect(extractArticle(page("", ARTICLE_BODY), "https://example.org/a", 8000, null).matched).toBe(false);
+  });
+});

@@ -12,6 +12,7 @@ import { useToast } from "../shell/toast.tsx";
 import { FeedDeletionDialog } from "./FeedDeletionDialog.tsx";
 import { firstField, useInlineEditFocus } from "./inline-edit-focus.ts";
 import { AddFeedForm, CategorySelect, NO_CATEGORY } from "./AddFeedForm.tsx";
+import { ContentSelectorField, contentSelectorOf } from "./ContentSelector.tsx";
 import { AutoSummarize, FetchFullContent, TopicSource, Translate } from "./FeedSwitches.tsx";
 import { CandidateChoice, CandidateStatus, SelectorEditor, selectorsOf, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
 import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from "../ui/controls.tsx";
@@ -120,6 +121,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
   const [autoSummarize, setAutoSummarize] = useState(feed.autoSummarize);
   const [translate, setTranslate] = useState(feed.translate);
   const [fetchFullContent, setFetchFullContent] = useState(feed.fetchFullContent);
+  const [contentSelector, setContentSelector] = useState(feed.contentSelector ?? "");
   const [topicSource, setTopicSource] = useState(feed.topicSource);
   const [selectors, setSelectors] = useState<SelectorTexts>(textsOf(feed.selectors));
   const [intervalError, setIntervalError] = useState<string | null>(null);
@@ -140,6 +142,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       autoSummarize !== feed.autoSummarize ||
       translate !== feed.translate ||
       fetchFullContent !== feed.fetchFullContent ||
+      contentSelectorOf(contentSelector) !== feed.contentSelector ||
       topicSource !== feed.topicSource ||
       JSON.stringify(selectors) !== JSON.stringify(textsOf(feed.selectors)),
   );
@@ -156,6 +159,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
     if (ownInterval && intervalMinutes === null) setIntervalError(RANGE);
     if (titleError !== null || (ownInterval && intervalMinutes === null)) return;
     const chosenSelectors = feed.format === "page" ? selectorsOf(selectors) : null;
+    const chosenContentSelector = contentSelectorOf(contentSelector);
     setError(null);
     setChecking(urlChanged);
     try {
@@ -171,6 +175,8 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
         autoSummarize,
         translate,
         fetchFullContent,
+        // Sent only when it changed: a change forgets the full content of the feed's unread articles.
+        ...(chosenContentSelector !== feed.contentSelector ? { contentSelector: chosenContentSelector } : {}),
         // Only a feed of a category can be a source of its topics: a feed moved to none keeps what it had.
         ...(category !== NO_CATEGORY ? { topicSource } : {}),
       });
@@ -251,6 +257,7 @@ function EditFeed({ feed, categories, onDone }: { feed: Feed; categories: Catego
       <AutoSummarize id={`${id}-summarize-hint`} checked={autoSummarize} onChange={setAutoSummarize} />
       <Translate id={`${id}-translate-hint`} checked={translate} onChange={setTranslate} />
       <FetchFullContent id={`${id}-full-content-hint`} checked={fetchFullContent} onChange={setFetchFullContent} page={feed.format === "page"} />
+      <ContentSelectorField feedId={feed.id} value={contentSelector} onChange={setContentSelector} error={error} />
       {category !== NO_CATEGORY ? <TopicSource id={`${id}-topic-source-hint`} checked={topicSource} onChange={setTopicSource} /> : null}
       {feed.format === "page" ? <PageSelectorsSection feed={feed} value={selectors} onChange={setSelectors} error={error} /> : null}
       {error && !(error instanceof ApiError && error.kind === "invalid") && urlTaken === null ? <ErrorNotice error={error} /> : null}

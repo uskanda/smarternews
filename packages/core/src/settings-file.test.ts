@@ -727,6 +727,46 @@ describe("summaries of feeds in the settings file", () => {
   });
 });
 
+describe("the content selector of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the selector of the feeds that have one only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", contentSelector: "article .body" }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.contentSelector)).toEqual(["article .body", undefined]);
+    expect(Object.keys(written.subscriptions[1]!)).not.toContain("contentSelector");
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.contentSelector])).toEqual([[A, "article .body"], [B, null]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without a selector with none, leaves a known feed as it is, and changes it when the file says so", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBeNull();
+
+    updateFeed(db, listFeeds(db)[0]!.id, { contentSelector: "main" }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBe("main");
+    importSettings(db, file("    contentSelector: article\n"), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBe("article");
+  });
+
+  it("refuses a value that is not a CSS selector, or one the engine cannot use, and changes nothing", () => {
+    const db = createTestDb();
+    expect(() => importSettings(db, file('    contentSelector: "div["\n'), clock)).toThrow(/expected format/);
+    expect(() => importSettings(db, file('    contentSelector: "div:frobnicate"\n'), clock)).toThrow(/content selector cannot be used/);
+    expect(listFeeds(db)).toEqual([]);
+  });
+});
+
 describe("full content of feeds in the settings file", () => {
   const A = "https://a.example.org/feed.xml";
   const B = "https://b.example.org/feed.xml";

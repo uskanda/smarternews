@@ -32,7 +32,9 @@ describe("nextArticleForFullContent", () => {
   it("returns an unread article stored after its feed began to fetch full content, with its page", () => {
     const { db, feedId } = setup();
     const id = seedFeedArticle(db, feedId, { body: "Delivered text", at: LATER, url: "https://site.example.org/fresh" });
-    expect(nextArticleForFullContent(db)).toEqual({ id, url: "https://site.example.org/fresh", contentText: "Delivered text" });
+    expect(nextArticleForFullContent(db)).toEqual({ id, url: "https://site.example.org/fresh", contentText: "Delivered text", contentSelector: null });
+    updateFeed(db, feedId, { contentSelector: "article" });
+    expect(nextArticleForFullContent(db)).toMatchObject({ id, contentSelector: "article" });
     expect(getArticle(db, id)).toMatchObject({ fullContent: null, fullContentStatus: "waiting", fullContentError: null });
   });
 
