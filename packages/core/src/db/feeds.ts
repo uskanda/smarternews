@@ -107,6 +107,8 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     lastError: strOrNull(row.last_error),
     failureCount: num(row.failure_count),
     goneAt: strOrNull(row.gone_at),
+    movedFrom: strOrNull(row.moved_from),
+    movedAt: strOrNull(row.moved_at),
     nextFetchAt: enabled ? nextFetchFrom(row, baseMinutes).toISOString() : null,
     fetchRequestedAt: strOrNull(row.fetch_requested_at),
     articleCount: num(row.article_count),
@@ -358,7 +360,7 @@ function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefi
  * Changes a feed. Switching summaries or full content on records the time: only articles stored after it are
  * summarised, or have their full content fetched. Switching either on again when it is on keeps the earlier time.
  */
-export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
+export function updateFeed(db: Database, id: number, patch: Omit<FeedUpdate, "url">, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
   // A feed that leaves its category keeps the switch: it counts again once the feed is in a category.
@@ -467,6 +469,47 @@ export function recordFetchFailure(db: Database, id: number, result: FetchFailur
             gone_at = CASE WHEN ? THEN coalesce(gone_at, ?) ELSE NULL END
       WHERE id = ?`,
   ).run(result.now, result.error.slice(0, 500), result.retryAfterUntil ?? null, result.gone ? 1 : 0, result.now, id);
+}
+
+/** How many successful fetches in a row a permanent redirect to the same target needs before the URL follows it. */
+export const MOVES_TO_FOLLOW = 3;
+
+/**
+ * Counts a successful fetch toward following where its permanent redirects led (`target`, null for none). The
+ * count starts again at a fetch that was not redirected for good, or was redirected elsewhere; at
+ * `MOVES_TO_FOLLOW` the URL of the feed becomes the target, and the URL it had is recorded with the time. A
+ * target that is the URL of another feed is not counted, and changes nothing. Returns whether the URL changed.
+ * A failed fetch does not come here: it leaves the count as it is.
+ */
+export function followMove(db: Database, id: number, target: string | null, now: string): boolean {
+  const row = db.prepare("SELECT url, move_target, move_count FROM feeds WHERE id = ?").get(id);
+  if (!row) return false;
+  const url = target === null ? null : normalizeUrl(target);
+  if (url === null || url === str(row.url)) {
+    db.prepare("UPDATE feeds SET move_target = NULL, move_count = 0 WHERE id = ?").run(id);
+    return false;
+  }
+  if (db.prepare("SELECT 1 FROM feeds WHERE url = ? AND id <> ?").get(url, id)) return false;
+  const count = strOrNull(row.move_target) === url ? num(row.move_count) + 1 : 1;
+  if (count < MOVES_TO_FOLLOW) {
+    db.prepare("UPDATE feeds SET move_target = ?, move_count = ? WHERE id = ?").run(url, count, id);
+    return false;
+  }
+  db.prepare("UPDATE feeds SET url = ?, moved_from = url, moved_at = ?, move_target = NULL, move_count = 0 WHERE id = ?").run(url, now, id);
+  return true;
+}
+
+/**
+ * Gives the feed a URL the user chose and checked. What was learnt about the old one goes: the values of
+ * conditional requests, the failures, the end of delivery, and the moves counted or followed.
+ */
+export function replaceFeedUrl(db: Database, id: number, url: string): void {
+  db.prepare(
+    `UPDATE feeds
+        SET url = ?, etag = NULL, last_modified = NULL, last_error = NULL, failure_count = 0, retry_after_until = NULL, gone_at = NULL,
+            move_target = NULL, move_count = 0, moved_from = NULL, moved_at = NULL
+      WHERE id = ?`,
+  ).run(normalizeUrl(url), id);
 }
 
 /** Forgets the items a feed has not listed since the given time. Their articles are purged by then. */
