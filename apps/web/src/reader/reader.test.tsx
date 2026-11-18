@@ -12,7 +12,7 @@ import {
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { back, gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { back, failPaths, gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { intersect, setFontSize } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
@@ -3525,5 +3525,60 @@ describe("recording that an article was opened", () => {
     await waitFor(() => expect(opens).toHaveLength(1));
     expect(getArticle(server.db, id!).openedAt).toBeNull();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("a list whose category or feed could not be loaded", () => {
+  it("says that the categories could not be loaded, not that it is loading, and loads the list on a retry", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id, { title: "Story" });
+    const failing = failPaths(server, ["categories"]);
+    const { user } = renderApp({ server, route: "/c/security" });
+
+    const alert = await within(list()).findByRole("alert");
+    expect(within(list()).queryByText("読み込み中…")).not.toBeInTheDocument();
+
+    failing.clear();
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
+    expect(await within(list()).findByRole("link", { name: /Story/ })).toBeInTheDocument();
+    expect(within(list()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says that the feeds could not be loaded on the list of a feed", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://x.example.org/feed.xml", title: "X", categoryId: null }, server.clock);
+    failPaths(server, ["feeds"]);
+    renderApp({ server, route: `/f/${feed.id}` });
+
+    expect(await within(list()).findByRole("alert")).toBeInTheDocument();
+    expect(within(list()).queryByText("読み込み中…")).not.toBeInTheDocument();
+  });
+
+  it("asks for the categories again on r when they failed", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id, { title: "Story" });
+    const failing = failPaths(server, ["categories"]);
+    const { user } = renderApp({ server, route: "/c/security" });
+    await within(list()).findByRole("alert");
+
+    failing.clear();
+    await user.keyboard("r");
+
+    expect(await within(list()).findByRole("link", { name: /Story/ })).toBeInTheDocument();
+    expect(within(nav()).getByRole("link", { name: /Security/ })).toBeInTheDocument();
+  });
+
+  it("does not ask for the categories or the feeds again on r when they arrived", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id, { title: "Story" });
+    const { user, requests } = renderApp({ server, route: "/c/security" });
+    await within(list()).findByRole("link", { name: /Story/ });
+    const asked = () => requests.filter((request) => /^GET \S*\/api\/v1\/(categories|feeds)$/.test(request)).length;
+    const before = asked();
+
+    await user.keyboard("r");
+    expect(await screen.findByText("新しい記事はありませんでした", { selector: '[role="status"] > span' })).toBeInTheDocument();
+
+    expect(asked()).toBe(before);
   });
 });

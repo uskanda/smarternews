@@ -1,5 +1,5 @@
 import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListFormat, ListSort } from "@smarternews/core/api";
-import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -59,7 +59,7 @@ import { categorySettingsPath, listPathOf } from "../lib/paths.ts";
 import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
-import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { Button, Checkbox, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
 import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
@@ -105,6 +105,9 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
+
+/** Whether a query's last fetch failed, with or without data from before. */
+const hasFailed = (query: Query): boolean => query.state.status === "error";
 const NO_IDS: ReadonlySet<number> = new Set();
 
 /**
@@ -246,6 +249,9 @@ export function ReaderPage({ view }: { view: View }) {
     if (view === "search" || view === "mention") return null;
     return { type: view };
   }, [view, inCategory, category, feed]);
+  // The categories or the feeds the path waits for, when they could not be loaded: the list never comes without them.
+  const awaited = inCategory ? categories : view === "feed" ? feeds : null;
+  const awaitedFailed = awaited !== null && awaited.isError && awaited.data === undefined ? awaited : null;
   const isEvents = view === "category" && category?.kind === "event";
   const readToggle = target !== null && hasReadToggle(target) && !isEvents;
   // Search results and the articles of a name never offer marking everything read: they are found articles, not
@@ -650,6 +656,9 @@ export function ReaderPage({ view }: { view: View }) {
       client.invalidateQueries({ queryKey: ["counts"] }),
       // The list of annotations is not a list of articles, so it is fetched again on its own.
       isAnnotations ? client.invalidateQueries({ queryKey: ["annotations"] }) : undefined,
+      // The categories and the feeds only when they failed: the left pane and the list of one wait for them.
+      client.invalidateQueries({ queryKey: ["categories"], predicate: hasFailed }),
+      client.invalidateQueries({ queryKey: ["feeds"], predicate: hasFailed }),
     ]);
   }
 
@@ -1199,7 +1208,13 @@ export function ReaderPage({ view }: { view: View }) {
         {/* A next page that could not be loaded is said below the rows, where the reader is. */}
         {wordsProblem !== null ? <ErrorNotice message={wordsProblem} /> : null}
         {active.isError && !active.isFetchNextPageError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
-        {active.isPending && !active.isError && !(isSearch && words.length === 0) && wordsProblem === null &&!(isMention && mentionName.length === 0) ? <Loading /> : null}
+        {awaitedFailed ? (
+          <ErrorNotice
+            message={`${inCategory ? "カテゴリ" : "購読フィード"}を読み込めませんでした。${messageFor(awaitedFailed.error)}`}
+            onRetry={() => void awaitedFailed.refetch()}
+          />
+        ) : null}
+        {active.isPending && !active.isError && awaitedFailed === null && !(isSearch && words.length === 0) && wordsProblem === null &&!(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
         ) : null}
