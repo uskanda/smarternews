@@ -62,7 +62,7 @@ function refuse(message: string): DomainError {
 async function commonFeed(fetcher: Fetcher, pageUrl: string): Promise<DiscoveredFeed | null> {
   for (const path of COMMON_FEED_PATHS) {
     try {
-      const response = await fetcher.get(new URL(path, pageUrl).toString());
+      const response = await fetcher.get(new URL(path, pageUrl).toString(), { maxBytes: fetcher.feedMaxBytes });
       if (response.status < 200 || response.status >= 300) continue;
       return { url: normalizeUrl(response.url), title: parseSubscription(response.text).title };
     } catch {
@@ -75,12 +75,13 @@ async function commonFeed(fetcher: Fetcher, pageUrl: string): Promise<Discovered
 /**
  * The feeds behind a URL. When the URL is a feed, that is the one answer; when it is a page, the answers are
  * the feeds the page points to with `<link rel="alternate">`. A page that points to none gets the first feed
- * found at a common place under its origin. Nothing is subscribed.
+ * found at a common place under its origin. Nothing is subscribed. The URL is fetched under the size limit of
+ * feeds, since it may be one; read as a page, it is held to the limit of pages.
  */
 export async function discoverFeeds(fetcher: Fetcher, url: string): Promise<DiscoveredFeed[]> {
   let response;
   try {
-    response = await fetcher.get(url);
+    response = await fetcher.get(url, { maxBytes: fetcher.feedMaxBytes });
   } catch (error) {
     throw refuse(`the page could not be fetched: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -89,6 +90,9 @@ export async function discoverFeeds(fetcher: Fetcher, url: string): Promise<Disc
     return [{ url: normalizeUrl(url), title: parseSubscription(response.text).title }];
   } catch {
     // not a feed, so read it as a page
+  }
+  if (Buffer.byteLength(response.text) > fetcher.maxBytes) {
+    throw refuse(`the page could not be fetched: response larger than ${fetcher.maxBytes} bytes: ${response.url}`);
   }
   const found = new Map<string, DiscoveredFeed>();
   for (const link of pageLinks(response.text, response.url)) {

@@ -64,7 +64,10 @@ export interface FetcherOptions {
   userAgent: string;
   hostIntervalMs: number;
   timeoutMs: number;
+  /** The largest body accepted, in bytes, unless the request names another limit. */
   maxBytes: number;
+  /** The limit the callers that fetch feeds name: feeds that list every episode grow larger than pages. Defaults to `maxBytes`. */
+  feedMaxBytes?: number;
   /** Hosts that may be fetched although they are, or resolve to, loopback, private, link-local or shared-space addresses. */
   allowPrivateHosts?: readonly string[];
   /** Replaces the network in tests. Without it, every connection also checks the address the name resolved to. */
@@ -77,6 +80,8 @@ export interface RequestOptions {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: string;
+  /** The largest body accepted for this request, in place of the configured one. */
+  maxBytes?: number;
 }
 
 function declaredCharset(contentType: string, head: Uint8Array): string {
@@ -118,6 +123,7 @@ export class Fetcher {
       clock: systemClock,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       ...options,
+      feedMaxBytes: options.feedMaxBytes ?? options.maxBytes,
     };
   }
 
@@ -125,10 +131,20 @@ export class Fetcher {
     return this.#options.userAgent;
   }
 
+  /** The configured size limit, which pages are fetched under. */
+  get maxBytes(): number {
+    return this.#options.maxBytes;
+  }
+
+  /** The size limit of feeds, for the callers that fetch one to name. */
+  get feedMaxBytes(): number {
+    return this.#options.feedMaxBytes;
+  }
+
   async get(url: string, request: RequestOptions = {}): Promise<HttpResponse> {
-    const { userAgent, maxBytes } = this.#options;
+    const { userAgent } = this.#options;
     const { response, url: current, permanentUrl } = await this.#send(url, request, { "user-agent": userAgent, accept: "*/*" });
-    const bytes = await this.#readBody(response, current, maxBytes);
+    const bytes = await this.#readBody(response, current, request.maxBytes ?? this.#options.maxBytes);
     const contentType = response.headers.get("content-type") ?? "";
     const responseHeaders = Object.fromEntries(response.headers.entries());
     return { status: response.status, url: current, permanentUrl, contentType, headers: responseHeaders, text: decode(bytes, contentType) };

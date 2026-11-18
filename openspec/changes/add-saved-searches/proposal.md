@@ -35,7 +35,7 @@
 
 ## Impact
 
-- `packages/core/src/db/migrations/045_saved_searches.sql`（新規）：表 `saved_searches`
+- `packages/core/src/db/migrations/046_saved_searches.sql`（新規）：表 `saved_searches`
 - `packages/core/src/db/saved-searches.ts`（新規）：読み書きと並べ替え
 - `packages/core/src/db/articles.ts`：検索の条件の組み立てを切り出し、`getCounts` で保存した検索ごとに数える
 - `packages/core/src/api.ts`：保存した検索の型、件数の型、設定ファイルの型

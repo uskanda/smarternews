@@ -729,6 +729,46 @@ describe("summaries of feeds in the settings file", () => {
   });
 });
 
+describe("the content selector of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the selector of the feeds that have one only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", contentSelector: "article .body" }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.contentSelector)).toEqual(["article .body", undefined]);
+    expect(Object.keys(written.subscriptions[1]!)).not.toContain("contentSelector");
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.contentSelector])).toEqual([[A, "article .body"], [B, null]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without a selector with none, leaves a known feed as it is, and changes it when the file says so", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBeNull();
+
+    updateFeed(db, listFeeds(db)[0]!.id, { contentSelector: "main" }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBe("main");
+    importSettings(db, file("    contentSelector: article\n"), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBe("article");
+  });
+
+  it("refuses a value that is not a CSS selector, or one the engine cannot use, and changes nothing", () => {
+    const db = createTestDb();
+    expect(() => importSettings(db, file('    contentSelector: "div["\n'), clock)).toThrow(/expected format/);
+    expect(() => importSettings(db, file('    contentSelector: "div:frobnicate"\n'), clock)).toThrow(/content selector cannot be used/);
+    expect(listFeeds(db)).toEqual([]);
+  });
+});
+
 describe("full content of feeds in the settings file", () => {
   const A = "https://a.example.org/feed.xml";
   const B = "https://b.example.org/feed.xml";
@@ -956,7 +996,48 @@ describe("list views in the settings file", () => {
     const feed = insertFeed(db, { url: FEED, title: "A", categoryId: tools.id }, clock);
     return { db, tools, feed };
   }
-  const views = (db: ReturnType<typeof createTestDb>) => listListViews(db).items;
+  /** The stored views, the standard format left out as the file leaves it out. */
+  const views = (db: ReturnType<typeof createTestDb>) =>
+    listListViews(db).items.map(({ format, ...view }) => (format === "standard" ? view : { ...view, format }));
+
+  it("carry the format of a list, and leave out the standard one", () => {
+    const { db, tools } = changed();
+    updateListView(db, "unread", { format: "compact" });
+    updateListView(db, `category-${tools.id}`, { sort: "oldest", format: "expanded" });
+    updateListView(db, "all", { sort: "oldest" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([
+      { list: "unread", format: "compact" },
+      { list: { category: "tools" }, sort: "oldest", format: "expanded" },
+      { list: "all", sort: "oldest" },
+    ]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(3);
+    const otherTools = listCategories(other).find((category) => category.slug === "tools")!;
+    expect(views(other)).toEqual([
+      { key: "unread", sort: "newest", format: "compact" },
+      { key: `category-${otherTools.id}`, sort: "oldest", format: "expanded" },
+      { key: "all", sort: "oldest" },
+    ]);
+  });
+
+  it("keep the stored format when an entry leaves it out, as a file written before formats does", () => {
+    const { db } = changed();
+    updateListView(db, "unread", { sort: "oldest", format: "expanded" });
+
+    importSettings(db, "version: 1\nlistViews: [{ list: unread, sort: newest }]\n", clock);
+
+    expect(views(db)).toEqual([{ key: "unread", sort: "newest", format: "expanded" }]);
+    importSettings(db, "version: 1\nlistViews: [{ list: unread, format: standard }]\n", clock);
+    expect(views(db)).toEqual([]);
+  });
+
+  it("refuse the whole file for a format it does not know", () => {
+    const { db } = changed();
+    expect(() => importSettings(db, "version: 1\nlistViews: [{ list: unread, format: cards }]\n", clock)).toThrow();
+    expect(views(db)).toEqual([]);
+  });
 
   it("are written for the entries that were changed, a category by its slug and a feed by its URL", () => {
     const { db, tools, feed } = changed();

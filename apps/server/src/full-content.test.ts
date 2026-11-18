@@ -192,3 +192,85 @@ describe("a feed that fetches full content and summarises", () => {
     expect(s.llmRequests.summarize[0]!.prompt).toContain("A sentence of the page");
   });
 });
+
+describe("the content selector of a feed", () => {
+  const COMMENT = "A comment below the article that is not part of it at all. ".repeat(12);
+  const storyPage = () =>
+    new Response(
+      `<html><head><title>a</title></head><body><article><h1>a</h1><div class="story"><p>${LONG}</p></div>` +
+        `<p>${COMMENT}</p><p>${COMMENT}</p></article></body></html>`,
+      { headers: { "content-type": "text/html" } },
+    );
+
+  it("is listed, changed and taken away, and a value that is not a CSS selector is refused", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss([]));
+    const created = await (await s.post("/api/v1/feeds", { url: FEED, contentSelector: "article .body" })).json();
+    expect(created.contentSelector).toBe("article .body");
+
+    expect((await (await s.patch(`/api/v1/feeds/${created.id}`, { contentSelector: "main" })).json()).contentSelector).toBe("main");
+    const invalid = await s.patch(`/api/v1/feeds/${created.id}`, { contentSelector: "div[" });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).error.fields).toEqual([{ path: "contentSelector", message: "not a CSS selector", code: "format" }]);
+    const unusable = await s.patch(`/api/v1/feeds/${created.id}`, { contentSelector: "div:frobnicate" });
+    expect(unusable.status).toBe(400);
+    expect((await unusable.json()).error.fields).toEqual([expect.objectContaining({ path: "contentSelector", code: "format" })]);
+
+    await s.patch(`/api/v1/feeds/${created.id}`, { contentSelector: null });
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([expect.objectContaining({ id: created.id, contentSelector: null })]);
+  });
+
+  it("takes the full content of the unread articles again by the new selector once it changes, without waiting for the next look", async () => {
+    const s = testServer();
+    s.site.set("https://blog.example.org/a", storyPage);
+    const { feed, id } = await delivered(s, { fetchFullContent: true });
+    s.fullContent.tick();
+    await s.fullContent.idle();
+    expect((await (await s.get(`/api/v1/articles/${id}`)).json()).fullContent.body).toContain("A comment below");
+
+    expect((await s.patch(`/api/v1/feeds/${feed.id}`, { contentSelector: ".story" })).status).toBe(200);
+    await s.fullContent.idle();
+
+    const article = await (await s.get(`/api/v1/articles/${id}`)).json();
+    expect(article.fullContentStatus).toBe("fetched");
+    expect(article.fullContent.body).toContain("A sentence of the page");
+    expect(article.fullContent.body).not.toContain("A comment below");
+  });
+
+  it("previews the selector on the page of the feed's newest article and stores nothing", async () => {
+    const s = testServer();
+    s.site.set("https://blog.example.org/a", storyPage);
+    const { feed, id } = await delivered(s);
+
+    const response = await s.post(`/api/v1/feeds/${feed.id}/content-preview`, { contentSelector: ".story" });
+    expect(response.status).toBe(200);
+    const preview = await response.json();
+    expect(preview).toMatchObject({ status: "ok", article: { id, title: "a", url: "https://blog.example.org/a" }, matched: true, shorter: false });
+    expect(preview.markdown).toContain("A sentence of the page");
+    expect(preview.markdown).not.toContain("A comment below");
+    expect(await (await s.get(`/api/v1/articles/${id}`)).json()).toMatchObject({ fullContent: null, fullContentStatus: "none" });
+
+    expect(await (await s.post(`/api/v1/feeds/${feed.id}/content-preview`, { contentSelector: ".missing" })).json()).toMatchObject({ status: "ok", matched: false });
+  });
+
+  it("answers why a preview has nothing to show, and refuses a selector and a feed it cannot use", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss([]));
+    const empty = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    expect(await (await s.post(`/api/v1/feeds/${empty.id}/content-preview`, { contentSelector: ".story" })).json()).toEqual({ status: "no-article" });
+
+    const invalid = await s.post(`/api/v1/feeds/${empty.id}/content-preview`, { contentSelector: "div[" });
+    expect(invalid.status).toBe(400);
+    expect((await s.post("/api/v1/feeds/999/content-preview", { contentSelector: ".story" })).status).toBe(404);
+  });
+
+  it("previews a page that cannot be read with the reason full content gives", async () => {
+    const s = testServer();
+    const { feed, id } = await delivered(s);
+    expect(await (await s.post(`/api/v1/feeds/${feed.id}/content-preview`, { contentSelector: null })).json()).toEqual({
+      status: "failed",
+      article: { id, title: "a", url: "https://blog.example.org/a" },
+      error: { reason: "http", detail: "404" },
+    });
+  });
+});

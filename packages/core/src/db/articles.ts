@@ -726,13 +726,16 @@ export interface ArticleForFullContent {
   url: string | null;
   /** What the feed delivered, without markup. The full content must not be shorter. */
   contentText: string;
+  /** The feed's content selector, or null for what Readability finds. */
+  contentSelector: string | null;
 }
 
 const FULL_CONTENT_COLUMNS = `a.id, a.content_text,
-  (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url`;
+  (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url,
+  (SELECT f.content_selector FROM feeds f WHERE f.id = a.feed_id) AS content_selector`;
 
 function toArticleForFullContent(row: Row): ArticleForFullContent {
-  return { id: num(row.id), url: strOrNull(row.url), contentText: str(row.content_text) };
+  return { id: num(row.id), url: strOrNull(row.url), contentText: str(row.content_text), contentSelector: strOrNull(row.content_selector) };
 }
 
 /** The feed article whose full content is fetched next: of those that wait, the one stored last. */
@@ -783,6 +786,25 @@ export function saveFullContent(db: Database, id: number, content: { markdown: s
         WHERE id = ?`,
     ).run(content.markdown, content.text, content.now, id);
     deleteArticleTranslation(db, id);
+  });
+}
+
+/**
+ * Forgets the full content and the failures of a feed's unread articles, with the translations of their
+ * content, which may be of the full content. They wait for full content again if their feed fetches it. Read
+ * articles keep theirs, and every summary stays.
+ */
+export function forgetUnreadFullContent(db: Database, feedId: number): void {
+  transaction(db, () => {
+    db.prepare(
+      `DELETE FROM article_translations WHERE article_id IN
+         (SELECT id FROM articles WHERE origin = 'feed' AND feed_id = ? AND is_read = 0 AND full_content_status IS NOT NULL)`,
+    ).run(feedId);
+    db.prepare(
+      `UPDATE articles SET full_content = NULL, full_content_text = NULL, full_content_at = NULL, full_content_status = NULL,
+              full_content_error = NULL, full_content_error_detail = NULL
+        WHERE origin = 'feed' AND feed_id = ? AND is_read = 0 AND full_content_status IS NOT NULL`,
+    ).run(feedId);
   });
 }
 

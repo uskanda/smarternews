@@ -93,7 +93,7 @@ export function buildFetchers(
     ...overrides,
   };
   return {
-    crawl: new Fetcher({ ...common, hostIntervalMs: config.fetch.hostIntervalMs, maxBytes: config.fetch.maxBytes }),
+    crawl: new Fetcher({ ...common, hostIntervalMs: config.fetch.hostIntervalMs, maxBytes: config.fetch.maxBytes, feedMaxBytes: config.fetch.feedMaxBytes }),
     images: new Fetcher({ ...common, hostIntervalMs: 0, maxBytes: IMAGE_MAX_BYTES }),
   };
 }

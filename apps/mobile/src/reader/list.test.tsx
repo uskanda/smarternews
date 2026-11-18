@@ -295,7 +295,24 @@ describe("the recently read articles", () => {
 
 describe("the order of a list", () => {
   const press = async (name: string | RegExp) => userEvent.setup().press(await screen.findByRole("button", { name }));
-  const views = (server: TestServer) => server.core<{ items: Array<{ key: string; sort: string }> }>("listListViews");
+  /** The stored views, the standard format left out. */
+  const views = async (server: TestServer) => {
+    const { items } = await server.core<{ items: Array<{ key: string; sort: string; format: string }> }>("listListViews");
+    return { items: items.map(({ format, ...view }) => (format === "standard" ? view : { ...view, format })) };
+  };
+
+  it("keeps the format the web page chose for the entry when the order changes", async () => {
+    const { server, tools } = await seeded();
+    await server.core("updateListView", `category-${tools.id}`, { sort: "oldest", format: "expanded" });
+    await renderApp({ server, url: `/list/category-${tools.id}` });
+    await waitFor(() => expect(rowTitles()).toEqual(["Blog post", "First", "Second", "Third"]));
+
+    await press("並び順：古い順");
+    await press("新しい順");
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Third", "Second", "First", "Blog post"]));
+    await eventually(async () => expect((await views(server)).items).toEqual([{ key: `category-${tools.id}`, sort: "newest", format: "expanded" }]));
+  });
 
   /** Tools holds three generated articles a minute apart, after a feed article of the day before. */
   async function seeded() {

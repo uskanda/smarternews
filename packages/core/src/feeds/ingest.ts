@@ -37,7 +37,7 @@ import { parseSubscription, type ParsedSubscription, type SubscriptionItem } fro
 import type { TranslationService } from "../translation/service.ts";
 import { convertContent, convertDescription, type ConvertedContent } from "./content.ts";
 import { findFeedIcon, ICON_RECHECK_DAYS, type IconSearch } from "./icon.ts";
-import { extractPage, pageFailureReason, parsePage } from "./page.ts";
+import { checkContentSelectorUsable, extractPage, pageFailureReason, parsePage } from "./page.ts";
 
 const DAY = 86_400_000;
 const FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*";
@@ -410,12 +410,12 @@ async function download(deps: FeedDeps, url: string, conditions: { etag: string 
   const headers: Record<string, string> = { accept: FEED_ACCEPT };
   if (conditions.etag) headers["if-none-match"] = conditions.etag;
   if (conditions.lastModified) headers["if-modified-since"] = conditions.lastModified;
-  const response = await deps.fetcher.get(url, { headers });
+  const response = await deps.fetcher.get(url, { headers, maxBytes: deps.fetcher.feedMaxBytes });
   const { permanentUrl } = response;
   if (response.status === 304) return { parsed: null, permanentUrl };
   if (response.status < 200 || response.status >= 300) throw new FeedHttpError(response.status, url, response.headers["retry-after"]);
   return {
-    parsed: parseSubscription(response.text, url),
+    parsed: parseSubscription(response.text, url, getSettings(deps.db).timeZone),
     etag: response.headers.etag ?? null,
     lastModified: response.headers["last-modified"] ?? null,
     page: undefined,
@@ -530,7 +530,8 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
   const url = normalizeUrl(input.url);
   if (findFeedByUrl(db, url)) throw new DomainError("conflict", `already subscribed: ${url}`, [{ path: "url", message: "already subscribed" }]);
   checkFeedCategory(db, input.categoryId);
-  // Refused before anything is fetched.
+  // Refused before the URL is fetched, as the category is.
+  if (input.contentSelector) checkContentSelectorUsable(input.contentSelector);
   checkTopicSource(input.topicSource, input.categoryId);
 
   const result = input.format === "page" && input.selectors !== undefined ? await firstPage(deps, url, input.selectors) : await firstFeed(deps, url);
@@ -551,6 +552,7 @@ export async function subscribe(deps: FeedDeps, input: FeedCreate): Promise<Feed
         autoSummarize: input.autoSummarize,
         translate: input.translate,
         fetchFullContent: input.fetchFullContent,
+        contentSelector: input.contentSelector,
         topicSource: input.topicSource,
       },
       clock,

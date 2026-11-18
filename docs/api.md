@@ -94,7 +94,7 @@ Settings fields:
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, [rules](#rules) by their scope, conditions and actions, and term groups by `name`. A filter and a rule name a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
-`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only, and `format` is `standard`, `compact` or `expanded`. Export leaves `listViews` out when no entry was changed, and an entry's `sort` and `format` out when they are the defaults. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` or `format` keeps that setting. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
 
 `savedSearches` holds the [saved searches](#saved-searches) in their order: `name`, `query`, and `scope`, which is `{"category": "tools"}` or `{"feed": "https://example.com/feed.xml"}` and is left out for a search over every article. Export leaves `savedSearches` out when there are none. Import stores them after the categories and feeds of the file; one with the same name, words and scope as a saved search on the server is not saved again. The searches of the file come first, in the file's order, and the others follow. A scope that names a category or feed found neither in the file nor on the server makes the whole file invalid. `savedSearchesCreated` in the response counts the searches saved.
 
@@ -530,7 +530,8 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/page/candidates` | Propose selectors for a page without a feed, each with a preview. See [Web feeds](#web-feeds) |
 | `POST /api/v1/feeds/page/preview` | Show what a set of selectors takes out of a page |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `url`, `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, `topicSource`, and `selectors` of a web feed |
+| `PATCH /api/v1/feeds/:id` | Change `url`, `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, `contentSelector`, `topicSource`, and `selectors` of a web feed |
+| `POST /api/v1/feeds/:id/content-preview` | Show what a content selector takes out of the page of the feed's newest article. See [Content selector](#content-selector) |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -581,6 +582,7 @@ Fields of a feed:
 | `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
 | `translate` | True when the titles and contents of this feed's articles are translated into the output language. Switching it on translates nothing that is stored: an article the feed already has is translated when it is opened |
 | `fetchFullContent` | True when the server fetches the page of every article this feed delivers and stores its text as the full content. Only articles stored after it was switched on are fetched |
+| `contentSelector` | The CSS selector of the element that holds the article body on this feed's pages, or `null` to let Readability find it. See [Content selector](#content-selector) |
 | `topicSource` | True when the runs of the feed's category judge its articles as candidates of every enabled topic of the category. A run takes the articles stored within the category's window, leaving out hidden duplicates, articles the filters hide and pages judged before, newest first and at most `limits.subscriptionCandidatesPerRun` (60 by default) of config.yaml. Articles stored before it was switched on count too. The judgements take model calls: one for every `limits.judgeBatchSize` articles. The feed article stays in its lists as it was; the article it went into is named in its `summarizedIn` |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
@@ -603,6 +605,29 @@ A site that moved for good is followed: when three successful fetches in a row a
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
 The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders. Web feeds are not in it: OPML has no way to hold their selectors. The settings file has them.
+
+### Content selector
+
+Full content, and a summary that reads an article's page, take the article body out of the page with Readability. On a site where Readability takes the wrong part, such as a list of related articles or the comments, set `contentSelector` on the feed, at registration or in a change: the first element of the page that the CSS selector matches becomes the body instead, rewritten by the same rules. A page where it matches no element with text is read by Readability as before. Full content that is shorter than what the feed delivered is still refused with `shorter`. The selector is at most 300 characters; one that is not a CSS selector, or one the server cannot use, is refused with status 400 and the field `contentSelector`. `null` takes it away.
+
+A change of `contentSelector`, taking it away included, forgets the full content, its failure, and the content translation of the feed's unread articles, so that they are taken again by the new selector: right away for those that wait for full content, and when a reader asks for the others. Read articles keep theirs, and summaries stay. Sending the value the feed already has changes nothing.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"contentSelector":"article .post-body"}' "$API/api/v1/feeds/1"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"contentSelector":"article .post-body"}' "$API/api/v1/feeds/1/content-preview"
+```
+
+`content-preview` takes `{"contentSelector": ...}`, a selector or `null` for Readability, and fetches the page of the feed's newest article with a URL by the rules of full content. It answers one of:
+
+| `status` | Fields |
+|---|---|
+| `ok` | `article` (`id`, `title`, `url`); `matched`, false when the selector matched no element with text and the body is Readability's; `markdown`, the first 1000 characters of the body; `chars`, the characters of the whole body; `shorter`, true when the body is shorter than what the feed delivered |
+| `failed` | `article`, and `error` with `reason` and `detail` as for full content |
+| `no-article` | Nothing: the feed has no article with a URL |
+
+It calls no model and stores nothing. An unknown feed answers 404.
 
 ### Web feeds
 
@@ -830,12 +855,12 @@ Status 400 answers a rule without an action, a wrong regular expression, and a s
 
 ## List views
 
-Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
+Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. A list view holds two settings. `sort` is `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. `format` is how the web app shows the list: `standard` (three lines a row beside the article pane), `compact` (the title alone on one line) or `expanded` (each article in full, one after another, without the article pane); the Android app keeps it as it is. An entry that was never changed is `newest` and `standard`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
 
 | Operation | Purpose |
 |---|---|
-| `GET /api/v1/list-views` | The entries whose view differs from the defaults, as `{"items":[{"key":"feed-12","sort":"oldest"}]}` |
-| `PATCH /api/v1/list-views/:key` | Change the view of one entry, `{"sort":"oldest"}`. What the body leaves out stays as it is. Answers with the view of the entry, such as `{"key":"feed-12","sort":"oldest"}` |
+| `GET /api/v1/list-views` | The entries whose view differs from the defaults, as `{"items":[{"key":"feed-12","sort":"oldest","format":"standard"}]}` |
+| `PATCH /api/v1/list-views/:key` | Change the view of one entry, `{"sort":"oldest"}` or `{"format":"compact"}`. What the body leaves out stays as it is. Answers with the view of the entry, such as `{"key":"feed-12","sort":"oldest","format":"standard"}` |
 
 ```bash
 curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

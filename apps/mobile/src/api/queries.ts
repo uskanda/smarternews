@@ -1,6 +1,6 @@
 import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary, ListSort, ListViews } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { createTermMatcher, type TermMatcher } from "@smarternews/client";
+import { createTermMatcher, withViewChange, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "./AppProvider";
 
@@ -64,8 +64,8 @@ export function useListSortChange(onFailed: () => void) {
       // A fetch under way would put the old order back.
       await client.cancelQueries({ queryKey: ["list-views"] });
       const before = client.getQueryData<ListViews>(["list-views"]);
-      const others = (before?.items ?? []).filter((view) => view.key !== key);
-      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      // The format the web keeps for the entry stays.
+      client.setQueryData<ListViews>(["list-views"], { items: withViewChange(before?.items ?? [], key, { sort }) });
       return { before };
     },
     onError: (_error, _variables, context) => {

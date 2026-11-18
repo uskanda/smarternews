@@ -907,10 +907,19 @@ export function listViewKey(target: ListViewTarget): string {
 }
 
 /**
- * How one entry shows its articles. An entry the server does not answer has every default: newest first. Only
- * the entry of starred articles can be in the order by star time.
+ * The format of an article list on the web: `standard`, three lines a row beside the article pane; `compact`,
+ * the title alone on one line beside the article pane; `expanded`, each article in full, one after another,
+ * without the article pane. The Android app shows every list in its own format and keeps this one as it is.
  */
-export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema });
+export const listFormatSchema = z.enum(["standard", "compact", "expanded"]);
+export type ListFormat = z.infer<typeof listFormatSchema>;
+
+/**
+ * How one entry shows its articles. An entry the server does not answer has every default: newest first, in the
+ * standard format. Only the entry of starred articles can be in the order by star time. A view stored before
+ * there were formats is answered in the standard format.
+ */
+export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema, format: listFormatSchema.default("standard") });
 export type ListView = z.infer<typeof listViewSchema>;
 
 /** The entries whose view differs from the defaults. */
@@ -918,7 +927,7 @@ export const listViewsSchema = z.object({ items: z.array(listViewSchema) });
 export type ListViews = z.infer<typeof listViewsSchema>;
 
 /** A change to one entry's view. What is left out stays as it is. */
-export const listViewUpdateSchema = z.object({ sort: listSortSchema }).partial();
+export const listViewUpdateSchema = z.object({ sort: listSortSchema, format: listFormatSchema }).partial();
 export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 
 // ---- subscribed feeds --------------------------------------------------------------------------
@@ -987,6 +996,11 @@ export const feedSchema = z.object({
   translate: z.boolean(),
   /** Whether the full content of the articles this feed delivers from now on is fetched from their pages. */
   fetchFullContent: z.boolean(),
+  /**
+   * The element of an article's page that holds its body, for full content and for the summaries that read the
+   * page. Null means Readability finds it; so it does on a page where the selector matches nothing.
+   */
+  contentSelector: z.string().nullable(),
   /**
    * Whether runs of the feed's category offer its articles to the judge as candidates of the category's topics.
    * Only a feed of a category can have it on.
@@ -1061,6 +1075,8 @@ const feedFields = z.object({
   autoSummarize: z.boolean().optional(),
   translate: z.boolean().optional(),
   fetchFullContent: z.boolean().optional(),
+  /** Null takes it away. A change of it forgets the full content of the feed's unread articles. */
+  contentSelector: cssSelectorSchema.nullable().optional(),
   topicSource: z.boolean().optional(),
 });
 
@@ -1128,6 +1144,36 @@ export const pageCandidatesSchema = z.object({
   fallback: selectorFallbackSchema.nullable(),
 });
 export type PageCandidates = z.infer<typeof pageCandidatesSchema>;
+
+/** A content selector to try on a feed's newest article, or null for what Readability finds. */
+export const contentPreviewRequestSchema = z.object({ contentSelector: cssSelectorSchema.nullable() });
+export type ContentPreviewRequest = z.infer<typeof contentPreviewRequestSchema>;
+
+/** The characters of the converted body a content preview shows at most. */
+export const CONTENT_PREVIEW_CHARS = 1000;
+
+const contentPreviewArticleSchema = z.object({ id: z.number().int(), title: z.string(), url: z.string() });
+
+/**
+ * What a content selector takes out of the page of a feed's newest article with a URL: nothing when the feed
+ * has no such article, why when the page could not be read, or the start of the body as full content would
+ * store it. `matched` is false when the selector matched no element with text, and the body is Readability's.
+ * `chars` counts the whole body; `shorter` is true when it is shorter than what the feed delivered, which full
+ * content would refuse.
+ */
+export const contentPreviewSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("no-article") }),
+  z.object({ status: z.literal("failed"), article: contentPreviewArticleSchema, error: fullContentErrorSchema }),
+  z.object({
+    status: z.literal("ok"),
+    article: contentPreviewArticleSchema,
+    matched: z.boolean(),
+    markdown: z.string(),
+    chars: z.number().int(),
+    shorter: z.boolean(),
+  }),
+]);
+export type ContentPreview = z.infer<typeof contentPreviewSchema>;
 
 /** What one fetch of a feed did, and the feed as it is afterwards. */
 export const feedFetchResultSchema = z.object({
@@ -1886,6 +1932,8 @@ const settingsFileSubscriptionSchema = z.object({
   translate: z.boolean().optional(),
   /** Left out, a new feed does not fetch full content and a known one keeps what it has. */
   fetchFullContent: z.boolean().optional(),
+  /** Left out, a new feed has none and a known one keeps what it has. */
+  contentSelector: cssSelectorSchema.optional(),
   /** Left out, a new feed is no topic source and a known one keeps what it has. */
   topicSource: z.boolean().optional(),
   /** The selectors of a web feed. Written for a web feed only: a subscription without them is a feed. */
@@ -1965,6 +2013,7 @@ export type SettingsFileListViewTarget = z.infer<typeof settingsFileListViewTarg
 const settingsFileListViewSchema = z.object({
   list: settingsFileListViewTargetSchema,
   sort: listSortSchema.optional(),
+  format: listFormatSchema.optional(),
 });
 export type SettingsFileListView = z.infer<typeof settingsFileListViewSchema>;
 

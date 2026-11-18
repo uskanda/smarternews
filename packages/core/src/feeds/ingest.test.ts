@@ -356,6 +356,70 @@ describe("fetchFeed", () => {
   });
 });
 
+describe("reading what a feed delivers", () => {
+  const raw = (items: string) => () => xml(`<?xml version="1.0"?><rss version="2.0"><channel><title>Raw</title>${items}</channel></rss>`);
+
+  it("sorts by dates with abbreviated zones, and leaves out the old ones", async () => {
+    const s = setup(
+      raw(`
+        <item><title>Tokyo</title><link>https://example.org/t</link><guid>t</guid><pubDate>Sun, 01 Mar 2026 15:00:00 JST</pubDate></item>
+        <item><title>Paris</title><link>https://example.org/p</link><guid>p</guid><pubDate>Sun, 01 Mar 2026 09:00:00 CET</pubDate></item>
+        <item><title>Old</title><link>https://example.org/o</link><guid>o</guid><pubDate>Fri, 01 Mar 2024 09:00:00 JST</pubDate></item>
+        <item><title>India</title><link>https://example.org/i</link><guid>i</guid><pubDate>Fri, 01 Mar 2024 09:00:00 IST</pubDate></item>`),
+    );
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(s.list().map((article) => [article.title, article.firstPublishedAt])).toEqual([
+      ["India", START],
+      ["Paris", "2026-03-01T08:00:00.000Z"],
+      ["Tokyo", "2026-03-01T06:00:00.000Z"],
+    ]);
+  });
+
+  it("reads a date without an offset in the time zone of the settings", async () => {
+    const s = setup(raw(`<item><title>Local</title><link>https://example.org/l</link><guid>l</guid><dc:date xmlns:dc="http://purl.org/dc/elements/1.1/">2026-03-01T15:00:00</dc:date></item>`));
+    updateSettings(s.db, { timeZone: "Asia/Tokyo" });
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(s.list()[0]!.firstPublishedAt).toBe("2026-03-01T06:00:00.000Z");
+  });
+
+  it("decodes the named references of HTML in titles", async () => {
+    const s = setup([{ title: "Q1 &mdash; results&hellip;" }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(s.list()[0]!.title).toBe("Q1 — results…");
+  });
+
+  it("takes the page of an item without a link from a guid that is a permalink", async () => {
+    const s = setup(
+      raw(`
+        <item><title>Permalink</title><guid>https://example.org/posts/1?utm_source=rss</guid></item>
+        <item><title>Not a permalink</title><guid isPermaLink="false">https://example.org/?p=2</guid></item>`),
+    );
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(Object.fromEntries(s.list().map((article) => [article.title, article.primaryUrl]))).toEqual({
+      Permalink: "https://example.org/posts/1",
+      "Not a permalink": null,
+    });
+  });
+
+  it("subscribes to a feed larger than the limit of pages, up to the limit of feeds", async () => {
+    const items = Array.from({ length: 50 }, (_unused, index) => ({ title: `Episode ${index}`, key: `e${index}`, content: "x".repeat(200) }));
+    const body = rss(items);
+    const db = createTestDb();
+    const clock = fakeClock(START);
+    const fake = fakeFetch({ [FEED_URL]: () => xml(body) }, clock);
+    const limited = (feedMaxBytes: number) =>
+      new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 2048, feedMaxBytes, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+
+    await expect(subscribe({ db, clock, fetcher: limited(4096) }, { url: FEED_URL })).rejects.toMatchObject({
+      code: "invalid",
+      message: expect.stringMatching(/larger than 4096 bytes/),
+    });
+    const feed = await subscribe({ db, clock, fetcher: limited(1_000_000) }, { url: FEED_URL });
+    expect(getFeed(db, feed.id).articleCount).toBe(50);
+    expect(await fetchFeed({ db, clock, fetcher: limited(1_000_000) }, feed.id)).toMatchObject({ status: "updated" });
+  });
+});
+
 describe("rules when a feed is fetched", () => {
   const titleHas = (value: string) => [{ fields: ["title" as const], match: "contains" as const, value }];
   const flagsOf = (db: ReturnType<typeof createTestDb>, title: string) =>

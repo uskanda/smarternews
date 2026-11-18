@@ -36,6 +36,7 @@ import {
   feedStatsSchema,
   pageCandidatesSchema,
   selectorPreviewSchema,
+  contentPreviewSchema,
   importResultSchema,
   listViewSchema,
   listViewsSchema,
@@ -99,6 +100,7 @@ import {
   type PageCandidates,
   type PageSelectors,
   type SelectorPreview,
+  type ContentPreview,
   type ProviderStatus,
   type Usage,
   type Run,
@@ -392,6 +394,9 @@ export function createApi(options: ApiOptions) {
     pagePreview: (url: string, selectors: PageSelectors): Promise<SelectorPreview> =>
       json(selectorPreviewSchema, "/feeds/page/preview", body("POST", { url, selectors })),
     updateFeed: (id: number, patch: FeedUpdate): Promise<Feed> => json(feedSchema, `/feeds/${id}`, body("PATCH", patch)),
+    /** What a content selector, or none, takes out of the page of the feed's newest article. Stores nothing. */
+    contentPreview: (id: number, contentSelector: string | null): Promise<ContentPreview> =>
+      json(contentPreviewSchema, `/feeds/${id}/content-preview`, body("POST", { contentSelector })),
     /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
     moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),
     deleteFeed: async (id: number): Promise<void> => void (await request(`/feeds/${id}`, { method: "DELETE" })),
