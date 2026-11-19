@@ -1,8 +1,8 @@
-import { addHighlight, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
+import { addHighlight, followMove, getFeed, getSettings, saveArticleNote, insertFeed, listFeeds, recordFetchFailure, recordFetchSuccess, reserveTranslationChars, updateFeed } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { gateFirst, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const section = (name: string) => screen.findByRole("region", { name });
 const FEED = "https://blog.example.org/feed.xml";
@@ -81,6 +81,21 @@ describe("the list of subscribed feeds", () => {
     expect(row).toHaveTextContent("配信終了");
     expect(row).not.toHaveTextContent("取得に失敗");
     expect(row).toHaveTextContent("理由: 配信を終えたと返しています（HTTP 410）");
+  });
+
+  it("says that permanent redirects moved a feed, when, and from where, without calling it failing", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    for (const now of ["2026-03-01T09:00:00.000Z", "2026-03-01T10:00:00.000Z", "2026-03-01T11:00:00.000Z"]) {
+      recordFetchSuccess(server.db, blog.id, { now });
+      followMove(server.db, blog.id, "https://blog.example.net/feed.xml", now);
+    }
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(row).toHaveTextContent("https://blog.example.net/feed.xml");
+    expect(row).toHaveTextContent("転送によりURLを変更 3月1日 11:00（元: https://blog.example.org/feed.xml）");
+    expect(row).not.toHaveTextContent("取得に失敗");
   });
 
   it("says that a paused feed is paused", async () => {
@@ -207,7 +222,7 @@ describe("the focus in the list of feeds", () => {
 
     const row = await rowOf("Blog");
     await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
-    expect(within(row).getByLabelText("名前")).toHaveFocus();
+    expect(within(row).getByLabelText("URL")).toHaveFocus();
 
     await user.click(within(row).getByRole("button", { name: "やめる" }));
     expect(within(row).getByRole("button", { name: "Blogを編集" })).toHaveFocus();
@@ -255,6 +270,33 @@ describe("the way from a row to the feed's articles", () => {
   });
 });
 
+describe("the way from a row to the feed's site", () => {
+  it("opens the site the feed belongs to in a new tab, beside the way to its articles", async () => {
+    const server = makeServer();
+    insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", siteUrl: "https://blog.example.org/" }, server.clock);
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    const site = within(row).getByRole("link", { name: "Blogのサイトを開く" });
+    expect(site).toHaveTextContent("サイトを開く");
+    expect(site).toHaveAttribute("href", "https://blog.example.org/");
+    expect(site).toHaveAttribute("target", "_blank");
+    expect(site).toHaveAttribute("rel", "noopener noreferrer");
+    const articles = within(row).getByRole("link", { name: "Blogの記事の一覧" });
+    expect(articles.compareDocumentPosition(site) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is not shown for a feed whose site is not known", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    expect(within(row).getByRole("link", { name: "Blogの記事の一覧" })).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "Blogのサイトを開く" })).not.toBeInTheDocument();
+  });
+});
+
 describe("a feed named in the address to be edited", () => {
   it("opens that row's form with the focus in it, and scrolls to the row once the list is in", async () => {
     const server = makeServer();
@@ -264,7 +306,7 @@ describe("a feed named in the address to be edited", () => {
     renderApp({ server, route: `/settings/feeds#feed-${slow.id}-edit` });
 
     const row = await rowOf("Slow");
-    await waitFor(() => expect(within(row).getByLabelText("名前")).toHaveFocus());
+    await waitFor(() => expect(within(row).getByLabelText("URL")).toHaveFocus());
     expect(within(row).getByLabelText("名前")).toHaveValue("Slow");
     expect(within(await rowOf("Blog")).queryByLabelText("名前")).not.toBeInTheDocument();
     await waitFor(() => expect(scroll.mock.contexts).toContain(row));
@@ -319,6 +361,95 @@ describe("editing a feed", () => {
 
     await waitFor(() => expect(getFeed(server.db, feed.id).intervalMinutes).toBeNull());
     expect(await rowOf("Blog")).toHaveTextContent("基本の取得周期（30分）");
+  });
+
+  it("changes the URL with the rest, after the server fetched it, and keeps the articles", async () => {
+    const server = makeServer();
+    const moved = "https://blog.example.net/feed.xml";
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const feed = await (await server.post("/api/v1/feeds", { url: FEED })).json();
+    server.site.set(moved, rss("Example Blog", ["a"]));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Example Blog");
+    await user.click(within(row).getByRole("button", { name: "Example Blogを編集" }));
+    const url = within(row).getByLabelText("URL");
+    expect(url).toHaveValue(FEED);
+    await user.clear(url);
+    await user.type(url, moved);
+    const name = within(row).getByLabelText("名前");
+    await user.clear(name);
+    await user.type(name, "My blog");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id)).toMatchObject({ url: moved, title: "My blog", articleCount: 1 });
+    expect(await rowOf("My blog")).toHaveTextContent(moved);
+  });
+
+  it("keeps the form open with the reason under the URL when the new URL is no feed, and changes nothing", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const url = within(row).getByLabelText("URL");
+    await user.clear(url);
+    await user.type(url, "https://gone.example.org/feed.xml");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(row).findByText(/このURLを取得できませんでした。.*404/)).toBeInTheDocument();
+    expect(within(row).getByLabelText("URL")).toHaveAccessibleDescription(/このURLを取得できませんでした/);
+    expect(getFeed(server.db, feed.id).url).toBe("https://blog.example.org/feed.xml");
+  });
+
+  it("says that the new URL is another feed's", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    feedOf(server, "News");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const url = within(row).getByLabelText("URL");
+    await user.clear(url);
+    await user.type(url, "https://news.example.org/feed.xml");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(row).findByText("このフィードはすでに購読しています（https://news.example.org/feed.xml）。")).toBeInTheDocument();
+  });
+
+  it("says it is checking while the server fetches the new URL", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    let answer: (response: Response) => void = () => {};
+    server.site.set("https://blog.example.net/feed.xml", () => new Promise<Response>((resolve) => (answer = resolve)));
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const url = within(row).getByLabelText("URL");
+    await user.clear(url);
+    await user.type(url, "https://blog.example.net/feed.xml");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(row).findByRole("button", { name: "確かめています…" })).toBeDisabled();
+    answer(new Response(rss("Blog", ["a"]), { headers: { "content-type": "application/xml" } }));
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+  });
+
+  it("does not send the URL when it did not change", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(server.site.requests).toEqual([]);
   });
 
   it("does not save an interval outside five minutes to one day, and says what is allowed", async () => {
@@ -514,6 +645,65 @@ describe("OPML", () => {
   });
 });
 
+describe("a change to feeds waiting for the server's answer", () => {
+  it("saves an edited feed once", async () => {
+    const server = makeServer();
+    feedOf(server, "Blog");
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const held = hold(/^PATCH \/api\/v1\/feeds\/\d+$/);
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const save = within(row).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+  });
+
+  it("saves the base interval once", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const form = await section("取得周期");
+    await within(form).findByLabelText("基本の取得周期（分）");
+    const held = hold("PATCH /api/v1/settings");
+
+    const save = within(form).getByRole("button", { name: "保存する" });
+    await user.click(save);
+    await user.click(save);
+
+    expect(save).toBeDisabled();
+    expect(requests.filter((request) => request === "PATCH /api/v1/settings")).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("取得周期を保存しました")).toBeInTheDocument();
+  });
+
+  it("loads an OPML file once", async () => {
+    const server = makeServer();
+    const { user, requests, hold } = renderApp({ server, route: "/settings/feeds" });
+    const held = hold("POST /api/v1/feeds/opml");
+    const file = new File(
+      ['<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" text="A" xmlUrl="https://a.example.org/feed.xml"/></body></opml>'],
+      "feeds.opml",
+    );
+
+    const opml = await section("OPML");
+    await user.upload(within(opml).getByLabelText("読み込むOPMLファイル"), file);
+    const load = within(opml).getByRole("button", { name: "読み込む" });
+    await user.click(load);
+    await waitFor(() => expect(load).toBeDisabled());
+    await user.click(load);
+
+    expect(requests.filter((request) => request === "POST /api/v1/feeds/opml")).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(within(opml).getByRole("status")).toHaveTextContent("1件を登録し、0件を飛ばしました。"));
+    expect(listFeeds(server.db)).toHaveLength(1);
+  });
+});
+
 describe("deleting a category that has feeds", () => {
   it("says in the question that its feeds stay and move to 未分類", async () => {
     const server = makeServer();
@@ -618,8 +808,40 @@ describe("summaries of a feed", () => {
   });
 });
 
+describe("a feed as a topic source", () => {
+  it("is switched on in the edit form of a feed of a category, and the list then marks the feed", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    const feed = feedOf(server, "Blog", tools.id);
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    const choice = within(row).getByRole("checkbox", { name: "トピックの取得元にする" });
+    expect(choice).not.toBeChecked();
+    await user.click(choice);
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(await rowOf("Blog")).findByText("トピックの取得元")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).topicSource).toBe(true);
+  });
+
+  it("is offered only while the form has a category chosen", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const row = await rowOf("Blog");
+    await user.click(within(row).getByRole("button", { name: "Blogを編集" }));
+    expect(within(row).queryByRole("checkbox", { name: "トピックの取得元にする" })).not.toBeInTheDocument();
+    await user.selectOptions(within(row).getByLabelText("カテゴリ"), String(tools.id));
+    expect(within(row).getByRole("checkbox", { name: "トピックの取得元にする" })).toBeInTheDocument();
+  });
+});
+
 describe("translation of a feed", () => {
-  const HINT = "記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
+  const HINT ="記事のタイトルと本文を、翻訳のためにGoogleまたは設定したLLMのサービスへ送ります。";
 
   it("is switched on in the edit form, and the list then marks the feed", async () => {
     const server = makeServer();
@@ -714,6 +936,114 @@ describe("full content of a feed", () => {
 
     expect(within(await rowOf("Example Blog")).getByText("全文を取得")).toBeInTheDocument();
     expect(listFeeds(server.db)).toMatchObject([{ url: FEED, fetchFullContent: true }]);
+  });
+});
+
+describe("the content selector of a feed", () => {
+  const HINT =
+    "全文と要約の本文を、記事のページのどの要素から取り出すかをCSSセレクターで指定します。空のときと、ページに当たる要素がないときは、Readabilityで本文を見つけます。値を変えて保存すると、この購読フィードの未読の記事の全文を取得し直します。";
+  const ARTICLE = "https://blog.example.org/story";
+  const STORY = "The council approved the budget after a long debate about the old bridge. ".repeat(6).trim();
+  const COMMENT = "A comment from a reader that is not part of the article. ".repeat(8).trim();
+  const storyPage = () =>
+    new Response(`<html><head><title>Story</title></head><body><article><div class="story"><p>${STORY}</p></div><p>${COMMENT}</p><p>${COMMENT}</p></article></body></html>`, {
+      headers: { "content-type": "text/html" },
+    });
+
+  async function openForm(server: TestServer, title: string) {
+    const rendered = renderApp({ server, route: "/settings/feeds" });
+    const row = await rowOf(title);
+    await rendered.user.click(within(row).getByRole("button", { name: `${title}を編集` }));
+    return { ...rendered, row };
+  }
+
+  it("is saved from the edit form, with what it does and that unread articles are fetched again said beside it, and taken away when emptied", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user, row } = await openForm(server, "Blog");
+
+    const field = within(row).getByLabelText("本文のセレクター");
+    expect(field).toHaveValue("");
+    expect(field).toHaveAccessibleDescription(HINT);
+    await user.type(field, "article .body");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+    expect(await screen.findByText("購読フィードを保存しました")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).contentSelector).toBe("article .body");
+
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "Blogを編集" }));
+    const again = within(await rowOf("Blog")).getByLabelText("本文のセレクター");
+    expect(again).toHaveValue("article .body");
+    await user.clear(again);
+    await user.click(within(await rowOf("Blog")).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(getFeed(server.db, feed.id).contentSelector).toBeNull());
+  });
+
+  it("says beside the field that a value is not a CSS selector, and saves nothing", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), "div[[");
+    await user.click(within(row).getByRole("button", { name: "保存する" }));
+
+    expect(await within(row).findByText("CSSセレクターとして読めません。")).toBeInTheDocument();
+    expect(getFeed(server.db, feed.id).contentSelector).toBeNull();
+  });
+
+  it("shows what the selector takes out of the page of the newest article, without saving", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: ARTICLE, title: "Budget approved" });
+    server.site.set(ARTICLE, storyPage);
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), ".story");
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("セレクターに当たる要素から本文を取り出しました。")).toBeInTheDocument();
+    expect(within(row).getByText("見本に使った記事：Budget approved")).toBeInTheDocument();
+    const body = within(row).getByLabelText("取り出した本文の先頭");
+    expect(body).toHaveTextContent("The council approved the budget");
+    expect(body).not.toHaveTextContent("A comment from a reader");
+    expect(getFeed(server.db, feed.id).contentSelector).toBeNull();
+  });
+
+  it("says that a selector that matches nothing falls back to Readability", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: ARTICLE, title: "Budget approved" });
+    server.site.set(ARTICLE, storyPage);
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), ".missing");
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("セレクターに当たる要素がないため、Readabilityの結果に戻ります。")).toBeInTheDocument();
+    expect(within(row).getByLabelText("取り出した本文の先頭")).toHaveTextContent("The council approved the budget");
+  });
+
+  it("says that there is no article to try it on", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: null });
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.type(within(row).getByLabelText("本文のセレクター"), ".story");
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("見本に使える記事がありません。元のページのURLを持つ記事が届いてから試してください。")).toBeInTheDocument();
+  });
+
+  it("says why the page of the article could not be read", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Blog");
+    seedFeedArticle(server.db, feed.id, { url: ARTICLE, title: "Budget approved" });
+    const { user, row } = await openForm(server, "Blog");
+
+    await user.click(within(row).getByRole("button", { name: "本文の見本を見る" }));
+
+    expect(await within(row).findByText("見本に使った記事：Budget approved")).toBeInTheDocument();
+    expect(within(row).getByText("ページから本文を取り出せませんでした。ページが見つかりませんでした（HTTP 404）。")).toBeInTheDocument();
   });
 });
 
@@ -864,6 +1194,91 @@ describe("stale feeds and the numbers of a feed", () => {
     stats = await within(row).findByRole("region", { name: "直近30日の統計" });
     await waitFor(() => expect(within(stats).getByText("届いた記事").nextElementSibling).toHaveTextContent("2件"));
     expect(row).toHaveTextContent("直近30日に2件");
+  });
+});
+
+describe("fetching every feed now", () => {
+  const allButton = async () => within(await section("購読フィードの一覧")).findByRole("button", { name: /^(すべていま取得|取得中…)$/ });
+  const navButton = () => within(screen.getByRole("navigation", { name: "項目" })).getByRole("button", { name: "すべての購読フィードをいま取得" });
+  const timers = () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => void vi.useRealTimers());
+  };
+
+  it("shows 取得中… on both buttons while a feed waits, then says that all were fetched and shows the new state", async () => {
+    timers();
+    const server = makeServer();
+    let release: () => void = () => {};
+    server.site.set("https://blog.example.org/feed.xml", async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return new Response(rss("Blog", ["a", "b"]), { headers: { "content-type": "application/xml" } });
+    });
+    feedOf(server, "Blog");
+    const { user } = renderApp({ server, route: "/settings/feeds", advanceTimers: (ms) => void vi.advanceTimersByTime(ms) });
+
+    const all = await allButton();
+    expect(all).toHaveTextContent("すべていま取得");
+    await user.click(all);
+
+    await waitFor(() => expect(all).toHaveTextContent("取得中…"));
+    expect(all).toBeDisabled();
+    expect(navButton()).toHaveTextContent("取得中…");
+    expect(navButton()).toBeDisabled();
+    expect(screen.queryByText("すべての購読フィードを取得しました")).not.toBeInTheDocument();
+
+    release();
+    await server.poller.idle();
+    // The feeds are read again every three seconds while one waits, not every minute.
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(await screen.findByText("すべての購読フィードを取得しました")).toBeInTheDocument();
+    expect(await rowOf("Blog")).toHaveTextContent("最後の成功 3月1日 12:00");
+    expect(all).toHaveTextContent("すべていま取得");
+    expect(all).toBeEnabled();
+    expect(navButton()).toHaveTextContent("いま取得");
+    expect(navButton()).toBeEnabled();
+  });
+
+  it("says how many fetches failed, and how many feeds it passed by because their site asked to wait", async () => {
+    timers();
+    const server = makeServer();
+    server.site.set("https://blog.example.org/feed.xml", rss("Blog", ["a"]));
+    feedOf(server, "Blog");
+    feedOf(server, "Down");
+    const busy = feedOf(server, "Busy");
+    recordFetchFailure(server.db, busy.id, { now: "2026-03-01T11:00:00.000Z", error: "HTTP status 429: https://busy.example.org/feed.xml", retryAfterUntil: "2026-03-01T16:00:00.000Z" });
+    const { user } = renderApp({ server, route: "/settings/feeds", advanceTimers: (ms) => void vi.advanceTimersByTime(ms) });
+    const before = server.site.requests.length;
+
+    await user.click(await allButton());
+    await server.poller.idle();
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(await screen.findByText("1件の取得に失敗しました。サイトの指定で待っている1件は飛ばしました。")).toBeInTheDocument();
+    expect(await rowOf("Down")).toHaveTextContent("取得に失敗");
+    // Only the feeds themselves: the icon of the feed fetched first is looked for too.
+    const feedsFetched = server.site.requests.slice(before).map((request) => request.url).filter((url) => url.endsWith("/feed.xml"));
+    expect(feedsFetched.sort()).toEqual(["https://blog.example.org/feed.xml", "https://down.example.org/feed.xml"]);
+  });
+
+  it("starts nothing and says so when every feed is paused", async () => {
+    const server = makeServer();
+    updateFeed(server.db, feedOf(server, "Blog").id, { enabled: false });
+    const { user } = renderApp({ server, route: "/settings/feeds" });
+
+    const all = await allButton();
+    await user.click(all);
+
+    expect(await screen.findByText("取得する購読フィードはありません")).toBeInTheDocument();
+    expect(all).toHaveTextContent("すべていま取得");
+    expect(all).toBeEnabled();
+    expect(server.site.requests).toHaveLength(0);
+  });
+
+  it("has no button while there is no feed", async () => {
+    renderApp({ route: "/settings/feeds" });
+    expect(await screen.findByText("購読フィードはまだありません。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "すべていま取得" })).not.toBeInTheDocument();
   });
 });
 
@@ -1100,5 +1515,115 @@ describe("changes to feeds not saved yet", () => {
     await toUnread(user);
 
     expect(await question()).toHaveTextContent("購読フィードの追加");
+  });
+});
+
+describe("answers that come after the input changed", () => {
+  const PAGE = "https://town.example.org/news";
+  const URL_FIELD = "フィードまたはサイトのURL";
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  it("keeps the URL field read-only, with the focus in it, while feeds are looked for", async () => {
+    const server = makeServer();
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const discover = gateFirst("/feeds/discover");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: discover.hold });
+
+    const form = await section("購読フィードの追加");
+    const field = within(form).getByLabelText(URL_FIELD);
+    await user.type(field, `${FEED}{Enter}`);
+    await waitFor(() => expect(discover.waiting()).toBe(true));
+    await waitFor(() => expect(field).toHaveAttribute("readonly"));
+    expect(field).toHaveFocus();
+    await user.type(field, "x");
+    expect(field).toHaveValue(FEED);
+
+    await discover.open();
+    await rowOf("Example Blog");
+    expect(listFeeds(server.db).map((feed) => feed.url)).toEqual([FEED]);
+    expect(field).toHaveValue("");
+    expect(field).not.toHaveAttribute("readonly");
+    expect(field).toHaveFocus();
+  });
+
+  it("subscribes with the category and the switches changed while feeds are looked for", async () => {
+    const server = makeServer();
+    const tools = server.category("Tools");
+    server.site.set(FEED, rss("Example Blog", ["a"]));
+    const discover = gateFirst("/feeds/discover");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: discover.hold });
+
+    const form = await section("購読フィードの追加");
+    await within(form).findByRole("option", { name: "Tools" });
+    await user.type(within(form).getByLabelText(URL_FIELD), FEED);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await waitFor(() => expect(discover.waiting()).toBe(true));
+    await user.selectOptions(within(form).getByLabelText("カテゴリ"), "Tools");
+    await user.click(within(form).getByRole("checkbox", { name: "翻訳する" }));
+
+    await discover.open();
+    await rowOf("Example Blog");
+    expect(listFeeds(server.db)).toMatchObject([{ url: FEED, categoryId: tools.id, translate: true }]);
+  });
+
+  it("drops the candidates of a page whose URL was changed while they were awaited", async () => {
+    const OTHER = "https://village.example.org/news";
+    const listing = (title: string, keys: string[]) => () =>
+      new Response(`<html><head><title>${title}</title></head><body><ul>${keys.map((key) => `<li class="post"><a href="/news/${key}">Story ${key}</a></li>`).join("")}</ul></body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    const server = makeServer(undefined, { proposeSelectors: () => ({ candidates: [{ item: "li.post", title: null, link: null, date: null }] }) });
+    server.site.set(PAGE, listing("Town News", ["a"]));
+    server.site.set(OTHER, listing("Village News", ["x", "y"]));
+    const candidates = gateFirst("/feeds/page/candidates");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: candidates.hold });
+
+    const form = await section("購読フィードの追加");
+    const field = within(form).getByLabelText(URL_FIELD);
+    await user.type(field, PAGE);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await user.click(await within(form).findByRole("button", { name: "このページを購読する" }));
+    await waitFor(() => expect(candidates.waiting()).toBe(true));
+    expect(field).not.toHaveAttribute("readonly");
+    await user.clear(field);
+    expect(within(form).queryByText(/候補を探しています/)).not.toBeInTheDocument();
+
+    // The changed URL is another page without a feed, whose candidates come before the first page's.
+    await user.type(field, OTHER);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await user.click(await within(form).findByRole("button", { name: "このページを購読する" }));
+    expect(await within(form).findByText("2件の記事を抜き出せます")).toBeInTheDocument();
+
+    await candidates.open();
+    await settle();
+    expect(within(form).queryByText("1件の記事を抜き出せます")).not.toBeInTheDocument();
+    expect(within(form).getByText("2件の記事を抜き出せます")).toBeInTheDocument();
+    await user.click(within(form).getByRole("button", { name: "このページを追加" }));
+    await rowOf("Village News");
+    expect(listFeeds(server.db)).toMatchObject([{ url: OTHER, format: "page", articleCount: 2 }]);
+  });
+
+  it("drops the preview of selectors that were changed while it was awaited", async () => {
+    const server = makeServer(undefined, { selectorProposalsPerDay: 0 });
+    server.site.set(PAGE, () => new Response('<html><head><title>Town News</title></head><body><p><a href="/news/a">Story a</a></p></body></html>', { headers: { "content-type": "text/html" } }));
+    const preview = gateFirst("/feeds/page/preview");
+    const { user } = renderApp({ server, route: "/settings/feeds", hold: preview.hold });
+
+    const form = await section("購読フィードの追加");
+    await user.type(within(form).getByLabelText(URL_FIELD), PAGE);
+    await user.click(within(form).getByRole("button", { name: "購読フィードを追加" }));
+    await user.click(await within(form).findByRole("button", { name: "このページを購読する" }));
+    expect(await within(form).findByText(/候補は見つかりませんでした/)).toBeInTheDocument();
+    const item = within(form).getByLabelText("項目のセレクター");
+    await user.type(item, "p");
+    await user.click(within(form).getByRole("button", { name: "見本を見る" }));
+    await waitFor(() => expect(preview.waiting()).toBe(true));
+    await user.type(item, " > a");
+
+    await preview.open();
+    await settle();
+    expect(within(form).queryByText("1件の記事を抜き出せます")).not.toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "このページを追加" })).toBeDisabled();
+    expect(within(form).getByRole("button", { name: "見本を見る" })).toBeEnabled();
   });
 });

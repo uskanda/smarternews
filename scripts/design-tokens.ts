@@ -56,10 +56,22 @@ function frontMatter(text: string): DesignTokens {
   return parse(match[1]!) as DesignTokens;
 }
 
+/** The pixels of one rem at the browser's default font size. */
+const ROOT_FONT_SIZE = 16;
+
+/** A length in pixels as rem, so that it follows the font size the browser is set to; any other length as it is. */
+const rem = (value: string): string => {
+  const size = pixels(value);
+  return size === null ? value : `${size / ROOT_FONT_SIZE}rem`;
+};
+
 export function renderTokens(designMd: string): string {
   const tokens = frontMatter(designMd);
   const { light, dark, darkblue } = palettes(tokens);
   const declare = (colors: Colors, indent: string) => colors.map(([name, value]) => `${indent}--color-${name}: ${value};`);
+  // The drawer that holds the navigation pane on a narrower screen widens with the text, unlike the pane itself.
+  const nav = tokens.spacing?.nav;
+  const drawer = nav !== undefined && pixels(nav) !== null ? [`  --spacing-drawer: ${rem(String(nav))};`] : [];
 
   const lines = [
     "/* Generated from DESIGN.md by scripts/design-tokens.ts. Do not edit: change DESIGN.md and run `pnpm run tokens`. */",
@@ -69,6 +81,7 @@ export function renderTokens(designMd: string): string {
     "  --radius-*: initial;",
     ...Object.entries(tokens.rounded ?? {}).map(([name, value]) => `  --radius-${name}: ${value};`),
     ...Object.entries(tokens.spacing ?? {}).map(([name, value]) => `  --spacing-${name}: ${value};`),
+    ...drawer,
     "}",
     "",
     "/* Until the user chooses a colour scheme, the dark blue values replace the light ones on a device that asks for a dark one. */",
@@ -99,10 +112,10 @@ export function renderTokens(designMd: string): string {
       "",
       `@utility type-${name} {`,
       `  font-family: ${type.fontFamily};`,
-      `  font-size: ${type.fontSize};`,
+      `  font-size: ${rem(type.fontSize)};`,
       `  font-weight: ${type.fontWeight};`,
       `  line-height: ${type.lineHeight};`,
-      ...(type.letterSpacing ? [`  letter-spacing: ${type.letterSpacing};`] : []),
+      ...(type.letterSpacing ? [`  letter-spacing: ${rem(type.letterSpacing)};`] : []),
       "}",
     );
   }

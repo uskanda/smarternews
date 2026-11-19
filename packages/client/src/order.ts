@@ -63,7 +63,38 @@ export function nextEventCategory(model: NavModel, current: ListTarget | null): 
   return events[(index + 1) % events.length]!;
 }
 
-/** What a reader can move: a category among the categories, a feed among the feeds. */
+/** An entry the `g u` dialog offers: a category or "未分類", or a feed with the name of its group. */
+export interface JumpCandidate {
+  target: ListTarget;
+  label: string;
+  unread: number;
+  /** The name of the category, or "未分類", a feed belongs to; null for a category. */
+  group: string | null;
+}
+
+/** Text as the dialog compares it: full-width and half-width forms alike, capitals as small letters. */
+const comparable = (text: string) => text.normalize("NFKC").toLowerCase();
+
+/**
+ * The categories and the feeds whose names hold every word of `query`, in the order of the left pane. Give it
+ * the model before hiding: an entry the pane folds or hides is still one to go to. The generated articles of a
+ * category are left out, as their name is the same in every category. A feed is matched by its own name only.
+ */
+export function jumpCandidates(model: NavModel, query: string): JumpCandidate[] {
+  const words = comparable(query).split(/\s+/).filter((word) => word.length > 0);
+  const all = model.groups.flatMap((group): JumpCandidate[] => [
+    { target: group.entry.target, label: group.entry.label, unread: group.entry.unread, group: null },
+    ...group.children
+      .filter((child) => child.target.type === "feed")
+      .map((child) => ({ target: child.target, label: child.label, unread: child.unread, group: group.entry.label })),
+  ]);
+  return all.filter((candidate) => {
+    const name = comparable(candidate.label);
+    return words.every((word) => name.includes(word));
+  });
+}
+
+/** What a reader can move:a category among the categories, a feed among the feeds. */
 export type Movable = { kind: "category"; id: number } | { kind: "feed"; id: number };
 
 /** A move as the API takes it: before another entry, or last when `before` is null. */
@@ -189,6 +220,72 @@ export function applyMove(lists: { categories: Category[]; feeds: Feed[] }, move
   const moved = { ...item, categoryId: move.categoryId };
   // Last means last in its category, which is last overall here: the lists are filtered by category when shown.
   return { ...lists, feeds: placed(lists.feeds, moved, move.before) };
+}
+
+/** What the server answers to a move: the list the move changed, in its stored order. */
+export interface MoveAnswer {
+  categories?: Category[];
+  feeds?: Feed[];
+}
+
+export interface MoveQueue {
+  /** Sends the move after the ones before it have been answered. */
+  push: (send: () => Promise<MoveAnswer>) => void;
+  /** True while a move is being sent or waits to be. */
+  busy: () => boolean;
+}
+
+/**
+ * Sends moves one at a time, so that the server stores them and answers them in the order they were made.
+ * Only the answers that arrive when nothing is left to send are given on, the last one of each list, so an
+ * answer that is already out of date never shows. When a move fails, the moves still waiting are dropped:
+ * they were made on top of the one that failed. `onFailed` gets the answers to the moves before it, which
+ * the server did store.
+ */
+export function createMoveQueue(handlers: {
+  onSettled: (answer: MoveAnswer) => void;
+  onFailed: (error: unknown, answered: MoveAnswer) => void;
+}): MoveQueue {
+  const waiting: Array<() => Promise<MoveAnswer>> = [];
+  let running = false;
+  let answer: MoveAnswer = {};
+  const next = () => {
+    const send = waiting.shift();
+    if (!send) {
+      running = false;
+      const settled = answer;
+      answer = {};
+      handlers.onSettled(settled);
+      return;
+    }
+    running = true;
+    let sent: Promise<MoveAnswer>;
+    try {
+      sent = send();
+    } catch (error) {
+      sent = Promise.reject(error);
+    }
+    sent.then(
+      (got) => {
+        answer = { ...answer, ...got };
+        next();
+      },
+      (error: unknown) => {
+        const answered = answer;
+        waiting.length = 0;
+        answer = {};
+        running = false;
+        handlers.onFailed(error, answered);
+      },
+    );
+  };
+  return {
+    push(send) {
+      waiting.push(send);
+      if (!running) next();
+    },
+    busy: () => running || waiting.length > 0,
+  };
 }
 
 /** A dragged entry this near to the top or the bottom of the list makes the list scroll. */

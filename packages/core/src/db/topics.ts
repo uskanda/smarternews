@@ -1,6 +1,7 @@
 import type { Topic, TopicCreate, TopicUpdate } from "../api.ts";
 import { systemClock, type Clock } from "../clock.ts";
 import { notFound } from "../errors.ts";
+import { isLlmSearchReduced } from "../runs/llm-search-reduction.ts";
 import { getCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { bool, json, num, str, strOrNull, type Row } from "./rows.ts";
@@ -12,10 +13,10 @@ export interface Interpretation {
   suggestedSources: { newsSearch: boolean; llmSearch: boolean };
 }
 
-function toTopic(row: Row): Topic {
+function toTopic(db: Database, row: Row): Topic {
   const language = strOrNull(row.search_language);
   const region = strOrNull(row.search_region);
-  return {
+  const topic: Omit<Topic, "llmSearchReduced"> = {
     id: num(row.id),
     categoryId: num(row.category_id),
     text: str(row.text),
@@ -33,6 +34,7 @@ function toTopic(row: Row): Topic {
     createdAt: str(row.created_at),
     missesSinceInterpretation: num(row.misses_since_interpretation),
   };
+  return { ...topic, llmSearchReduced: isLlmSearchReduced(db, topic) };
 }
 
 /** A topic's columns, with how many of its misses were marked after its last interpretation, or all of them. */
@@ -41,13 +43,16 @@ const TOPIC_COLUMNS = `t.*,
     WHERE mt.topic_id = t.id AND (t.interpreted_at IS NULL OR m.marked_at > t.interpreted_at)) AS misses_since_interpretation`;
 
 export function listTopics(db: Database, categoryId: number): Topic[] {
-  return db.prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.category_id = ? ORDER BY t.id`).all(categoryId).map(toTopic);
+  return db
+    .prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.category_id = ? ORDER BY t.id`)
+    .all(categoryId)
+    .map((row) => toTopic(db, row));
 }
 
 export function getTopic(db: Database, id: number): Topic {
   const row = db.prepare(`SELECT ${TOPIC_COLUMNS} FROM topics t WHERE t.id = ?`).get(id);
   if (!row) throw notFound("topic", id);
-  return toTopic(row);
+  return toTopic(db, row);
 }
 
 function save(db: Database, topic: Topic): void {
@@ -113,7 +118,8 @@ export function updateTopic(db: Database, id: number, patch: TopicUpdate, clock:
   }
   save(db, topic);
   if (record) recordTopicVersion(db, id, "edited", clock().toISOString());
-  return topic;
+  // Read again: a new text or a change of sources changes whether web search by the model is cut.
+  return getTopic(db, id);
 }
 
 export function deleteTopic(db: Database, id: number): void {

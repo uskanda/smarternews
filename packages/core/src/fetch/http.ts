@@ -29,6 +29,11 @@ export interface HttpResponse {
   status: number;
   /** The URL after redirects. */
   url: string;
+  /**
+   * Where the permanent redirects (301, 308) in a row from the first request lead: the target of the last of
+   * them before a temporary one or the answer. Null when the first answer was no permanent redirect.
+   */
+  permanentUrl: string | null;
   contentType: string;
   /** The response headers, with their names in lower case. */
   headers: Record<string, string>;
@@ -40,6 +45,8 @@ export interface BytesResponse {
   status: number;
   /** The URL after redirects. */
   url: string;
+  /** Where the permanent redirects in a row from the first request lead, as in `HttpResponse`. */
+  permanentUrl: string | null;
   contentType: string;
   bytes: Uint8Array;
 }
@@ -57,7 +64,10 @@ export interface FetcherOptions {
   userAgent: string;
   hostIntervalMs: number;
   timeoutMs: number;
+  /** The largest body accepted, in bytes, unless the request names another limit. */
   maxBytes: number;
+  /** The limit the callers that fetch feeds name: feeds that list every episode grow larger than pages. Defaults to `maxBytes`. */
+  feedMaxBytes?: number;
   /** Hosts that may be fetched although they are, or resolve to, loopback, private, link-local or shared-space addresses. */
   allowPrivateHosts?: readonly string[];
   /** Replaces the network in tests. Without it, every connection also checks the address the name resolved to. */
@@ -70,6 +80,8 @@ export interface RequestOptions {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: string;
+  /** The largest body accepted for this request, in place of the configured one. */
+  maxBytes?: number;
 }
 
 function declaredCharset(contentType: string, head: Uint8Array): string {
@@ -91,6 +103,7 @@ function decode(bytes: Uint8Array, contentType: string): string {
 
 const MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const PERMANENT_STATUSES = new Set([301, 308]);
 
 function notAllowed(url: string, reason: string): FetchError {
   return new FetchError(`destination not allowed: ${url} (${reason}); to fetch it, list the host under fetch.allowPrivateHosts in config.yaml`, "blocked");
@@ -110,6 +123,7 @@ export class Fetcher {
       clock: systemClock,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       ...options,
+      feedMaxBytes: options.feedMaxBytes ?? options.maxBytes,
     };
   }
 
@@ -117,13 +131,23 @@ export class Fetcher {
     return this.#options.userAgent;
   }
 
+  /** The configured size limit, which pages are fetched under. */
+  get maxBytes(): number {
+    return this.#options.maxBytes;
+  }
+
+  /** The size limit of feeds, for the callers that fetch one to name. */
+  get feedMaxBytes(): number {
+    return this.#options.feedMaxBytes;
+  }
+
   async get(url: string, request: RequestOptions = {}): Promise<HttpResponse> {
-    const { userAgent, maxBytes } = this.#options;
-    const { response, url: current } = await this.#send(url, request, { "user-agent": userAgent, accept: "*/*" });
-    const bytes = await this.#readBody(response, current, maxBytes);
+    const { userAgent } = this.#options;
+    const { response, url: current, permanentUrl } = await this.#send(url, request, { "user-agent": userAgent, accept: "*/*" });
+    const bytes = await this.#readBody(response, current, request.maxBytes ?? this.#options.maxBytes);
     const contentType = response.headers.get("content-type") ?? "";
     const responseHeaders = Object.fromEntries(response.headers.entries());
-    return { status: response.status, url: current, contentType, headers: responseHeaders, text: decode(bytes, contentType) };
+    return { status: response.status, url: current, permanentUrl, contentType, headers: responseHeaders, text: decode(bytes, contentType) };
   }
 
   /**
@@ -134,7 +158,7 @@ export class Fetcher {
    */
   async getBytes(url: string, request: BytesRequestOptions): Promise<BytesResponse> {
     const headers = { "user-agent": this.#options.userAgent, ...request.headers };
-    const { response, url: current } = await this.#send(url, { headers }, headers);
+    const { response, url: current, permanentUrl } = await this.#send(url, { headers }, headers);
     const contentType = response.headers.get("content-type") ?? "";
     try {
       request.inspect?.({ status: response.status, url: current, contentType });
@@ -143,14 +167,14 @@ export class Fetcher {
       throw error;
     }
     const bytes = await this.#readBody(response, current, request.maxBytes);
-    return { status: response.status, url: current, contentType, bytes };
+    return { status: response.status, url: current, permanentUrl, contentType, bytes };
   }
 
   /**
    * Sends the request and follows redirects, checking each target before it is asked. `base` is what is sent
    * in place of the caller's headers once a redirect leads to another site.
    */
-  async #send(url: string, request: RequestOptions, base: Record<string, string>): Promise<{ response: Response; url: string }> {
+  async #send(url: string, request: RequestOptions, base: Record<string, string>): Promise<{ response: Response; url: string; permanentUrl: string | null }> {
     const { fetchImpl, timeoutMs } = this.#options;
     const signal = AbortSignal.timeout(timeoutMs);
     let current = url;
@@ -158,6 +182,9 @@ export class Fetcher {
     let body = request.body;
     let headers: Record<string, string> = { ...base, ...request.headers };
     let response: Response;
+    // Where the permanent redirects lead, while every redirect so far was permanent.
+    let permanentUrl: string | null = null;
+    let permanent = true;
     // Redirects are followed here and not by fetch, so that each target is checked before it is asked.
     for (let followed = 0; ; followed++) {
       const refusal = checkUrl(current, this.#allowed);
@@ -173,7 +200,7 @@ export class Fetcher {
         throw new FetchError(`request failed: ${current}: ${(error as Error).message}`);
       }
       const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
-      if (location === null) return { response, url: current };
+      if (location === null) return { response, url: current, permanentUrl };
       await response.body?.cancel();
       if (followed >= MAX_REDIRECTS) throw new FetchError(`more than ${MAX_REDIRECTS} redirects: ${url}`);
       const from = new URL(current).origin;
@@ -182,6 +209,8 @@ export class Fetcher {
       } catch {
         throw new FetchError(`redirect to something that is not a URL: ${url}`);
       }
+      permanent &&= PERMANENT_STATUSES.has(response.status);
+      if (permanent) permanentUrl = current;
       // What the caller sent was meant for the site it asked: a key or a validator does not follow to another one.
       if (new URL(current).origin !== from) headers = { ...base };
       if (response.status !== 307 && response.status !== 308 && method !== "GET") {

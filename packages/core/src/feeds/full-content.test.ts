@@ -148,6 +148,16 @@ describe("fetchFullContent", () => {
     expect(body.split("\n\n").filter((block) => block.startsWith("fulltext"))).toHaveLength(2);
   });
 
+  it("keeps a video embedded in the page as a link to it, in the output language", async () => {
+    const s = setup({
+      "https://site.example.org/1": () =>
+        page(`<p>${FULL}</p><iframe src="https://www.youtube.com/embed/abc" width="560" height="315"></iframe><p>${FULL}</p>`),
+    });
+    const id = s.article();
+    await fetchFullContent(s.deps, s.pages, id);
+    expect(getArticle(s.db, id).fullContent!.body).toContain("\n\n[埋め込み（www.youtube.com）](https://www.youtube.com/embed/abc)\n\n");
+  });
+
   it("returns what is stored without fetching the page again", async () => {
     const s = setup({ "https://site.example.org/1": fullPage });
     const id = s.article();
@@ -165,6 +175,41 @@ describe("fetchFullContent", () => {
     up = true;
     expect(await fetchFullContent(s.deps, s.pages, id)).toMatchObject({ status: "fetched" });
     expect(getArticle(s.db, id)).toMatchObject({ fullContentStatus: "fetched", fullContentError: null });
+  });
+});
+
+describe("fetchFullContent with a content selector", () => {
+  const RELATED = prose("related", 900);
+  const storyPage = (story: string) =>
+    page(`<div class="story"><p>${story}</p></div><section><p>${RELATED}</p><p>${RELATED}</p></section><div class="story"><p>second</p></div>`);
+
+  it("stores the first element the feed's content selector matches instead of what Readability finds", async () => {
+    const s = setup({ "https://site.example.org/1": () => storyPage(FULL) });
+    updateFeed(s.db, s.feed.id, { contentSelector: ".story" }, s.clock);
+    const id = s.article();
+    expect(await fetchFullContent(s.deps, s.pages, id)).toMatchObject({ status: "fetched" });
+    const body = getArticle(s.db, id).fullContent!.body;
+    expect(body).toContain("fulltext fulltext");
+    expect(body).not.toContain("related");
+    expect(body).not.toContain("second");
+  });
+
+  it("reads a page where the selector matches nothing with Readability", async () => {
+    const s = setup({ "https://site.example.org/1": fullPage, "https://site.example.org/2": fullPage });
+    const without = s.article();
+    await fetchFullContent(s.deps, s.pages, without);
+    const readability = getArticle(s.db, without).fullContent!.body;
+    updateFeed(s.db, s.feed.id, { contentSelector: ".story" }, s.clock);
+    const id = s.article();
+    expect(await fetchFullContent(s.deps, s.pages, id)).toMatchObject({ status: "fetched" });
+    expect(getArticle(s.db, id).fullContent!.body).toBe(readability);
+  });
+
+  it("still refuses an element shorter than what the feed delivered", async () => {
+    const s = setup({ "https://site.example.org/1": () => storyPage(prose("short", 100)) });
+    updateFeed(s.db, s.feed.id, { contentSelector: ".story" }, s.clock);
+    const id = s.article({ body: prose("delivered", 300) });
+    expect(await fetchFullContent(s.deps, s.pages, id)).toMatchObject({ status: "failed", error: { reason: "shorter" } });
   });
 });
 
@@ -201,6 +246,27 @@ describe("FullContentWorker", () => {
 
     expect(s.pageRequests()).toEqual(["https://site.example.org/3", "https://site.example.org/2", "https://site.example.org/1"]);
     expect(ids.every((id) => getArticle(s.db, id).fullContentStatus === "fetched")).toBe(true);
+  });
+
+  it("fetches again by the new content selector the unread articles whose full content a change of it forgot", async () => {
+    const story = `<div class="story"><p>${FULL}</p></div><section><p>${prose("related", 1500)}</p></section>`;
+    const s = setup({ "https://site.example.org/": () => page(story) });
+    const unread = s.article();
+    const read = s.article();
+    const worker = new FullContentWorker(s.deps);
+    worker.tick();
+    await worker.idle();
+    setArticleFlags(s.db, read, { isRead: true }, s.clock().toISOString());
+    expect(getArticle(s.db, unread).fullContent!.body).toContain("related");
+
+    updateFeed(s.db, s.feed.id, { contentSelector: ".story" }, s.clock);
+    worker.tick();
+    await worker.idle();
+
+    expect(getArticle(s.db, unread)).toMatchObject({ fullContentStatus: "fetched" });
+    expect(getArticle(s.db, unread).fullContent!.body).not.toContain("related");
+    expect(getArticle(s.db, read).fullContent!.body).toContain("related");
+    expect(s.pageRequests()).toHaveLength(3);
   });
 
   it("fetches an article it is asked for right after the one under way, before the others that wait", async () => {

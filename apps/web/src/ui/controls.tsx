@@ -11,16 +11,25 @@ const BUTTON: Record<Variant, string> = {
   quiet: "border-transparent text-primary underline underline-offset-4",
 };
 
+/** `sm` is `button-small` in DESIGN.md: the star and read switches on the line of details above an article. */
+type Size = "md" | "sm";
+
+const SIZE: Record<Size, string> = {
+  md: "px-md py-xs type-body-md",
+  sm: "px-sm py-0 type-label-sm",
+};
+
 export function Button({
   variant = "secondary",
+  size = "md",
   className = "",
   type = "button",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; ref?: Ref<HTMLButtonElement> }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; ref?: Ref<HTMLButtonElement> }) {
   return (
     <button
       type={type}
-      className={`inline-flex shrink-0 cursor-pointer items-center justify-center gap-xs rounded-md border px-md py-xs type-body-md disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON[variant]} ${className}`}
+      className={`inline-flex shrink-0 cursor-pointer items-center justify-center gap-xs rounded-md border disabled:cursor-not-allowed disabled:opacity-50 ${SIZE[size]} ${BUTTON[variant]} ${className}`}
       {...props}
     />
   );
@@ -41,7 +50,7 @@ export function StarMark() {
 }
 
 const INPUT =
-  "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error";
+  "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error read-only:border-outline read-only:text-on-surface-muted";
 
 /** A labelled input with room for a hint and for the reason a value was refused. */
 export function Field({
@@ -55,6 +64,8 @@ export function Field({
   hint?: ReactNode;
   error?: string | null;
   multiline?: boolean;
+  /** Reaches the input or the text area, for putting the focus there. */
+  ref?: Ref<HTMLInputElement & HTMLTextAreaElement>;
 } & InputHTMLAttributes<HTMLInputElement> &
   TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const id = useId();
@@ -94,13 +105,14 @@ export function messageFor(error: unknown): string {
   return sharedMessageFor(error, "表示できませんでした。ページを読み込み直してください。");
 }
 
-export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+/** A failure, said from its error or, for one the screen found before sending, in the `message` given. */
+export function ErrorNotice({ error, message, onRetry }: { error?: unknown; message?: string; onRetry?: () => void }) {
   return (
     <div role="alert" className="m-lg flex flex-wrap items-center gap-md rounded-md border border-error px-lg py-sm type-body-md text-error">
-      <span>{messageFor(error)}</span>
+      <span>{message ?? messageFor(error)}</span>
       {onRetry ? (
         <Button onClick={onRetry} className="text-on-surface">
-          再試行
+          もう一度試す
         </Button>
       ) : null}
     </div>

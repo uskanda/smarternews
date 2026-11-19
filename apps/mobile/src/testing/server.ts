@@ -1,6 +1,6 @@
 // A real API with an in-memory database for one test, reached over HTTP. The server runs in the test process
 // that `global-setup.js` started; the functions here put data into it and move its clock.
-import type { Category, DigestSection } from "@smarternews/core/api";
+import type { Category, DigestSection, DigestTarget, DigestTrigger } from "@smarternews/core/api";
 import { nodeFetch } from "./fetch";
 
 const MINUTE_MS = 60_000;
@@ -57,9 +57,10 @@ export async function makeServer(start = "2026-03-01T12:00:00.000Z", options: { 
       options: { title?: string; body?: string; at?: string; isRead?: boolean; starred?: boolean; author?: string; url?: string; storedAt?: string; duplicateOf?: number } = {},
     ) =>
       core<number>("seedFeedArticle", feedId, options),
-    /** A digest made now, covering the six hours before. */
-    digest: (options: { executiveSummary?: string; sections?: DigestSection[] } = {}) =>
+    /** A digest made now, covering the six hours before; or, given a target, a digest of that list. */
+    digest: (options: { executiveSummary?: string; sections?: DigestSection[]; trigger?: DigestTrigger; target?: DigestTarget | null } = {}) =>
       core<number>("saveDigest", {
+        target: null,
         periodStart: new Date(now - 6 * 60 * MINUTE_MS).toISOString(),
         periodEnd: new Date(now).toISOString(),
         createdAt: new Date(now).toISOString(),

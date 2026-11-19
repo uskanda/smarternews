@@ -1,9 +1,20 @@
-import { insertFeed, listListViews, recordFetchFailure, saveAutoSummary, setArticleFlags, updateFeed } from "@smarternews/core";
+import {
+  getArticle,
+  insertFeed,
+  listListViews,
+  recordFeedIcon,
+  recordFetchFailure,
+  recordFetchSuccess,
+  saveAutoSummary,
+  saveTranslatedTitle,
+  setArticleFlags,
+  updateFeed,
+} from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { relayPath } from "@smarternews/server/testing";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -52,6 +63,55 @@ function seeded() {
   server.clock.advance(1);
   return { server, tools, cars, blog, releases, loose, oldPost, newPost, release, stray, generated, carNews };
 }
+
+describe("the icons of feeds in the navigation", () => {
+  const ICON = "https://blog.example.org/favicon.ico";
+  const frameOf = (name: RegExp) => within(nav()).getByRole("link", { name }).querySelector("[data-feed-icon]");
+
+  it("stand before the name of a feed through the relay, and leave an empty frame for a feed without one", async () => {
+    const { server, blog } = seeded();
+    recordFeedIcon(server.db, blog.id, { iconUrl: ICON, checkedAt: at(0) });
+    renderApp({ server });
+    await within(nav()).findByRole("link", { name: /Blog/ });
+
+    const image = await waitFor(() => {
+      const found = frameOf(/Blog/)?.querySelector("img");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(image.getAttribute("src")).toBe(relayPath(ICON));
+    expect(image).toHaveAttribute("alt", "");
+    expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
+    // The frame comes first, so the names of feeds with and without an icon start at one place.
+    expect(within(nav()).getByRole("link", { name: /Blog/ }).firstElementChild).toBe(frameOf(/Blog/));
+    expect(frameOf(/Releases/)).toBeEmptyDOMElement();
+    // Read out as before: the name and the count, nothing of the picture.
+    expect(navLines()).toContain("Blog2");
+  });
+
+  it("are left out of the categories and the views, and out of the rows of the list", async () => {
+    const { server, blog } = seeded();
+    recordFeedIcon(server.db, blog.id, { iconUrl: ICON, checkedAt: at(0) });
+    renderApp({ server, route: `/f/${blog.id}` });
+    await within(list()).findByRole("link", { name: /New post/ });
+    expect(frameOf(/Tools/)).toBeNull();
+    expect(frameOf(/未読/)).toBeNull();
+    expect(list().querySelector("img")).toBeNull();
+  });
+
+  it("leave the frame empty when the picture cannot be loaded", async () => {
+    const { server, blog } = seeded();
+    recordFeedIcon(server.db, blog.id, { iconUrl: ICON, checkedAt: at(0) });
+    renderApp({ server });
+    const image = await waitFor(() => {
+      const found = frameOf(/Blog/)?.querySelector("img");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    fireEvent.error(image);
+    expect(frameOf(/Blog/)).toBeEmptyDOMElement();
+  });
+});
 
 describe("the entries of the navigation", () => {
   it("lists the generated articles and the feeds below a category that has feeds, with unread counts", async () => {
@@ -190,7 +250,7 @@ describe("the list an entry opens", () => {
     await user.click(within(screen.getByRole("menu", { name: "並び順" })).getByRole("menuitemradio", { name: "古い順" }));
 
     await waitFor(() => expect(rowTitles()).toEqual(["Old post", "Stray", "Release 2", "New post"]));
-    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "feeds", sort: "oldest" }]));
+    await waitFor(() => expect(listListViews(server.db).items).toEqual([{ key: "feeds", sort: "oldest", format: "standard" }]));
   });
 
   it("shows 購読フィード at the top without a number when no feed is subscribed", async () => {
@@ -229,6 +289,40 @@ describe("the list an entry opens", () => {
     renderApp({ server, route: `/f/${blog.id}/${newPost}` });
     expect(await within(await opened()).findByRole("heading", { level: 2, name: "New post" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Blog" })).toBeInTheDocument();
+  });
+
+  it("keeps an article opened directly in the unread list of a category, read before the categories and the list arrive", async () => {
+    const { server, newPost } = seeded();
+    const held = gate();
+    renderApp({
+      server,
+      route: `/c/tools/${newPost}`,
+      hold: (request) => (request === "GET /api/v1/categories" || request.startsWith("GET /api/v1/articles?") ? held.wait : undefined),
+    });
+    expect(await within(await opened()).findByRole("heading", { level: 2, name: "New post" })).toBeInTheDocument();
+    await waitFor(() => expect(getArticle(server.db, newPost).isRead).toBe(true));
+
+    await act(async () => held.open());
+
+    await waitFor(() => expect(rowTitles()).toEqual(["Generated", "New post", "Release 2", "Old post"]));
+    expect(row(/New post/)).toHaveAttribute("data-read", "true");
+  });
+
+  it("keeps an article opened directly in the unread list of a feed, read before the feeds and the list arrive", async () => {
+    const { server, blog, oldPost } = seeded();
+    const held = gate();
+    renderApp({
+      server,
+      route: `/f/${blog.id}/${oldPost}`,
+      hold: (request) => (request === "GET /api/v1/feeds" || request.startsWith("GET /api/v1/articles?") ? held.wait : undefined),
+    });
+    expect(await within(await opened()).findByRole("heading", { level: 2, name: "Old post" })).toBeInTheDocument();
+    await waitFor(() => expect(getArticle(server.db, oldPost).isRead).toBe(true));
+
+    await act(async () => held.open());
+
+    await waitFor(() => expect(rowTitles()).toEqual(["New post", "Old post"]));
+    expect(row(/Old post/)).toHaveAttribute("data-read", "true");
   });
 
   it("says so when the feed does not exist", async () => {
@@ -308,8 +402,21 @@ describe("a feed article that is opened", () => {
     expect(open).toHaveBeenCalledWith("https://blog.example.org/new", "_blank", "noopener,noreferrer");
 
     await user.keyboard("s");
-    expect(await within(await opened()).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
+    expect(await within(await within(await opened()).findByRole("group", { name: "記事の操作" })).findByRole("button", { name: "スターを外す" })).toBeInTheDocument();
     open.mockRestore();
+  });
+
+  it("copies the link to its page with the headline it shows, the translated title when there is one", async () => {
+    const { server, blog, newPost } = seeded();
+    saveTranslatedTitle(server.db, newPost, { original: "New post", title: "新しい投稿", sourceLanguage: "en" });
+    const { user } = renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "新しい投稿" });
+
+    await user.click(within(pane).getByRole("button", { name: "リンクをコピー" }));
+
+    await screen.findByText("リンクをコピーしました", { selector: '[role="status"] > span' });
+    expect(await navigator.clipboard.readText()).toBe("[新しい投稿](https://blog.example.org/new)");
   });
 });
 
@@ -615,6 +722,62 @@ describe("an article that other feeds delivered too", () => {
     // The copy was marked read with the kept article, so the list includes read articles to show it.
     await waitFor(() => expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]));
     expect(row(/Big news \(Releases\)/)).toHaveAttribute("data-read", "true");
+  });
+});
+
+describe("the feed's name in an opened feed article", () => {
+  it("leads to the unread list of the feed and keeps the article open beside it", async () => {
+    const { server, blog, newPost } = seeded();
+    const { user, path } = renderApp({ server, route: `/unread/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "New post" });
+    const name = await within(pane).findByRole("link", { name: "Blog" });
+    expect(name).toHaveAttribute("href", `/f/${blog.id}/${newPost}`);
+
+    await user.click(name);
+
+    expect(path()).toBe(`/f/${blog.id}/${newPost}`);
+    expect(within(list()).getByRole("heading", { level: 1, name: "Blog" })).toBeInTheDocument();
+    expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveAttribute("aria-current", "page");
+    expect(within(article()).getByRole("heading", { level: 2, name: "New post" })).toBeInTheDocument();
+    // The list is the unread one the left pane opens: the article that was read is not in it.
+    await waitFor(() => expect(rowTitles()).toEqual(["Old post"]));
+  });
+
+  it("leads to the list alone on a narrow screen, where the list and the article are not shown together", async () => {
+    const { server, blog, newPost } = seeded();
+    renderApp({ server, route: `/unread/${newPost}`, width: 390 });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "New post" });
+    expect(await within(pane).findByRole("link", { name: "Blog" })).toHaveAttribute("href", `/f/${blog.id}`);
+  });
+
+  it("is no link in the list of that feed", async () => {
+    const { server, blog, newPost } = seeded();
+    renderApp({ server, route: `/f/${blog.id}/${newPost}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "New post" });
+    expect(pane).toHaveTextContent("Blog");
+    expect(within(pane).queryByRole("link", { name: "Blog" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the way to the feed's site above its list", () => {
+  it("opens the site of the feed in a new tab", async () => {
+    const { server, blog } = seeded();
+    recordFetchSuccess(server.db, blog.id, { now: at(120), siteUrl: "https://blog.example.org/" });
+    renderApp({ server, route: `/f/${blog.id}` });
+    const site = await within(list()).findByRole("link", { name: "サイトを開く" });
+    expect(site).toHaveAttribute("href", "https://blog.example.org/");
+    expect(site).toHaveAttribute("target", "_blank");
+    expect(site).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("is not shown for a feed whose site is not known", async () => {
+    const { server, blog } = seeded();
+    renderApp({ server, route: `/f/${blog.id}` });
+    await within(list()).findByRole("button", { name: "購読フィードの設定" });
+    expect(within(list()).queryByRole("link", { name: "サイトを開く" })).not.toBeInTheDocument();
   });
 });
 

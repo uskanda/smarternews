@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/db.ts";
-import { recordArticleOpened } from "./articles.ts";
+import { recordArticleOpened, recordFullContentFailure, saveFullContent } from "./articles.ts";
+import { saveArticleTranslation } from "./translations.ts";
 import { createFilter, deleteFilter } from "./filters.ts";
 import { createCategory, deleteCategory } from "./categories.ts";
 import {
@@ -13,6 +14,7 @@ import {
   nextFetchAt,
   recordFetchFailure,
   recordFetchSuccess,
+  requestFetchAll,
   updateFeed,
 } from "./feeds.ts";
 import { updateSettings } from "./settings.ts";
@@ -197,6 +199,103 @@ describe("when a feed is due", () => {
   });
 });
 
+describe("a request to fetch every feed", () => {
+  const hours = (count: number) => new Date(new Date(START).getTime() + count * 60 * MINUTE).toISOString();
+
+  it("makes the enabled feeds due at once, whatever their interval, and counts them", () => {
+    const { db, clock } = setup();
+    const a = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    const b = insertFeed(db, { url: "https://example.org/b.xml", title: "B", intervalMinutes: 120 }, clock);
+    recordFetchSuccess(db, a.id, { now: START });
+    recordFetchSuccess(db, b.id, { now: START });
+    clock.advance(MINUTE);
+    expect(dueFeeds(db, clock())).toEqual([]);
+
+    const request = requestFetchAll(db, clock());
+
+    expect(request).toEqual({ requested: 2, skipped: 0, requestedAt: clock().toISOString() });
+    expect(dueFeeds(db, clock()).map((feed) => feed.id)).toEqual([a.id, b.id]);
+    expect(getFeed(db, a.id)).toMatchObject({ fetchRequestedAt: request.requestedAt, nextFetchAt: request.requestedAt });
+  });
+
+  it("does not wait for the longer interval after failures", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    for (let index = 0; index < 3; index += 1) recordFetchFailure(db, feed.id, { now: START, error: "HTTP status 500" });
+    clock.advance(MINUTE);
+    expect(dueFeeds(db, clock())).toEqual([]);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 1, skipped: 0 });
+    expect(dueFeeds(db, clock()).map((entry) => entry.id)).toEqual([feed.id]);
+  });
+
+  it("passes by a feed that waits for the time a Retry-After gave, and counts it as skipped", () => {
+    const { db, clock } = setup();
+    const waiting = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    const other = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    recordFetchFailure(db, waiting.id, { now: START, error: "HTTP status 429", retryAfterUntil: hours(5) });
+    recordFetchSuccess(db, other.id, { now: START });
+    clock.advance(60 * MINUTE);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 1, skipped: 1 });
+    expect(dueFeeds(db, clock()).map((feed) => feed.id)).toEqual([other.id]);
+    expect(getFeed(db, waiting.id)).toMatchObject({ fetchRequestedAt: null, nextFetchAt: hours(5) });
+  });
+
+  it("takes a feed whose Retry-After time has passed", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    for (let index = 0; index < 4; index += 1) recordFetchFailure(db, feed.id, { now: START, error: "HTTP status 429", retryAfterUntil: hours(1) });
+    clock.advance(61 * MINUTE);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 1, skipped: 0 });
+    expect(dueFeeds(db, clock())).toHaveLength(1);
+  });
+
+  it("leaves a disabled feed out of both counts", () => {
+    const { db, clock } = setup();
+    const paused = insertFeed(db, { url: "https://example.org/a.xml", title: "A", enabled: false }, clock);
+
+    expect(requestFetchAll(db, clock())).toMatchObject({ requested: 0, skipped: 0 });
+    expect(getFeed(db, paused.id).fetchRequestedAt).toBeNull();
+    expect(dueFeeds(db, clock())).toEqual([]);
+  });
+
+  it("is forgotten once the feed was fetched, whether that worked or not, and the interval counts again", () => {
+    const { db, clock } = setup();
+    const worked = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    const failed = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    recordFetchSuccess(db, worked.id, { now: START });
+    recordFetchSuccess(db, failed.id, { now: START });
+    clock.advance(MINUTE);
+    requestFetchAll(db, clock());
+    const now = clock().toISOString();
+
+    recordFetchSuccess(db, worked.id, { now });
+    recordFetchFailure(db, failed.id, { now, error: "timed out" });
+
+    expect(getFeed(db, worked.id).fetchRequestedAt).toBeNull();
+    expect(getFeed(db, failed.id).fetchRequestedAt).toBeNull();
+    expect(dueFeeds(db, clock())).toEqual([]);
+    expect(nextFetchAt(db, getFeed(db, worked.id)).getTime() - clock().getTime()).toBe(30 * MINUTE);
+    expect(nextFetchAt(db, getFeed(db, failed.id)).getTime() - clock().getTime()).toBe(60 * MINUTE);
+  });
+
+  it("is forgotten when the feed is paused, so that it is not fetched at once when it is enabled again", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A" }, clock);
+    recordFetchSuccess(db, feed.id, { now: START });
+    clock.advance(MINUTE);
+    requestFetchAll(db, clock());
+
+    updateFeed(db, feed.id, { enabled: false });
+    expect(getFeed(db, feed.id).fetchRequestedAt).toBeNull();
+    updateFeed(db, feed.id, { enabled: true });
+
+    expect(dueFeeds(db, clock())).toEqual([]);
+  });
+});
+
 describe("summaries of a feed", () => {
   const since = (db: ReturnType<typeof createTestDb>, id: number) => db.prepare("SELECT auto_summarize_since AS since FROM feeds WHERE id = ?").get(id)!.since;
 
@@ -252,6 +351,39 @@ describe("translation of a feed", () => {
   });
 });
 
+describe("a feed as a topic source", () => {
+  it("is off for a feed that is registered without saying so", () => {
+    const { db, clock, news } = setup();
+    expect(insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", categoryId: news.id }, clock).topicSource).toBe(false);
+  });
+
+  it("is stored at registration and at a change for a feed of a category", () => {
+    const { db, clock, news } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", categoryId: news.id, topicSource: true }, clock);
+    expect(feed.topicSource).toBe(true);
+    expect(updateFeed(db, feed.id, { title: "Renamed" }, clock).topicSource).toBe(true);
+    expect(updateFeed(db, feed.id, { topicSource: false }, clock).topicSource).toBe(false);
+    expect(listFeeds(db)[0]!.topicSource).toBe(false);
+  });
+
+  it("is refused for a feed of no category, at registration and at a change", () => {
+    const { db, clock, news } = setup();
+    expect(() => insertFeed(db, { url: "https://example.org/a.xml", title: "A", topicSource: true }, clock)).toThrow(/category/);
+    const feed = insertFeed(db, { url: "https://example.org/b.xml", title: "B" }, clock);
+    expect(() => updateFeed(db, feed.id, { topicSource: true }, clock)).toThrow(/category/);
+    expect(getFeed(db, feed.id).topicSource).toBe(false);
+    // Moved into a category with the same change, the feed takes it.
+    expect(updateFeed(db, feed.id, { categoryId: news.id, topicSource: true }, clock).topicSource).toBe(true);
+    expect(() => updateFeed(db, feed.id, { categoryId: null, topicSource: true }, clock)).toThrow(/category/);
+  });
+
+  it("stays on when the feed leaves its category, and counts again in the next one", () => {
+    const { db, clock, news } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", categoryId: news.id, topicSource: true }, clock);
+    expect(updateFeed(db, feed.id, { categoryId: null }, clock).topicSource).toBe(true);
+  });
+});
+
 describe("full content fetching of a feed", () => {
   const since = (db: ReturnType<typeof createTestDb>, id: number) =>
     db.prepare("SELECT fetch_full_content_since AS since FROM feeds WHERE id = ?").get(id)!.since;
@@ -284,6 +416,86 @@ describe("full content fetching of a feed", () => {
     const feed = insertFeed(db, { url: "https://example.org/a.xml", title: "A", fetchFullContent: true }, clock);
     expect(updateFeed(db, feed.id, { fetchFullContent: false }, clock).fetchFullContent).toBe(false);
     expect(since(db, feed.id)).toBeNull();
+  });
+});
+
+describe("the content selector of a feed", () => {
+  const full = (db: ReturnType<typeof createTestDb>, id: number) =>
+    db
+      .prepare(
+        `SELECT full_content, full_content_text, full_content_at, full_content_status, full_content_error, full_content_error_detail,
+                (SELECT count(*) FROM article_translations t WHERE t.article_id = a.id) AS translations
+           FROM articles a WHERE id = ?`,
+      )
+      .get(id)!;
+  const withFullContent = (db: ReturnType<typeof createTestDb>, feedId: number, isRead: boolean) => {
+    const id = seedFeedArticle(db, feedId, { isRead });
+    saveFullContent(db, id, { markdown: "Full text", text: "Full text", now: START });
+    saveArticleTranslation(db, id, { segments: [{ original: "Full text", translated: "全文" }], method: "google", truncated: false, now: START });
+    return id;
+  };
+  const cleared = { full_content: null, full_content_text: null, full_content_at: null, full_content_status: null, full_content_error: null, full_content_error_detail: null, translations: 0 };
+
+  it("is none for a feed registered without one, and is stored, changed and taken away", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example" }, clock);
+    expect(feed.contentSelector).toBeNull();
+    const given = insertFeed(db, { url: "https://example.org/b.xml", title: "B", contentSelector: "article .body" }, clock);
+    expect(getFeed(db, given.id).contentSelector).toBe("article .body");
+    expect(updateFeed(db, feed.id, { contentSelector: "main article" }, clock).contentSelector).toBe("main article");
+    expect(updateFeed(db, feed.id, { contentSelector: null }, clock).contentSelector).toBeNull();
+    expect(listFeeds(db).map((each) => each.contentSelector)).toEqual([null, "article .body"]);
+  });
+
+  it("refuses a selector the engine that reads pages cannot use, naming the field", () => {
+    const { db, clock } = setup();
+    expect(() => insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", contentSelector: "div:frobnicate" }, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "contentSelector" })] }),
+    );
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", contentSelector: "article" }, clock);
+    expect(() => updateFeed(db, feed.id, { contentSelector: "div:frobnicate", title: "Renamed" }, clock)).toThrow(
+      expect.objectContaining({ fields: [expect.objectContaining({ path: "contentSelector" })] }),
+    );
+    expect(getFeed(db, feed.id)).toMatchObject({ title: "Example", contentSelector: "article" });
+  });
+
+  it("forgets the full content, its failure and the translation of the unread articles of the feed when it changes", () => {
+    const { db, clock } = setup();
+    const feedId = seedFeed(db);
+    const other = seedFeed(db);
+    const unread = withFullContent(db, feedId, false);
+    const read = withFullContent(db, feedId, true);
+    const failed = seedFeedArticle(db, feedId);
+    recordFullContentFailure(db, failed, { reason: "shorter", detail: "10 < 20" });
+    const elsewhere = withFullContent(db, other, false);
+
+    updateFeed(db, feedId, { contentSelector: "article .body" }, clock);
+
+    expect(full(db, unread)).toEqual(cleared);
+    expect(full(db, failed)).toEqual(cleared);
+    expect(full(db, read)).toMatchObject({ full_content: "Full text", full_content_status: "fetched", translations: 1 });
+    expect(full(db, elsewhere)).toMatchObject({ full_content: "Full text", full_content_status: "fetched", translations: 1 });
+  });
+
+  it("forgets the full content when it is taken away, and keeps it when the same value comes again or it is not sent", () => {
+    const { db, clock } = setup();
+    const feed = insertFeed(db, { url: "https://example.org/feed.xml", title: "Example", contentSelector: "article" }, clock);
+    const kept = withFullContent(db, feed.id, false);
+    updateFeed(db, feed.id, { contentSelector: "article" }, clock);
+    updateFeed(db, feed.id, { title: "Renamed" }, clock);
+    expect(full(db, kept)).toMatchObject({ full_content: "Full text", translations: 1 });
+
+    updateFeed(db, feed.id, { contentSelector: null }, clock);
+    expect(full(db, kept)).toEqual(cleared);
+  });
+
+  it("keeps the summary that was made", () => {
+    const { db, clock } = setup();
+    const feedId = seedFeed(db);
+    const id = withFullContent(db, feedId, false);
+    db.prepare("UPDATE articles SET auto_summary = 'A summary', auto_summary_at = ? WHERE id = ?").run(START, id);
+    updateFeed(db, feedId, { contentSelector: "article" }, clock);
+    expect(db.prepare("SELECT auto_summary FROM articles WHERE id = ?").get(id)!.auto_summary).toBe("A summary");
   });
 });
 

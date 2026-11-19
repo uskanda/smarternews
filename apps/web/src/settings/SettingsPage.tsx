@@ -30,7 +30,9 @@ import {
 } from "@smarternews/client";
 import { useCategories, useProviders, useSettings, useTopics, useUsage } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
+import { saveBlob } from "../lib/download.ts";
 import { chooseHideRead, useHideRead } from "../lib/hide-read.ts";
+import { usePending } from "../lib/pending.ts";
 import { chooseScrollRead, useScrollRead } from "../lib/scroll-read.ts";
 import { chooseTheme, useThemeChoice } from "../lib/theme.ts";
 import { useToast } from "../shell/toast.tsx";
@@ -39,7 +41,7 @@ import { Badge, Button, Checkbox, ErrorNotice, Field, Loading, messageFor } from
 import { useScrollToHash } from "../ui/useScrollToHash.ts";
 import { LANGUAGE_FORMAT_HINT, problemsOf, REGION_FORMAT_HINT, TIME_FORMAT_HINT, type Problems } from "./checks.ts";
 import { ConnectCode } from "./ConnectCode.tsx";
-import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "./unsaved.tsx";
+import { UnsavedGuard, useUnsaved, useUnsavedLeaving } from "../ui/unsaved.tsx";
 
 export const KIND_LABEL = { news: "ニュース", event: "イベント" } as const;
 const SECTION = "flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl";
@@ -74,10 +76,14 @@ function Categories() {
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const leave = useUnsavedLeaving();
+  const [adding, run] = usePending();
   useUnsaved("新しいカテゴリの名前", name.trim() !== "");
-
-  async function add(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(add);
+  };
+
+  async function add() {
     const found = checkText(name, { label: "カテゴリの名前", max: CATEGORY_NAME_MAX_CHARS });
     setProblem(found);
     if (found !== null) return;
@@ -95,13 +101,13 @@ function Categories() {
 
   return (
     <section id="categories" aria-label="カテゴリ" className={SECTION}>
-      <h2 className="type-headline-md">カテゴリ</h2>
+      <h2 tabIndex={-1} className="type-headline-md">カテゴリ</h2>
       {categories.isError ? <ErrorNotice error={categories.error} onRetry={() => void categories.refetch()} /> : null}
       {categories.data?.length === 0 ? (
         <p className="type-body-md text-on-surface-muted">カテゴリはまだありません。下の欄から追加してください。</p>
       ) : null}
       <ul className="max-w-measure">{categories.data?.map((category) => <CategoryRow key={category.id} category={category} />)}</ul>
-      <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
         <Field
           label="カテゴリの名前"
           value={name}
@@ -125,7 +131,7 @@ function Categories() {
         </p>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
-          <Button type="submit" disabled={name.trim().length === 0}>
+          <Button type="submit" disabled={adding || name.trim().length === 0}>
             カテゴリを追加
           </Button>
         </div>
@@ -141,10 +147,22 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   const [text, setText] = useState(settings.readerInfo);
   const [problem, setProblem] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
+  // A settings file or another device may change the value: show it rather than save the old one over it.
+  const [shown, setShown] = useState(settings.readerInfo);
+  if (shown !== settings.readerInfo) {
+    setShown(settings.readerInfo);
+    setText(settings.readerInfo);
+    setProblem(null);
+    setError(null);
+  }
   useUnsaved("読み手情報", text !== settings.readerInfo);
-
-  async function save(event: FormEvent) {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
+    void run(save);
+  };
+
+  async function save() {
     const found = checkText(text, { label: "読み手情報", max: READER_INFO_MAX_CHARS, required: false });
     setProblem(found);
     if (found !== null) return;
@@ -159,8 +177,8 @@ function ReaderInfo({ settings }: { settings: Settings }) {
 
   return (
     <section id="reader" aria-label="読み手情報" className={SECTION}>
-      <h2 className="type-headline-md">読み手情報</h2>
-      <form noValidate onSubmit={save} className="flex max-w-measure flex-col gap-md">
+      <h2 tabIndex={-1} className="type-headline-md">読み手情報</h2>
+      <form noValidate onSubmit={submit} className="flex max-w-measure flex-col gap-md">
         <Field
           label="読み手情報"
           multiline
@@ -174,7 +192,7 @@ function ReaderInfo({ settings }: { settings: Settings }) {
         />
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div>
-          <Button type="submit">
+          <Button type="submit" disabled={saving}>
             保存する
           </Button>
         </div>
@@ -183,26 +201,61 @@ function ReaderInfo({ settings }: { settings: Settings }) {
   );
 }
 
-function GlobalSettings({ settings }: { settings: Settings }) {
-  const { api } = useApp();
-  const client = useQueryClient();
-  const toast = useToast();
-  const [form, setForm] = useState({
+function globalForm(settings: Settings) {
+  return {
     outputLanguage: settings.outputLanguage,
     timeZone: settings.timeZone,
     language: settings.search.language,
     region: settings.search.region,
     digestSchedule: settings.digestSchedule.join(", "),
-  });
+  };
+}
+
+/** The values the global settings show, as one string to compare. */
+function globalValues(settings: Settings): string {
+  return JSON.stringify([
+    settings.outputLanguage,
+    settings.timeZone,
+    settings.search.language,
+    settings.search.region,
+    settings.digestSchedule,
+    settings.advanceAfterMarkAll,
+    settings.removeDuplicates,
+    settings.staleFeedDays,
+  ]);
+}
+
+function GlobalSettings({ settings }: { settings: Settings }) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  const toast = useToast();
+  const [form, setForm] = useState(() => globalForm(settings));
   const [advance, setAdvance] = useState(settings.advanceAfterMarkAll);
   const [removeDuplicates, setRemoveDuplicates] = useState(settings.removeDuplicates);
   const duplicatesHint = useId();
   const [staleDays, setStaleDays] = useState(String(settings.staleFeedDays));
   const [problems, setProblems] = useState<Problems>({});
   const [error, setError] = useState<unknown>(null);
+  const [saving, run] = usePending();
+  // A settings file, another device or this form's own save may change the values: show them rather than
+  // save the old ones over them.
+  const [shown, setShown] = useState(() => globalValues(settings));
+  if (shown !== globalValues(settings)) {
+    setShown(globalValues(settings));
+    setForm(globalForm(settings));
+    setAdvance(settings.advanceAfterMarkAll);
+    setRemoveDuplicates(settings.removeDuplicates);
+    setStaleDays(String(settings.staleFeedDays));
+    setProblems({});
+    setError(null);
+  }
   const set = (name: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [name]: event.target.value });
     setProblems((shown) => ({ ...shown, [name]: undefined }));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void run(save);
   };
   // Compared the way they are saved, so that nothing is left to ask about once they are.
   useUnsaved(
@@ -217,8 +270,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
       staleDays.trim() !== String(settings.staleFeedDays),
   );
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
+  async function save() {
     const stale = checkWholeNumber(staleDays, { label: "更新が止まったとみなす日数", min: 1, max: STALE_FEED_DAYS_MAX });
     const digestTimes = checkTimes(form.digestSchedule, { label: "ダイジェストを作る時刻", max: SCHEDULE_MAX_TIMES, formatHint: TIME_FORMAT_HINT });
     const found = problemsOf({
@@ -242,7 +294,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         digestSchedule: digestTimes.value,
       });
       client.setQueryData(["settings"], saved);
-      // The server puts the times in order and drops the same time given twice.
+      // The server puts the times in order and drops the same time given twice. When that leaves the stored
+      // values as they were, nothing above replaces the field, so it is put in that order here.
       setForm((shown) => ({ ...shown, digestSchedule: saved.digestSchedule.join(", ") }));
       // Which feeds are stale follows the days at once.
       void client.invalidateQueries({ queryKey: ["feeds"] });
@@ -255,8 +308,8 @@ function GlobalSettings({ settings }: { settings: Settings }) {
 
   return (
     <section id="global" aria-label="全体設定" className={SECTION}>
-      <h2 className="type-headline-md">全体設定</h2>
-      <form noValidate onSubmit={save} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
+      <h2 tabIndex={-1} className="type-headline-md">全体設定</h2>
+      <form noValidate onSubmit={submit} className="grid max-w-measure grid-cols-1 gap-md sm:grid-cols-2">
         <Field
           label="出力言語"
           value={form.outputLanguage}
@@ -293,7 +346,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
               problems.digestSchedule ??
               fieldMessage(error, "digestSchedule", { label: "ダイジェストを作る時刻", formatHint: TIME_FORMAT_HINT })
             }
-            hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「今すぐ作る」でだけ作ります。"
+            hint="24時間表記の時刻を、コンマで区切って並べます。例は 07:00, 19:00。タイムゾーンの時刻で作ります。空にすると、時刻では作らず、ダイジェストの画面の「いま作る」でだけ作ります。"
           />
         </div>
         <div className="sm:col-span-2">
@@ -332,7 +385,7 @@ function GlobalSettings({ settings }: { settings: Settings }) {
         </div>
         {error && !(error instanceof ApiError && error.kind === "invalid") ? <ErrorNotice error={error} /> : null}
         <div className="sm:col-span-2">
-          <Button type="submit">
+          <Button type="submit" disabled={saving}>
             保存する
           </Button>
         </div>
@@ -353,7 +406,7 @@ function DeviceSettings() {
   const id = useId();
   return (
     <section id="device" aria-labelledby={`${id}-title`} className={SECTION}>
-      <h2 id={`${id}-title`} className="type-headline-md">
+      <h2 id={`${id}-title`} tabIndex={-1} className="type-headline-md">
         この端末の設定
       </h2>
       <p id={`${id}-hint`} className="max-w-measure type-body-md text-on-surface-muted">
@@ -413,15 +466,12 @@ function SettingsFile() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
+  // Loading goes on after the question closes; 読み込む stays held until the server answers.
+  const [loading, run] = usePending();
 
   async function download() {
     try {
-      const url = URL.createObjectURL(new Blob([await api.exportSettings()], { type: "application/yaml" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "smarternews-settings.yaml";
-      link.click();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([await api.exportSettings()], { type: "application/yaml" }), "smarternews-settings.yaml");
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -430,7 +480,7 @@ function SettingsFile() {
 
   function ask(event: FormEvent) {
     event.preventDefault();
-    if (file) setConfirming(true);
+    if (file && !loading) setConfirming(true);
   }
 
   async function upload() {
@@ -444,7 +494,7 @@ function SettingsFile() {
         `カテゴリを${done.categoriesCreated}件作成、${done.categoriesUpdated}件更新。トピックを${done.topicsCreated}件作成、${done.topicsUpdated}件更新。` +
           `語のまとまりを${done.termGroupsCreated}件作成、語を${done.highlightTermsCreated}件追加。`,
       );
-      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "articles", "term-groups"]) void client.invalidateQueries({ queryKey: [key] });
+      for (const key of ["categories", "topics", "settings", "counts", "feeds", "filters", "rules", "articles", "term-groups"]) void client.invalidateQueries({ queryKey: [key] });
     } catch (caught) {
       setError(caught);
     }
@@ -452,7 +502,7 @@ function SettingsFile() {
 
   return (
     <section id="settings-file" aria-label="設定ファイル" className={SECTION}>
-      <h2 className="type-headline-md">設定ファイル</h2>
+      <h2 tabIndex={-1} className="type-headline-md">設定ファイル</h2>
       <p className="max-w-measure type-body-md text-on-surface-muted">
         カテゴリ、トピック、購読フィード、フィルター、語の色付け、読み手情報、全体設定を1つのYAMLファイルにします。控えや、別のサーバーへの移行に使えます。
       </p>
@@ -473,7 +523,7 @@ function SettingsFile() {
           識別名が一致するカテゴリ、文章が一致するトピック、URLが一致する購読フィードは更新し、ないものは作ります。ファイルに書かれていないカテゴリとトピックは消えません。購読フィードとフィルターも消えません。語の色付けは、名前が一致するまとまりの色を変え、ない語だけを足します。ファイルにないまとまりと語は消えません。以前のストップワードの形式のファイルも読み込め、各語は全体の隠すフィルターになります。カテゴリと購読フィードは、ファイルに書かれた順に並びます。
         </p>
         <div>
-          <Button type="submit" disabled={!file}>
+          <Button type="submit" disabled={loading || !file}>
             読み込む
           </Button>
         </div>
@@ -503,7 +553,7 @@ function SettingsFile() {
         onDismiss={() => setConfirming(false)}
         actions={
           <>
-            <Button variant="primary" onClick={() => void upload()}>
+            <Button variant="primary" disabled={loading} onClick={() => void run(upload)}>
               読み込む
             </Button>
             <Button onClick={() => setConfirming(false)}>やめる</Button>
@@ -560,7 +610,7 @@ function Providers() {
   const status = providers.data;
   return (
     <section id="providers" aria-label="プロバイダー" className={SECTION}>
-      <h2 className="type-headline-md">プロバイダー</h2>
+      <h2 tabIndex={-1} className="type-headline-md">プロバイダー</h2>
       {providers.isError ? <ErrorNotice error={providers.error} onRetry={() => void providers.refetch()} /> : null}
       {status ? (
         <>
@@ -730,7 +780,7 @@ function UsageSection() {
   const data = usage.data;
   return (
     <section id="usage" aria-label="利用量" className={SECTION}>
-      <h2 className="type-headline-md">利用量</h2>
+      <h2 tabIndex={-1} className="type-headline-md">利用量</h2>
       {usage.isError ? <ErrorNotice error={usage.error} onRetry={() => void usage.refetch()} /> : null}
       {data ? (
         <>
@@ -770,6 +820,7 @@ const SECTIONS = [
   { id: "settings-file", name: "設定ファイル" },
   { id: "providers", name: "プロバイダー" },
   { id: "usage", name: "利用量" },
+  { id: "connect", name: "アプリの接続" },
   { id: "tokens", name: "トークン" },
 ] as const;
 
@@ -816,9 +867,9 @@ function SettingsSections() {
       </header>
       <Categories />
       <section id="feeds" aria-label="購読フィード" className={SECTION}>
-        <h2 className="type-headline-md">購読フィード</h2>
+        <h2 tabIndex={-1} className="type-headline-md">購読フィード</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
-          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。
+          RSSやAtomのフィードを登録すると、配信された記事をそのまま読めます。読みたくない記事は、フィルターで隠せます。条件に合う新しい記事には、ルールでスター、既読、通知、要約を自動で行えます。
         </p>
         <ul className="flex flex-col gap-xs type-body-md">
           <li>
@@ -831,10 +882,15 @@ function SettingsSections() {
               フィルターを設定する
             </Link>
           </li>
+          <li>
+            <Link to="/settings/rules" className="tap text-primary underline underline-offset-4">
+              ルールを設定する
+            </Link>
+          </li>
         </ul>
       </section>
       <section id="term-highlights" aria-label="語の色付け" className={SECTION}>
-        <h2 className="type-headline-md">語の色付け</h2>
+        <h2 tabIndex={-1} className="type-headline-md">語の色付け</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           登録した語を、生成記事と配信記事の両方の一覧と本文で色付けします。語はまとまりに分け、まとまりごとに色を選びます。色付けは記事を隠しません。
         </p>
@@ -857,8 +913,12 @@ function SettingsSections() {
       <SettingsFile />
       <Providers />
       <UsageSection />
+      <section id="connect" aria-label="アプリの接続" className={SECTION}>
+        <h2 className="type-headline-md">アプリの接続</h2>
+        <ConnectCode />
+      </section>
       <section id="tokens" aria-label="トークン" className={SECTION}>
-        <h2 className="type-headline-md">トークン</h2>
+        <h2 tabIndex={-1} className="type-headline-md">トークン</h2>
         <p className="max-w-measure type-body-md text-on-surface-muted">
           このブラウザーに保存したAPIのトークンを消します。次に開くとき、もう一度入力が必要になります。
         </p>
@@ -880,7 +940,6 @@ function SettingsSections() {
         >
           <p>このブラウザーに保存したトークンを消します。次に開くとき、サーバーで表示したトークンをもう一度入力する必要があります。</p>
         </ConfirmDialog>
-        <ConnectCode />
       </section>
     </div>
   );

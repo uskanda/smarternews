@@ -5,9 +5,9 @@ import { ApiError, checkRequired, conflictLabel, fieldError, fieldMessage, UNCAT
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
-import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
+import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, useLatest, type SelectorTexts } from "./PageSelectors.tsx";
 import { Button, Field, messageFor } from "../ui/controls.tsx";
-import { useUnsaved } from "./unsaved.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
 const SELECT = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface";
 export const NO_CATEGORY = "";
@@ -66,18 +66,30 @@ function PageChoice({
 }
 
 /**
- * The fields for subscribing to a feed or a page, on the page of feeds and in the dialog above a category's list.
- * It starts in `categoryId` when given, and tells `onAdded` once a feed is subscribed.
+ * The fields for subscribing to a feed or a page, on the page of feeds, in the dialog above the list of a category,
+ * of feeds or of uncategorized feeds, and in the dialog of a site on a category's page.
+ * It starts in `categoryId` when given, and tells `onAdded` once a feed is subscribed. Given `discoverUrl`, it starts with
+ * that URL and looks for its feeds at once; what it finds waits for the reader to add it, even a single feed.
  */
-export function AddFeedForm({ categories, categoryId = null, onAdded }: { categories: Category[]; categoryId?: number | null; onAdded?: () => void }) {
+export function AddFeedForm({
+  categories,
+  categoryId = null,
+  discoverUrl,
+  onAdded,
+}: {
+  categories: Category[];
+  categoryId?: number | null;
+  discoverUrl?: string;
+  onAdded?: () => void;
+}) {
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
   const id = useId();
   const initialCategory = categoryId === null ? NO_CATEGORY : String(categoryId);
-  const [url, setUrl] = useState("");
-  // Only on the page of feeds: the dialog above a category's list has no guard, and this does nothing there.
-  useUnsaved("購読フィードの追加", url.trim() !== "");
+  const [url, setUrl] = useState(discoverUrl ?? "");
+  // The page of feeds asks before it is left, and a dialog before it is closed. The URL a dialog starts with is not input.
+  useUnsaved("購読フィードの追加", url.trim() !== "" && url !== discoverUrl);
   const [category, setCategory] = useState(initialCategory);
   const [found, setFound] = useState<Array<{ url: string; title: string }> | null>(null);
   const [chosen, setChosen] = useState("");
@@ -94,6 +106,11 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
   const [manual, setManual] = useState<SelectorTexts>(textsOf(null));
   const [tested, setTested] = useState<PageSelectors | null>(null);
   const firstChoice = useRef<HTMLInputElement>(null);
+  // Looking for feeds: an answer that comes after the URL changed or the form went away is dropped.
+  const discovery = useLatest();
+  // What is subscribed with is what the fields hold when the feed is subscribed, also after a wait for discovery.
+  const choices = useRef({ category, autoSummarize, translate, fetchFullContent });
+  choices.current = { category, autoSummarize, translate, fetchFullContent };
   useEffect(() => {
     if (found) firstChoice.current?.focus();
   }, [found]);
@@ -127,10 +144,12 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
     // The page gives titles, links and dates only: the text comes from full content, so it starts switched on.
     setFetchFullContent(true);
     const result = await candidates.ask(pageUrl);
-    if (result && result.candidates.length > 0) setChosenCandidate(0);
+    if (result === null) return;
+    if (result.candidates.length > 0) setChosenCandidate(0);
   }
 
   async function subscribe(feedUrl: string, selectors?: PageSelectors) {
+    const { category, autoSummarize, translate, fetchFullContent } = choices.current;
     const created = await api.createFeed({
       url: feedUrl,
       ...(selectors ? { format: "page" as const, selectors } : {}),
@@ -151,15 +170,16 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
     onAdded?.();
   }
 
-  async function run(action: () => Promise<void>) {
+  /** Runs the request numbered `request`; once it is not the latest, its failure and its end change nothing. */
+  async function run(request: number, action: () => Promise<void>) {
     setBusy(true);
     setProblem(null);
     try {
       await action();
     } catch (error) {
-      setProblem(explain(error));
+      if (discovery.current(request)) setProblem(explain(error));
     } finally {
-      setBusy(false);
+      if (discovery.current(request)) setBusy(false);
     }
   }
 
@@ -170,25 +190,44 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
       setProblem(empty);
       return;
     }
-    void run(async () => {
+    const request = discovery.next();
+    void run(request, async () => {
       if (page !== null) {
         const selectors = pageSelectors(candidates.state.status === "ready" ? candidates.state.result : null);
         return selectors ? subscribe(page, selectors) : undefined;
       }
       if (found !== null && chosen) return subscribe(chosen);
-      // The URL may be a feed or a page that points to feeds; the server tells which.
-      const { feeds } = await api.discoverFeeds(url.trim());
-      if (feeds.length === 0) {
-        setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
-        // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
-        setNoFeed(url.trim());
-        return;
-      }
-      if (feeds.length === 1) return subscribe(feeds[0]!.url);
-      setFound(feeds);
-      setChosen(feeds[0]!.url);
+      return findFeeds(request, url.trim(), true);
     });
   }
+
+  /**
+   * Looks for the feeds of a URL as the request numbered `request`, whose answer is dropped once it is not the
+   * latest. A single feed is subscribed to at once when the reader sent the URL, and offered like several when the
+   * form looked by itself.
+   */
+  async function findFeeds(request: number, target: string, subscribeOne: boolean) {
+    // The URL may be a feed or a page that points to feeds; the server tells which.
+    const { feeds } = await api.discoverFeeds(target);
+    if (!discovery.current(request)) return;
+    if (feeds.length === 0) {
+      setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
+      // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
+      setNoFeed(target);
+      return;
+    }
+    if (feeds.length === 1 && subscribeOne) return subscribe(feeds[0]!.url);
+    setFound(feeds);
+    setChosen(feeds[0]!.url);
+  }
+
+  // An effect may run twice while developing: the end of the first run drops its request, and the second one asks again.
+  useEffect(() => {
+    if (discoverUrl === undefined) return;
+    const request = discovery.next();
+    void run(request, () => findFeeds(request, discoverUrl, false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the URL it was opened with, looked for once
+  }, []);
 
   return (
     <form noValidate onSubmit={add} className="flex max-w-measure flex-col gap-md">
@@ -198,7 +237,12 @@ export function AddFeedForm({ categories, categoryId = null, onAdded }: { catego
         inputMode="url"
         autoComplete="off"
         value={url}
+        // Read-only while feeds are looked for, keeping the focus: the answer is for the URL as it was sent.
+        readOnly={busy && page === null}
         onChange={(event) => {
+          // A request under way is for the URL before this change: its answer is dropped.
+          discovery.next();
+          setBusy(false);
           setUrl(event.target.value);
           setFound(null);
           leavePage();
