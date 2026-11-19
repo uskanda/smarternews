@@ -1,6 +1,17 @@
 // What the list of entries holds — the left pane of the web app, the drawer of the Android app — and which
 // articles each entry opens. Both apps draw this one model, so they cannot disagree.
-import type { ArticleListQuery, Category, Counts, Feed, ListFormat, ListSort, ListView, ListViewUpdate, MarkRead } from "@smarternews/core/api";
+import type {
+  ArticleListQuery,
+  Category,
+  Counts,
+  Feed,
+  ListFormat,
+  ListSort,
+  ListView,
+  ListViewUpdate,
+  MarkRead,
+  SavedSearch,
+} from "@smarternews/core/api";
 import { feedState, strongestFeedState, type FeedState } from "./feed-state.ts";
 
 /** A list of articles a reader can open. */
@@ -14,7 +25,9 @@ export type ListTarget =
   | { type: "annotations" }
   /** A category: everything in it, or only the articles the model wrote. */
   | { type: "category"; categoryId: number; generatedOnly: boolean }
-  | { type: "feed"; feedId: number };
+  | { type: "feed"; feedId: number }
+  /** The results of a saved search, unread only until the read ones are asked for. The web app has it; the Android app does not. */
+  | { type: "savedSearch"; savedSearchId: number };
 
 export interface NavEntry {
   target: ListTarget;
@@ -41,6 +54,8 @@ export interface NavGroup {
 
 export interface NavModel {
   views: NavEntry[];
+  /** The saved searches in their order, between the views and the categories. Empty where an app passes none. */
+  savedSearches: NavEntry[];
   groups: NavGroup[];
   /** How many articles are starred, read or not. The web app shows it beside "スター". */
   starred: number;
@@ -51,9 +66,11 @@ export const FEEDS_LABEL = "購読フィード";
 export const UNCATEGORIZED_LABEL = "未分類";
 export const RECENTLY_READ_LABEL = "最近読んだ記事";
 export const ANNOTATIONS_LABEL = "注釈";
+export const SAVED_SEARCHES_LABEL = "保存した検索";
 
-export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts: Counts | undefined }): NavModel {
+export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts: Counts | undefined; savedSearches?: SavedSearch[] }): NavModel {
   const { categories, feeds, counts } = input;
+  const ofSavedSearch = new Map(counts?.savedSearches.map((entry) => [entry.id, entry.unread]));
   const ofCategory = new Map(counts?.categories.map((entry) => [entry.categoryId, entry]));
   const ofFeed = new Map(counts?.feeds.map((entry) => [entry.feedId, entry.unread]));
   const feedEntry = (feed: Feed): NavEntry => {
@@ -103,6 +120,11 @@ export function buildNav(input: { categories: Category[]; feeds: Feed[]; counts:
       { target: { type: "recentlyRead" }, label: RECENTLY_READ_LABEL, unread: 0 },
       { target: { type: "annotations" }, label: ANNOTATIONS_LABEL, unread: 0 },
     ],
+    savedSearches: (input.savedSearches ?? []).map((saved) => ({
+      target: { type: "savedSearch", savedSearchId: saved.id },
+      label: saved.name,
+      unread: ofSavedSearch.get(saved.id) ?? 0,
+    })),
     groups,
     starred: counts?.starred ?? 0,
   };
@@ -123,11 +145,11 @@ export function parseHideRead(stored: string | null): boolean {
 }
 
 /**
- * The model without the categories, the feeds and the generated articles of a category that have no unread
- * article. The views at the top stay. So do the open entry with the group above it, and a feed whose fetches
- * failed or stopped, or whose feed has gone, with its group: hiding it would hide that something is wrong. A
- * group keeps the `childState` of all its feeds, the hidden ones too. Until the counts have arrived (`counted`
- * false), every entry counts zero and nothing is hidden.
+ * The model without the saved searches, the categories, the feeds and the generated articles of a category
+ * that have no unread article. The views at the top stay. So do the open entry with the group above it, and a
+ * feed whose fetches failed or stopped, or whose feed has gone, with its group: hiding it would hide that
+ * something is wrong. A group keeps the `childState` of all its feeds, the hidden ones too. Until the counts
+ * have arrived (`counted` false), every entry counts zero and nothing is hidden.
  */
 export function hideEmptyEntries(model: NavModel, options: { current: ListTarget | null; counted: boolean }): NavModel {
   if (!options.counted) return model;
@@ -139,7 +161,7 @@ export function hideEmptyEntries(model: NavModel, options: { current: ListTarget
     const children = group.children.filter(keeps);
     return group.entry.unread > 0 || children.length > 0 || isCurrent(group.entry) ? [{ ...group, children }] : [];
   });
-  return { ...model, groups };
+  return { ...model, savedSearches: model.savedSearches.filter(keeps), groups };
 }
 
 /** A short text that names a list, for a route or a stored choice. */
@@ -147,6 +169,7 @@ export function listKey(target: ListTarget): string {
   if (target.type === "category") return `category-${target.categoryId}${target.generatedOnly ? "-generated" : ""}`;
   if (target.type === "feed") return `feed-${target.feedId}`;
   if (target.type === "recentlyRead") return "recently-read";
+  if (target.type === "savedSearch") return `search-${target.savedSearchId}`;
   return target.type;
 }
 
@@ -157,7 +180,9 @@ export function parseListKey(key: string): ListTarget | null {
   const category = /^category-(\d{1,15})(-generated)?$/.exec(key);
   if (category) return { type: "category", categoryId: Number(category[1]), generatedOnly: category[2] !== undefined };
   const feed = /^feed-(\d{1,15})$/.exec(key);
-  return feed ? { type: "feed", feedId: Number(feed[1]) } : null;
+  if (feed) return { type: "feed", feedId: Number(feed[1]) };
+  const saved = /^search-(\d{1,15})$/.exec(key);
+  return saved ? { type: "savedSearch", savedSearchId: Number(saved[1]) } : null;
 }
 
 /**
@@ -191,6 +216,9 @@ function filterOf(target: ListTarget): ArticleListQuery {
     case "annotations":
       // A list of annotations, not of articles: it is read with `annotations` of the API.
       return {};
+    case "savedSearch":
+      // Search results, not an article list: they are read with `search` of the API.
+      return {};
   }
 }
 
@@ -219,10 +247,11 @@ function isEventCategory(target: ListTarget, categories: Category[] | undefined)
 
 /**
  * Whether the list offers the menu of its order. Not the recently read articles, ordered by read time, nor an
- * event category, ordered by start. Search results have no target and no menu either.
+ * event category, ordered by start, nor a saved search: search results are newest first. Search results have
+ * no target and no menu either.
  */
 export function hasSortMenu(target: ListTarget, categories: Category[] | undefined): boolean {
-  return target.type !== "recentlyRead" && target.type !== "annotations" && !isEventCategory(target, categories);
+  return target.type !== "recentlyRead" && target.type !== "annotations" && target.type !== "savedSearch" && !isEventCategory(target, categories);
 }
 
 /** The labels of the orders, as the menu of the order names them. */
@@ -290,10 +319,11 @@ export function hasReadToggle(target: ListTarget): boolean {
 /**
  * Whether the list may offer mark all as read and the toggle for importance 4 and above. Not the recently
  * read articles: everything there is read already, and a lower bound on importance would hide every feed
- * article in a list meant for finding what was read.
+ * article in a list meant for finding what was read. Nor a saved search: its words match parts of the text,
+ * so marking everything would take articles not meant, as in any search.
  */
 export function hasListControls(target: ListTarget): boolean {
-  return target.type !== "recentlyRead" && target.type !== "annotations";
+  return target.type !== "recentlyRead" && target.type !== "annotations" && target.type !== "savedSearch";
 }
 
 /**

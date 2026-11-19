@@ -219,7 +219,7 @@ describe("the expanded format", () => {
 
     expect(expandedRows()).toHaveLength(10);
     expect(requests.some((request) => request.startsWith("GET /api/v1/articles?") && request.includes("limit=10"))).toBe(true);
-    act(() => intersect(list().querySelector("[data-list-more]")!));
+    act(() => intersect(list().querySelector("[data-load-more]")!));
 
     await waitFor(() => expect(expandedRows()).toHaveLength(15));
   });

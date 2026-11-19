@@ -13,7 +13,7 @@ import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { back, gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
-import { intersect, setFontSize } from "../testing/setup.ts";
+import { intersect, intersectionOptions, setFontSize } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
 const nav = () => screen.getByRole("navigation", { name: "項目" });
@@ -21,7 +21,7 @@ const list = () => screen.getByRole("region", { name: "記事の一覧" });
 const article = () => screen.getByRole("article", { name: "記事" });
 const rowTitles = () => within(list()).getAllByRole("listitem").map((item) => item.querySelector("[data-title]")?.textContent);
 /** The mark below the last row loaded, which loads the next page when it comes into view. */
-const moreMark = () => list().querySelector<HTMLElement>("[data-list-more]");
+const moreMark = () => list().querySelector<HTMLElement>("[data-load-more]");
 const row = (title: RegExp) => within(list()).getByRole("link", { name: title }).closest("li")!;
 /** The controls at the end of the article: star, read and the mark of a miss. */
 const actions = async () => within(await screen.findByRole("group", { name: "記事の操作" }));
@@ -366,67 +366,119 @@ describe("narrowing and paging", () => {
     expect(screen.queryByRole("button", { name: "絞り込みを外す" })).not.toBeInTheDocument();
   });
 
-  it("loads further articles as the end of the list comes into view, until all 120 are shown once", async () => {
-    const server = makeServer();
-    const category = server.category();
-    for (let index = 0; index < 120; index += 1) {
-      server.article(category.id, { title: `Story ${index}` });
-      if (index % 3 === 0) server.clock.advance(MINUTE);
+  describe("further articles", () => {
+    const more = () => moreMark()!;
+    const lastRow = () => within(list()).getAllByRole("listitem").at(-1)!;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    function hundredTwenty() {
+      const server = makeServer();
+      const category = server.category();
+      for (let index = 0; index < 120; index += 1) {
+        server.article(category.id, { title: `Story ${index}` });
+        if (index % 3 === 0) server.clock.advance(MINUTE);
+      }
+      return server;
     }
-    renderApp({ server });
-    await screen.findByRole("link", { name: /Story 119/ });
-    expect(rowTitles()).toHaveLength(50);
 
-    // The pages are shorter than the view here: the end stays in view, and the pages keep coming.
-    act(() => intersect(moreMark()!));
-    await waitFor(() => expect(rowTitles()).toHaveLength(120));
-
-    expect(new Set(rowTitles()).size).toBe(120);
-    expect(screen.queryByRole("button", { name: "さらに読み込む" })).not.toBeInTheDocument();
-    expect(moreMark()).toBeNull();
-  });
-
-  it("loads one page for one scroll to the end, when the page pushes the end out of view", async () => {
-    const server = makeServer();
-    const category = server.category();
-    for (let index = 0; index < 120; index += 1) server.article(category.id, { title: `Story ${index}` });
-    // As over a network, an answer takes a while: the list is drawn while the page is on its way.
-    const answer = server.app.request.bind(server.app);
-    vi.spyOn(server.app, "request").mockImplementation(async (...args: Parameters<typeof answer>) => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      return answer(...args);
+    it("stays at the first 50 while the end of the list is far off", async () => {
+      renderApp({ server: hundredTwenty() });
+      await screen.findByRole("link", { name: /Story 119/ });
+      await sleep(50);
+      expect(rowTitles()).toHaveLength(50);
     });
-    const { requests } = renderApp({ server });
-    await screen.findByRole("link", { name: /Story 119/ });
 
-    act(() => intersect(moreMark()!, true, { stays: false }));
-    await waitFor(() => expect(rowTitles()).toHaveLength(100));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    it("loads until all 120 are shown once when the end comes near, and then offers nothing more", async () => {
+      renderApp({ server: hundredTwenty() });
+      await screen.findByRole("link", { name: /Story 119/ });
 
-    expect(rowTitles()).toHaveLength(100);
-    expect(requests.filter((request) => request.includes("cursor="))).toHaveLength(1);
-  });
+      // The pages are shorter than the view here: the end stays in view, and the pages keep coming.
+      act(() => intersect(more()));
+      await waitFor(() => expect(rowTitles()).toHaveLength(120));
 
-  it("does not load again by itself after a failure, and loads again from the button", async () => {
-    const server = makeServer();
-    const category = server.category();
-    for (let index = 0; index < 120; index += 1) server.article(category.id, { title: `Story ${index}` });
-    let offline = false;
-    const { user, requests } = renderApp({ server, offline: () => offline });
-    await screen.findByRole("link", { name: /Story 119/ });
+      expect(new Set(rowTitles()).size).toBe(120);
+      expect(list().querySelector("[data-load-more]")).toBeNull();
+      expect(within(list()).queryByRole("button", { name: "さらに読み込む" })).not.toBeInTheDocument();
+    });
 
-    offline = true;
-    act(() => intersect(moreMark()!));
-    expect(await within(list()).findByText("続きを読み込めませんでした。")).toBeInTheDocument();
-    const asked = requests.filter((request) => request.includes("cursor=")).length;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(requests.filter((request) => request.includes("cursor=")).length).toBe(asked);
-    expect(rowTitles()).toHaveLength(50);
+    it("starts a list's height before the end", async () => {
+      renderApp({ server: hundredTwenty() });
+      await screen.findByRole("link", { name: /Story 119/ });
 
-    offline = false;
-    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
-    await waitFor(() => expect(rowTitles()).toHaveLength(120));
-    expect(within(list()).queryByText("続きを読み込めませんでした。")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(intersectionOptions(more())).toEqual([{ root: list().querySelector("[data-list-scroll]"), rootMargin: "0px 0px 100% 0px" }]),
+      );
+    });
+
+    it("puts the mark right after the last row, above the room for reading by scrolling", async () => {
+      window.localStorage.setItem("smarternews.scrollRead", "on");
+      renderApp({ server: hundredTwenty() });
+      await screen.findByRole("link", { name: /Story 119/ });
+      const room = list().querySelector("[data-scroll-read-room]");
+
+      expect(room).not.toBeNull();
+      expect(lastRow().compareDocumentPosition(more()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(more().compareDocumentPosition(room!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("says that it is loading, without the button, while the next page is on its way", async () => {
+      const waiting = gate();
+      renderApp({ server: hundredTwenty(), hold: (request) => (request.includes("cursor=") ? waiting.wait : undefined) });
+      await screen.findByRole("link", { name: /Story 119/ });
+
+      act(() => intersect(more()));
+
+      expect(await within(list()).findByText("読み込み中…")).toBeInTheDocument();
+      expect(within(list()).queryByRole("button", { name: "さらに読み込む" })).not.toBeInTheDocument();
+      waiting.open();
+      await waitFor(() => expect(rowTitles()).toHaveLength(120));
+      expect(within(list()).queryByText("読み込み中…")).not.toBeInTheDocument();
+    });
+
+    it("tells of a failure at the end, not at the top, loads no more by itself, and tries again with the button", async () => {
+      let down = false;
+      const { user, requests } = renderApp({ server: hundredTwenty(), offline: () => down });
+      await screen.findByRole("link", { name: /Story 119/ });
+
+      down = true;
+      act(() => intersect(more()));
+
+      expect(await within(list()).findByText("続きを読み込めませんでした")).toBeInTheDocument();
+      expect(within(list()).getAllByRole("alert")).toHaveLength(1);
+      expect(within(list()).queryByRole("button", { name: "再試行" })).not.toBeInTheDocument();
+      expect(lastRow().compareDocumentPosition(within(list()).getByRole("button", { name: "さらに読み込む" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      const asked = requests.length;
+      act(() => intersect(more(), false));
+      act(() => intersect(more()));
+      await sleep(100);
+      expect(requests).toHaveLength(asked);
+
+      down = false;
+      await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+      await waitFor(() => expect(rowTitles()).toHaveLength(120));
+      expect(within(list()).queryByText("続きを読み込めませんでした")).not.toBeInTheDocument();
+    });
+
+    it("loads one page for one scroll to the end, when the page pushes the end out of view", async () => {
+      const server = makeServer();
+      const category = server.category();
+      for (let index = 0; index < 120; index += 1) server.article(category.id, { title: `Story ${index}` });
+      // As over a network, an answer takes a while: the list is drawn while the page is on its way.
+      const answer = server.app.request.bind(server.app);
+      vi.spyOn(server.app, "request").mockImplementation(async (...args: Parameters<typeof answer>) => {
+        await sleep(20);
+        return answer(...args);
+      });
+      const { requests } = renderApp({ server });
+      await screen.findByRole("link", { name: /Story 119/ });
+
+      act(() => intersect(more(), true, { stays: false }));
+      await waitFor(() => expect(rowTitles()).toHaveLength(100));
+      await sleep(200);
+
+      expect(rowTitles()).toHaveLength(100);
+      expect(requests.filter((request) => request.includes("cursor="))).toHaveLength(1);
+    });
   });
 
   it("shows another list from its top, wherever the last one was scrolled to", async () => {
@@ -527,7 +579,7 @@ describe("moving past the last article loaded", () => {
     offline = true;
     await user.keyboard("j");
 
-    expect(await within(list()).findByText("続きを読み込めませんでした。")).toBeInTheDocument();
+    expect(await within(list()).findByText("続きを読み込めませんでした")).toBeInTheDocument();
     expect(path()).toBe(`/all/${ids[1]}`);
   });
 
@@ -535,7 +587,8 @@ describe("moving past the last article loaded", () => {
     const { server, ids } = seeded();
     const { user, path } = renderApp({ server, route: `/all/${ids[0]}` });
     await screen.findByRole("heading", { level: 2, name: "Story 1" });
-    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    await waitFor(() => expect(within(list()).getAllByRole("listitem")).toHaveLength(50));
+    act(() => intersect(moreMark()!));
     await within(list()).findByRole("link", { name: /Story 1(?!\d)/ });
 
     await user.keyboard("j");
@@ -592,7 +645,7 @@ describe("moving past the last article loaded", () => {
     let offline = false;
     const { user, path } = renderApp({ server, route: `/all/${ids[52]}`, offline: () => offline });
     await screen.findByRole("heading", { level: 2, name: "Story 53" });
-    await user.click(within(list()).getByRole("button", { name: "さらに読み込む" }));
+    act(() => intersect(moreMark()!, true, { stays: false }));
     await within(list()).findByRole("link", { name: /Story 2(?!\d)/ });
     await user.click(within(list()).getByRole("link", { name: /Story 2(?!\d)/ }));
     await screen.findByRole("heading", { level: 2, name: "Story 2" });
@@ -2065,7 +2118,7 @@ describe("a star or a read state changed while the list or the change before is 
     const id = ids.at(-1)!;
     const { user, hold } = await openInAll(server, id);
     const late = hold(listFetch);
-    await user.click(screen.getByRole("button", { name: "さらに読み込む" }));
+    act(() => intersect(moreMark()!, true, { stays: false }));
     await waitFor(() => expect(late.held()).toBe(1));
 
     await user.keyboard("m");

@@ -328,6 +328,31 @@ describe("stepTarget", () => {
     expect(stepTarget(model(), fd(999), 1, open)).toEqual(views("unread"));
   });
 
+  it("goes through the saved searches between the views and the categories", () => {
+    const withSaved = buildNav({
+      categories: CATEGORIES,
+      feeds: FEEDS,
+      counts: undefined,
+      savedSearches: [7, 8].map((id) => ({ id, name: `s${id}`, query: `s${id}`, categoryId: null, feedId: null })),
+    });
+    const s = (savedSearchId: number): ListTarget => ({ type: "savedSearch", savedSearchId });
+    expect(stepTarget(withSaved, { type: "annotations" }, 1, open)).toEqual(s(7));
+    expect(stepTarget(withSaved, s(7), 1, open)).toEqual(s(8));
+    expect(stepTarget(withSaved, s(8), 1, open)).toEqual(cat(1));
+    expect(stepTarget(withSaved, cat(1), -1, open)).toEqual(s(8));
+    expect(stepTarget(withSaved, s(7), -1, open)).toEqual({ type: "annotations" });
+  });
+
+  it("opens nothing after marking a saved search read, as with the views", () => {
+    const withSaved = buildNav({
+      categories: CATEGORIES,
+      feeds: FEEDS,
+      counts: undefined,
+      savedSearches: [{ id: 7, name: "s", query: "s", categoryId: null, feedId: null }],
+    });
+    expect(nextTarget(withSaved, { type: "savedSearch", savedSearchId: 7 })).toBeNull();
+  });
+
   it("passes by the entries without unread articles once they are hidden, but not the one that is open", () => {
     const counted = model({ "category-1": 3, "feed-11": 1, "feed-13": 2, "category-2": 0 });
     const shown = (current: ListTarget | null) => hideEmptyEntries(counted, { current, counted: true });
