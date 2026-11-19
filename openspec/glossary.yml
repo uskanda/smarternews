@@ -594,3 +594,7 @@ terms:
     definition: "入力欄が空のときに欄の中に薄く表示する、入れるものを示す文字列。"
     aliases: ["プレースホルダ"]
     en: "placeholder"
+  - term: "パーマリンク"
+    definition: "フィードの項目のguidのうち、元のページの変わらないURLとして使えると示されたもの。"
+    aliases: []
+    en: "permalink"

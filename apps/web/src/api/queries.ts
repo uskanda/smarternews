@@ -112,6 +112,12 @@ export function useTermGroups() {
   return useQuery({ queryKey: ["term-groups"], queryFn: () => api.termGroups() });
 }
 
+/** The saved searches in their order. Their unread counts come with the counts. */
+export function useSavedSearches() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["saved-searches"], queryFn: () => api.savedSearches() });
+}
+
 /** Finds the terms of the term groups in a text. Has no terms until the groups have arrived. */
 export function useTermMatcher(): TermMatcher {
   const groups = useTermGroups().data;

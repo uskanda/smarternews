@@ -126,3 +126,11 @@ listViews:
   - list: { feed: "https://www.rfc-editor.org/rfcrss.xml" }
     sort: oldest
     format: expanded
+# Saved searches: the words of a search under a name, listed in the left pane of the web app with how many
+# unread articles they find. A search may be narrowed to a category by its slug or to a feed by its URL; the
+# scope is left out for a search over every article. A search with the same name, words and scope is not
+# saved twice.
+savedSearches:
+  - name: Rust security
+    query: rust vulnerability
+    scope: { category: security }

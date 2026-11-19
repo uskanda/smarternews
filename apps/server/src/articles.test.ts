@@ -468,6 +468,7 @@ describe("ended events in lists without a kind", () => {
         { categoryId: events.id, unread: 1, total: 2, generatedUnread: 1, generatedTotal: 2 },
       ],
       feeds: [],
+      savedSearches: [],
     });
   });
 });
@@ -498,6 +499,7 @@ describe("counts", () => {
         { categoryId: empty.id, unread: 0, total: 0, generatedUnread: 0, generatedTotal: 0 },
       ],
       feeds: [],
+      savedSearches: [],
     });
   });
 });

@@ -97,8 +97,10 @@ let inView = new WeakSet<Element>();
 class FakeIntersectionObserver {
   readonly targets = new Set<Element>();
   readonly callback: IntersectionObserverCallback;
-  constructor(callback: IntersectionObserverCallback) {
+  readonly options: IntersectionObserverInit;
+  constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
     this.callback = callback;
+    this.options = options;
   }
   observe(target: Element) {
     this.targets.add(target);
@@ -131,6 +133,10 @@ export function intersect(target: Element, isIntersecting = true, { stays = isIn
   for (const observer of [...intersectionObservers]) {
     if (observer.targets.has(target)) observer.tell(target, isIntersecting);
   }
+}
+/** The options of the observers watching `target` now. */
+export function intersectionOptions(target: Element): IntersectionObserverInit[] {
+  return [...intersectionObservers].filter((observer) => observer.targets.has(target)).map((observer) => observer.options);
 }
 afterEach(() => {
   intersectionObservers.clear();
