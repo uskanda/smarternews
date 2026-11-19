@@ -423,6 +423,7 @@ describe("articles of subscribed feeds", () => {
         { feedId: inCategory.id, unread: 2 },
         { feedId: loose.id, unread: 1 },
       ],
+      savedSearches: [],
     });
   });
 
