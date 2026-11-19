@@ -61,6 +61,7 @@ import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
 import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { LoadMore } from "../ui/LoadMore.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
 import { AddTopicButton } from "./AddTopicDialog.tsx";
 import { AnnotationList } from "./AnnotationList.tsx";
@@ -929,31 +930,6 @@ export function ReaderPage({ view }: { view: View }) {
     const to = followScroll({ top: pane.scrollTop, height: pane.clientHeight || view.height, rowTop, rowBottom: rowTop + box.height, step });
     if (to !== null) pane.scrollTop = to;
   }, [articleId]);
-  // The next page is loaded when the end of the rows loaded comes into view, and again while it stays there: a
-  // page may be shorter than the view. A page that could not be loaded is not asked for again by itself, or
-  // every scroll would ask; the button below the rows asks again.
-  const moreMark = useRef<HTMLDivElement>(null);
-  const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = active;
-  // Every page that arrives moves the mark, and so does another list. What was in view before says nothing of
-  // now, and would load one page more than the reader scrolled to: the mark is looked at anew, and counts as
-  // in view only for the rows it was seen under.
-  const rowsLoaded = `${listKey}#${active.data?.pages.length ?? 0}`;
-  const [seenUnder, setSeenUnder] = useState<string | null>(null);
-  const nearEnd = seenUnder === rowsLoaded;
-  useEffect(() => {
-    const mark = moreMark.current;
-    if (!mark) return;
-    const observer = new IntersectionObserver((entries) => setSeenUnder(entries.at(-1)?.isIntersecting ? rowsLoaded : null), {
-      root: listScroll.current,
-      rootMargin: "0px 0px 200px 0px",
-    });
-    observer.observe(mark);
-    return () => observer.disconnect();
-    // The mark is there while the list is shown and has more.
-  }, [listShown, hasNextPage, rowsLoaded]);
-  useEffect(() => {
-    if (nearEnd && hasNextPage && !isFetching && !isFetchNextPageError) void fetchNextPage();
-  }, [nearEnd, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
   // The article pane starts every article at its top.
   const articlePane = useRef<HTMLDivElement>(null);
   /** The move through the list of annotations, which that list puts here while it is shown. */
@@ -1249,7 +1225,7 @@ export function ReaderPage({ view }: { view: View }) {
         {/* A next page that could not be loaded is said below the rows, where the reader is. */}
         {wordsProblem !== null ? <ErrorNotice message={wordsProblem} /> : null}
         {active.isError && !active.isFetchNextPageError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
-        {active.isPending && !active.isError && !(isSearch && words.length === 0) && wordsProblem === null &&!(isMention && mentionName.length === 0) ? <Loading /> : null}
+        {active.isPending && !active.isError && !(isSearch && words.length === 0) && wordsProblem === null && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
         ) : null}
@@ -1306,18 +1282,7 @@ export function ReaderPage({ view }: { view: View }) {
                 />
               ))}
         </ul>
-        {active.hasNextPage ? (
-          <div ref={moreMark} data-list-more className="flex flex-col items-center gap-sm p-lg">
-            {active.isFetchNextPageError ? (
-              <p role="alert" className="type-body-md text-error">
-                続きを読み込めませんでした。
-              </p>
-            ) : null}
-            <Button onClick={() => void active.fetchNextPage()} disabled={active.isFetchingNextPage}>
-              {active.isFetchingNextPage ? "読み込んでいます" : "さらに読み込む"}
-            </Button>
-          </div>
-        ) : null}
+        <LoadMore list={active} scroller={listScroll} />
         {items.length > 0 && active.isSuccess && !active.hasNextPage ? (
           <div data-list-end className="flex flex-col items-center gap-sm p-lg type-body-md">
             <p className="text-on-surface-muted">一覧の最後です</p>
