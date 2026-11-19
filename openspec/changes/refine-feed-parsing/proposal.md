@@ -18,7 +18,7 @@
 
 ### New Capabilities
 
-なし
+なし。
 
 ### Modified Capabilities
 
@@ -27,7 +27,7 @@
 
 ## Impact
 
-- コード：`packages/core/src/sources/text.ts`、`sources/feed.ts`、`sources/news-search.ts`、`feeds/ingest.ts`、`feeds/discover.ts`、`fetch/http.ts`、`pipeline/run.ts`、`config.ts`、`apps/server/src/runtime.ts`。
+- コード：`packages/core/src/sources/` の `text.ts`、`feed.ts`、`news-search.ts`。`packages/core/src/` の `feeds/ingest.ts`、`feeds/discover.ts`、`fetch/http.ts`、`pipeline/run.ts`、`config.ts`。サーバーの `apps/server/src/runtime.ts`。
 - 依存：`entities`（8.1.0、BSD-2-Clause）を `packages/core` の直接の依存にする。`linkedom` の依存として、すでに同じ版が入っている。
 - 設定：`fetch.feedMaxBytes` を足す。既存の `config.yaml` は書き換えずにそのまま動く。
 - データ：保存済みの配信記事は変えない。次の取得から新しい読み方になる。
