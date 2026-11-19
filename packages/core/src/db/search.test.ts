@@ -235,6 +235,29 @@ describe("the results", () => {
     expect(search(db, "電池", { unread: "true" })).toEqual([unread]);
   });
 
+  it("narrow to starred articles, newest first by last update whenever they were starred", () => {
+    const db = createTestDb();
+    const feed = seedFeed(db);
+    const older = seedFeedArticle(db, feed, { title: "電池 1", at: day(1) });
+    const newer = seedFeedArticle(db, feed, { title: "電池 2", at: day(2) });
+    seedFeedArticle(db, feed, { title: "電池 3", at: day(3) });
+    seedFeedArticle(db, feed, { title: "電池 4", at: day(4) });
+    setArticleFlags(db, newer, { starred: true }, day(5));
+    setArticleFlags(db, older, { starred: true }, day(6));
+    expect(search(db, "電池", { starred: "true" })).toEqual([newer, older]);
+    expect(search(db, "電池", { starred: "true", unread: "true" })).toEqual([newer, older]);
+    setArticleFlags(db, older, { isRead: true }, day(6));
+    expect(search(db, "電池", { starred: "true", unread: "true" })).toEqual([newer]);
+  });
+
+  it("include a hidden duplicate that has a star when narrowed to starred articles, as the list of starred articles does", () => {
+    const db = createTestDb();
+    const kept = seedFeedArticle(db, seedFeed(db), { title: "電池の話", at: day(1) });
+    const duplicate = seedFeedArticle(db, seedFeed(db), { title: "電池の話", at: day(2), duplicateOf: kept, starred: true });
+    expect(search(db, "電池", { starred: "true" })).toEqual([duplicate]);
+    expect(search(db, "電池")).toEqual([kept]);
+  });
+
   it("come in pages, none twice", () => {
     const db = createTestDb();
     const feed = seedFeed(db);

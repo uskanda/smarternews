@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getArticle, recordFullContentFailure, requestAutoSummary, saveFullContent, setArticleFlags } from "../db/articles.ts";
 import { listMentionArticles } from "../db/mentions.ts";
 import { insertFeed, updateFeed } from "../db/feeds.ts";
+import { applyRules, createRule } from "../db/rules.ts";
 import { Fetcher } from "../fetch/http.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "../testing/db.ts";
@@ -69,6 +70,22 @@ describe("summarizeNext", () => {
     expect(stored.body).toBe(DELIVERED);
     expect(JSON.stringify(s.db.prepare("SELECT * FROM articles WHERE id = ?").get(id))).not.toContain("fulltext");
     expect(s.calls()).toEqual([{ task: "summarize", ok: 1 }]);
+  });
+
+  it("summarises from the element the feed's content selector matches, for a feed that does not fetch full content", async () => {
+    const comments = prose("comment", 900);
+    const s = setup({
+      "https://site.example.org/1": () =>
+        html(`<html><head><title>Page</title></head><body><article><div class="story"><p>${PAGE_TEXT}</p></div><section><p>${comments}</p><p>${comments}</p></section></article></body></html>`),
+    });
+    updateFeed(s.db, s.feed.id, { contentSelector: ".story" }, s.clock);
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(s.prompts()[0]).toContain("fulltext fulltext");
+    expect(s.prompts()[0]).not.toContain("comment");
+    expect(getArticle(s.db, id)).toMatchObject({ autoSummary: { source: "page" }, fullContent: null });
   });
 
   it("stores no full content from the page it read for a feed that does not fetch full content", async () => {
@@ -263,6 +280,24 @@ describe("summarizeNext, when a call fails", () => {
     s.clock.advance(24 * 60 * MINUTE);
     expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
     expect(getArticle(s.db, first).autoSummary?.text).toBe("A summary.");
+  });
+
+  it("counts what a rule asked for against the day's allowance, and makes it first on the next day", async () => {
+    const s = setup({}, () => ({ summary: "A summary." }), { summariesPerDay: 1 });
+    createRule(s.db, { scope: { type: "all" }, conditions: [{ fields: ["title"], match: "contains", value: "障害" }], actions: ["summarize"] }, s.clock);
+    s.article();
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+    const other = insertFeed(s.db, { url: "https://other.example.org/feed.xml", title: "Other" }, s.clock);
+    const asked = seedFeedArticle(s.db, other.id, { title: "障害", at: "2026-02-01T00:00:00.000Z", body: DELIVERED, url: null });
+    applyRules(s.db, asked, s.clock().toISOString());
+    s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("limit");
+    expect(getArticle(s.db, asked)).toMatchObject({ autoSummary: null, autoSummaryPending: true });
+
+    s.clock.advance(24 * 60 * MINUTE);
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+    expect(getArticle(s.db, asked).autoSummary?.text).toBe("A summary.");
   });
 });
 

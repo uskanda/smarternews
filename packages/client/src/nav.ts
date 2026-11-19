@@ -1,6 +1,6 @@
 // What the list of entries holds — the left pane of the web app, the drawer of the Android app — and which
 // articles each entry opens. Both apps draw this one model, so they cannot disagree.
-import type { ArticleListQuery, Category, Counts, Feed, ListSort, ListView, MarkRead } from "@smarternews/core/api";
+import type { ArticleListQuery, Category, Counts, Feed, ListFormat, ListSort, ListView, ListViewUpdate, MarkRead } from "@smarternews/core/api";
 import { feedState, strongestFeedState, type FeedState } from "./feed-state.ts";
 
 /** A list of articles a reader can open. */
@@ -125,15 +125,16 @@ export function parseHideRead(stored: string | null): boolean {
 /**
  * The model without the categories, the feeds and the generated articles of a category that have no unread
  * article. The views at the top stay. So do the open entry with the group above it, and a feed whose fetches
- * failed or stopped, with its group: hiding it would hide that something is wrong. A group keeps the
- * `childState` of all its feeds, the hidden ones too. Until the counts have arrived (`counted` false), every
- * entry counts zero and nothing is hidden.
+ * failed or stopped, or whose feed has gone, with its group: hiding it would hide that something is wrong. A
+ * group keeps the `childState` of all its feeds, the hidden ones too. Until the counts have arrived (`counted`
+ * false), every entry counts zero and nothing is hidden.
  */
 export function hideEmptyEntries(model: NavModel, options: { current: ListTarget | null; counted: boolean }): NavModel {
   if (!options.counted) return model;
   const currentKey = options.current === null ? null : listKey(options.current);
   const isCurrent = (entry: NavEntry) => currentKey !== null && listKey(entry.target) === currentKey;
-  const keeps = (entry: NavEntry) => entry.unread > 0 || entry.state === "failed" || entry.state === "stale" || isCurrent(entry);
+  const troubled = (entry: NavEntry) => entry.state === "failed" || entry.state === "stale" || entry.state === "gone";
+  const keeps = (entry: NavEntry) => entry.unread > 0 || troubled(entry) || isCurrent(entry);
   const groups = model.groups.flatMap((group) => {
     const children = group.children.filter(keeps);
     return group.entry.unread > 0 || children.length > 0 || isCurrent(group.entry) ? [{ ...group, children }] : [];
@@ -164,7 +165,7 @@ export function parseListKey(key: string): ListTarget | null {
  * the server's default and is not sent.
  */
 export function targetFilter(target: ListTarget, sort: ListSort = "newest"): ArticleListQuery {
-  return { ...filterOf(target), ...(sort === "oldest" ? { order: "oldest" as const } : {}) };
+  return { ...filterOf(target), ...(sort === "newest" ? {} : { order: sort }) };
 }
 
 function filterOf(target: ListTarget): ArticleListQuery {
@@ -224,14 +225,61 @@ export function hasSortMenu(target: ListTarget, categories: Category[] | undefin
   return target.type !== "recentlyRead" && target.type !== "annotations" && !isEventCategory(target, categories);
 }
 
+/** The labels of the orders, as the menu of the order names them. */
+export const SORT_LABELS: Record<ListSort, string> = { newest: "新しい順", oldest: "古い順", relevance: "関連度順", starred: "スターを付けた順" };
+
+/**
+ * The orders the menu of the list offers: newest and oldest first and by relevance, and for the starred
+ * articles also the order they were starred in.
+ */
+export function sortOptionsOf(target: ListTarget): ListSort[] {
+  const common: ListSort[] = ["newest", "oldest", "relevance"];
+  return target.type === "starred" ? [...common, "starred"] : common;
+}
+
 /**
  * The order the list of the target is shown in: the one its list view keeps, newest first for an entry
- * without one, and always newest first where the order cannot be chosen.
+ * without one, and always newest first where the order cannot be chosen. An order the menu of the entry does
+ * not offer is newest first too.
  */
-export function listSortOf(target: ListTarget, views: ListView[] | undefined, categories: Category[] | undefined): ListSort {
+export function listSortOf(target: ListTarget, views: readonly StoredView[] | undefined, categories: Category[] | undefined): ListSort {
   if (!hasSortMenu(target, categories)) return "newest";
   const key = listKey(target);
-  return views?.find((view) => view.key === key)?.sort ?? "newest";
+  const sort = views?.find((view) => view.key === key)?.sort ?? "newest";
+  return sortOptionsOf(target).includes(sort) ? sort : "newest";
+}
+
+/** A list view as the apps hold it: a setting it leaves out is the default. */
+export type StoredView = Pick<ListView, "key"> & Partial<Pick<ListView, "sort" | "format">>;
+
+/**
+ * The list views as the server will answer them once it stores a change to one entry: the setting the change
+ * leaves out keeps its value, and the entry is no longer listed once both settings are back to the defaults.
+ * For the screens to take a change before the server answers.
+ */
+export function withViewChange(views: readonly StoredView[], key: string, patch: ListViewUpdate): ListView[] {
+  const stored = views.find((view) => view.key === key);
+  const sort = patch.sort ?? stored?.sort ?? "newest";
+  const format = patch.format ?? stored?.format ?? "standard";
+  const others = views.filter((view) => view.key !== key).map((view) => ({ sort: "newest" as const, format: "standard" as const, ...view }));
+  return sort === "newest" && format === "standard" ? others : [...others, { key, sort, format }];
+}
+
+/** The formats of a list on the web, in the order the menu of the format offers them. */
+export const FORMAT_OPTIONS: readonly ListFormat[] = ["standard", "compact", "expanded"];
+
+/** The labels of the formats, as the menu of the format names them. */
+export const FORMAT_LABELS: Record<ListFormat, string> = { standard: "標準", compact: "タイトルのみ", expanded: "展開" };
+
+/**
+ * The format the list of the target is shown in on the web: the one its list view keeps, and the standard one
+ * for an entry without one and wherever the order cannot be chosen either, as the format is kept by the same
+ * entries as the order.
+ */
+export function listFormatOf(target: ListTarget, views: readonly StoredView[] | undefined, categories: Category[] | undefined): ListFormat {
+  if (!hasSortMenu(target, categories)) return "standard";
+  const key = listKey(target);
+  return views?.find((view) => view.key === key)?.format ?? "standard";
 }
 
 /** Whether the list shows unread articles only until the reader asks for the read ones too. */

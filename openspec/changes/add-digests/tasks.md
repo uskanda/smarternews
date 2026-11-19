@@ -19,12 +19,12 @@
 ## 3. 作る処理
 
 - [x] 3.1 `packages/core/src/digests/worker.ts` に、1つのダイジェストを作る処理を書く。入力にない識別子を捨てること、区画をカテゴリの並び順にすること、記事が0件のときに呼ばないことを確かめる。仕様 `digests` の「根拠の記事の確かめ」「記事のない期間」「カテゴリの区画」の各場面が対象である
-- [x] 3.2 `DigestWorker` に、時刻での作成、起動のときの補完、今すぐ作る操作を書く。仕様 `digests` の「時刻でのダイジェストの作成」「停止中に過ぎた時刻の補完」「今すぐ作る」の各場面を、時計を動かすテストで確かめる。仕様 `llm-tasks` の「ダイジェストの呼び出しの回数」「ダイジェストの呼び出しの記録」も確かめる
+- [x] 3.2 `DigestWorker` に、時刻での作成、起動のときの補完、いま作る操作を書く。仕様 `digests` の「時刻でのダイジェストの作成」「停止中に過ぎた時刻の補完」「いま作る」の各場面を、時計を動かすテストで確かめる。仕様 `llm-tasks` の「ダイジェストの呼び出しの回数」「ダイジェストの呼び出しの記録」も確かめる
 - [x] 3.3 `apps/server/src/runtime.ts` で `DigestWorker` を組み立て、起動と停止を結びつける。`runtime.test.ts` で確かめる
 
 ## 4. API
 
-- [x] 4.1 `apps/server/src/app.ts` にダイジェストの3つの操作を足す。仕様 `http-api` の「ダイジェストの一覧の操作」「ダイジェストの取得の操作」「今すぐ作る操作」の各場面を、サーバーを通したテストで確かめる
+- [x] 4.1 `apps/server/src/app.ts` にダイジェストの3つの操作を足す。仕様 `http-api` の「ダイジェストの一覧の操作」「ダイジェストの取得の操作」「いま作る操作」の各場面を、サーバーを通したテストで確かめる
 - [x] 4.2 `GET /api/v1/providers` に `digestsToday` と `limits.digestsPerDay` を足す。仕様 `http-api` の「ダイジェストの呼び出し回数の提供」の場面を確かめる
 - [x] 4.3 `rss-route.test.ts` で、仕様 `digests` の「ダイジェストをRSSに出さないこと」の場面を確かめる
 - [x] 4.4 `packages/client/src/api.ts` にダイジェストの呼び出しを足し、応答のスキーマでの検証をテストで確かめる
@@ -32,7 +32,7 @@
 ## 5. Web
 
 - [x] 5.1 `apps/web/src/shell/Shell.tsx` の左のペインの「注釈」の下に、ダイジェストの項目を足す。仕様 `web-reader` と仕様 `web-shell` の、ダイジェストの項目の場面を確かめる
-- [x] 5.2 `apps/web/src/digests/DigestPage.tsx` を作り、`/digests/:digestId?` で開く。仕様 `web-reader` の「ダイジェストの画面」「根拠の記事へのリンク」の各場面を、実物のAPIに対するテストで確かめる。「画面からの今すぐ作る操作」「ダイジェストがないときの表示」と、仕様 `web-shell` の「ダイジェストの画面のURL」も確かめる
+- [x] 5.2 `apps/web/src/digests/DigestPage.tsx` を作り、`/digests/:digestId?` で開く。仕様 `web-reader` の「ダイジェストの画面」「根拠の記事へのリンク」の各場面を、実物のAPIに対するテストで確かめる。「画面からのいま作る操作」「ダイジェストがないときの表示」と、仕様 `web-shell` の「ダイジェストの画面のURL」も確かめる
 - [x] 5.3 `apps/web/src/settings/SettingsPage.tsx` に、ダイジェストを作る時刻の欄を足す。仕様 `web-settings` の「ダイジェストを作る時刻の欄」の各場面を確かめる
 
 ## 6. アプリ
@@ -44,5 +44,5 @@
 ## 7. 文書と全体の確認
 
 - [x] 7.1 `docs/api.md` と `docs/providers.md` に、ダイジェストと新しい設定を書く。`examples/config.example.yaml`、`README.md`、`README.ja.md` にも書く
-- [ ] 7.2 `apps/server` を作業用のディレクトリと空いているポートで起動する。プロバイダーは差し替えのものに向け、Webで今すぐ作るから表示までを確かめる。サーバーは起動のときに控えたPIDで止める
+- [ ] 7.2 `apps/server` を作業用のディレクトリと空いているポートで起動する。プロバイダーは差し替えのものに向け、Webでいま作るから表示までを確かめる。サーバーは起動のときに控えたPIDで止める
 - [x] 7.3 `make verify` を通し、`openspec validate add-digests --strict` が通ることを確かめる

@@ -23,8 +23,12 @@ export function firstRowBelow(container: HTMLElement, rows: ArrayLike<Element>):
 export interface ScrollToReadOptions {
   /** Whether the list marks read what it is scrolled past now. */
   enabled: boolean;
-  /** The element that scrolls, and the list whose items are the rows, in the order of `items`. */
+  /**
+   * The element that scrolls, and the list whose items are the rows, in the order of `items`. `scrollElement` is
+   * the same element as `scrollRef` holds, kept as a value so that the scroll is listened to again when it comes.
+   */
   scrollRef: RefObject<HTMLElement | null>;
+  scrollElement: HTMLElement | null;
   rowsRef: RefObject<HTMLElement | null>;
   items: readonly ArticleSummary[];
   /** Changes when the list is read anew: another entry, or a refresh. What was put back to unread counts again. */
@@ -95,7 +99,7 @@ export function useScrollToRead(options: ScrollToReadOptions): { exclude: (id: n
   }, [options.enabled, options.items, options.resetKey]);
 
   useEffect(() => {
-    const container = options.scrollRef.current;
+    const container = options.scrollElement;
     if (!options.enabled || !container) return;
     let frame: number | null = null;
     const onScroll = () => {
@@ -116,7 +120,7 @@ export function useScrollToRead(options: ScrollToReadOptions): { exclude: (id: n
       container.removeEventListener("scroll", onScroll);
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [options.enabled, options.scrollRef, queue]);
+  }, [options.enabled, options.scrollElement, queue]);
 
   // A page that goes away or out of sight sends what waits, and lets the request outlive it.
   useEffect(() => {

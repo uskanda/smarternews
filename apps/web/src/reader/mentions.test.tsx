@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "../App.tsx";
 import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
-import { watchIntersections } from "../testing/setup.ts";
+import { intersect } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
 const BOJ: Mention = { name: "日本銀行", kind: "organization" };
@@ -196,7 +196,6 @@ describe("the list of a name", () => {
   });
 
   it("loads more rows near the end, and moves through them with j and k", async () => {
-    const intersections = watchIntersections();
     const server = makeServer();
     const category = server.category();
     for (let index = 0; index < 55; index += 1) {
@@ -206,7 +205,7 @@ describe("the list of a name", () => {
     const { user, path } = renderApp({ server, route: `/mentions?${n("日本銀行")}` });
     await waitFor(() => expect(rowTitles()).toHaveLength(50));
 
-    intersections.show(list().querySelector("[data-load-more]")!);
+    act(() => intersect(list().querySelector("[data-load-more]")!));
     await waitFor(() => expect(rowTitles()).toHaveLength(55));
 
     await user.keyboard("j");
@@ -289,7 +288,9 @@ describe("the names and the keyboard", () => {
     await user.keyboard("?");
     const dialog = await screen.findByRole("dialog", { name: "キー操作" });
     const keys = within(dialog).getAllByRole("term").map((term) => term.textContent);
-    expect(keys).toEqual(["j", "k", "s", "m", "x", "o", "w", "h", "Space", "Shift+Space", "Shift+A", "z", "r", "u", "Shift+J", "Shift+K", "g a", "g s", "g e", "g r", "Shift+F10", "/", "?"]);
-    expect(dialog.textContent).not.toContain("名前");
+    expect(keys).toEqual(["j", "k", "s", "m", "x", "o", "c", "w", "h", "Space", "Shift+Space", "Shift+A", "z", "r", "u", "Shift+J", "Shift+K", "g a", "g s", "g e", "g r", "g u", "Shift+F10", "/", "?"]);
+    // The names in an article add no key. `g u` takes the name of an entry, not of an article.
+    const actions = within(dialog).getAllByRole("definition").map((action) => action.textContent);
+    expect(actions.filter((action) => action !== "名前を打って、カテゴリか購読フィードへ移る").join("")).not.toContain("名前");
   });
 });

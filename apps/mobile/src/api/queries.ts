@@ -1,6 +1,6 @@
 import type { Article, ArticleList, ArticleListQuery, ArticleSearchQuery, ArticleSummary, ListSort, ListViews } from "@smarternews/core/api";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { createTermMatcher, type TermMatcher } from "@smarternews/client";
+import { createTermMatcher, withViewChange, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "./AppProvider";
 
@@ -64,8 +64,8 @@ export function useListSortChange(onFailed: () => void) {
       // A fetch under way would put the old order back.
       await client.cancelQueries({ queryKey: ["list-views"] });
       const before = client.getQueryData<ListViews>(["list-views"]);
-      const others = (before?.items ?? []).filter((view) => view.key !== key);
-      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      // The format the web keeps for the entry stays.
+      client.setQueryData<ListViews>(["list-views"], { items: withViewChange(before?.items ?? [], key, { sort }) });
       return { before };
     },
     onError: (_error, _variables, context) => {
@@ -127,7 +127,14 @@ export function useArticle(id: number | null) {
   return useQuery({ queryKey: ["article", id], queryFn: () => api.article(id!), enabled: id !== null });
 }
 
-/** Applies a change to one article wherever it is cached: in every list and in its own entry. */
+/** Hears every change `patchArticle` makes to an article. */
+export type ArticlePatchListener = (id: number, patch: Partial<ArticleSummary>) => void;
+const patchListeners = new WeakMap<QueryClient, Set<ArticlePatchListener>>();
+
+/**
+ * Applies a change to one article wherever it is cached: in every list and in its own entry. Those listening hear
+ * it too: the rows a list keeps outside the cache.
+ */
 function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSummary>): void {
   client.setQueriesData<InfiniteData<ArticleList>>({ queryKey: ["articles"] }, (data) =>
     data
@@ -135,6 +142,24 @@ function patchArticle(client: QueryClient, id: number, patch: Partial<ArticleSum
       : data,
   );
   client.setQueryData<Article>(["article", id], (article) => (article ? { ...article, ...patch } : article));
+  for (const listener of patchListeners.get(client) ?? []) listener(id, patch);
+}
+
+/**
+ * Hears every change made to a cached article: a translated title, an open time, a read state or a star, and
+ * such a change undone when the server could not store it. For the rows a list keeps outside the cache.
+ */
+export function useArticlePatchListener(listener: ArticlePatchListener): void {
+  const client = useQueryClient();
+  const latest = useRef(listener);
+  latest.current = listener;
+  useEffect(() => {
+    let listeners = patchListeners.get(client);
+    if (!listeners) patchListeners.set(client, (listeners = new Set()));
+    const heard: ArticlePatchListener = (id, patch) => latest.current(id, patch);
+    listeners.add(heard);
+    return () => void listeners.delete(heard);
+  }, [client]);
 }
 
 /**
@@ -280,18 +305,21 @@ export function useRecordOpened() {
   );
 }
 
+/**
+ * Sets the read state or the star of an article. The screen changes at once, in every list and in the article.
+ * When the server cannot store it, the change is undone everywhere it was made, also for an article whose own
+ * entry is not cached: the value before is the opposite of the one sent, since a toggle sends the opposite.
+ */
 export function useArticleFlags() {
   const { api } = useApp();
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...patch }: { id: number; isRead?: boolean; starred?: boolean }) => api.updateArticle(id, patch),
     onMutate: ({ id, ...patch }) => {
-      const before = client.getQueryData<Article>(["article", id]);
       patchArticle(client, id, patch);
-      return { before };
     },
-    onError: (_error, { id }, context) => {
-      if (context?.before) patchArticle(client, id, { isRead: context.before.isRead, starred: context.before.starred });
+    onError: (_error, { id, isRead, starred }) => {
+      patchArticle(client, id, { ...(isRead !== undefined ? { isRead: !isRead } : {}), ...(starred !== undefined ? { starred: !starred } : {}) });
     },
     onSettled: (_data, _error, variables) => {
       void client.invalidateQueries({ queryKey: ["counts"] });

@@ -3,8 +3,9 @@ import { createTestDb, fakeClock, seedFeed, seedFeedArticle } from "../testing/d
 import { insertArticle, reviseArticle } from "./articles.ts";
 import { createCategory, updateCategory } from "./categories.ts";
 import type { Database } from "./database.ts";
-import { DIGEST_MAX_ARTICLES, digestArticles, digestPeriodStart, getDigest, listDigests, saveDigest } from "./digests.ts";
+import { DIGEST_MAX_ARTICLES, digestArticles, digestPeriodStart, getDigest, listDigestArticles, listDigests, saveDigest } from "./digests.ts";
 import { createFilter } from "./filters.ts";
+import { replaceMentions } from "./mentions.ts";
 
 const NOW = "2026-03-01T07:00:00.000Z";
 const clock = fakeClock(NOW);
@@ -38,6 +39,7 @@ function store(db: Database, periodEnd: string, overrides: Partial<Parameters<ty
     executiveSummary: "Summary.",
     sections: [],
     articleCount: 1,
+    target: null,
     ...overrides,
   });
 }
@@ -49,6 +51,13 @@ describe("the period of a digest", () => {
     const db = createTestDb();
     store(db, "2026-02-28T19:00:00.000Z");
     store(db, "2026-02-28T07:00:00.000Z");
+    expect(digestPeriodStart(db, new Date(NOW)).toISOString()).toBe("2026-02-28T19:00:00.000Z");
+  });
+
+  it("leaves out the digests made of a list", () => {
+    const db = createTestDb();
+    store(db, "2026-02-28T19:00:00.000Z");
+    store(db, "2026-03-01T06:50:00.000Z", { trigger: "list", target: { type: "starred", label: "スター" } });
     expect(digestPeriodStart(db, new Date(NOW)).toISOString()).toBe("2026-02-28T19:00:00.000Z");
   });
 
@@ -161,5 +170,71 @@ describe("stored digests", () => {
       { id: feedArticle, title: "訳", origin: "feed" },
     ]);
     expect(() => getDigest(db, 12345)).toThrow(expect.objectContaining({ code: "not_found" }));
+  });
+
+  it("keep the target of a list digest, and the digests of a period can be listed alone", () => {
+    const db = createTestDb();
+    const morning = store(db, "2026-02-28T19:00:00.000Z");
+    const list = store(db, NOW, { trigger: "list", target: { type: "mention", label: "名前：OpenAI" } });
+
+    expect(listDigests(db).map((digest) => [digest.id, digest.target])).toEqual([
+      [list, { type: "mention", label: "名前：OpenAI" }],
+      [morning, null],
+    ]);
+    expect(listDigests(db, { kind: "period" }).map((digest) => digest.id)).toEqual([morning]);
+    expect(getDigest(db, list)).toMatchObject({ trigger: "list", target: { type: "mention", label: "名前：OpenAI" } });
+  });
+});
+
+describe("the articles of a list a digest is made from", () => {
+  it("takes the starred articles newest first, as the starred list has them, at most 200", () => {
+    const db = createTestDb();
+    const feed = seedFeed(db, { categoryId: null });
+    const older = seedFeedArticle(db, feed, { at: "2026-02-01T00:00:00.000Z", starred: true, title: "Older" });
+    const newer = seedFeedArticle(db, feed, { at: "2026-02-20T00:00:00.000Z", starred: true, title: "Newer", body: "y".repeat(500) });
+    seedFeedArticle(db, feed, { at: "2026-02-25T00:00:00.000Z", title: "Not starred" });
+
+    const { articles, target, period } = listDigestArticles(db, { type: "starred" }, NOW);
+    expect(target).toEqual({ type: "starred", label: "スター" });
+    expect(period).toEqual({ start: "2026-02-01T00:00:00.000Z", end: "2026-02-20T00:00:00.000Z" });
+    expect(articles.map((article) => article.id)).toEqual([newer, older]);
+    expect(articles[0]).toEqual({ id: newer, categoryId: null, origin: "feed", title: "Newer", importance: null, text: "y".repeat(300) });
+
+    for (let i = 0; i < 210; i += 1) seedFeedArticle(db, feed, { at: new Date(Date.parse("2026-02-21T00:00:00.000Z") + i * 60_000).toISOString(), starred: true });
+    const many = listDigestArticles(db, { type: "starred" }, NOW).articles;
+    expect(many).toHaveLength(DIGEST_MAX_ARTICLES);
+    expect(many.map((article) => article.id)).not.toContain(older);
+  });
+
+  it("takes the articles of a name, generated ones with their summary and importance", () => {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tech", kind: "news" }, clock);
+    const article = generated(db, category.id, { importance: 4, title: "About OpenAI" });
+    const feedArticle = seedFeedArticle(db, seedFeed(db, { categoryId: category.id }), { at: "2026-02-01T00:00:00.000Z" });
+    generated(db, category.id, { title: "Elsewhere" });
+    for (const id of [article, feedArticle]) replaceMentions(db, id, [{ name: "OpenAI", kind: "organization" }]);
+
+    const { articles, target } = listDigestArticles(db, { type: "mention", name: " OpenAI " }, NOW);
+    expect(target.label).toBe("名前：OpenAI");
+    expect(articles.map((entry) => entry.id)).toEqual([article, feedArticle]);
+    expect(articles[0]).toEqual({ id: article, categoryId: category.id, origin: "generated", title: "About OpenAI", importance: 4, text: "The summary." });
+  });
+
+  it("takes the results of a search with its narrowing, and says the narrowing in the label", () => {
+    const db = createTestDb();
+    const tech = createCategory(db, { name: "Tech", kind: "news" }, clock);
+    const feed = seedFeed(db, { categoryId: tech.id });
+    const unread = seedFeedArticle(db, feed, { title: "Semiconductor news" });
+    seedFeedArticle(db, feed, { title: "Semiconductor old", isRead: true });
+    seedFeedArticle(db, feed, { title: "Something else" });
+
+    const all = listDigestArticles(db, { type: "search", q: "semiconductor" }, NOW);
+    expect(all.target.label).toBe("検索：semiconductor");
+    expect(all.articles).toHaveLength(2);
+    const narrowed = listDigestArticles(db, { type: "search", q: "semiconductor", category: tech.id, unread: true }, NOW);
+    expect(narrowed.target.label).toBe("検索：semiconductor（カテゴリ：Tech、未読だけ）");
+    expect(narrowed.articles.map((entry) => entry.id)).toEqual([unread]);
+    const byFeed = listDigestArticles(db, { type: "search", q: "semiconductor", feed }, NOW);
+    expect(byFeed.target.label).toMatch(/^検索：semiconductor（フィード：.+）$/);
   });
 });

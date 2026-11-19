@@ -1,20 +1,22 @@
 import { createTopic, deleteCategory, insertFeed, listTopics, replaceMentions, saveArticleTranslation, saveAutoSummary, updateCategory } from "@smarternews/core";
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { makeServer, renderApp } from "../testing/harness.tsx";
 
 // Adding a topic while reading: from the list of the articles of a name, and from the menu of a selection. The
 // dialog chooses a category and the text; adding starts no run.
 
-const ADD = "トピックを足す…";
+const ADD = "トピックを追加…";
 const MAKE_FILTER = "隠すフィルターを作る…";
 const opened = () => screen.findByRole("article", { name: "記事" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
 const toolbar = () => screen.queryByRole("toolbar", { name: "選んだ文字列" });
 const buttonsOf = (element: HTMLElement) => within(element).getAllByRole("button").map((button) => button.textContent);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
-const dialog = () => screen.findByRole("dialog", { name: "トピックを足す" });
+const dialog = () => screen.findByRole("dialog", { name: "トピックを追加" });
+const question = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
 const n = (name: string) => new URLSearchParams({ name }).toString();
 
 /** Selects the given occurrence of `text` among the characters under `root`, as a mouse would. */
@@ -66,7 +68,7 @@ describe("adding a topic from the articles of a name", () => {
     await user.click(within(form).getByRole("button", { name: "追加する" }));
     await waitFor(() => expect(listTopics(server.db, beta.id).map((topic) => topic.text)).toEqual(["日本銀行"]));
     const notice = await screen.findByText("追加しました。次の実行で解釈されます。");
-    expect(screen.queryByRole("dialog", { name: "トピックを足す" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "トピックを追加" })).toBeNull();
     // The article and the list stay; no run starts.
     expect(within(await opened()).getByRole("heading", { name: "利上げの記事" })).toBeInTheDocument();
     expect(list()).toBeInTheDocument();
@@ -101,7 +103,7 @@ describe("adding a topic from the articles of a name", () => {
 
     await user.click(within(form).getByRole("button", { name: "追加する" }));
     expect(await within(form).findByRole("alert")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "トピックを足す" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "トピックを追加" })).toBeInTheDocument();
     expect(screen.queryByText("追加しました。次の実行で解釈されます。")).toBeNull();
   });
 
@@ -123,6 +125,40 @@ describe("adding a topic from the articles of a name", () => {
 
     await user.click(within(form).getByRole("button", { name: "追加する" }));
     await waitFor(() => expect(listTopics(server.db, beta.id)).toHaveLength(2));
+  });
+
+  it("closes at once as it opened, and asks before throwing a changed text or category away", async () => {
+    const { server, beta, id } = seeded();
+    const { user } = renderApp({ server, route: `/mentions/${id}?${n("日本銀行")}` });
+    await within(await opened()).findByRole("heading", { name: "利上げの記事" });
+    await user.click(await within(list()).findByRole("button", { name: ADD }));
+    let form = await dialog();
+    await waitFor(() => expect(within(form).getByLabelText("カテゴリ")).toHaveDisplayValue("Beta"));
+    await user.click(within(form).getByRole("button", { name: "やめる" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // A text written over the draft is kept when the article behind is pressed, and asked about on Escape.
+    await user.click(within(list()).getByRole("button", { name: ADD }));
+    form = await dialog();
+    await user.type(within(form).getByLabelText("文章"), "の利上げ");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(screen.getByRole("article", { name: "記事", hidden: true }));
+    expect(screen.getByRole("dialog", { name: "トピックを追加" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(within(await question()).getByRole("button", { name: "破棄して閉じる" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Another category is a change too.
+    await user.click(within(list()).getByRole("button", { name: ADD }));
+    form = await dialog();
+    await waitFor(() => expect(within(form).getByLabelText("カテゴリ")).toHaveDisplayValue("Beta"));
+    expect(within(form).getByLabelText("文章")).toHaveValue("日本銀行");
+    await user.selectOptions(within(form).getByLabelText("カテゴリ"), "Alpha");
+    await user.click(within(form).getByRole("button", { name: "やめる" }));
+    await user.click(within(await question()).getByRole("button", { name: "編集を続ける" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(within(form).getByLabelText("カテゴリ")).toHaveDisplayValue("Alpha");
+    expect(listTopics(server.db, beta.id)).toEqual([]);
   });
 });
 

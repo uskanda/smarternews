@@ -23,7 +23,18 @@ export function ArticleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ id: string; list?: string; read?: string; min?: string; q?: string; category?: string; feed?: string; unread?: string; name?: string }>();
+  const params = useLocalSearchParams<{
+    id: string;
+    list?: string;
+    read?: string;
+    min?: string;
+    q?: string;
+    category?: string;
+    feed?: string;
+    unread?: string;
+    starred?: string;
+    name?: string;
+  }>();
   const openedId = Number(params.id);
   // Opened from search results, the pages follow the results and mark the words of the search.
   const ref = listRefOf(params.list ?? "unread", params);

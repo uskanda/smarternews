@@ -3,10 +3,11 @@ import { seedFeedArticle } from "@smarternews/core/testing";
 import { createTermMatcher } from "@smarternews/client";
 import { ANNOTATION_SAMPLE_MARKDOWN, ANNOTATION_SAMPLE_TEXT, withoutSpaces } from "@smarternews/client/testing";
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import { back, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
-import { watchIntersections } from "../testing/setup.ts";
-import { useBodyAnnotations } from "./Annotations.tsx";
+import { intersect, intersectionOptions } from "../testing/setup.ts";
+import { placeMenu, useBodyAnnotations } from "./Annotations.tsx";
 import { SKIP_ATTRIBUTE } from "./highlight.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -19,6 +20,9 @@ const marks = (root: ParentNode = document) => [...root.querySelectorAll<HTMLEle
 const marked = (root: ParentNode = document) => marks(root).map((mark) => mark.textContent);
 const stored = (server: TestServer) => server.db.prepare("SELECT kind, quote, prefix, suffix, position, note FROM annotations ORDER BY id").all();
 const anchor = (quote: string, note: string | null = null) => ({ quote, prefix: "", suffix: "", position: 0, note });
+const unsavedQuestion = () => screen.findByRole("alertdialog", { name: "保存していない変更があります" });
+/** Presses the article behind a dialog, which takes no pointer events while the dialog is open. */
+const pressBehind = () => userEvent.setup({ pointerEventsCheck: 0 }).click(screen.getByRole("article", { name: "記事", hidden: true }));
 
 /** The text of the text nodes under `root`, without those of skipped elements. */
 function drawnText(root: Element): string {
@@ -124,7 +128,7 @@ describe("highlighting a selection", () => {
     selectText(article.querySelector(".article-body")!, QUOTE);
     // A topic can be added too, as the article's category holds topics.
     await waitFor(() =>
-      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを足す…"]),
+      expect(within(menu()!).getAllByRole("button").map((button) => button.textContent)).toEqual(["ハイライト", "メモを書く", "トピックを追加…"]),
     );
     await user.click(within(menu()!).getByRole("button", { name: "ハイライト" }));
 
@@ -153,6 +157,27 @@ describe("highlighting a selection", () => {
     await waitFor(() => expect(within(article).getByRole("button", { name: "ハイライト、メモあり" })).toHaveTextContent(QUOTE));
     expect(article.querySelectorAll(".annotation-note-icon")).toHaveLength(1);
     expect(stored(server)).toMatchObject([{ quote: QUOTE, note: "規模を確かめる" }]);
+  });
+
+  it("keeps a note for a new highlight when the page behind is pressed, and asks before Escape throws it away", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await within(article).findByText(/電池の工場/);
+
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "メモを書く" }));
+    const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
+    await user.type(within(dialog).getByLabelText("メモ"), "規模を確かめる");
+    await pressBehind();
+    expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(await unsavedQuestion()).toHaveTextContent("保存されません");
+    await user.click(within(await unsavedQuestion()).getByRole("button", { name: "破棄して閉じる" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(stored(server)).toEqual([]);
   });
 
   it("offers nothing, and h does nothing, for the summary, the title, a translation or a range over a highlight", async () => {
@@ -215,6 +240,96 @@ describe("highlighting a selection", () => {
     await user.keyboard("h");
     await waitFor(() => expect(marked(article)).toEqual(["最後の段落"]));
     expect(stored(server)).toMatchObject([{ quote: "最後の段落", note: null }]);
+  });
+
+  it("makes one highlight while the answer waits, whether by the button, h or the menu", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    const { user, requests, hold } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await within(article).findByText(/電池の工場/);
+    const held = hold(`POST /api/v1/articles/${id}/highlights`);
+
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    const button = within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "ハイライト" });
+    await user.click(button);
+    await user.click(button);
+    expect(button).toBeDisabled();
+    // jsdom drops the selection on a click, which a browser keeps: the text is selected again for the key and the menu.
+    (document.activeElement as HTMLElement).blur();
+    selectText(article.querySelector(".article-body")!, QUOTE);
+    await screen.findByRole("toolbar", { name: "選んだ文字列" });
+    await user.keyboard("h");
+    fireEvent.contextMenu(article.querySelector(".article-body")!, { button: 2, clientX: 40, clientY: 50 });
+    const item = within(await screen.findByRole("menu", { name: "選んだ文字列の操作" })).getByRole("menuitem", { name: "ハイライト" });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Escape}");
+
+    expect(requests.filter((request) => request === `POST /api/v1/articles/${id}/highlights`)).toHaveLength(1);
+    await held.release();
+    await waitFor(() => expect(marked(article)).toEqual([QUOTE]));
+    expect(stored(server)).toHaveLength(1);
+  });
+
+  describe("a selection longer than a highlight can be", () => {
+    const TOO_LONG = "ハイライトする文字列は5000文字以内にしてください。選ぶ範囲を狭めてください。";
+    const LONG = "長".repeat(5001);
+
+    /** An article with a paragraph of 5001 characters, all of them selected. */
+    async function selectedTooLong() {
+      const server = makeServer();
+      const id = generated(server, `最初の段落です。\n\n${LONG}\n\n最後の段落です。`);
+      const view = renderApp({ server, route: `/all/${id}` });
+      const article = await opened();
+      const paragraph = await within(article).findByText(LONG);
+      selectText(article.querySelector(".article-body")!, LONG);
+      const toolbar = await screen.findByRole("toolbar", { name: "選んだ文字列" });
+      return { ...view, article, paragraph, toolbar };
+    }
+    const toldWhy = async () => expect(await screen.findByRole("status")).toHaveTextContent(TOO_LONG);
+    const sent = (requests: string[]) => requests.filter((request) => request.endsWith("/highlights"));
+
+    it("is not sent from the menu, and the reason is told", async () => {
+      const { server, user, requests, toolbar } = await selectedTooLong();
+      await user.click(within(toolbar).getByRole("button", { name: "ハイライト" }));
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("is not sent with h", async () => {
+      const { server, user, requests } = await selectedTooLong();
+      await user.keyboard("h");
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("is not sent from the menu of a right click", async () => {
+      const { server, user, requests, paragraph } = await selectedTooLong();
+      expect(fireEvent.contextMenu(paragraph, { button: 2, clientX: 40, clientY: 50 })).toBe(false);
+      await user.click(within(await screen.findByRole("menu", { name: "選んだ文字列の操作" })).getByRole("menuitem", { name: "ハイライト" }));
+      await toldWhy();
+      expect(sent(requests)).toEqual([]);
+      expect(stored(server)).toEqual([]);
+    });
+
+    it("opens no dialog for a note, so that no note is written for nothing", async () => {
+      const { user, requests, toolbar } = await selectedTooLong();
+      await user.click(within(toolbar).getByRole("button", { name: "メモを書く" }));
+      await toldWhy();
+      expect(screen.queryByRole("dialog", { name: "メモを書いてハイライトする" })).toBeNull();
+      expect(sent(requests)).toEqual([]);
+    });
+
+    it("can be narrowed to as many characters as a highlight takes, and highlighted", async () => {
+      const { server, user, article } = await selectedTooLong();
+      selectText(article.querySelector(".article-body")!, LONG.slice(1));
+      await waitFor(() => expect(document.getSelection()?.toString()).toBe(LONG.slice(1)));
+      await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: "ハイライト" }));
+      await waitFor(() => expect(stored(server)).toMatchObject([{ quote: LONG.slice(1) }]));
+      expect(screen.queryByRole("status")).toBeNull();
+    });
   });
 
   it("is listed among the keys", async () => {
@@ -306,6 +421,39 @@ describe("a highlight in the body", () => {
     expect(stored(server)).toEqual([]);
   });
 
+  it("keeps a note being written when the page behind is pressed, and asks before Escape or the cancel button throws it away", async () => {
+    const server = makeServer();
+    const id = generated(server);
+    addHighlight(server.db, id, anchor(QUOTE), server.clock().toISOString());
+    const { user } = renderApp({ server, route: `/all/${id}` });
+    const article = await opened();
+    await user.click(await within(article).findByRole("button", { name: "ハイライト" }));
+    const dialog = await screen.findByRole("dialog", { name: "ハイライト" });
+    await user.click(within(dialog).getByRole("button", { name: "メモを書く" }));
+    await user.type(within(dialog).getByLabelText("メモ"), "数字を確かめる");
+
+    await pressBehind();
+    expect(screen.getByRole("dialog", { name: "ハイライト" })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("数字を確かめる");
+
+    await user.keyboard("{Escape}");
+    await user.click(within(await unsavedQuestion()).getByRole("button", { name: "編集を続ける" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("数字を確かめる");
+
+    // The cancel button of the field asks as well, and throwing the note away goes back to the highlight's actions.
+    await user.click(within(dialog).getByRole("button", { name: "やめる" }));
+    await user.click(within(await unsavedQuestion()).getByRole("button", { name: "破棄して閉じる" }));
+    expect(await within(dialog).findByRole("button", { name: "メモを書く" })).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("メモ")).toBeNull();
+
+    // With nothing written, Escape closes at once.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(stored(server)).toMatchObject([{ note: null }]);
+  });
+
   it("is listed after the body when the body no longer holds it, and opens from there", async () => {
     const server = makeServer();
     const id = generated(server);
@@ -380,6 +528,110 @@ describe("the note on a whole article", () => {
     expect(stored(server)).toEqual([]);
   });
 
+  describe("being written", () => {
+    /** Two articles in one category; the first is opened. */
+    function two() {
+      const server = makeServer();
+      const category = server.category("Alpha");
+      const first = server.article(category.id, { title: "電池の話", body: BODY });
+      const second = server.article(category.id, { title: "車の話", body: "車の本文。" });
+      return { server, first, second };
+    }
+    const linkTo = (id: number) => screen.getAllByRole("link").find((link) => link.getAttribute("href")?.endsWith(`/${id}`))!;
+
+    it("is kept for its article while another is read, and put back in the open field without the focus", async () => {
+      const { server, first, second } = two();
+      const { user, path } = renderApp({ server, route: `/all/${first}` });
+      let article = await opened();
+      await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
+      await user.type(within(article).getByLabelText("記事へのメモ"), "あとで比べる");
+
+      await user.click(linkTo(second));
+      article = await opened();
+      await within(article).findByRole("heading", { name: "車の話" });
+      expect(within(article).queryByRole("textbox", { name: "記事へのメモ" })).toBeNull();
+
+      await user.click(linkTo(first));
+      article = await opened();
+      await within(article).findByRole("heading", { name: "電池の話" });
+      const field = await within(article).findByLabelText("記事へのメモ");
+      expect(field).toHaveValue("あとで比べる");
+      expect(field).not.toHaveFocus();
+      expect(stored(server)).toEqual([]);
+
+      // The keys of the list still move to another article: the newer one, above it.
+      await user.keyboard("k");
+      await waitFor(() => expect(path()).not.toBe(`/all/${first}`));
+    });
+
+    it("is kept through a reload of the page", async () => {
+      const { server, first } = two();
+      const view = renderApp({ server, route: `/all/${first}` });
+      const article = await opened();
+      await view.user.click(await within(article).findByRole("button", { name: "メモを書く" }));
+      await view.user.type(within(article).getByLabelText("記事へのメモ"), "あとで比べる");
+      view.unmount();
+
+      renderApp({ server, route: `/all/${first}` });
+      expect(await within(await opened()).findByLabelText("記事へのメモ")).toHaveValue("あとで比べる");
+    });
+
+    it("is asked about by the cancel button, and forgotten once thrown away", async () => {
+      const { server, first, second } = two();
+      const { user } = renderApp({ server, route: `/all/${first}` });
+      let article = await opened();
+      await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
+      await user.type(within(article).getByLabelText("記事へのメモ"), "あとで比べる");
+
+      await user.click(within(article).getByRole("button", { name: "やめる" }));
+      await user.click(within(await unsavedQuestion()).getByRole("button", { name: "編集を続ける" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(within(article).getByLabelText("記事へのメモ")).toHaveValue("あとで比べる");
+
+      await user.click(within(article).getByRole("button", { name: "やめる" }));
+      await user.click(within(await unsavedQuestion()).getByRole("button", { name: "破棄して閉じる" }));
+      await waitFor(() => expect(within(article).getByRole("button", { name: "メモを書く" })).toHaveFocus());
+      expect(within(article).queryByRole("textbox", { name: "記事へのメモ" })).toBeNull();
+
+      await user.click(linkTo(second));
+      await within(await opened()).findByRole("heading", { name: "車の話" });
+      await user.click(linkTo(first));
+      article = await opened();
+      await within(article).findByRole("heading", { name: "電池の話" });
+      expect(await within(article).findByRole("button", { name: "メモを書く" })).toBeInTheDocument();
+      expect(within(article).queryByRole("textbox", { name: "記事へのメモ" })).toBeNull();
+    });
+
+    it("closes at once with the cancel button while it is what was saved", async () => {
+      const { server, first } = two();
+      saveArticleNote(server.db, first, "あとで比べる", server.clock().toISOString());
+      const { user } = renderApp({ server, route: `/all/${first}` });
+      const article = await opened();
+      await user.click(await within(article).findByRole("button", { name: "メモを書き直す" }));
+      await user.click(within(article).getByRole("button", { name: "やめる" }));
+      expect(await within(article).findByRole("button", { name: "メモを書き直す" })).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("is forgotten once saved", async () => {
+      const { server, first, second } = two();
+      const { user } = renderApp({ server, route: `/all/${first}` });
+      let article = await opened();
+      await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
+      await user.type(within(article).getByLabelText("記事へのメモ"), "あとで比べる");
+      await user.click(within(article).getByRole("button", { name: "保存する" }));
+      await within(article).findByRole("region", { name: "記事へのメモ" });
+
+      await user.click(linkTo(second));
+      await within(await opened()).findByRole("heading", { name: "車の話" });
+      await user.click(linkTo(first));
+      article = await opened();
+      await within(article).findByRole("heading", { name: "電池の話" });
+      expect(await within(article).findByRole("region", { name: "記事へのメモ" })).toHaveTextContent("あとで比べる");
+      expect(within(article).queryByRole("textbox", { name: "記事へのメモ" })).toBeNull();
+    });
+  });
+
   it("is shown whichever content of a feed article is shown", async () => {
     const server = makeServer();
     const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
@@ -439,14 +691,15 @@ describe("the list of annotations", () => {
     }
 
     it("loads the rest near the end until all 60 are shown once, with no button", async () => {
-      const intersections = watchIntersections();
       renderApp({ server: sixty(), route: "/annotations" });
       const list = await screen.findByRole("region", { name: "注釈の一覧" });
       await within(list).findByText("メモ59");
       expect(notes(list)).toHaveLength(50);
-      expect(intersections.optionsFor(more(list))).toEqual([{ root: list.querySelector("[data-list-scroll]"), rootMargin: "0px 0px 100% 0px" }]);
+      await waitFor(() =>
+        expect(intersectionOptions(more(list))).toEqual([{ root: list.querySelector("[data-list-scroll]"), rootMargin: "0px 0px 100% 0px" }]),
+      );
 
-      intersections.show(more(list));
+      act(() => intersect(more(list)));
 
       await waitFor(() => expect(notes(list)).toHaveLength(60));
       expect(new Set(notes(list)).size).toBe(60);
@@ -454,21 +707,20 @@ describe("the list of annotations", () => {
     });
 
     it("tells of a failure at the end, not at the top, and tries again with the button", async () => {
-      const intersections = watchIntersections();
       let down = false;
       const { user, requests } = renderApp({ server: sixty(), route: "/annotations", offline: () => down });
       const list = await screen.findByRole("region", { name: "注釈の一覧" });
       await within(list).findByText("メモ59");
 
       down = true;
-      intersections.show(more(list));
+      act(() => intersect(more(list)));
 
       expect(await within(list).findByText("続きを読み込めませんでした")).toBeInTheDocument();
       expect(within(list).getAllByRole("alert")).toHaveLength(1);
       expect(within(list).queryByRole("button", { name: "再試行" })).toBeNull();
       const asked = requests.length;
-      intersections.hide(more(list));
-      intersections.show(more(list));
+      act(() => intersect(more(list), false));
+      act(() => intersect(more(list)));
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(requests).toHaveLength(asked);
 
@@ -555,6 +807,156 @@ describe("the list of annotations", () => {
     expect(second!.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
     expect(first!.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
   });
+
+  it("keeps a rewritten note on a page not loaded yet in its place, and brings it once with the new text", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    saveArticleNote(server.db, b, "古いメモ", at(1000));
+    for (let index = 1; index <= 50; index += 1) addHighlight(server.db, a, anchor(QUOTE), at(index));
+    const { user } = renderApp({ server, route: `/annotations/${b}` });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(50));
+    const article = await opened();
+
+    await user.click(await within(article).findByRole("button", { name: "メモを書き直す" }));
+    const field = within(article).getByLabelText("記事へのメモ");
+    await user.clear(field);
+    await user.type(field, "新しいメモ");
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
+    await within(article).findByText("新しいメモ");
+
+    expect(within(list).getAllByRole("listitem")).toHaveLength(50);
+    expect(within(list).queryByText("新しいメモ")).toBeNull();
+    act(() => intersect(list.querySelector("[data-load-more]")!));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(51));
+    const notes = within(list)
+      .getAllByRole("listitem")
+      .filter((row) => row.querySelector("[data-article-note]"));
+    expect(notes.map((row) => row.querySelector("[data-note]")!.textContent)).toEqual(["新しいメモ"]);
+    expect(within(list).getAllByRole("listitem").at(-1)).toBe(notes[0]);
+  });
+
+  it("puts a new note on an article at the top of the list", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    addHighlight(server.db, a, anchor(QUOTE), new Date(server.clock().getTime() - 60_000).toISOString());
+    const { user } = renderApp({ server, route: `/annotations/${b}` });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText(QUOTE);
+    const article = await opened();
+
+    await user.click(await within(article).findByRole("button", { name: "メモを書く" }));
+    await user.type(within(article).getByLabelText("記事へのメモ"), "新しいメモ");
+    await user.click(within(article).getByRole("button", { name: "保存する" }));
+
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+    expect(within(list).getAllByRole("listitem")[0]!.querySelector("[data-note]")).toHaveTextContent("新しいメモ");
+  });
+
+  it("is fetched again with r", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    saveArticleNote(server.db, a, "前からあるメモ", server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/annotations" });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("前からあるメモ");
+
+    saveArticleNote(server.db, b, "あとから足したメモ", server.clock().toISOString());
+    await user.keyboard("r");
+    expect(await within(list).findByText("あとから足したメモ")).toBeInTheDocument();
+  });
+
+  it("drops the rows of a feed unsubscribed from the menu of the left pane", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
+    const b = seedFeedArticle(server.db, feed.id, { title: "Post", body: "本文。" });
+    saveArticleNote(server.db, a, "残るメモ", server.clock().toISOString());
+    saveArticleNote(server.db, b, "消えるメモ", server.clock().toISOString());
+    const { user } = renderApp({ server, route: "/annotations" });
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("消えるメモ");
+
+    const nav = screen.getByRole("navigation", { name: "項目" });
+    fireEvent.contextMenu(await within(nav).findByRole("link", { name: /^Blog/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "登録を解除する" }));
+
+    await waitFor(() => expect(within(list).queryByText("消えるメモ")).toBeNull());
+    expect(within(list).getByText("残るメモ")).toBeInTheDocument();
+  });
+});
+
+describe("the keys of an article on the list of annotations", () => {
+  /** jsdom lays nothing out: the article pane is 400px tall and holds `height` pixels. */
+  function layOut(height: number): HTMLElement {
+    const pane = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: height });
+    return pane;
+  }
+
+  it("do nothing to the article last opened in すべて while no article is open", async () => {
+    const server = makeServer();
+    const read = generated(server);
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { user, requests } = renderApp({ server, route: `/all/${read}` });
+    await opened();
+    await waitFor(() => expect(getArticle(server.db, read)?.isRead).toBe(true));
+
+    await user.click(screen.getByRole("link", { name: "注釈" }));
+    await screen.findByRole("region", { name: "注釈の一覧" });
+    const before = requests.length;
+    await user.keyboard("s");
+    await user.keyboard("m");
+    await user.keyboard("o");
+
+    expect(requests.slice(before).filter((request) => request.includes(`/articles/${read}`))).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+    expect(getArticle(server.db, read)).toMatchObject({ starred: false, isRead: true });
+    open.mockRestore();
+  });
+
+  it("move through the annotations with Space and Shift+Space, and never to an article of すべて", async () => {
+    const server = makeServer();
+    const a = generated(server);
+    const b = generated(server);
+    const other = generated(server);
+    const at = (minutes: number) => new Date(server.clock().getTime() - minutes * 60_000).toISOString();
+    const older = saveArticleNote(server.db, a, "古いメモ", at(20));
+    const newer = saveArticleNote(server.db, b, "新しいメモ", at(10));
+    const { user, path, requests } = renderApp({ server, route: `/all/${other}` });
+    await opened();
+    await waitFor(() => expect(getArticle(server.db, other)?.isRead).toBe(true));
+    await user.click(screen.getByRole("link", { name: "注釈" }));
+    const list = await screen.findByRole("region", { name: "注釈の一覧" });
+    await within(list).findByText("古いメモ");
+    const before = requests.length;
+
+    await user.keyboard(" ");
+    await waitFor(() => expect(path()).toBe(`/annotations/${b}?annotation=${newer.id}`));
+    await within(await opened()).findByText("新しいメモ");
+    // In the middle of a long body, Space scrolls it.
+    const pane = layOut(2000);
+    await user.keyboard(" ");
+    expect(pane.scrollTop).toBe(400 - 33);
+    expect(path()).toBe(`/annotations/${b}?annotation=${newer.id}`);
+    // At its end, Space moves to the next annotation.
+    pane.scrollTop = 1600;
+    await user.keyboard(" ");
+    await waitFor(() => expect(path()).toBe(`/annotations/${a}?annotation=${older.id}`));
+    await within(await opened()).findByText("古いメモ");
+    // At the top of the body, Shift+Space moves to the one before.
+    layOut(2000).scrollTop = 0;
+    await user.keyboard("{Shift>} {/Shift}");
+    await waitFor(() => expect(path()).toBe(`/annotations/${b}?annotation=${newer.id}`));
+
+    expect(requests.slice(before).filter((request) => request.includes(`/articles/${other}`))).toEqual([]);
+  });
 });
 
 describe("an excerpt from a note in the search results", () => {
@@ -598,6 +1000,147 @@ describe("drawing a body again for its highlights", () => {
     act(() => withOne.result.current.marksFor(0)!.onText!("電池の話"));
     expect(renders).toBe(2);
     expect(withOne.result.current.marksFor(0)!.ranges).toEqual([{ start: 0, end: 2, id: 1, note: false, first: true, last: true }]);
+  });
+
+  it("starts again from the text of the new body when the body shown changes", () => {
+    const hook = renderHook(({ count, bodyKey }) => useBodyAnnotations([highlight], count, true, bodyKey), {
+      initialProps: { count: 1, bodyKey: "original" },
+    });
+    act(() => hook.result.current.marksFor(0)!.onText!("電池の話"));
+    expect(hook.result.current.marksFor(0)!.ranges).toEqual([{ start: 0, end: 2, id: 1, note: false, first: true, last: true }]);
+
+    // The translation has two parts: until both are drawn, the text of the original is not used for them.
+    hook.rerender({ count: 2, bodyKey: "translated" });
+    expect(hook.result.current.located).toBeNull();
+    act(() => hook.result.current.marksFor(1)!.onText!("次の段落"));
+    expect(hook.result.current.located).toBeNull();
+    act(() => hook.result.current.marksFor(0)!.onText!("新しい電池の話"));
+    expect(hook.result.current.marksFor(0)!.ranges).toEqual([{ start: 3, end: 5, id: 1, note: false, first: true, last: true }]);
+    expect(hook.result.current.marksFor(1)!.ranges).toEqual([]);
+  });
+});
+
+describe("a dialog of an annotation when the body shown changes", () => {
+  const ORIGINAL = "The plant opens soon.\n\nIt is new.";
+
+  /** A feed that translates, in a news category, with an article whose translation waits for the test. */
+  function translating() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const server = makeServer(undefined, {
+      google: {
+        calls: [],
+        async translate(items: { text: string }[]) {
+          await gate;
+          return { texts: items.map((item) => `訳:${item.text}`), sourceLanguage: "en" };
+        },
+      },
+    });
+    const category = server.category("Alpha");
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog", translate: true, categoryId: category.id }, server.clock);
+    const id = seedFeedArticle(server.db, feed.id, { title: "Battery plant", body: ORIGINAL });
+    return { server, id, route: `/f/${feed.id}/${id}`, release };
+  }
+
+  // While a dialog is open, the rest of the page is hidden from the accessibility tree: the article is found by its text.
+  const article = () => document.querySelector<HTMLElement>("article")!;
+
+  async function arrives(release: () => void) {
+    release();
+    await within(article()).findByText("訳:The plant opens soon.");
+  }
+
+  async function choose(user: ReturnType<typeof renderApp>["user"], text: string, choice: string) {
+    const opening = await opened();
+    await within(opening).findByText(/The plant opens/);
+    selectText(opening.querySelector(".article-body")!, text);
+    await user.click(within(await screen.findByRole("toolbar", { name: "選んだ文字列" })).getByRole("button", { name: choice }));
+  }
+
+  it("keeps the note being written for a selection when the translation arrives, and saves it", async () => {
+    const { server, route, release } = translating();
+    const { user } = renderApp({ server, route });
+    await choose(user, "The plant opens", "メモを書く");
+    const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
+    await user.type(within(dialog).getByLabelText("メモ"), "規模を確かめる");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("規模を確かめる");
+    await user.click(within(dialog).getByRole("button", { name: "保存する" }));
+    await waitFor(() => expect(stored(server)).toMatchObject([{ quote: "The plant opens", note: "規模を確かめる" }]));
+    await waitFor(() => expect(within(pane()).getByRole("button", { name: "ハイライト、メモあり" })).toHaveTextContent("The plant opens"));
+  });
+
+  it("keeps the note of a highlight being rewritten when the translation arrives", async () => {
+    const { server, id, route, release } = translating();
+    addHighlight(server.db, id, anchor("The plant opens", "前のメモ"), server.clock().toISOString());
+    const { user } = renderApp({ server, route });
+    await user.click(await within(await opened()).findByRole("button", { name: "ハイライト、メモあり" }));
+    const dialog = await screen.findByRole("dialog", { name: "ハイライト" });
+    await user.click(within(dialog).getByRole("button", { name: "メモを書き直す" }));
+    await user.type(within(dialog).getByLabelText("メモ"), "に足す");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "ハイライト" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("前のメモに足す");
+  });
+
+  it("keeps the dialog of a hide filter when the translation arrives", async () => {
+    const { server, route, release } = translating();
+    const { user } = renderApp({ server, route });
+    await choose(user, "plant", "隠すフィルターを作る…");
+    const dialog = await screen.findByRole("dialog", { name: "隠すフィルターを作る" });
+    const value = within(dialog).getByLabelText("条件1の値");
+    await user.clear(value);
+    await user.type(value, "plants");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "隠すフィルターを作る" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("条件1の値")).toHaveValue("plants");
+  });
+
+  it("keeps the dialog of a topic when the translation arrives", async () => {
+    const { server, route, release } = translating();
+    const { user } = renderApp({ server, route });
+    await choose(user, "The plant opens", "トピックを追加…");
+    const dialog = await screen.findByRole("dialog", { name: "トピックを追加" });
+    await user.type(within(dialog).getByLabelText("文章"), " in Ohio");
+
+    await arrives(release);
+
+    expect(screen.getByRole("dialog", { name: "トピックを追加" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("文章")).toHaveValue("The plant opens in Ohio");
+  });
+
+  it("keeps the note being written for a selection when the full content arrives", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://blog.example.org/feed.xml", title: "Blog" }, server.clock);
+    const id = seedFeedArticle(server.db, feed.id, { title: "Battery plant", body: ORIGINAL, url: "https://blog.example.org/story" });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const sentence = "A sentence of the page that the full content is taken from. ".repeat(8);
+    server.site.set("https://blog.example.org/story", (async () => {
+      await gate;
+      return new Response(`<html><head><title>a</title></head><body><article><h1>a</h1><p>${sentence}</p><p>${sentence}</p></article></body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as () => Response);
+    const { user } = renderApp({ server, route: `/f/${feed.id}/${id}` });
+    await user.click(await within(await opened()).findByRole("button", { name: "全文を取得" }));
+    await within(pane()).findByText("全文を取得しています。");
+    await choose(user, "The plant opens", "メモを書く");
+    const dialog = await screen.findByRole("dialog", { name: "メモを書いてハイライトする" });
+    await user.type(within(dialog).getByLabelText("メモ"), "規模を確かめる");
+
+    release();
+    expect(await within(article()).findAllByText(/A sentence of the page/)).not.toHaveLength(0);
+
+    expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBe(dialog);
+    expect(within(dialog).getByLabelText("メモ")).toHaveValue("規模を確かめる");
   });
 });
 
@@ -656,5 +1199,69 @@ describe("keys while a dialog of a highlight is open", () => {
 
     expect(getArticle(server.db, id)?.starred).toBe(false);
     expect(screen.getByRole("dialog", { name: "メモを書いてハイライトする" })).toBeInTheDocument();
+  });
+});
+
+describe("where the menu of a selection is placed", () => {
+  const phone = { width: 390, height: 800 };
+  const menuSize = { width: 210, height: 40 };
+
+  it("is below the selection, at its left, when it fits", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 50 }, menuSize, phone)).toEqual({ top: 126, left: 50 });
+  });
+
+  it("moves left as far as it would go past the right edge", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 249 }, menuSize, phone)).toEqual({ top: 126, left: 172 });
+  });
+
+  it("keeps 8 pixels from the left edge, even for a menu wider than the screen", () => {
+    expect(placeMenu({ top: 100, bottom: 120, left: 2 }, menuSize, phone).left).toBe(8);
+    expect(placeMenu({ top: 100, bottom: 120, left: 100 }, { width: 500, height: 40 }, phone).left).toBe(8);
+  });
+
+  it("is above the selection when it would go past the bottom edge", () => {
+    expect(placeMenu({ top: 700, bottom: 780, left: 50 }, menuSize, phone)).toEqual({ top: 654, left: 50 });
+  });
+
+  it("stays on the screen when it fits neither below nor above", () => {
+    expect(placeMenu({ top: 20, bottom: 780, left: 50 }, menuSize, phone)).toEqual({ top: 752, left: 50 });
+  });
+});
+
+describe("the menu of a selection while the body scrolls", () => {
+  it("follows the selection, and is hidden while the selection is out of the pane", async () => {
+    let box = { top: 200, bottom: 220, left: 100, right: 200 };
+    const rect = (edges: { top: number; bottom: number; left: number; right: number }) =>
+      ({ ...edges, x: edges.left, y: edges.top, width: edges.right - edges.left, height: edges.bottom - edges.top, toJSON: () => edges }) as DOMRect;
+    const had = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+    Range.prototype.getBoundingClientRect = () => rect(box);
+    try {
+      const server = makeServer();
+      const id = generated(server);
+      renderApp({ server, route: `/all/${id}` });
+      const article = await opened();
+      await within(article).findByText(/電池の工場/);
+      const scroller = document.querySelector<HTMLElement>("[data-article-scroll]")!;
+      vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect({ top: 100, bottom: 700, left: 0, right: 1024 }));
+
+      selectText(article.querySelector(".article-body")!, QUOTE);
+      await waitFor(() => expect(menu()?.style.top).toBe("226px"));
+
+      box = { top: 150, bottom: 170, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()?.style.top).toBe("176px"));
+
+      // Above the pane, behind the heading of the article.
+      box = { top: 40, bottom: 60, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()).toBeNull());
+
+      box = { top: 300, bottom: 320, left: 100, right: 200 };
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(menu()?.style.top).toBe("326px"));
+    } finally {
+      if (had) Object.defineProperty(Range.prototype, "getBoundingClientRect", had);
+      else delete (Range.prototype as Partial<Range>).getBoundingClientRect;
+    }
   });
 });

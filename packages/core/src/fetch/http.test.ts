@@ -82,6 +82,18 @@ describe("Fetcher", () => {
     await expect(fetcher.get("https://example.org/big")).rejects.toThrow(/larger than 1000 bytes/);
   });
 
+  it("takes the size limit of one request from the caller", async () => {
+    const { fetcher } = setup({ "https://example.org/big": "x".repeat(5000) }, { feedMaxBytes: 8000 });
+    await expect(fetcher.get("https://example.org/big", { maxBytes: 4000 })).rejects.toThrow(/larger than 4000 bytes/);
+    await expect(fetcher.get("https://example.org/big", { maxBytes: fetcher.feedMaxBytes })).resolves.toMatchObject({ status: 200 });
+    await expect(fetcher.get("https://example.org/big")).rejects.toThrow(/larger than 1000 bytes/);
+  });
+
+  it("names the limit of pages as the limit of feeds when it is given none", () => {
+    const { fetcher } = setup({});
+    expect([fetcher.maxBytes, fetcher.feedMaxBytes]).toEqual([1000, 1000]);
+  });
+
   it("hands back the status of an error response instead of throwing", async () => {
     const { fetcher } = setup({});
     await expect(fetcher.get("https://example.org/missing")).resolves.toMatchObject({ status: 404 });
@@ -181,6 +193,41 @@ describe("Fetcher redirects", () => {
     const { fetcher, requests } = setup({ "https://example.org/form": redirect("https://example.org/again", 307), "https://example.org/again": "ok" });
     await fetcher.get("https://example.org/form", { method: "POST", body: "a=1" });
     expect(requests[1]).toMatchObject({ method: "POST", body: "a=1" });
+  });
+
+  it("reports where a permanent redirect leads", async () => {
+    const { fetcher } = setup({ "http://example.org/feed": redirect("https://example.org/feed", 301), "https://example.org/feed": "ok" });
+    await expect(fetcher.get("http://example.org/feed")).resolves.toMatchObject({ url: "https://example.org/feed", permanentUrl: "https://example.org/feed" });
+  });
+
+  it("follows permanent redirects in a row to the last of them", async () => {
+    const { fetcher } = setup({
+      "http://example.org/feed": redirect("https://example.org/feed", 308),
+      "https://example.org/feed": redirect("https://example.net/feed", 301),
+      "https://example.net/feed": "ok",
+    });
+    await expect(fetcher.get("http://example.org/feed")).resolves.toMatchObject({ permanentUrl: "https://example.net/feed" });
+  });
+
+  it("stops at a temporary redirect that comes after a permanent one", async () => {
+    const { fetcher } = setup({
+      "http://example.org/feed": redirect("https://example.org/feed", 301),
+      "https://example.org/feed": redirect("https://example.org/feed?session=1", 302),
+      "https://example.org/feed?session=1": "ok",
+      "https://example.org/later": redirect("https://example.org/feed", 301),
+    });
+    await expect(fetcher.get("http://example.org/feed")).resolves.toMatchObject({ url: "https://example.org/feed?session=1", permanentUrl: "https://example.org/feed" });
+  });
+
+  it("reports no permanent target after a temporary redirect, nor without a redirect", async () => {
+    const { fetcher } = setup({
+      "https://example.org/a": redirect("https://example.org/b", 302),
+      "https://example.org/b": redirect("https://example.org/c", 301),
+      "https://example.org/c": "ok",
+    });
+    await expect(fetcher.get("https://example.org/a")).resolves.toMatchObject({ url: "https://example.org/c", permanentUrl: null });
+    await expect(fetcher.get("https://example.org/c")).resolves.toMatchObject({ permanentUrl: null });
+    await expect(fetcher.getBytes("https://example.org/c", { maxBytes: 100 })).resolves.toMatchObject({ permanentUrl: null });
   });
 
   it("waits the host interval before a redirect back to the same host", async () => {

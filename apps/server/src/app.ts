@@ -18,8 +18,11 @@ import {
   listMentionArticles,
   mentionArticlesQuerySchema,
   articleUpdateSchema,
+  contentPreviewRequestSchema,
+  previewContent,
   categoryCreateSchema,
   categoryUpdateSchema,
+  changeFeedUrl,
   createCategory,
   createTopic,
   deleteCategory,
@@ -36,14 +39,19 @@ import {
   feedUpdateSchema,
   feedStats,
   topicStats,
+  siteStats,
+  blockSite,
+  unblockSite,
   findCategoryBySlug,
   getArticle,
   getDigest,
   listDigests,
   digestListQuerySchema,
+  digestRequestSchema,
   ImageFetchError,
   verifyImageProxyPath,
   relayArticleImages,
+  relayFeedIcon,
   relayFullContent,
   relayTranslation,
   getCategory,
@@ -52,6 +60,7 @@ import {
   getRun,
   getSettings,
   getTopic,
+  restoreLlmSearch,
   importOpml,
   importSettings,
   listArticles,
@@ -71,6 +80,7 @@ import {
   markArticlesRead,
   moveCategory,
   moveFeed,
+  requestFetchAll,
   categoryMoveSchema,
   feedMoveSchema,
   pageCandidatesRequestSchema,
@@ -94,6 +104,16 @@ import {
   filterPreviewSchema,
   filterUpdateSchema,
   previewFilter,
+  createRule,
+  deleteRule,
+  listRuleNotifications,
+  listRules,
+  previewRule,
+  ruleCreateSchema,
+  ruleNotificationsQuerySchema,
+  rulePreviewSchema,
+  ruleUpdateSchema,
+  updateRule,
   recordArticleOpened,
   addHighlightTerm,
   createTermGroup,
@@ -123,6 +143,7 @@ import {
   type Database,
   type DigestList,
   type DigestWorker,
+  type Feed,
   type FeedFetchResult,
   type FeedPoller,
   type Fetcher,
@@ -208,6 +229,8 @@ export function createApp(deps: AppDeps): Hono {
   const { db, clock, queue, runner, fetcher, poller, translation, summarizer, fullContent, digests, trials, images } = deps;
   /** An article as it is answered: the images of a feed article's content load through the relay. */
   const answered = (article: ReturnType<typeof getArticle>) => relayArticleImages(article, images.key);
+  /** A feed as it is answered: its icon loads through the relay. */
+  const feedAnswer = (feed: Feed) => relayFeedIcon(feed, images.key);
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -310,6 +333,13 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(listTopics(db, category.id));
   });
   api.get("/categories/:id/topic-stats", (c) => c.json(topicStats(db, idParam(c, "category"), clock())));
+  // The sites of the category's candidates, and the sites whose candidates are rejected before the judge. No model.
+  api.get("/categories/:id/site-stats", (c) => c.json(siteStats(db, idParam(c, "category"), clock())));
+  api.put("/categories/:id/blocked-sites/:host", (c) => c.json(blockSite(db, idParam(c, "category"), c.req.param("host") ?? "", clock())));
+  api.delete("/categories/:id/blocked-sites/:host", (c) => {
+    unblockSite(db, idParam(c, "category"), c.req.param("host") ?? "");
+    return c.body(null, 204);
+  });
   api.post("/categories/:id/topics", async (c) =>
     c.json(createTopic(db, idParam(c, "category"), parse(topicCreateSchema, await jsonBody(c)), clock), 201),
   );
@@ -325,6 +355,11 @@ export function createApp(deps: AppDeps): Hono {
     return c.body(null, 204);
   });
   api.post("/topics/:id/interpret", (c) => c.json(requestInterpretation(db, idParam(c, "topic"))));
+  api.post("/topics/:id/llm-search/restore", (c) => {
+    const id = idParam(c, "topic");
+    restoreLlmSearch(db, id, clock);
+    return c.json(getTopic(db, id));
+  });
   // Judges stored candidates again with a text that is not saved. Answers at once; the result is asked for below.
   // Nothing is stored but the record of the model calls.
   api.post("/topics/:id/trials", async (c) => {
@@ -400,11 +435,11 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // subscribed feeds
-  api.get("/feeds", (c) => c.json(listFeeds(db, clock())));
+  api.get("/feeds", (c) => c.json(listFeeds(db, clock()).map(feedAnswer)));
   // Registering fetches the URL once, so the answer can take as long as that site does.
   api.post("/feeds", async (c) => {
     const input = parse(feedCreateSchema, await jsonBody(c));
-    return c.json(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, input)), 201);
+    return c.json(feedAnswer(await poller.exclusive(() => subscribe({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, input))), 201);
   });
   // Candidates for the selectors of a page without a feed. The one place a web feed calls a model, and only when
   // the day has room; otherwise the server's own guess. Waits for the model, up to its time limit. Stores nothing.
@@ -420,13 +455,38 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/discover", async (c) => c.json({ feeds: await discoverFeeds(fetcher, parse(feedDiscoverSchema, await jsonBody(c)).url) }));
   api.get("/feeds/opml", (c) => c.body(exportOpml(db), 200, { "content-type": "text/x-opml; charset=utf-8" }));
   api.post("/feeds/opml", async (c) => c.json(importOpml(db, await c.req.text(), clock)));
-  api.get("/feeds/:id", (c) => c.json(getFeed(db, idParam(c, "feed"), clock())));
+  // Every enabled feed, now. It answers before anything is fetched: the poller takes the feeds one at a time,
+  // as on its timer, and `fetchRequestedAt` of the feeds says which still wait.
+  api.post("/feeds/fetch", (c) => {
+    const result = requestFetchAll(db, clock());
+    poller.tick();
+    return c.json(result);
+  });
+  api.get("/feeds/:id", (c) => c.json(feedAnswer(getFeed(db, idParam(c, "feed"), clock()))));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
-  api.patch("/feeds/:id", async (c) => c.json(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock)));
+  // A change with a URL fetches it first, as registering does; any other change is stored at once.
+  api.patch("/feeds/:id", async (c) => {
+    const id = idParam(c, "feed");
+    const patch = parse(feedUpdateSchema, await jsonBody(c));
+    const feed =
+      patch.url === undefined
+        ? updateFeed(db, id, patch, clock)
+        : await poller.exclusive(() => changeFeedUrl({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, id, patch));
+    // A changed content selector forgot the full content of unread articles: those that wait for it again are
+    // fetched now rather than at the next look. Nothing waits after any other change, and the look is cheap.
+    fullContent.tick();
+    return c.json(feedAnswer(feed));
+  });
+  // What a content selector takes out of the page of the feed's newest article. No model is called and nothing is stored.
+  api.post("/feeds/:id/content-preview", async (c) => {
+    const id = idParam(c, "feed");
+    const { contentSelector } = parse(contentPreviewRequestSchema, await jsonBody(c));
+    return c.json(await previewContent({ db, pages: poller.pageFetcher() }, id, contentSelector));
+  });
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
-    return c.json(listFeeds(db, clock()));
+    return c.json(listFeeds(db, clock()).map(feedAnswer));
   });
   api.delete("/feeds/:id", (c) => {
     deleteFeed(db, idParam(c, "feed"));
@@ -435,7 +495,7 @@ export function createApp(deps: AppDeps): Hono {
   api.post("/feeds/:id/fetch", async (c) => {
     const id = idParam(c, "feed");
     const outcome = await poller.fetchNow(id);
-    const result: FeedFetchResult = { ...outcome, feed: getFeed(db, id, clock()) };
+    const result: FeedFetchResult = { ...outcome, feed: feedAnswer(getFeed(db, id, clock())) };
     return c.json(result);
   });
 
@@ -449,6 +509,19 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/filters/:id/articles", (c) =>
     c.json(listFilterArticles(db, idParam(c, "filter"), parse(filterArticlesQuerySchema, c.req.query()))),
   );
+
+  // rules: what is done to a feed article when it is first stored
+  api.get("/rules", (c) => c.json(listRules(db)));
+  api.post("/rules", async (c) => c.json(createRule(db, parse(ruleCreateSchema, await jsonBody(c)), clock), 201));
+  // Counts against the stored articles without saving anything. Before `/rules/:id`, which it is not.
+  api.post("/rules/preview", async (c) => c.json(previewRule(db, parse(rulePreviewSchema, await jsonBody(c)))));
+  api.patch("/rules/:id", async (c) => c.json(updateRule(db, idParam(c, "rule"), parse(ruleUpdateSchema, await jsonBody(c)))));
+  api.delete("/rules/:id", (c) => {
+    deleteRule(db, idParam(c, "rule"));
+    return c.body(null, 204);
+  });
+  // The feed articles a rule made ones the app notifies, for the periodic check of the app.
+  api.get("/rule-notifications", (c) => c.json(listRuleNotifications(db, parse(ruleNotificationsQuerySchema, c.req.query()))));
 
   // list views: how each entry of the left pane and the drawer orders its articles, shared by both apps
   api.get("/list-views", (c) => c.json(listListViews(db)));
@@ -507,12 +580,23 @@ export function createApp(deps: AppDeps): Hono {
   // digests
   api.get("/digests", (c) => {
     const query = parse(digestListQuerySchema, c.req.query());
-    const list: DigestList = { items: listDigests(db, { limit: query.limit }), building: digests.building };
+    const list: DigestList = { items: listDigests(db, { limit: query.limit, kind: query.kind }), building: digests.building };
     return c.json(list);
   });
   api.get("/digests/:id", (c) => c.json(getDigest(db, idParam(c, "digest"))));
-  api.post("/digests", (c) => {
-    const status = digests.buildNow();
+  api.post("/digests", async (c) => {
+    // The body is optional: without one, or without a target, the digest of the period that ends now.
+    const text = await c.req.text();
+    let body: unknown = {};
+    if (text.trim().length > 0) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new DomainError("invalid", "the request body is not JSON");
+      }
+    }
+    const { target } = parse(digestRequestSchema, body);
+    const status = target === undefined ? digests.buildNow() : digests.buildFromList(target);
     if (status === "busy") throw new DomainError("conflict", "a digest is being made");
     return c.json({ status }, status === "queued" ? 202 : 200);
   });

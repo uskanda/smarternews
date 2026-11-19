@@ -1,9 +1,13 @@
 // Which new articles a device tells its user about. The device asks the server from time to time; this decides,
 // from what came back, what to notify and how far the device has now looked. All times are the server's, so a
 // device whose clock is off neither misses an article nor repeats one.
-import type { ArticleSummary } from "@smarternews/core/api";
+import type { ArticleSummary, RuleNotification } from "@smarternews/core/api";
 
-/** Importance 5 only, every new generated article, or nothing. Feed articles are never notified. */
+/**
+ * Importance 5 only, every new generated article, or nothing. Of the feed articles, only those a rule made
+ * ones to notify are notified, under either of the first two. Unless the setting is off, the articles of a starred
+ * story are notified whatever their importance.
+ */
 export type NotifySetting = "important" | "all" | "off";
 
 export const DEFAULT_NOTIFY_SETTING: NotifySetting = "important";
@@ -28,6 +32,11 @@ export interface NotifyPlan {
   notifications: PlannedNotification[];
   /** The update time of the newest article looked at so far. Stored, and passed to the next check. */
   checkedAt: string;
+  /**
+   * When the newest of the feed articles a rule made ones to notify was made one, of those looked at so far.
+   * Stored, and passed to the next check. Null only while notifications are off and none was looked at yet.
+   */
+  ruleCheckedAt: string | null;
 }
 
 /** The `minImportance` to ask the server for. */
@@ -46,23 +55,63 @@ export function planNotifications(input: {
   articles: ArticleSummary[];
   checkedAt: string;
   categories: Array<{ id: number; name: string }>;
+  /** The feed articles a rule made ones to notify, as the server listed them. */
+  ruled?: RuleNotification[];
+  /**
+   * Where the last check left the feed articles a rule made ones to notify. Null on a device that never looked
+   * at them: this check only records where they stand, so that none made before is notified.
+   */
+  ruleCheckedAt?: string | null;
 }): NotifyPlan {
-  if (input.setting === "off") return { notifications: [], checkedAt: input.checkedAt };
+  const ruled = input.ruled ?? [];
+  const ruleCheckedBefore = input.ruleCheckedAt ?? null;
+  if (input.setting === "off") return { notifications: [], checkedAt: input.checkedAt, ruleCheckedAt: ruleCheckedBefore };
   const threshold = minImportanceFor(input.setting) ?? 1;
   const importanceOf = (item: ArticleSummary): number => item.importance ?? 0;
+  // A story the reader starred is notified whatever its importance: a later article on it, or the starred one rewritten.
+  const onStarredStory = (item: ArticleSummary): boolean => item.starred || item.followsStarred;
   const fresh = input.articles
-    .filter((item) => item.origin === "generated" && !item.isRead && importanceOf(item) >= threshold && item.updatedAt > input.checkedAt)
+    .filter(
+      (item) =>
+        item.origin === "generated" &&
+        !item.isRead &&
+        (importanceOf(item) >= threshold || onStarredStory(item)) &&
+        item.updatedAt > input.checkedAt,
+    )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id);
+  // Whatever its importance, which a feed article has not: the reader chose it by writing the rule.
+  const freshRuled =
+    ruleCheckedBefore === null
+      ? []
+      : ruled
+          .filter((entry) => !entry.article.isRead && entry.notifiedAt > ruleCheckedBefore)
+          .sort((a, b) => b.notifiedAt.localeCompare(a.notifiedAt) || b.article.id - a.article.id);
   const checkedAt = baselineFrom([{ updatedAt: input.checkedAt }, ...input.articles]);
-  if (fresh.length >= FOLD_FROM) {
-    const top = [...fresh].sort((a, b) => importanceOf(b) - importanceOf(a) || b.updatedAt.localeCompare(a.updatedAt))[0]!;
-    return { notifications: [{ kind: "summary", count: fresh.length, title: `新着の記事が${fresh.length}件あります`, body: top.title }], checkedAt };
+  const ruleCheckedAt = ruled.reduce((latest, entry) => (entry.notifiedAt > latest ? entry.notifiedAt : latest), ruleCheckedBefore ?? BEGINNING);
+  const count = fresh.length + freshRuled.length;
+  if (count >= FOLD_FROM) {
+    const top = [...fresh].sort((a, b) => importanceOf(b) - importanceOf(a) || b.updatedAt.localeCompare(a.updatedAt))[0] ?? freshRuled[0]!.article;
+    return { notifications: [{ kind: "summary", count, title: `新着の記事が${count}件あります`, body: top.title }], checkedAt, ruleCheckedAt };
   }
   const names = new Map(input.categories.map((category) => [category.id, category.name]));
   return {
-    notifications: fresh.map((item) => ({ kind: "article", articleId: item.id, title: item.title, body: (item.categoryId === null ? undefined : names.get(item.categoryId)) ?? "" })),
+    notifications: [
+      ...fresh.map((item): PlannedNotification => ({
+        kind: "article",
+        articleId: item.id,
+        title: item.title,
+        body: (item.categoryId === null ? undefined : names.get(item.categoryId)) ?? "",
+      })),
+      ...freshRuled.map((entry): PlannedNotification => ({ kind: "article", articleId: entry.article.id, title: entry.article.title, body: entry.feedTitle })),
+    ],
     checkedAt,
+    ruleCheckedAt,
   };
+}
+
+/** Where to start looking at the feed articles a rule made ones to notify: none made so far is notified later. */
+export function ruleBaselineFrom(newest: Pick<RuleNotification, "notifiedAt">[]): string {
+  return newest.reduce((latest, entry) => (entry.notifiedAt > latest ? entry.notifiedAt : latest), BEGINNING);
 }
 
 /** The title of the notification of a digest. */
