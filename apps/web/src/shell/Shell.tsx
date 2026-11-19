@@ -276,7 +276,7 @@ function FetchAllButton() {
 
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
-  const { shown: model, pathOf: pathOfTarget } = useNavModels();
+  const { shown: model, pathOf: pathOfTarget, failed } = useNavModels();
   const feeds = useFeeds().data;
   const attention = useAttention().data?.count ?? 0;
   const collapsed = useCollapsed();
@@ -319,6 +319,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       className="relative flex h-full flex-col gap-lg overflow-y-auto bg-background p-sm"
     >
       <SearchBox onNavigate={onNavigate} />
+      <NavFetchFailure failed={failed} />
       <ul className="flex flex-col gap-px">
         {model.views.map((entry) => (
           <li key={listKey(entry.target)} className="flex">
@@ -465,10 +466,29 @@ function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTa
  * The entries of the left pane: `full` holds every one, `shown` those the pane shows — without the entries that
  * have no unread article when this browser hides them. The open entry is found in `full`, so that it stays.
  */
-function useNavModels(): { full: NavModel; shown: NavModel; current: ListTarget | null; pathOf: (target: ListTarget) => string | null } {
-  const counts = useCounts().data;
-  const categories = useCategories().data;
-  const feeds = useFeeds().data;
+function useNavModels(): {
+  full: NavModel;
+  shown: NavModel;
+  current: ListTarget | null;
+  pathOf: (target: ListTarget) => string | null;
+  failed: NavFetch[];
+} {
+  const countsQuery = useCounts();
+  const categoriesQuery = useCategories();
+  const feedsQuery = useFeeds();
+  const counts = countsQuery.data;
+  const categories = categoriesQuery.data;
+  const feeds = feedsQuery.data;
+  // Only what failed with nothing to show: a fetch again that fails leaves the pane as it was, and says nothing.
+  const failed = (
+    [
+      ["カテゴリ", categoriesQuery],
+      ["購読フィード", feedsQuery],
+      ["件数", countsQuery],
+    ] as const
+  )
+    .filter(([, query]) => query.isError && query.data === undefined)
+    .map(([name, query]) => ({ name, refetch: () => void query.refetch() }));
   const savedSearches = useSavedSearches().data;
   const hideRead = useHideRead();
   const { pathname } = useLocation();
@@ -484,7 +504,31 @@ function useNavModels(): { full: NavModel; shown: NavModel; current: ListTarget 
     () => (hideRead ? hideEmptyEntries(full, { current: currentKey === null ? null : parseListKey(currentKey), counted }) : full),
     [full, hideRead, currentKey, counted],
   );
-  return { full, shown, current, pathOf };
+  return { full, shown, current, pathOf, failed };
+}
+
+/** A list the left pane is made from that could not be loaded. */
+interface NavFetch {
+  name: string;
+  refetch: () => void;
+}
+
+/** "カテゴリ", "カテゴリと件数", or "カテゴリ、購読フィード、件数". */
+function joinNames(names: string[]): string {
+  return names.length === 2 ? `${names[0]}と${names[1]}` : names.join("、");
+}
+
+/** One line under the search box: what the pane could not load, and one button that asks for all of it again. */
+function NavFetchFailure({ failed }: { failed: NavFetch[] }) {
+  if (failed.length === 0) return null;
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-x-sm gap-y-xs px-sm type-label-sm text-error">
+      <span>{joinNames(failed.map((entry) => entry.name))}を読み込めませんでした</span>
+      <Button size="sm" className="text-on-surface" onClick={() => failed.forEach((entry) => entry.refetch())}>
+        もう一度試す
+      </Button>
+    </div>
+  );
 }
 
 const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";

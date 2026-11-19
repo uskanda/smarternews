@@ -3,7 +3,7 @@ import { seedFeedArticle } from "@smarternews/core/testing";
 import { API_TOKEN } from "@smarternews/server/testing";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { failPaths, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
@@ -55,6 +55,59 @@ describe("the token screen", () => {
 
     expect(await screen.findByLabelText("APIのトークン")).toBeInTheDocument();
     expect(window.localStorage.getItem("smarternews.token")).toBeNull();
+  });
+});
+
+describe("a failed fetch of the left pane", () => {
+  it("says below the search box that the categories could not be loaded, and loads them on a retry", async () => {
+    const server = makeServer();
+    server.category("Security");
+    const failing = failPaths(server, ["categories"]);
+    const { user } = renderApp({ server });
+
+    const alert = await within(nav()).findByRole("alert");
+    expect(alert).toHaveTextContent("カテゴリを読み込めませんでした");
+    // Below the search box, above the fixed entries.
+    expect(within(nav()).getByRole("searchbox").compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alert.compareDocumentPosition(within(nav()).getByRole("link", { name: /^未読/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    failing.clear();
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
+    expect(await within(nav()).findByRole("link", { name: /Security/ })).toBeInTheDocument();
+    expect(within(nav()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("names every list that failed in one line with one button", async () => {
+    const server = makeServer();
+    failPaths(server, ["categories", "counts"]);
+    renderApp({ server });
+
+    const alert = await within(nav()).findByRole("alert");
+    await waitFor(() => expect(alert).toHaveTextContent("カテゴリと件数を読み込めませんでした"));
+    expect(within(nav()).getAllByRole("alert")).toHaveLength(1);
+    expect(within(alert).getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("names all three, the feeds between them", async () => {
+    const server = makeServer();
+    failPaths(server, ["categories", "feeds", "counts"]);
+    renderApp({ server });
+
+    await waitFor(() => expect(within(nav()).getByRole("alert")).toHaveTextContent("カテゴリ、購読フィード、件数を読み込めませんでした"));
+  });
+
+  it("says nothing when only a fetch again fails and what came before is still shown", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id);
+    const { user } = renderApp({ server, route: "/unread" });
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1"));
+
+    failPaths(server, ["counts"]);
+    await user.click(screen.getByRole("button", { name: "読み直す" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "読み直す" })).toBeEnabled());
+
+    expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("1");
+    expect(within(nav()).queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 
@@ -734,7 +787,8 @@ describe("failures", () => {
     let down = true;
     const { user } = renderApp({ server, route: "/unread", offline: () => down });
 
-    const alert = await screen.findByRole("alert");
+    // The left pane says on its own line that its lists could not be loaded.
+    const alert = await within(list()).findByRole("alert");
     expect(alert).toHaveTextContent("サーバーに接続できません");
 
     down = false;
