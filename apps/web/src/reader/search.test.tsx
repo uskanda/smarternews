@@ -165,7 +165,7 @@ describe("the / key", () => {
     await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
     await user.click(screen.getByRole("button", { name: "項目を開く" }));
     const dialog = await screen.findByRole("dialog", { name: "項目" });
-    within(dialog).getByRole("link", { name: /未読/ }).focus();
+    within(dialog).getByRole("link", { name: /^未読/ }).focus();
 
     await user.keyboard("/");
 

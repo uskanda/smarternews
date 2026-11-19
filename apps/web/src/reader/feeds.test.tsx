@@ -95,7 +95,7 @@ describe("the icons of feeds in the navigation", () => {
     renderApp({ server, route: `/f/${blog.id}` });
     await within(list()).findByRole("link", { name: /New post/ });
     expect(frameOf(/Tools/)).toBeNull();
-    expect(frameOf(/未読/)).toBeNull();
+    expect(frameOf(/^未読/)).toBeNull();
     expect(list().querySelector("img")).toBeNull();
   });
 
