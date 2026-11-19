@@ -43,7 +43,7 @@ add-full-contentのNon-Goalsにあった「サイトごとに取り出しの方�
 
 ### 保存は `feeds` の列1つ
 
-移行 `045_feed_content_selector.sql` で `feeds` に `content_selector TEXT` を足す。NULLは指定なしである。`articles` の表は作り直さない。
+移行 `046_feed_content_selector.sql` で `feeds` に `content_selector TEXT` を足す。NULLは指定なしである。`articles` の表は作り直さない。
 APIの `feedSchema` には `contentSelector: string | null` を足す。`feedFields` に `contentSelector: cssSelectorSchema.nullable().optional()` を足し、登録と変更の両方で受ける。変更で `null` を送ると指定なしに戻る。
 保存の前に、`checkSelectorsUsable` と同じ仕組みで、ページを読む仕組みで使えない値を断る。誤りの項目は `contentSelector` とする。
 
