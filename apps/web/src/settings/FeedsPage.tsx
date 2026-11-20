@@ -278,8 +278,12 @@ function PageSelectorsSection({ feed, value, onChange, error }: { feed: Feed; va
 
 /** What the last fetches did, in words: a colour alone would not tell a failing feed from a healthy one. */
 function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
+  const { now } = useApp();
   const at = (iso: string) => `${formatDay(iso, timeZone).date} ${formatClock(iso, timeZone)}`;
   const lastSuccess = feed.lastSucceededAt ? `最後の成功 ${at(feed.lastSucceededAt)}` : "まだ取得していません";
+  // A time already past is a fetch the scheduler is about to make, or one not yet made: never fetched, or running late.
+  const nextFetch =
+    feed.nextFetchAt === null ? null : new Date(feed.nextFetchAt).getTime() <= now().getTime() ? "まもなく" : at(feed.nextFetchAt);
   return (
     <span className="flex flex-wrap items-baseline gap-x-md gap-y-xs">
       {feed.enabled ? null : <Badge>一時停止中</Badge>}
@@ -288,8 +292,11 @@ function FetchState({ feed, timeZone }: { feed: Feed; timeZone: string }) {
       {feed.fetchFullContent ? <Badge>全文を取得</Badge> : null}
       {/* A feed the site answers is gone is told apart from a failing one: unsubscribing is what fixes it. */}
       {feed.goneAt ? <Badge tone="error">配信終了</Badge> : feed.lastError ? <Badge tone="error">取得に失敗</Badge> : null}
+      {/* The first failure is told by the badge and the reason; a count from the second shows the failing goes on. */}
+      {feed.failureCount >= 2 ? <span className="tabular-nums text-error">{feed.failureCount}回続けて失敗</span> : null}
       {feed.stale ? <Badge tone="warning">更新が止まっています</Badge> : null}
       <span className="tabular-nums">{feed.lastError && !feed.lastSucceededAt ? "まだ成功していません" : lastSuccess}</span>
+      {nextFetch === null ? null : <span className="tabular-nums">次の取得 {nextFetch}</span>}
       <span className="tabular-nums">直近30日に{feed.recentArticleCount}件</span>
       <span className="tabular-nums">{feed.lastNewItemAt ? `最後の新着 ${at(feed.lastNewItemAt)}` : "新着はまだありません"}</span>
       {feed.lastError ? (
