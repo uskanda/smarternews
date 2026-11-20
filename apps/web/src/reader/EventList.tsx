@@ -1,11 +1,25 @@
 import type { ArticleSummary } from "@smarternews/core/api";
+import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { eventTime, groupEvents, registrationLabel } from "@smarternews/client";
+import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { SelectedMark } from "./SelectedMark.tsx";
+
+/** Where the fetch of the events stands, and what loads the rest; the list of articles shows the same. */
+export type EventListState = {
+  pending: boolean;
+  error: unknown;
+  retry: () => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => void;
+};
 
 /** Upcoming events of one category, grouped by the day they start. */
 export function EventList({
   title,
+  actions,
+  state,
   events,
   selectedId,
   to,
@@ -13,6 +27,9 @@ export function EventList({
   now,
 }: {
   title: string;
+  /** The buttons beside the title, as the list of articles has them. */
+  actions: ReactNode;
+  state: EventListState;
   events: ArticleSummary[];
   selectedId: number | null;
   to: (id: number) => string;
@@ -20,13 +37,19 @@ export function EventList({
   now: Date;
 }) {
   const groups = groupEvents(events, timeZone, now);
+  const failed = state.error !== null && state.error !== undefined;
   return (
     <section aria-label="イベントの一覧" className="flex h-full min-h-0 flex-col bg-surface">
-      <header className="border-b border-outline px-lg py-md">
-        <h1 className="type-headline-md">{title}</h1>
+      <header className="flex items-center justify-between gap-sm border-b border-outline px-lg py-md">
+        <h1 className="min-w-0 truncate type-headline-md" title={title}>
+          {title}
+        </h1>
+        <div className="flex shrink-0 gap-sm">{actions}</div>
       </header>
       <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
-        {groups.length === 0 ? (
+        {failed ? <ErrorNotice error={state.error} onRetry={state.retry} /> : null}
+        {state.pending && !failed ? <Loading /> : null}
+        {!state.pending && !failed && groups.length === 0 ? (
           <p className="p-lg type-body-md text-on-surface-muted">これから開催されるイベントはありません。</p>
         ) : null}
         {groups.map((group) => (
@@ -61,6 +84,13 @@ export function EventList({
             </ul>
           </div>
         ))}
+        {state.hasMore ? (
+          <div className="flex justify-center p-lg">
+            <Button onClick={state.loadMore} disabled={state.loadingMore}>
+              さらに読み込む
+            </Button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

@@ -943,9 +943,10 @@ export function markArticlesRead(
   filter: { categoryId?: number; uncategorized?: boolean; origin?: Origin; feedId?: number; minImportance?: number; before: string },
   now: string,
 ): number[] {
-  // What filters hide is in no list, so it is not marked either: it comes back unread when the filter goes.
-  const where = ["is_read = 0", "updated_at < ?", `NOT ${hiddenByFilters("articles")}`];
-  const params: Array<string | number> = [new Date(filter.before).toISOString()];
+  // What filters hide is in no list, so it is not marked either: it comes back unread when the filter goes. An
+  // event that has ended is in no list either, and stays out of the unread counts already.
+  const where = ["is_read = 0", "updated_at < ?", `NOT ${hiddenByFilters("articles")}`, "(kind <> 'event' OR event_ends_at >= ?)"];
+  const params: Array<string | number> = [new Date(filter.before).toISOString(), now];
   if (filter.categoryId !== undefined) {
     where.push("category_id = ?");
     params.push(filter.categoryId);

@@ -252,7 +252,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   -d '{"categoryId":1,"before":"2026-03-01T12:00:00.000Z"}' "$API/api/v1/articles/mark-read"
 ```
 
-`mark-read` marks the unread articles that were last updated before `before`. Pass the `asOf` of the first page of the list: articles that arrived after the list was read stay unread, and the articles of pages not loaded yet are marked too, whatever the order of the list. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. The response lists the articles it changed as `ids`, including the duplicates marked read with the articles kept for them, and `mark-unread` takes such a list to undo the change:
+`mark-read` marks the unread articles that were last updated before `before`. Pass the `asOf` of the first page of the list: articles that arrived after the list was read stay unread, and the articles of pages not loaded yet are marked too, whatever the order of the list. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. Events that have ended stay unread, as no list and no unread count shows them. The response lists the articles it changed as `ids`, including the duplicates marked read with the articles kept for them, and `mark-unread` takes such a list to undo the change:
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

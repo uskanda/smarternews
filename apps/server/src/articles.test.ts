@@ -429,6 +429,20 @@ describe("bulk read state", () => {
     expect(body.ids.sort()).toEqual(ids);
   });
 
+  it("leaves out the events that have ended, which no list shows", async () => {
+    const s = testServer("2026-03-10T12:00:00.000Z");
+    const category = s.category("Events", "event");
+    const event = (startsAt: string, endsAt: string) =>
+      s.article(category.id, { kind: "event", event: { key: startsAt, startsAt, endsAt, venue: null, fee: null, registration: "unknown" } });
+    event("2026-03-09T10:00:00.000Z", "2026-03-09T16:00:00.000Z");
+    const coming = [event("2026-03-11T10:00:00.000Z", "2026-03-11T16:00:00.000Z"), event("2026-03-13T10:00:00.000Z", "2026-03-13T16:00:00.000Z")];
+    s.clock.advance(60_000);
+
+    const response = await s.post("/api/v1/articles/mark-read", { categoryId: category.id, before: s.clock().toISOString() });
+
+    expect(await response.json()).toEqual({ updated: 2, ids: coming });
+  });
+
   it("puts the named articles back to unread and leaves the others alone", async () => {
     const s = testServer();
     const category = s.category();

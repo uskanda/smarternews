@@ -217,7 +217,8 @@ export function ReaderPage({ view }: { view: View }) {
   const annotationParam = isAnnotations ? search.get("annotation") : null;
   const focusAnnotation = annotationParam && /^\d{1,15}$/.test(annotationParam) ? Number(annotationParam) : null;
   const includeRead = search.get("read") === "1";
-  const importantOnly = importanceFilter && search.get("min") === "4";
+  // An event category offers no such filter, so a `min=4` left in the address does not narrow marking all as read.
+  const importantOnly = importanceFilter && !isEvents && search.get("min") === "4";
   // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
   const listViews = useListViews();
   const viewsSettled = listViews.isSuccess || listViews.isError;
@@ -638,8 +639,10 @@ export function ReaderPage({ view }: { view: View }) {
     pane.scrollTop = Math.max(0, pane.scrollTop + step * by);
   };
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = opened ?? items[index];
-  // A page not loaded yet may hold unread articles, which marking all as read takes too.
-  const canMarkAll = listControls && (view === "unread" || readToggle) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
+  // A page not loaded yet may hold unread articles, which marking all as read takes too. An event category has no
+  // switch for the read events, but its unread ones are still a list to finish.
+  const canMarkAll =
+    listControls && (view === "unread" || readToggle || isEvents) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
   useHotkeys(
     {
       // The list of annotations moves through its own rows.
@@ -705,10 +708,33 @@ export function ReaderPage({ view }: { view: View }) {
                 : "名前を含む記事"
               : TITLES[view];
 
+  const listActions = (
+    <>
+      {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
+      <Button onClick={refresh}>読み直す</Button>
+    </>
+  );
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} />
   ) : isEvents ? (
-    <EventList title={title} events={items} selectedId={current} to={articlePath} timeZone={timeZone} now={now()} />
+    <EventList
+      title={title}
+      actions={listActions}
+      state={{
+        // Until the views are known the list is not fetched, and is no more done than while it is.
+        pending: list.isPending,
+        error: list.isError ? list.error : null,
+        retry: () => void list.refetch(),
+        hasMore: list.hasNextPage,
+        loadingMore: list.isFetchingNextPage,
+        loadMore: () => void list.fetchNextPage(),
+      }}
+      events={items}
+      selectedId={current}
+      to={articlePath}
+      timeZone={timeZone}
+      now={now()}
+    />
   ) : (
     <section aria-label="記事の一覧" className="flex h-full min-h-0 flex-col bg-surface">
       <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
@@ -716,10 +742,7 @@ export function ReaderPage({ view }: { view: View }) {
           <h1 className="min-w-0 truncate type-headline-md" title={title}>
             {title}
           </h1>
-          <div className="flex shrink-0 gap-sm">
-            {canMarkAll ? <Button onClick={() => void markAllRead()}>すべて既読にする</Button> : null}
-            <Button onClick={refresh}>読み直す</Button>
-          </div>
+          <div className="flex shrink-0 gap-sm">{listActions}</div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
           {readToggle ? (
