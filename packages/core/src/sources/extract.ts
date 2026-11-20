@@ -12,12 +12,15 @@ export interface ExtractedArticle {
    */
   html: string;
   publishedAt: Date | null;
+  /** True when the text and the HTML are of the element the content selector matched, not Readability's. */
+  matched: boolean;
 }
 
 // The subset of the DOM this module uses. The project does not load the DOM type library.
 interface DomElement {
   getAttribute(name: string): string | null;
   textContent: string | null;
+  outerHTML: string;
 }
 interface DomDocument {
   querySelector(selector: string): DomElement | null;
@@ -70,11 +73,29 @@ function publishedAt(document: DomDocument): Date | null {
   return parseDate(document.querySelector("time[datetime]")?.getAttribute("datetime"));
 }
 
-/** Pulls the readable text, its HTML and the publication time out of a page. */
-export function extractArticle(html: string, _url: string, maxChars = 8000): ExtractedArticle {
+/** The first element the selector matches, when it has text. A selector the engine cannot use matches nothing. */
+function selected(document: DomDocument, selector: string): { text: string; html: string } | null {
+  let element: DomElement | null;
+  try {
+    element = document.querySelector(selector);
+  } catch {
+    return null;
+  }
+  const text = (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+  return element && text.length > 0 ? { text, html: element.outerHTML } : null;
+}
+
+/**
+ * Pulls the readable text, its HTML and the publication time out of a page. With a content selector, the
+ * first element it matches is the article body instead of what Readability finds; a page where it matches no
+ * element with text is read by Readability.
+ */
+export function extractArticle(html: string, _url: string, maxChars = 8000, contentSelector: string | null = null): ExtractedArticle {
   const { document } = parseHTML(html) as unknown as { document: DomDocument };
   const published = publishedAt(document);
   const pageTitle = (document.querySelector("title")?.textContent ?? "").replace(/\s+/g, " ").trim();
+  // Tried before Readability, which changes the document it reads.
+  const chosen = contentSelector === null ? null : selected(document, contentSelector);
   let text = "";
   let content = "";
   let title = pageTitle;
@@ -86,5 +107,7 @@ export function extractArticle(html: string, _url: string, maxChars = 8000): Ext
   } catch {
     // an unreadable page leaves the text empty
   }
-  return { title, text: text.slice(0, maxChars), html: content, publishedAt: published };
+  // Readability still runs with a selector: the title is read the same way whether one is given or not.
+  if (chosen) return { title, text: chosen.text.slice(0, maxChars), html: chosen.html, publishedAt: published, matched: true };
+  return { title, text: text.slice(0, maxChars), html: content, publishedAt: published, matched: false };
 }

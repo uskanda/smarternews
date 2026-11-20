@@ -93,6 +93,38 @@ describe("the digests API", () => {
     expect(limited.llmRequests.digest).toHaveLength(0);
   });
 
+  it("makes a digest of a list when a target is given, and lists the digests of a period alone when asked", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const s = testServer("2026-03-01T06:00:00.000Z", {
+      digest: async (request) => {
+        await gate;
+        return answer(request);
+      },
+    });
+    const security = s.category("Security");
+    const starred = s.article(security.id, { title: "Starred" });
+    s.db.prepare("UPDATE articles SET starred = 1 WHERE id = ?").run(starred);
+
+    const started = await s.post("/api/v1/digests", { target: { type: "starred" } });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toEqual({ status: "queued" });
+    expect((await s.post("/api/v1/digests", { target: { type: "search", q: "Starred" } })).status).toBe(409);
+    release();
+    await s.digests.idle();
+
+    const list = await (await s.get("/api/v1/digests")).json();
+    expect(list.items).toMatchObject([{ trigger: "list", target: { type: "starred", label: "スター" }, articleCount: 1 }]);
+    expect((await (await s.get("/api/v1/digests?kind=period")).json()).items).toEqual([]);
+    expect((await s.get("/api/v1/digests?kind=other")).status).toBe(400);
+    expect(s.llmRequests.digest[0]!.prompt).toContain("スター");
+
+    expect(await (await s.post("/api/v1/digests", { target: { type: "mention", name: "Nobody" } })).json()).toEqual({ status: "empty" });
+    expect((await s.post("/api/v1/digests", { target: { type: "mention", name: " " } })).status).toBe(400);
+    expect((await s.post("/api/v1/digests", { target: { type: "search", q: "" } })).status).toBe(400);
+    expect((await s.post("/api/v1/digests", { target: { type: "feed" } })).status).toBe(400);
+  });
+
   it("counts the calls of digests apart from the calls of runs", async () => {
     const s = testServer("2026-03-01T06:00:00.000Z", { digest: answer });
     s.article(s.category().id);

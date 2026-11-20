@@ -57,9 +57,10 @@ describe("listTrialCandidates", () => {
     expect(three.filter((candidate) => candidate.verdict === "accepted")).toHaveLength(2);
   });
 
-  it("leaves out candidates rejected for an unknown publication time, and those of other topics", () => {
+  it("leaves out candidates rejected for an unknown publication time or a blocked site, and those of other topics", () => {
     const s = setup();
     s.add("rejected", "公開日時が不明", { publishedAt: null, reasonCode: "no-date" });
+    s.add("rejected", "除外したサイト", { reasonCode: "blocked-site" });
     s.add("rejected", "publication time unknown", { publishedAt: null, reasonCode: "no-date" });
     s.add("pending", "relevant", { topicIds: [s.other.id] });
     const kept = s.add("rejected", "off topic", { topicIds: [s.topic.id, s.other.id] });

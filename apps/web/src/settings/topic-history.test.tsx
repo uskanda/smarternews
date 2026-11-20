@@ -65,6 +65,23 @@ describe("the history of a topic", () => {
     expect(Object.values(s.server.llmRequests).flat()).toHaveLength(0);
   });
 
+  it("holds every この版に戻す while going back waits for its answer", async () => {
+    const s = seeded();
+    const { user, history, requests, hold } = await openEditor(s);
+    const held = hold(/\/restore$/);
+
+    await user.click(within(within(history).getAllByRole("listitem")[2]!).getByRole("button", { name: "この版に戻す" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "戻す" }));
+
+    const buttons = within(history).getAllByRole("button", { name: "この版に戻す" });
+    await waitFor(() => buttons.forEach((button) => expect(button).toBeDisabled()));
+    await user.click(buttons[0]!);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.includes("/restore"))).toHaveLength(1);
+    await held.release();
+    expect(await screen.findByText("この版に戻しました")).toBeInTheDocument();
+  });
+
   it("changes nothing when the dialog is dismissed", async () => {
     const s = seeded();
     const { user, history, requests } = await openEditor(s);

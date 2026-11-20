@@ -1,4 +1,4 @@
-import { parseListViewKey, type Category, type Counts, type Feed } from "@smarternews/core/api";
+import { parseListViewKey, type Category, type Counts, type Feed, type SavedSearch } from "@smarternews/core/api";
 import { describe, expect, it } from "vitest";
 import {
   buildNav,
@@ -7,7 +7,7 @@ import {
   parseHideRead,
   hasImportanceFilter,
   hasListControls,
-  hideEmptyEntries, hasReadToggle, hasSortMenu, listKey, listSortOf, parseListKey, targetFilter, targetScope, type ListTarget } from "./nav.ts";
+  hideEmptyEntries, hasReadToggle, hasSortMenu, listFormatOf, withViewChange, FORMAT_LABELS, FORMAT_OPTIONS, listKey, listSortOf, parseListKey, sortOptionsOf, targetFilter, targetScope, type ListTarget } from "./nav.ts";
 
 const category = (id: number, name: string, overrides: Partial<Category> = {}): Category => ({
   id,
@@ -31,18 +31,24 @@ const feed = (id: number, title: string, categoryId: number | null): Feed => ({
   selectors: null,
   title,
   siteUrl: null,
+  iconUrl: null,
   categoryId,
   intervalMinutes: null,
   enabled: true,
   autoSummarize: false,
   translate: false,
   fetchFullContent: false,
+  contentSelector: null,
+  topicSource: false,
   lastFetchedAt: null,
   lastSucceededAt: null,
   lastError: null,
   failureCount: 0,
   goneAt: null,
+  movedFrom: null,
+  movedAt: null,
   nextFetchAt: null,
+  fetchRequestedAt: null,
   articleCount: 0,
   starredCount: 0,
   annotatedCount: 0,
@@ -66,7 +72,13 @@ const counts: Counts = {
     { feedId: 11, unread: 0 },
     { feedId: 12, unread: 4 },
   ],
+  savedSearches: [
+    { id: 7, unread: 3 },
+    { id: 8, unread: 0 },
+  ],
 };
+
+const saved = (id: number, name: string): SavedSearch => ({ id, name, query: name, categoryId: null, feedId: null });
 
 /** The model as lines of "label unread", children indented. */
 function outline(model: ReturnType<typeof buildNav>): string[] {
@@ -190,6 +202,7 @@ describe("hideEmptyEntries", () => {
       { feedId: 21, unread: 0 },
       { feedId: 30, unread: 0 },
     ],
+    savedSearches: [],
   };
   const CATEGORIES = [category(1, "Tools"), category(2, "Cars"), category(3, "Bikes")];
   const FEEDS = [feed(10, "Blog", 1), feed(11, "Releases", 1), feed(20, "Hill", 3), feed(21, "Road", 3), feed(30, "Loose", null)];
@@ -210,6 +223,13 @@ describe("hideEmptyEntries", () => {
   it("keeps a feed whose fetches failed or stopped, with its category, but not a paused one", () => {
     const feeds = [feed(10, "Blog", 1), { ...feed(11, "Releases", 1), stale: true }, feed(20, "Hill", 3), { ...feed(21, "Road", 3), lastError: "timed out" }, { ...feed(30, "Loose", null), enabled: false }];
     expect(outline(hide(build(feeds)))).toEqual([...VIEWS, "Tools 5", "  Blog 5", "  Releases 0", "Bikes 0", "  Road 0"]);
+  });
+
+  it("keeps a feed that has gone, with its category", () => {
+    const feeds = [feed(10, "Blog", 1), feed(11, "Releases", 1), feed(20, "Hill", 3), { ...feed(21, "Road", 3), goneAt: "2026-11-01T00:00:00.000Z" }, feed(30, "Loose", null)];
+    const model = hide(build(feeds));
+    expect(outline(model)).toEqual([...VIEWS, "Tools 5", "  Blog 5", "Bikes 0", "  Road 0"]);
+    expect(model.groups[1]!.children[0]!.state).toBe("gone");
   });
 
   it("keeps the entry that is open, and the category above it", () => {
@@ -276,6 +296,12 @@ describe("what a list asks the server for", () => {
     expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: true })).toEqual({ category: 7, origin: "generated" });
     expect(targetFilter({ type: "feed", feedId: 31 })).toEqual({ feed: 31 });
     expect(targetFilter({ type: "recentlyRead" })).toEqual({ recentlyRead: "true" });
+  });
+
+  it("sends the order of the list unless it is newest first, the server's default", () => {
+    expect(targetFilter({ type: "unread" }, "newest")).toEqual({ unread: "true" });
+    expect(targetFilter({ type: "unread" }, "oldest")).toEqual({ unread: "true", order: "oldest" });
+    expect(targetFilter({ type: "category", categoryId: 7, generatedOnly: false }, "relevance")).toEqual({ category: 7, order: "relevance" });
   });
 
   it("narrows a mark-all-read the same way", () => {
@@ -348,10 +374,73 @@ describe("the order of a list", () => {
     }
   });
 
-  it("is asked of the server only when it is oldest first", () => {
+  it("is asked of the server only when it is not newest first", () => {
     expect(targetFilter({ type: "feed", feedId: 12 }, "oldest")).toEqual({ feed: 12, order: "oldest" });
     expect(targetFilter({ type: "feed", feedId: 12 }, "newest")).toEqual({ feed: 12 });
     expect(targetFilter({ type: "unread" })).toEqual({ unread: "true" });
+    expect(targetFilter({ type: "starred" }, "starred")).toEqual({ starred: "true", order: "starred" });
+  });
+
+  it("offers the order by star time in the starred articles alone", () => {
+    expect(sortOptionsOf({ type: "starred" })).toEqual(["newest", "oldest", "relevance", "starred"]);
+    for (const target of [{ type: "unread" }, { type: "all" }, { type: "generated" }, { type: "feeds" }, { type: "feed", feedId: 12 }, { type: "category", categoryId: 1, generatedOnly: false }] as ListTarget[]) {
+      expect(sortOptionsOf(target)).toEqual(["newest", "oldest", "relevance"]);
+    }
+  });
+
+  it("follows the order by star time for the starred articles, and reads it as newest first for any other entry", () => {
+    const starredViews = [
+      { key: "starred", sort: "starred" as const },
+      // The server refuses this; a list that cannot be in the order is newest first all the same.
+      { key: "all", sort: "starred" as const },
+    ];
+    expect(listSortOf({ type: "starred" }, starredViews, categories)).toBe("starred");
+    expect(listSortOf({ type: "all" }, starredViews, categories)).toBe("newest");
+  });
+});
+
+describe("the format of a list", () => {
+  const categories = [category(1, "Tools"), category(2, "Events", { kind: "event" })];
+  const views = [
+    { key: "feed-12", sort: "oldest" as const, format: "expanded" as const },
+    { key: "category-1", sort: "newest" as const, format: "compact" as const },
+    { key: "all", sort: "oldest" as const },
+    // The server would refuse these; a list whose format cannot be chosen ignores them all the same.
+    { key: "category-2", sort: "newest" as const, format: "expanded" as const },
+    { key: "recently-read", sort: "newest" as const, format: "compact" as const },
+  ];
+
+  it("follows the view of the entry, and is the standard one for an entry without one", () => {
+    expect(listFormatOf({ type: "feed", feedId: 12 }, views, categories)).toBe("expanded");
+    expect(listFormatOf({ type: "category", categoryId: 1, generatedOnly: false }, views, categories)).toBe("compact");
+    expect(listFormatOf({ type: "category", categoryId: 1, generatedOnly: true }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "all" }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "unread" }, undefined, categories)).toBe("standard");
+  });
+
+  it("is the standard one where the order cannot be chosen either", () => {
+    expect(listFormatOf({ type: "category", categoryId: 2, generatedOnly: false }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "recentlyRead" }, views, categories)).toBe("standard");
+    expect(listFormatOf({ type: "annotations" }, views, categories)).toBe("standard");
+  });
+
+  it("is changed at once on the screen, keeping the setting the change leaves out", () => {
+    const stored = [
+      { key: "all", sort: "oldest" as const, format: "expanded" as const },
+      { key: "unread", sort: "newest" as const, format: "compact" as const },
+    ];
+    expect(withViewChange(stored, "all", { sort: "newest" })).toEqual([
+      { key: "unread", sort: "newest", format: "compact" },
+      { key: "all", sort: "newest", format: "expanded" },
+    ]);
+    expect(withViewChange(stored, "unread", { format: "standard" })).toEqual([{ key: "all", sort: "oldest", format: "expanded" }]);
+    expect(withViewChange([], "feeds", { format: "compact" })).toEqual([{ key: "feeds", sort: "newest", format: "compact" }]);
+    // A view answered before there were formats is in the standard one.
+    expect(withViewChange([{ key: "all", sort: "oldest" }], "all", { sort: "newest" })).toEqual([]);
+  });
+
+  it("offers the three formats under their labels", () => {
+    expect(FORMAT_OPTIONS.map((format) => FORMAT_LABELS[format])).toEqual(["標準", "タイトルのみ", "展開"]);
   });
 
   it("is kept under a key the server reads for every entry of the list but the recently read articles", () => {
@@ -362,5 +451,45 @@ describe("the order of a list", () => {
       if (key === "recently-read" || key === "annotations") expect(parseListViewKey(key)).toBeNull();
       else expect(parseListViewKey(key), key).not.toBeNull();
     }
+  });
+});
+
+describe("saved searches in the model", () => {
+  const target = (savedSearchId: number): ListTarget => ({ type: "savedSearch", savedSearchId });
+
+  it("are listed in their order with the unread count of each, apart from the views and the categories", () => {
+    const model = buildNav({ categories: [category(1, "Tools")], feeds: [], counts, savedSearches: [saved(7, "量子"), saved(8, "電池"), saved(9, "新しい")] });
+    expect(model.savedSearches).toEqual([
+      { target: target(7), label: "量子", unread: 3 },
+      { target: target(8), label: "電池", unread: 0 },
+      { target: target(9), label: "新しい", unread: 0 },
+    ]);
+    expect(model.views.map((entry) => entry.target.type)).not.toContain("savedSearch");
+  });
+
+  it("are none when the app passes none, as the Android app does", () => {
+    expect(buildNav({ categories: [], feeds: [], counts }).savedSearches).toEqual([]);
+  });
+
+  it("are hidden without unread articles, except the one that is open", () => {
+    const model = buildNav({ categories: [], feeds: [], counts, savedSearches: [saved(7, "量子"), saved(8, "電池")] });
+    expect(hideEmptyEntries(model, { current: null, counted: true }).savedSearches.map((entry) => entry.label)).toEqual(["量子"]);
+    expect(hideEmptyEntries(model, { current: target(8), counted: true }).savedSearches.map((entry) => entry.label)).toEqual(["量子", "電池"]);
+    expect(hideEmptyEntries(model, { current: null, counted: false }).savedSearches).toHaveLength(2);
+  });
+
+  it("have a key of their own that is read back, and that keeps no list view", () => {
+    expect(listKey(target(7))).toBe("search-7");
+    expect(parseListKey("search-7")).toEqual(target(7));
+    expect(parseListKey("search-x")).toBeNull();
+    expect(parseListViewKey("search-7")).toBeNull();
+  });
+
+  it("show unread articles until asked for the read ones, without mark all as read or a menu of the order", () => {
+    expect(hasReadToggle(target(7))).toBe(true);
+    expect(hasListControls(target(7))).toBe(false);
+    expect(hasImportanceFilter(target(7))).toBe(false);
+    expect(hasSortMenu(target(7), [])).toBe(false);
+    expect(targetScope(target(7))).toEqual({});
   });
 });

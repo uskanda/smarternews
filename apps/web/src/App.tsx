@@ -12,6 +12,7 @@ import { RunsPage } from "./runs/RunsPage.tsx";
 import { CategoryPage } from "./settings/CategoryPage.tsx";
 import { FeedsPage } from "./settings/FeedsPage.tsx";
 import { FiltersPage } from "./settings/FiltersPage.tsx";
+import { RulesPage } from "./settings/RulesPage.tsx";
 import { TermHighlightsPage } from "./settings/TermHighlightsPage.tsx";
 import { SettingsPage } from "./settings/SettingsPage.tsx";
 import { NotFound, Shell } from "./shell/Shell.tsx";
@@ -47,12 +48,14 @@ const routes: RouteObject[] = [
       { path: "c/:slug/:articleId?", element: <ReaderPage view="category" /> },
       { path: "f/:feedId/:articleId?", element: <ReaderPage view="feed" /> },
       { path: "search/:articleId?", element: <ReaderPage view="search" /> },
+      { path: "s/:savedSearchId/:articleId?", element: <ReaderPage view="savedSearch" /> },
       { path: "mentions/:articleId?", element: <ReaderPage view="mention" /> },
       { path: "digests/:digestId?", element: <DigestPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/categories/:categoryId", element: <CategoryPage /> },
       { path: "settings/feeds", element: <FeedsPage /> },
       { path: "settings/filters", element: <FiltersPage /> },
+      { path: "settings/rules", element: <RulesPage /> },
       { path: "settings/term-highlights", element: <TermHighlightsPage /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId", element: <RunPage /> },
@@ -76,9 +79,11 @@ export function App({ fetchImpl, initialEntries, now, onLocation, onHistory }: A
       if (next === null) queryClient.clear();
       setTokenState(next);
     };
+    const getToken = () => tokenRef.current;
     return {
-      api: createApi({ fetchImpl, getToken: () => tokenRef.current, onUnauthorized: () => setToken(null) }),
+      api: createApi({ fetchImpl, getToken, onUnauthorized: () => setToken(null) }),
       now: now ?? (() => new Date()),
+      getToken,
       clearToken: () => setToken(null),
       setToken,
     };

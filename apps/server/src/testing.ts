@@ -128,7 +128,7 @@ export function testServer(
     },
   });
   // Other sites, as the tests define them: `site.set(url, answer)`. Anything else answers 404.
-  const routes: Record<string, () => Response> = {};
+  const routes: Record<string, () => Response | Promise<Response>> = {};
   const site = fakeFetch(routes, clock);
   const fetcher = new Fetcher({ userAgent: "test", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: site.fetchImpl, clock, sleep: async () => {} });
   const poller = new FeedPoller({ db, clock, fetcher, translation });
@@ -189,7 +189,7 @@ export function testServer(
     llmRequests: llm.requests,
     site: {
       requests: site.requests,
-      set(url: string, answer: string | (() => Response)) {
+      set(url: string, answer: string | (() => Response | Promise<Response>)) {
         routes[url] = typeof answer === "string" ? () => new Response(answer, { headers: { "content-type": "application/xml; charset=utf-8" } }) : answer;
       },
     },

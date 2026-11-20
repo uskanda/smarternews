@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { candidateHost } from "../fetch/url.ts";
 import { annotationText, searchText } from "../search/plain.ts";
 
 export type Database = DatabaseSync;
@@ -15,7 +16,8 @@ const textOrNull = (value: unknown): string | null => (value === null || value =
  * origin, title, translated_title, summary, auto_summary, body, content_text, impact and event_venue, and
  * returns the text the index holds. Also `sn_annotation_text`, which takes the quote and the note of an
  * annotation and returns what the index holds of it. Every connection that writes articles or annotations must
- * have them: without them, the triggers fail.
+ * have them: without them, the triggers fail. And `sn_candidate_host`, which takes the URL of a candidate and
+ * returns its site: the migration that gave candidates their site calls it.
  */
 function registerFunctions(db: Database): void {
   db.function("sn_search_text", { deterministic: true }, (origin, title, translatedTitle, summary, autoSummary, body, contentText, impact, venue) =>
@@ -32,6 +34,7 @@ function registerFunctions(db: Database): void {
     }),
   );
   db.function("sn_annotation_text", { deterministic: true }, (quote, note) => annotationText(textOrNull(quote), textOrNull(note)));
+  db.function("sn_candidate_host", { deterministic: true }, (url) => candidateHost(text(url), null));
 }
 
 export function openDatabase(path: string): Database {

@@ -109,6 +109,26 @@ describe("the interpret task", () => {
   });
 });
 
+describe("the search task", () => {
+  const input = { topicText: "Maker fairs", criteria: "c", kind: "news" as const, windowHours: 24, windowDays: null, now: "2026-03-01T06:00:00.000Z" };
+
+  it("has no section of headlines when the topic has no articles", () => {
+    for (const recentHeadlines of [undefined, []]) {
+      const { prompt } = tasks.search.build({ ...input, recentHeadlines });
+      expect(prompt).not.toContain("<material>");
+      expect(prompt).not.toMatch(/headlines/i);
+    }
+  });
+
+  it("passes the headlines as material, asks to avoid the same pages and to keep new developments", () => {
+    const { prompt } = tasks.search.build({ ...input, recentHeadlines: ["Fair opens in March", "Fair adds a second hall"] });
+    expect(count(prompt, "<material>")).toBe(1);
+    expect(prompt).toContain("<material>\n- Fair opens in March\n- Fair adds a second hall\n</material>");
+    expect(prompt).toMatch(/do not list the pages these articles were made from/i);
+    expect(prompt).toMatch(/new developments and follow-ups/i);
+  });
+});
+
 describe("the judge task", () => {
   const input = {
     kind: "news" as const,
@@ -375,6 +395,16 @@ describe("the digest task", () => {
     expect(prompt).toContain('"id":10');
     expect(prompt).toContain("importance 4 and 5");
     expect(prompt).toContain("executiveSummary only");
+    expect(prompt).toContain("received in a period");
+  });
+
+  it("speaks of the articles of a list instead of a period when given a scope, and quotes the scope as material", () => {
+    const { prompt } = tasks.digest.build({ ...digestInput, scope: "名前：OpenAI" });
+    expect(prompt).not.toContain("Period:");
+    expect(prompt).not.toContain("received in a period");
+    expect(prompt).toContain("articles of one list the reader chose");
+    expect(prompt).toContain("名前：OpenAI");
+    expect(count(prompt, "<material>")).toBe(3);
   });
 
   it("takes an executive summary of up to 800 characters and up to five lines a section", () => {

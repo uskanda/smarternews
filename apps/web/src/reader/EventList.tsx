@@ -15,11 +15,21 @@ export type EventListState = {
   loadMore: () => void;
 };
 
+/** The link at the top of the list of a category to the settings of that category. */
+export function CategorySettingsLink({ to, className = "" }: { to: string; className?: string }) {
+  return (
+    <Link to={to} className={`tap type-label-sm text-primary underline underline-offset-4 ${className}`}>
+      カテゴリの設定
+    </Link>
+  );
+}
+
 /** Upcoming events of one category, grouped by the day they start. */
 export function EventList({
   title,
   actions,
   state,
+  settingsPath,
   events,
   selectedId,
   to,
@@ -30,6 +40,8 @@ export function EventList({
   /** The buttons beside the title, as the list of articles has them. */
   actions: ReactNode;
   state: EventListState;
+  /** The settings page of the category, linked under the heading. */
+  settingsPath: string | null;
   events: ArticleSummary[];
   selectedId: number | null;
   to: (id: number) => string;
@@ -40,11 +52,15 @@ export function EventList({
   const failed = state.error !== null && state.error !== undefined;
   return (
     <section aria-label="イベントの一覧" className="flex h-full min-h-0 flex-col bg-surface">
-      <header className="flex items-center justify-between gap-sm border-b border-outline px-lg py-md">
-        <h1 className="min-w-0 truncate type-headline-md" title={title}>
-          {title}
-        </h1>
-        <div className="flex shrink-0 gap-sm">{actions}</div>
+      <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
+        {/* As in the list of articles: the buttons go below the name only when it would keep less than six characters. */}
+        <div className="flex flex-wrap items-center justify-between gap-sm">
+          <h1 className="min-w-0 grow basis-[6em] truncate type-headline-md" title={title}>
+            {title}
+          </h1>
+          <div className="flex flex-wrap gap-sm">{actions}</div>
+        </div>
+        {settingsPath ? <CategorySettingsLink to={settingsPath} className="self-start" /> : null}
       </header>
       <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
         {failed ? <ErrorNotice error={state.error} onRetry={state.retry} /> : null}

@@ -2,7 +2,7 @@
 // what a set of selectors takes out, and the fields to write selectors by hand.
 import type { PageCandidates, PageSelectors, SelectorFallback, SelectorPreview } from "@smarternews/core/api";
 import { ApiError, feedErrorLabel, fieldError, fieldMessage, formatClock, formatDay } from "@smarternews/client";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useApp } from "../app/context.ts";
 import { useTimeZone } from "../api/queries.ts";
 import { Button, Field, messageFor } from "../ui/controls.tsx";
@@ -126,24 +126,51 @@ function describe(selectors: PageSelectors): string {
   ].join(" ／ ");
 }
 
+/**
+ * A number for each request, so that an answer that comes after a newer request, a change of the input, or the
+ * end of the component is dropped. `next` starts a request or drops the one under way; `current` tells whether
+ * the request of a number is still the latest.
+ */
+export function useLatest() {
+  const latest = useRef(0);
+  useEffect(
+    () => () => {
+      latest.current += 1;
+    },
+    [],
+  );
+  return {
+    next: () => (latest.current += 1),
+    current: (request: number) => request === latest.current,
+  };
+}
+
 /** Asks the server for candidates; says that it is looking while it waits, which may take minutes. */
 export function useCandidates() {
   const { api } = useApp();
+  const latest = useLatest();
   const [state, setState] = useState<{ status: "idle" } | { status: "loading" } | { status: "ready"; result: PageCandidates } | { status: "failed"; error: unknown }>({
     status: "idle",
   });
+  /** The candidates for the page, or null when they could not be had or an answer was dropped. */
   async function ask(url: string): Promise<PageCandidates | null> {
+    const request = latest.next();
     setState({ status: "loading" });
     try {
       const result = await api.pageCandidates(url);
+      if (!latest.current(request)) return null;
       setState({ status: "ready", result });
       return result;
     } catch (error) {
-      setState({ status: "failed", error });
+      if (latest.current(request)) setState({ status: "failed", error });
       return null;
     }
   }
-  return { state, ask, reset: () => setState({ status: "idle" }) };
+  function reset() {
+    latest.next();
+    setState({ status: "idle" });
+  }
+  return { state, ask, reset };
 }
 
 export function CandidateStatus({ state }: { state: ReturnType<typeof useCandidates>["state"] }) {
@@ -186,23 +213,27 @@ export function SelectorEditor({
   const [preview, setPreview] = useState<SelectorPreview | null>(null);
   const [problem, setProblem] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const latest = useLatest();
   const shown = problem ?? error;
 
   async function look() {
     const selectors = selectorsOf(value);
     if (selectors === null) return;
+    const request = latest.next();
     setBusy(true);
     setProblem(null);
     try {
       const result = await api.pagePreview(url, selectors);
+      if (!latest.current(request)) return;
       setPreview(result);
       onTested?.(result.count > 0 ? selectors : null);
     } catch (caught) {
+      if (!latest.current(request)) return;
       setPreview(null);
       setProblem(caught);
       onTested?.(null);
     } finally {
-      setBusy(false);
+      if (latest.current(request)) setBusy(false);
     }
   }
 
@@ -217,6 +248,9 @@ export function SelectorEditor({
           value={value[field.name]}
           onChange={(event) => {
             onChange({ ...value, [field.name]: event.target.value });
+            // A preview under way is of the selectors before this change: it is dropped, and the new ones can be tried.
+            latest.next();
+            setBusy(false);
             setPreview(null);
             setProblem(null);
             onTested?.(null);

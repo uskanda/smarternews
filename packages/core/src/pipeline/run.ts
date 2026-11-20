@@ -7,7 +7,9 @@ import {
   insertArticle,
   openEventArticles,
   recentNewsArticles,
+  recentTopicHeadlines,
   reviseArticle,
+  starredStoryTips,
   type ArticleDigest,
   type EventFields,
 } from "../db/articles.ts";
@@ -22,26 +24,31 @@ import {
   type PendingCandidate,
 } from "../db/candidates.ts";
 import { getCategory } from "../db/categories.ts";
+import { blockedHosts } from "../db/sites.ts";
 import { transaction, type Database } from "../db/database.ts";
 import { replaceMentions } from "../db/mentions.ts";
 import { recentMissTitles } from "../db/misses.ts";
 import { finishRun, getRun, startRun } from "../db/runs.ts";
 import { recordSearchAttempt, type SearchAttempt } from "../db/search-attempts.ts";
 import { getSettings } from "../db/settings.ts";
+import { deliveredText, listTopicSourceArticles, recordSummarizedIn } from "../db/topic-sources.ts";
 import { applyInterpretation, listTopics } from "../db/topics.ts";
 import type { Fetcher } from "../fetch/http.ts";
+import { candidateHost } from "../fetch/url.ts";
 import { PageFetcher } from "../fetch/pages.ts";
 import { LlmLimitError, type CallBudget, type TaskRunner } from "../llm/runner.ts";
+import { llmSearchedSince } from "../runs/llm-search-reduction.ts";
 import { extractArticle } from "../sources/extract.ts";
 import { collectFeed } from "../sources/feed.ts";
 import { collectLlmSearch } from "../sources/llm-search.ts";
 import { searchNews, type NewsEngine, type NewsSearchResult } from "../sources/news-search.ts";
 import type { CollectWindow, RawCandidate } from "../sources/types.ts";
+import { startOfLocalDay } from "../time.ts";
 import { resolveEvent } from "./events.ts";
-import { reasonText, type ReasonCode } from "./reasons.ts";
+import { reasonText, type MarkReasonCode, type ReasonCode } from "./reasons.ts";
 
 export interface PipelineConfig {
-  limits: { judgeBatchSize: number; pagesPerRun: number };
+  limits: { judgeBatchSize: number; pagesPerRun: number; subscriptionCandidatesPerRun: number };
   newsSearch: { engines: NewsEngine[]; maxResultsPerQuery: number };
 }
 
@@ -58,6 +65,10 @@ const HOUR = 3_600_000;
 const UPDATE_WINDOW_MS = 72 * HOUR;
 /** How far back published news articles are offered to the grouping step. */
 const FOLLOW_UP_LOOKBACK_MS = 14 * 24 * HOUR;
+/** How far back a starred news article keeps its story open to follow-ups beyond `FOLLOW_UP_LOOKBACK_MS`. */
+const STARRED_LOOKBACK_MS = 90 * 24 * HOUR;
+/** How many articles of starred stories are offered at most on top of the recent ones. */
+const STARRED_STORIES_LIMIT = 20;
 /** Event announcements appear long before the event, so news search looks this far back for them. */
 const EVENT_SEARCH_HOURS = 30 * 24;
 
@@ -80,6 +91,8 @@ interface Found {
   candidate: RawCandidate;
   topicIds: Set<number>;
   aliases: Set<string>;
+  /** The feed article of a topic source that delivered the page, whichever source found it first. */
+  feedArticleId: number | null;
 }
 
 function message(error: unknown): string {
@@ -131,6 +144,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     ? { since: new Date(ctx.now.getTime() - windowHours * HOUR), hours: windowHours }
     : { since: null, hours: EVENT_SEARCH_HOURS };
   const isSeen = (url: string) => isSeenUrl(ctx.db, ctx.category.id, url);
+  const today = startOfLocalDay(ctx.now, ctx.settings.timeZone).toISOString();
   const found = new Map<string, Found>();
 
   /** A search is recorded with what it returned, so that searches that keep finding nothing can be pointed out. */
@@ -153,7 +167,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     try {
       const loaded = await load();
       for (const candidate of loaded.candidates) {
-        const entry = found.get(candidate.url) ?? { candidate, topicIds: new Set<number>(), aliases: new Set<string>() };
+        const entry = found.get(candidate.url) ?? { candidate, topicIds: new Set<number>(), aliases: new Set<string>(), feedArticleId: null };
         entry.topicIds.add(topic.id);
         for (const alias of candidate.aliases) entry.aliases.add(alias);
         found.set(candidate.url, entry);
@@ -172,7 +186,7 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
 
   for (const topic of topics) {
     for (const feedUrl of topic.sources.feeds) {
-      await attempt(topic, "feed", feedUrl, () => plain(collectFeed(ctx.fetcher, feedUrl, window.since)));
+      await attempt(topic, "feed", feedUrl, () => plain(collectFeed(ctx.fetcher, feedUrl, window.since, ctx.settings.timeZone)));
     }
     if (topic.sources.newsSearch) {
       const locale = topic.search ?? ctx.settings.search;
@@ -190,11 +204,12 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
         }
       }
     }
-    if (topic.sources.llmSearch) {
+    // A search cut to once a day for finding nothing new is left out once it ran that day, by any kind of run.
+    if (topic.sources.llmSearch && !(topic.llmSearchReduced && llmSearchedSince(ctx.db, topic.id, today))) {
       await attempt(topic, "llm-search", topic.text, () => {
         if (!ctx.runner.canSearch()) throw new Error("the provider assigned to the search task cannot search the web");
         return plain(collectLlmSearch(
-          { runner: ctx.runner, budget: ctx.budget, pages: ctx.pages },
+          { runner: ctx.runner, budget: ctx.budget, pages: ctx.pages, isSeen },
           {
             topicText: topic.text,
             criteria: topic.criteria,
@@ -203,14 +218,24 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
             windowDays: ctx.category.windowDays,
             now: ctx.now,
             since: window.since,
+            recentHeadlines: recentTopicHeadlines(ctx.db, topic.id),
           },
         ));
       }, { kind: "llm-search", engine: null, query: topic.text });
     }
   }
+  if (isNews) collectTopicSources(ctx, topics, window.since!, found, isSeen);
 
-  const fresh = [...found.values()].filter((entry) => !isSeen(entry.candidate.url) && ![...entry.aliases].some(isSeen));
-  ctx.stats.collected = fresh.length;
+  const unseen = [...found.values()].filter((entry) => !isSeen(entry.candidate.url) && ![...entry.aliases].some(isSeen));
+  ctx.stats.collected = unseen.length;
+
+  // The sites the reader blocked in the category: rejected before the date is looked at and before any model sees them.
+  const blocked = blockedHosts(ctx.db, ctx.category.id);
+  const fresh: Found[] = [];
+  for (const entry of unseen) {
+    if (blocked.has(hostOf(entry.candidate))) store(ctx, entry, "rejected", reasonText("blocked-site", ctx.settings.outputLanguage), null, "blocked-site");
+    else fresh.push(entry);
+  }
   if (!isNews) return fresh;
 
   // News without a publication time cannot be placed in the window: rejected before any model sees it.
@@ -220,6 +245,41 @@ async function collect(ctx: Context, topics: Topic[]): Promise<Found[]> {
     else store(ctx, entry, "rejected", reasonText("no-date", ctx.settings.outputLanguage), null, "no-date");
   }
   return dated;
+}
+
+/** The site of a candidate, as it is stored and blocked. */
+function hostOf(candidate: RawCandidate): string {
+  return candidateHost(candidate.url, candidate.siteUrl);
+}
+
+/**
+ * Adds the articles the category's topic sources delivered within the window, as candidates of every topic that is
+ * ready: the judge has no way to say which topic a page fits. A page another source found already stays one
+ * candidate, which gains the topics and remembers the feed article. Nothing is fetched, so no source is counted.
+ */
+function collectTopicSources(ctx: Context, topics: Topic[], since: Date, found: Map<string, Found>, isSeen: (url: string) => boolean): void {
+  if (topics.length === 0) return;
+  const articles = listTopicSourceArticles(ctx.db, ctx.category.id, since.toISOString(), isSeen, ctx.config.limits.subscriptionCandidatesPerRun);
+  for (const article of articles) {
+    const entry = found.get(article.url) ?? {
+      candidate: {
+        url: article.url,
+        aliases: [],
+        fetchable: true,
+        title: article.title,
+        snippet: article.snippet,
+        siteName: article.siteName,
+        publishedAt: new Date(article.publishedAt),
+        sourceKind: "subscription",
+      },
+      topicIds: new Set<number>(),
+      aliases: new Set<string>(),
+      feedArticleId: null,
+    };
+    for (const topic of topics) entry.topicIds.add(topic.id);
+    entry.feedArticleId = article.articleId;
+    found.set(article.url, entry);
+  }
 }
 
 /**
@@ -244,6 +304,7 @@ function store(
     title: candidate.title,
     snippet: candidate.snippet,
     siteName: candidate.siteName,
+    siteHost: hostOf(candidate),
     publishedAt: candidate.publishedAt?.toISOString() ?? null,
     sourceKind: candidate.sourceKind,
     status,
@@ -251,6 +312,7 @@ function store(
     reasonCode,
     importance,
     topicIds: [...entry.topicIds],
+    feedArticleId: entry.feedArticleId,
     now,
   });
   markSeen(ctx.db, ctx.category.id, [candidate.url, ...entry.aliases], now);
@@ -309,11 +371,20 @@ interface Story {
   mode: "new" | "update" | "follow";
 }
 
+/**
+ * The news articles a new page could be a follow-up to: those updated recently, and the newest article of each
+ * story the reader starred within a longer time. An article in both is offered once.
+ */
+function newsToFollow(ctx: Context): ArticleDigest[] {
+  const at = (ms: number) => new Date(ctx.now.getTime() - ms).toISOString();
+  const recent = recentNewsArticles(ctx.db, ctx.category.id, at(FOLLOW_UP_LOOKBACK_MS));
+  const starred = starredStoryTips(ctx.db, ctx.category.id, at(STARRED_LOOKBACK_MS), STARRED_STORIES_LIMIT, new Set(recent.map((article) => article.id)));
+  return [...recent, ...starred];
+}
+
 async function groupStories(ctx: Context, pending: PendingCandidate[]): Promise<Story[] | null> {
   const isNews = ctx.category.kind === "news";
-  const existing = isNews
-    ? recentNewsArticles(ctx.db, ctx.category.id, new Date(ctx.now.getTime() - FOLLOW_UP_LOOKBACK_MS).toISOString())
-    : openEventArticles(ctx.db, ctx.category.id, ctx.now.toISOString());
+  const existing = isNews ? newsToFollow(ctx) : openEventArticles(ctx.db, ctx.category.id, ctx.now.toISOString());
 
   let groups: Array<{ candidateIds: number[]; existingArticleId: number | null }>;
   if (pending.length === 1 && existing.length === 0) {
@@ -375,20 +446,42 @@ async function groupStories(ctx: Context, pending: PendingCandidate[]): Promise<
   return stories;
 }
 
-function reject(ctx: Context, story: Story, code: ReasonCode): void {
+function reject(ctx: Context, story: Story, code: ReasonCode, title?: string): void {
   rejectCandidates(
     ctx.db,
     story.candidates.map((candidate) => candidate.id),
     code,
     ctx.settings.outputLanguage,
     ctx.run.id,
+    title,
   );
   ctx.stats.rejected += story.candidates.length;
 }
 
+/** Why no follow-up is written to an article: a miss first, then stopped follow-ups; null when it has neither. */
+function markReason(article: ArticleDigest | null): MarkReasonCode | null {
+  if (article?.missed) return "missed-follow-up";
+  if (article?.followUpsStopped) return "stopped-follow-up";
+  return null;
+}
+
+/**
+ * Rejects a story that follows up an article the reader marked, naming that article, and says whether it did. Its
+ * pages are not written about: the reader does not want the article back as unread, nor a new one after it.
+ */
+function rejectMarkedFollowUp(ctx: Context, story: Story, article: ArticleDigest | null): boolean {
+  const code = markReason(article);
+  if (code === null) return false;
+  reject(ctx, story, code, article!.title);
+  return true;
+}
+
 // ---- 7 and 8. fetch pages and write ------------------------------------------------------------
 
-/** The text given to the writer for each page: the extracted body when it can be had, else the snippet. */
+/**
+ * The text given to the writer for each page: the extracted body when it can be had; else, for a page a topic source
+ * delivered, the content the feed delivered; else the snippet.
+ */
 async function loadSources(ctx: Context, story: Story) {
   let anyBody = false;
   const sources = [];
@@ -401,6 +494,10 @@ async function loadSources(ctx: Context, story: Story) {
     if (text.length > 0) {
       anyBody = true;
       setCandidateBody(ctx.db, candidate.id, text);
+    } else if (candidate.feedArticleId !== null) {
+      // Longer than a snippet, and what the reader can read too: the article is not marked as written from snippets.
+      text = deliveredText(ctx.db, candidate.feedArticleId).trim();
+      if (text.length > 0) anyBody = true;
     }
     sources.push({
       title: candidate.title,
@@ -428,6 +525,7 @@ async function writeStories(ctx: Context): Promise<void> {
   let storyNumber = 0;
   for (const story of stories) {
     storyNumber += 1;
+    if (rejectMarkedFollowUp(ctx, story, story.existing)) continue;
     if (story.importance < ctx.category.minImportance) {
       reject(ctx, story, "below-minimum");
       continue;
@@ -476,6 +574,8 @@ async function writeStories(ctx: Context): Promise<void> {
       // The same event found again under another headline: add to its article instead of duplicating it.
       const sameEvent = story.mode === "update" ? null : findEventByKey(ctx.db, ctx.category.id, event.key);
       if (sameEvent) {
+        // Found only now, after the writer was asked: the article is still not rewritten.
+        if (rejectMarkedFollowUp(ctx, story, sameEvent)) continue;
         story.existing = sameEvent;
         story.mode = "update";
       }
@@ -502,6 +602,7 @@ async function writeStories(ctx: Context): Promise<void> {
       topicIds: [...new Set(story.candidates.flatMap((candidate) => candidate.topicIds))],
     };
     const candidateIds = story.candidates.map((candidate) => candidate.id);
+    const feedArticleIds = story.candidates.flatMap((candidate) => (candidate.feedArticleId === null ? [] : [candidate.feedArticleId]));
     const groupKey = `${ctx.run.id}:${storyNumber}`;
     // Names that are not valid are left out: a new article has none, and a rewritten one keeps its earlier names.
     const mentions = output.mentions;
@@ -511,6 +612,7 @@ async function writeStories(ctx: Context): Promise<void> {
         reviseArticle(ctx.db, story.existing.id, { ...content, updateNote: existingArticle ? output.updateNote : null });
         if (mentions !== null) replaceMentions(ctx.db, story.existing.id, mentions);
         acceptCandidates(ctx.db, candidateIds, story.existing.id, groupKey, ctx.run.id);
+        recordSummarizedIn(ctx.db, feedArticleIds, story.existing.id);
         return;
       }
       const articleId = insertArticle(ctx.db, {
@@ -521,6 +623,7 @@ async function writeStories(ctx: Context): Promise<void> {
       });
       if (mentions !== null) replaceMentions(ctx.db, articleId, mentions);
       acceptCandidates(ctx.db, candidateIds, articleId, groupKey, ctx.run.id);
+      recordSummarizedIn(ctx.db, feedArticleIds, articleId);
     });
     if (story.mode === "update") ctx.stats.updated += 1;
     else ctx.stats.created += 1;

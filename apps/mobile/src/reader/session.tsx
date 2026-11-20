@@ -1,5 +1,6 @@
 import type { ArticleSummary } from "@smarternews/core/api";
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { useArticlePatchListener } from "../api/queries";
 
 interface Kept {
   /** Which list the kept articles belong to. Another list starts empty. */
@@ -41,8 +42,15 @@ export function ReaderSessionProvider({ children }: { children: ReactNode }) {
     setKept((current) => ({ key, items: [...(current.key === key ? current.items : []).filter((entry) => entry.id !== item.id), item] }));
   }, []);
   const patch = useCallback((id: number, change: Partial<ArticleSummary>) => {
-    setKept((current) => ({ key: current.key, items: current.items.map((entry) => (entry.id === id ? { ...entry, ...change } : entry)) }));
+    setKept((current) =>
+      current.items.some((entry) => entry.id === id)
+        ? { key: current.key, items: current.items.map((entry) => (entry.id === id ? { ...entry, ...change } : entry)) }
+        : current,
+    );
   }, []);
+  // The kept rows are outside the cache: what changes an article there, a translated title or a change of flags
+  // undone after a failure, is put on them here.
+  useArticlePatchListener(patch);
   // Read only when the list is scrolled, so it needs no drawing of its own.
   const excluded = useRef<{ key: string; ids: Set<number> }>({ key: "", ids: new Set() });
   const excludedFor = useCallback((key: string) => (excluded.current.key === key ? excluded.current.ids : NO_IDS), []);

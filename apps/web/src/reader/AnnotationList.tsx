@@ -1,11 +1,12 @@
 import { formatShort } from "@smarternews/client";
 import type { AnnotationListItem } from "@smarternews/core/api";
-import { useLayoutEffect, useRef } from "react";
+import { type RefObject, useLayoutEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router";
 import { useAnnotationList } from "../api/queries.ts";
 import { focusWithin, followScroll } from "../lib/follow.ts";
 import { useHotkeys } from "../lib/keys.ts";
 import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { LoadMore } from "../ui/LoadMore.tsx";
 import { SelectedMark } from "./SelectedMark.tsx";
 
 /** Where a row of the list leads: the article, brought to the annotation. */
@@ -42,9 +43,20 @@ function AnnotationRow({ item, selected, timeZone, now }: { item: AnnotationList
 
 /**
  * The list of the reader's annotations, the last made first, one row per annotation: an article with several
- * has several rows. It offers none of the controls of an article list. `j` and `k` move through the rows.
+ * has several rows. It offers none of the controls of an article list. `j` and `k` move through the rows, and
+ * `moveRef` is given the same move, for Space at the end of the body.
  */
-export function AnnotationList({ selected, timeZone, now }: { selected: number | null; timeZone: string; now: Date }) {
+export function AnnotationList({
+  selected,
+  timeZone,
+  now,
+  moveRef,
+}: {
+  selected: number | null;
+  timeZone: string;
+  now: Date;
+  moveRef?: RefObject<((step: 1 | -1) => void) | null>;
+}) {
   const list = useAnnotationList();
   const navigate = useNavigate();
   const items = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -61,6 +73,13 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
     void navigate(annotationPath(target), { replace: selected !== null });
   };
   useHotkeys({ j: () => move(1), k: () => move(-1) });
+  useLayoutEffect(() => {
+    if (!moveRef) return;
+    moveRef.current = move;
+    return () => {
+      moveRef.current = null;
+    };
+  });
   // A move with a key takes the list along, as in the article list, and the focus too when it was in the list.
   useLayoutEffect(() => {
     const step = keyStep.current;
@@ -85,7 +104,7 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
         <Button onClick={() => void list.refetch()}>読み直す</Button>
       </header>
       <div ref={pane} data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
-        {list.isError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
+        {list.isError && !list.isFetchNextPageError ? <ErrorNotice error={list.error} onRetry={() => void list.refetch()} /> : null}
         {list.isPending ? <Loading /> : null}
         {list.isSuccess && items.length === 0 ? (
           <div className="flex flex-col items-start gap-sm p-lg type-body-md">
@@ -98,13 +117,7 @@ export function AnnotationList({ selected, timeZone, now }: { selected: number |
             <AnnotationRow key={item.id} item={item} selected={item.id === selected} timeZone={timeZone} now={now} />
           ))}
         </ul>
-        {list.hasNextPage ? (
-          <div className="flex justify-center p-lg">
-            <Button onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-              さらに読み込む
-            </Button>
-          </div>
-        ) : null}
+        <LoadMore list={list} scroller={pane} />
       </div>
     </section>
   );

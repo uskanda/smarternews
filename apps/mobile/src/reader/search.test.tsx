@@ -91,6 +91,32 @@ describe("the search results", () => {
     expect(await isRead(server, ids.aOld!)).toBe(false);
   });
 
+  it("narrow to starred articles once starred only is switched on", async () => {
+    const { server, ids } = await seeded();
+    await server.core("setArticleFlags", ids.aOld, { starred: true }, "$now");
+    await renderApp({ server, url: `/search?q=${encodeURIComponent("電池")}` });
+    await waitFor(() => expect(titles()).toHaveLength(3));
+    expect(screen.getByRole("switch", { name: "スターだけ" }).props.accessibilityState).toMatchObject({ checked: false });
+
+    await userEvent.setup().press(screen.getByRole("switch", { name: "スターだけ" }));
+
+    await waitFor(() => expect(titles()).toEqual(["電池の古い話"]));
+  });
+
+  it("keep starred only in the article opened from them, which swipes through the starred results alone", async () => {
+    const { server, ids } = await seeded();
+    await server.core("setArticleFlags", ids.aOld, { starred: true }, "$now");
+    await server.core("setArticleFlags", ids.feed, { starred: true }, "$now");
+    await renderApp({ server, url: `/search?q=${encodeURIComponent("電池")}&starred=true` });
+    await waitFor(() => expect(titles()).toEqual(["News of the day", "電池の古い話"]));
+
+    await press(/^電池の古い話/);
+
+    await screen.findByRole("header", { name: "電池の古い話" });
+    // Of the two starred results, not of the three results without the narrowing.
+    expect(await screen.findByLabelText("2件のうち2件目")).toBeOnTheScreen();
+  });
+
   it("narrow to a category and to a feed", async () => {
     const { server } = await seeded();
     await renderApp({ server, url: `/search?q=${encodeURIComponent("電池")}` });

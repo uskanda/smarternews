@@ -7,13 +7,24 @@ import type {
   ArticleSearchQuery,
   ArticleSummary,
   AttentionList,
+  Feed,
   Highlight,
   HighlightCreate,
-  ListSort,
   ListViews,
+  ListViewUpdate,
 } from "@smarternews/core/api";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { createTermMatcher, type TermMatcher } from "@smarternews/client";
+import {
+  hashKey,
+  partialMatchKey,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
+import { createTermMatcher, withViewChange, type TermMatcher } from "@smarternews/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../app/context.ts";
 
@@ -36,10 +47,23 @@ export function useCategories() {
   return useQuery({ queryKey: ["categories"], queryFn: () => api.categories() });
 }
 
-/** The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles. */
+/** How often the feeds are fetched again while some wait for a fetch of all: its end shows within this time. */
+export const FETCH_ALL_REFRESH_MS = 3_000;
+
+/** Whether the feed still waits for its turn in a fetch of all. */
+export const awaitsFetch = (feed: Pick<Feed, "fetchRequestedAt">): boolean => feed.fetchRequestedAt !== null;
+
+/**
+ * The subscribed feeds. Fetched again like the counts: a fetch on the server changes their state and titles.
+ * While some wait for a fetch of all they are fetched again every few seconds, which is how its end is noticed.
+ */
 export function useFeeds() {
   const { api } = useApp();
-  return useQuery({ queryKey: ["feeds"], queryFn: () => api.feeds(), refetchInterval: REFRESH_MS });
+  return useQuery({
+    queryKey: ["feeds"],
+    queryFn: () => api.feeds(),
+    refetchInterval: (query) => (query.state.data?.some(awaitsFetch) ? FETCH_ALL_REFRESH_MS : REFRESH_MS),
+  });
 }
 
 /** The filters with what each hides now. Asked for again whenever a filter, a feed or a category changes. */
@@ -62,6 +86,23 @@ export function useScopedFilterCount(target: { feedId: number } | { categoryId: 
   ).length;
 }
 
+export function useRules() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["rules"], queryFn: () => api.rules() });
+}
+
+/**
+ * How many rules have the given feed or category as their scope, enabled or not: what goes with it when it is
+ * deleted. Undefined until the rules have arrived.
+ */
+export function useScopedRuleCount(target: { feedId: number } | { categoryId: number }): number | undefined {
+  const rules = useRules().data;
+  if (!rules) return undefined;
+  return rules.filter((rule) =>
+    "feedId" in target ? rule.scope.type === "feed" && rule.scope.feedId === target.feedId : rule.scope.type === "category" && rule.scope.categoryId === target.categoryId,
+  ).length;
+}
+
 /**
  * The term groups in their order. Changing them on the settings page sets this anew, so lists and articles
  * take the new colours without a reload.
@@ -69,6 +110,12 @@ export function useScopedFilterCount(target: { feedId: number } | { categoryId: 
 export function useTermGroups() {
   const { api } = useApp();
   return useQuery({ queryKey: ["term-groups"], queryFn: () => api.termGroups() });
+}
+
+/** The saved searches in their order. Their unread counts come with the counts. */
+export function useSavedSearches() {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["saved-searches"], queryFn: () => api.savedSearches() });
 }
 
 /** Finds the terms of the term groups in a text. Has no terms until the groups have arrived. */
@@ -87,18 +134,17 @@ export function useListViews() {
 }
 
 /**
- * Changes the order of an entry. The screen takes it at once, and goes back to the order it had when the
- * server cannot store it; `onFailed` then says so.
+ * Changes the order or the format of an entry. The screen takes it at once, keeping the setting the change
+ * leaves out, and goes back to the view it had when the server cannot store it; `onFailed` then says so.
  */
-export function useListSortChange(onFailed: () => void) {
+export function useListViewChange(onFailed: () => void) {
   const { api } = useApp();
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, sort }: { key: string; sort: ListSort }) => api.updateListView(key, { sort }),
-    onMutate: ({ key, sort }) => {
+    mutationFn: ({ key, patch }: { key: string; patch: ListViewUpdate }) => api.updateListView(key, patch),
+    onMutate: ({ key, patch }) => {
       const before = client.getQueryData<ListViews>(["list-views"]);
-      const others = (before?.items ?? []).filter((view) => view.key !== key);
-      client.setQueryData<ListViews>(["list-views"], { items: sort === "newest" ? others : [...others, { key, sort }] });
+      client.setQueryData<ListViews>(["list-views"], { items: withViewChange(before?.items ?? [], key, patch) });
       return { before };
     },
     onError: (_error, _variables, context) => {
@@ -113,11 +159,18 @@ export function useCounts() {
   return useQuery({ queryKey: ["counts"], queryFn: () => api.counts(), refetchInterval: REFRESH_MS });
 }
 
-export function useArticleList(filter: ArticleListQuery, enabled = true) {
+/** How many articles a page of the expanded list holds: each is shown in full. */
+export const EXPANDED_PAGE_SIZE = 10;
+
+/**
+ * The articles of a list, a page at a time: 50 to a page, or `pageSize`. A list of pages of another size is kept
+ * apart, as its pages end elsewhere.
+ */
+export function useArticleList(filter: ArticleListQuery, enabled = true, pageSize = PAGE_SIZE) {
   const { api } = useApp();
   return useInfiniteQuery({
-    queryKey: ["articles", filter],
-    queryFn: ({ pageParam }) => api.articles({ ...filter, limit: PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }),
+    queryKey: pageSize === PAGE_SIZE ? ["articles", filter] : ["articles", filter, { pageSize }],
+    queryFn: ({ pageParam }) => api.articles({ ...filter, limit: pageSize, ...(pageParam ? { cursor: pageParam } : {}) }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     refetchInterval: REFRESH_MS,
@@ -167,29 +220,66 @@ export function useArticle(id: number | null) {
   });
 }
 
-/** Applies a change to one article wherever it is cached: in every list and in its own entry. */
-/** Changes an article in every list and in its own entry. A miss is only on the article: the lists do not show it. */
-function patchArticle(client: QueryClient, id: number, { missed, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed">>): void {
+/** Hears every change `patchArticle` makes to an article, as a list row has it. */
+export type ArticlePatchListener = (id: number, patch: Partial<ArticleSummary>) => void;
+const patchListeners = new WeakMap<QueryClient, Set<ArticlePatchListener>>();
+
+/**
+ * Changes an article in every list and in its own entry, and tells those listening: the rows a list keeps outside
+ * the cache. A miss and stopped follow-ups are only on the article: the lists do not show them.
+ */
+function patchArticle(
+  client: QueryClient,
+  id: number,
+  { missed, followUpsStopped, ...patch }: Partial<ArticleSummary> & Partial<Pick<Article, "missed" | "followUpsStopped">>,
+): void {
   client.setQueriesData<InfiniteData<ArticleList>>({ queryKey: ["articles"] }, (data) =>
     data
       ? { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) })) }
       : data,
   );
   client.setQueryData<Article>(["article", id], (article) =>
-    article ? { ...article, ...patch, ...(missed !== undefined ? { missed } : {}) } : article,
+    article
+      ? {
+          ...article,
+          ...patch,
+          ...(missed !== undefined ? { missed } : {}),
+          ...(followUpsStopped !== undefined ? { followUpsStopped } : {}),
+        }
+      : article,
   );
+  if (Object.keys(patch).length === 0) return;
+  for (const listener of patchListeners.get(client) ?? []) listener(id, patch);
+}
+
+/**
+ * Hears every change made to a cached article: a translated title, an open time, a read state or a star, and
+ * such a change undone when the server could not store it. For the rows a list keeps outside the cache.
+ */
+export function useArticlePatchListener(listener: ArticlePatchListener): void {
+  const client = useQueryClient();
+  const latest = useRef(listener);
+  latest.current = listener;
+  useEffect(() => {
+    let listeners = patchListeners.get(client);
+    if (!listeners) patchListeners.set(client, (listeners = new Set()));
+    const heard: ArticlePatchListener = (id, patch) => latest.current(id, patch);
+    listeners.add(heard);
+    return () => void listeners.delete(heard);
+  }, [client]);
 }
 
 /**
  * The translation of a feed article's content. It is asked for when an article of a feed that translates is
  * opened without one; the server makes and stores it, so this happens once for an article. What arrives is
- * put into the article and into the lists, which show the translated title.
+ * put into the article and into the lists, which show the translated title. While `wait` is set, as it is while
+ * the full content is on its way, nothing is asked: what the feed delivered would be translated for nothing.
  */
-export function useArticleTranslation(article: Article | undefined) {
+export function useArticleTranslation(article: Article | undefined, { wait = false }: { wait?: boolean } = {}) {
   const { api } = useApp();
   const client = useQueryClient();
   const id = article?.id ?? null;
-  const wanted = article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
+  const wanted = !wait && article !== undefined && article.translatable && (article.translation === null || article.translatedTitle === null);
   return useQuery({
     // The full content, once it arrives, is translated anew: the server dropped the translation of the excerpt.
     queryKey: ["article-translation", id, article?.fullContent?.fetchedAt ?? null],
@@ -330,46 +420,135 @@ export function useRecordOpened() {
   );
 }
 
-/** A change of an article's read state, star or miss, as sent to the server. */
+/** A change of an article's read state, star, miss or stopped follow-ups, as sent to the server. */
 export interface ArticleFlagChange {
   id: number;
   isRead?: boolean;
   starred?: boolean;
   missed?: boolean;
+  followUpsStopped?: boolean;
+}
+
+/** A query to fetch again once no change of flags is under way: `exact` for one that was stopped. */
+interface StaleQuery {
+  queryKey: QueryKey;
+  exact: boolean;
+}
+
+/** What the changes of flags under way share. */
+interface FlagSending {
+  /** Changes sent or waiting for their turn, and not yet answered. */
+  pending: number;
+  /** For each article, answered once the last change of it that was made is answered. */
+  lines: Map<number, Promise<void>>;
+  /** For each change waiting to be sent, what it waits for: the answer to the change of its article before it. */
+  turns: Map<ArticleFlagChange, Promise<void>>;
+  /** What to fetch again once every change is answered, by the hash of its key. */
+  stale: Map<string, StaleQuery>;
 }
 
 /**
  * Sets the read state or the star of an article. The screen changes at once, in every list and in the article.
  * When the server cannot store it, the change is undone everywhere it was made, also for an article whose own
  * entry is not cached, and `onFailed` gets what was sent, to say so and to send it again.
+ *
+ * A fetch of a list or of the article under way when the change is made is stopped, so that an answer read
+ * before the change cannot show the old flags again; the queries stopped are fetched again once every change is
+ * answered, together with those the changes made stale. Changes of one article are sent one after another, each
+ * once the one before is answered, so that the server stores the last one made. Changes of other articles do not
+ * wait for them.
  */
 export function useArticleFlags(onFailed: (change: ArticleFlagChange) => void) {
   const { api } = useApp();
   const client = useQueryClient();
+  const sending = useRef<FlagSending>({ pending: 0, lines: new Map(), turns: new Map(), stale: new Map() });
+  const markStale = (queryKey: QueryKey, exact = false) => {
+    const { stale } = sending.current;
+    const hash = hashKey(queryKey);
+    // A key to fetch again with what is under it stays so when it is stopped as well.
+    if (stale.get(hash)?.exact === false) return;
+    stale.set(hash, { queryKey, exact });
+  };
   return useMutation({
-    mutationFn: ({ id, ...patch }: ArticleFlagChange) => api.updateArticle(id, patch),
-    onMutate: ({ id, ...patch }) => {
-      patchArticle(client, id, patch);
+    mutationFn: async (change: ArticleFlagChange) => {
+      // `onMutate` keys the turn by the very object this gets.
+      await sending.current.turns.get(change);
+      const { id, ...patch } = change;
+      return api.updateArticle(id, patch);
     },
-    onError: (_error, change) => {
+    onMutate: async (change) => {
+      const state = sending.current;
+      state.pending += 1;
+      // The turn is taken before anything is awaited, so that the changes of an article keep the order they were made in.
+      const before = state.lines.get(change.id) ?? Promise.resolve();
+      let answered: () => void = () => {};
+      const line = new Promise<void>((resolve) => (answered = resolve));
+      state.lines.set(change.id, line);
+      state.turns.set(change, before);
+      const { id, ...patch } = change;
+      const outcome = { failed: false };
+      const fetching = client
+        .getQueryCache()
+        .findAll({ fetchStatus: "fetching", predicate: ({ queryKey: [kind, key] }) => kind === "articles" || (kind === "article" && key === id) });
+      // A first load and a load of the next page are not stopped. Stopped, a list of unread articles would come
+      // without the article just read in it, and the key that went past the last row would go back to the first
+      // row of the last page. The change is put into what they bring instead.
+      const loading = (query: (typeof fetching)[number]) => query.state.data === undefined || query.state.fetchMeta?.fetchMore !== undefined;
+      for (const query of fetching.filter(loading)) {
+        void query.promise?.then(
+          () => {
+            if (!outcome.failed) patchArticle(client, id, patch);
+          },
+          () => {},
+        );
+      }
+      const stopped = fetching.filter((query) => !loading(query));
+      for (const query of stopped) markStale(query.queryKey, true);
+      await Promise.all(stopped.map((query) => client.cancelQueries({ queryKey: query.queryKey, exact: true })));
+      patchArticle(client, id, patch);
+      return { answered, line, outcome };
+    },
+    onError: (_error, change, context) => {
+      if (context) context.outcome.failed = true;
       patchArticle(client, change.id, {
         ...(change.isRead !== undefined ? { isRead: !change.isRead } : {}),
         ...(change.starred !== undefined ? { starred: !change.starred } : {}),
         ...(change.missed !== undefined ? { missed: !change.missed } : {}),
+        ...(change.followUpsStopped !== undefined ? { followUpsStopped: !change.followUpsStopped } : {}),
       });
       onFailed(change);
     },
-    onSettled: (_data, _error, variables) => {
-      void client.invalidateQueries({ queryKey: ["counts"] });
+    onSettled: (_data, _error, variables, context) => {
+      const state = sending.current;
+      state.turns.delete(variables);
+      if (context) {
+        context.answered();
+        if (state.lines.get(variables.id) === context.line) state.lines.delete(variables.id);
+      }
+      markStale(["counts"]);
       // A miss changes how many misses a topic has had since its interpretation.
-      if (variables.missed !== undefined) void client.invalidateQueries({ queryKey: ["topics"] });
-      // Misses and stars are counted in the stats of the topics.
-      if (variables.missed !== undefined || variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["topic-stats"] });
+      if (variables.missed !== undefined) markStale(["topics"]);
+      // Misses and stars are counted in the stats of the topics and of the sites.
+      if (variables.missed !== undefined || variables.starred !== undefined) {
+        markStale(["topic-stats"]);
+        markStale(["site-stats"]);
+      }
       // A star changes which articles the starred list holds.
-      if (variables.starred !== undefined) void client.invalidateQueries({ queryKey: ["articles"] });
+      if (variables.starred !== undefined) markStale(["articles"]);
       // A read state changes which articles the recently read list holds. While that list is shown, it keeps
       // the row it changed until the reader refreshes; it shows the new list once the reader comes back to it.
-      else if (variables.isRead !== undefined) void client.invalidateQueries({ queryKey: ["articles", { recentlyRead: "true" }] });
+      else if (variables.isRead !== undefined) markStale(["articles", { recentlyRead: "true" }]);
+      state.pending -= 1;
+      // A fetch for one change could read the server before a later change is stored, and show the old flags again.
+      if (state.pending > 0) return;
+      const stale = [...state.stale.values()];
+      state.stale.clear();
+      const whole = stale.filter((query) => !query.exact);
+      for (const query of stale) {
+        // A query under a key fetched again as a whole is not fetched a second time.
+        if (query.exact && whole.some((other) => partialMatchKey(query.queryKey, other.queryKey))) continue;
+        void client.invalidateQueries({ queryKey: query.queryKey, exact: query.exact });
+      }
     },
   });
 }
@@ -383,6 +562,12 @@ export function useTopics(categoryId: number | null) {
 export function useTopicStats(categoryId: number) {
   const { api } = useApp();
   return useQuery({ queryKey: ["topic-stats", categoryId], queryFn: () => api.topicStats(categoryId) });
+}
+
+/** What the sites of the category's candidates brought in the last 30 days, and the sites blocked in it. */
+export function useSiteStats(categoryId: number) {
+  const { api } = useApp();
+  return useQuery({ queryKey: ["site-stats", categoryId], queryFn: () => api.siteStats(categoryId) });
 }
 
 /** The versions of a topic, newest first. Stale once the topic is saved or goes back to a version. */
@@ -408,12 +593,15 @@ export function useUsage() {
   return useQuery({ queryKey: ["usage"], queryFn: () => api.usage(), refetchInterval: REFRESH_MS });
 }
 
+/** How many runs the run history asks for, newest first. The list has no way to load older ones. */
+export const RUNS_LIMIT = 100;
+
 /** Runs are fetched every few seconds while one is waiting or in progress, and every minute otherwise. */
 export function useRuns(category?: number) {
   const { api } = useApp();
   return useQuery({
     queryKey: ["runs", category ?? null],
-    queryFn: () => api.runs({ category, limit: 100 }),
+    queryFn: () => api.runs({ category, limit: RUNS_LIMIT }),
     refetchInterval: (query) =>
       query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 3000 : REFRESH_MS,
   });
@@ -447,6 +635,25 @@ export function useDismissAttention(onFailed: () => void) {
       if (context?.before) client.setQueryData<AttentionList>(["attention"], context.before);
       onFailed();
     },
+  });
+}
+
+/**
+ * Puts a topic's web search by the model, cut to once a day, back to every run. On success the topic and the
+ * attention items are read again, so the item and the note in the topic's editor go away; `onFailed` says it failed.
+ */
+export function useRestoreLlmSearch(onFailed: () => void) {
+  const { api } = useApp();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (topicId: number) => api.restoreLlmSearch(topicId),
+    onSuccess: async (topic) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["attention"] }),
+        client.invalidateQueries({ queryKey: ["topics", topic.categoryId] }),
+      ]);
+    },
+    onError: () => onFailed(),
   });
 }
 
@@ -564,13 +771,17 @@ export function useAnnotationActions() {
       stale();
     },
     async saveNote(articleId: number, text: string): Promise<ArticleNote> {
+      const before = client.getQueryData<Article>(["article", articleId])?.annotations.note ?? null;
       const note = await api.saveArticleNote(articleId, text);
       patchArticle(articleId, (annotations) => ({ ...annotations, note }));
-      const listed = client
-        .getQueryData<AnnotationPages>(["annotations"])
-        ?.pages.some((page) => page.items.some((item) => item.id === note.id));
+      const list = client.getQueryData<AnnotationPages>(["annotations"]);
+      const listed = list?.pages.some((page) => page.items.some((item) => item.id === note.id));
       if (listed) patchList((items) => items.map((item) => (item.id === note.id ? { ...item, note: note.text } : item)));
-      else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
+      else if (before?.id === note.id) {
+        // A note written before keeps the place of when it was made, on a page not loaded yet, where the next page
+        // brings it with the new text. When no page is left to load, the list is older than the note and is read again.
+        if (list && list.pages.at(-1)?.nextCursor == null) void client.invalidateQueries({ queryKey: ["annotations"] });
+      } else prepend(rowOf(articleId, { id: note.id, createdAt: note.createdAt, quote: null, note: note.text }, "note"));
       stale();
       return note;
     },

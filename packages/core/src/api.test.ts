@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  contentPreviewRequestSchema,
   feedCreateSchema,
   feedUpdateSchema,
   pageSelectorsSchema,
@@ -109,11 +110,15 @@ describe("the shape of a search", () => {
     unconfirmed: false,
     firstPublishedAt: "2026-03-01T00:00:00.000Z",
     updatedAt: "2026-03-01T00:00:00.000Z",
+    rankAt: "2026-03-01T00:00:00.000Z",
     revision: 0,
     isRead: false,
     readAt: null,
     openedAt: null,
     starred: false,
+    starredAt: null,
+    followsStarred: false,
+    unreadFollowUps: 0,
     primaryUrl: null,
     refCount: 0,
     event: null,
@@ -173,10 +178,11 @@ describe("the key of a list view", () => {
 });
 
 describe("the shape of a change to a list view", () => {
-  it("takes the newest or the oldest first, and a body without it", () => {
+  it("takes the newest or the oldest first, the relevance order, and a body without it", () => {
     expect(listViewUpdateSchema.parse({ sort: "oldest" })).toEqual({ sort: "oldest" });
+    expect(listViewUpdateSchema.parse({ sort: "relevance" })).toEqual({ sort: "relevance" });
     expect(listViewUpdateSchema.parse({})).toEqual({});
-    expect(listViewUpdateSchema.safeParse({ sort: "relevance" }).success).toBe(false);
+    expect(listViewUpdateSchema.safeParse({ sort: "random" }).success).toBe(false);
   });
 });
 
@@ -311,5 +317,26 @@ describe("the selectors of a web feed", () => {
   it("lets a change give selectors but not a format", () => {
     expect(feedUpdateSchema.parse({ selectors: { item: "article" } })).toEqual({ selectors: { item: "article" } });
     expect(feedUpdateSchema.parse({ format: "page" })).toEqual({});
+  });
+});
+
+describe("the content selector of a feed", () => {
+  it("is taken at registration and at a change, trimmed, and null takes it away", () => {
+    expect(feedCreateSchema.parse({ url: "https://example.org/feed.xml", contentSelector: " article .body " })).toMatchObject({ contentSelector: "article .body" });
+    expect(feedUpdateSchema.parse({ contentSelector: "main" })).toEqual({ contentSelector: "main" });
+    expect(feedUpdateSchema.parse({ contentSelector: null })).toEqual({ contentSelector: null });
+    expect(feedUpdateSchema.parse({})).toEqual({});
+  });
+
+  it("refuses a value that is not a CSS selector, an empty one and a long one, naming the field", () => {
+    expect(issuesOf(feedUpdateSchema.safeParse({ contentSelector: "div[" }))).toEqual([{ path: "contentSelector", message: "not a CSS selector" }]);
+    expect(feedUpdateSchema.safeParse({ contentSelector: "  " }).success).toBe(false);
+    expect(feedUpdateSchema.safeParse({ contentSelector: "a".repeat(MAX_SELECTOR_CHARS + 1) }).success).toBe(false);
+  });
+
+  it("asks a preview for a selector or for none", () => {
+    expect(contentPreviewRequestSchema.parse({ contentSelector: "article" })).toEqual({ contentSelector: "article" });
+    expect(contentPreviewRequestSchema.parse({ contentSelector: null })).toEqual({ contentSelector: null });
+    expect(issuesOf(contentPreviewRequestSchema.safeParse({ contentSelector: "div[" }))).toEqual([{ path: "contentSelector", message: "not a CSS selector" }]);
   });
 });
