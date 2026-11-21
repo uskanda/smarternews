@@ -44,7 +44,7 @@ describe("the search box", () => {
     await user.click(await screen.findByRole("button", { name: "項目を開く" }));
     const dialog = await screen.findByRole("dialog", { name: "項目" });
     const search = within(dialog).getByRole("searchbox", { name: "記事を検索" });
-    expect(search.compareDocumentPosition(within(dialog).getByRole("link", { name: /未読/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(search.compareDocumentPosition(within(dialog).getByRole("link", { name: /^未読/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("opens the results with Enter, from any list, over every article and read ones too", async () => {
@@ -165,7 +165,7 @@ describe("the / key", () => {
     await screen.findByRole("heading", { level: 1, name: "「電池」の検索結果" });
     await user.click(screen.getByRole("button", { name: "項目を開く" }));
     const dialog = await screen.findByRole("dialog", { name: "項目" });
-    within(dialog).getByRole("link", { name: /未読/ }).focus();
+    within(dialog).getByRole("link", { name: /^未読/ }).focus();
 
     await user.keyboard("/");
 

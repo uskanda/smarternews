@@ -1,6 +1,6 @@
 import type { TopicRewriteProposal, TopicRewriteResult } from "@smarternews/core/api";
 import { ApiError } from "@smarternews/client";
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useApp } from "../app/context.ts";
 import { Button, ErrorNotice } from "../ui/controls.tsx";
 
@@ -29,6 +29,9 @@ export function TopicRewrite({ topicId, dirty, onUse }: { topicId: number; dirty
   const hintId = useId();
   const [state, setState] = useState<State>({ kind: "idle" });
 
+  const idle = state.kind === "idle";
+  const { said, after } = state.kind === "idle" ? {} : rewriteParts(state, onUse);
+
   async function ask() {
     setState({ kind: "asking" });
     try {
@@ -51,42 +54,52 @@ export function TopicRewrite({ topicId, dirty, onUse }: { topicId: number; dirty
           ? "保存していない変更があります。保存してから案を出してください。"
           : "保存してある文章と判定基準に、開いた記事、スターの記事、外れの印、判定で除外した候補を合わせて、文章の書き直しの案をLLMに出させます。何も保存せず、LLMを1回呼びます。"}
       </p>
-      {state.kind === "idle" ? null : (
-        <section aria-labelledby={headingId} className="flex flex-col gap-sm rounded-md border border-outline px-md py-sm">
+      {/* The status is there, empty, from before asking, and only its text changes: one that appears with its text
+          may not be read out. The proposals are left for the reader to go through. */}
+      <section aria-labelledby={idle ? undefined : headingId} className={idle ? "contents" : "flex flex-col gap-sm rounded-md border border-outline px-md py-sm"}>
+        {idle ? null : (
           <h3 id={headingId} className="type-label-md">
             書き直しの案
           </h3>
-          <RewriteBody state={state} onUse={onUse} />
-        </section>
-      )}
+        )}
+        {/* Out of the flow while empty, so that it adds no gap; not hidden, so that what comes into it is read out. */}
+        <div role="status" className={said ? undefined : "sr-only"}>
+          {said}
+        </div>
+        {after}
+      </section>
     </div>
   );
 }
 
-function RewriteBody({ state, onUse }: { state: Exclude<State, { kind: "idle" }>; onUse: (text: string) => void }) {
-  if (state.kind === "asking") return <p className="type-body-md text-on-surface-muted">案を出しています…</p>;
-  if (state.kind === "refused") return <p className="type-body-md text-warning">{REFUSED[state.status]}</p>;
+/** What the status reads out, and what comes after it. */
+function rewriteParts(state: Exclude<State, { kind: "idle" }>, onUse: (text: string) => void): { said?: ReactNode; after?: ReactNode } {
+  if (state.kind === "asking") return { said: <p className="type-body-md text-on-surface-muted">案を出しています…</p> };
+  if (state.kind === "refused") return { said: <p className="type-body-md text-warning">{REFUSED[state.status]}</p> };
   if (state.kind === "failed") {
-    return state.error instanceof ApiError && state.error.kind === "unavailable" ? (
-      <p className="type-body-md text-error">案を出せませんでした。時間をおいて、もう一度試してください。</p>
-    ) : (
-      <ErrorNotice error={state.error} />
-    );
+    // An error notice is read out as an alert already.
+    return state.error instanceof ApiError && state.error.kind === "unavailable"
+      ? { said: <p className="type-body-md text-error">案を出せませんでした。時間をおいて、もう一度試してください。</p> }
+      : { after: <ErrorNotice error={state.error} /> };
   }
+  return {
+    said: <p className="type-label-sm text-on-surface-muted">「この案を使う」を押すと、編集欄の文章が置き換わります。保存するまで、トピックは変わりません。</p>,
+    after: <Proposals proposals={state.proposals} onUse={onUse} />,
+  };
+}
+
+function Proposals({ proposals, onUse }: { proposals: TopicRewriteProposal[]; onUse: (text: string) => void }) {
   return (
-    <div className="flex flex-col gap-sm">
-      <p className="type-label-sm text-on-surface-muted">「この案を使う」を押すと、編集欄の文章が置き換わります。保存するまで、トピックは変わりません。</p>
-      <ul className="flex flex-col">
-        {state.proposals.map((proposal, index) => (
-          <li key={index} className="flex flex-col gap-xs border-t border-outline py-sm">
-            <p className="whitespace-pre-wrap break-words type-body-md">{proposal.text}</p>
-            <p className="whitespace-pre-wrap break-words type-label-sm text-on-surface-muted">{proposal.explanation}</p>
-            <div>
-              <Button onClick={() => onUse(proposal.text)}>この案を使う</Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <ul className="flex flex-col">
+      {proposals.map((proposal, index) => (
+        <li key={index} className="flex flex-col gap-xs border-t border-outline py-sm">
+          <p className="whitespace-pre-wrap break-words type-body-md">{proposal.text}</p>
+          <p className="whitespace-pre-wrap break-words type-label-sm text-on-surface-muted">{proposal.explanation}</p>
+          <div>
+            <Button onClick={() => onUse(proposal.text)}>この案を使う</Button>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -505,7 +505,7 @@ describe("deleting what filters apply to", () => {
     const { server } = scoped();
     const { user } = renderApp({ server, route: "/all" });
     const nav = await screen.findByRole("navigation", { name: "項目" });
-    fireEvent.contextMenu(await within(nav).findByRole("link", { name: /^Shop\s*\d*$/ }));
+    fireEvent.contextMenu(await within(nav).findByRole("link", { name: /^Shop(、未読\d+件)?$/ }));
     await user.click(await screen.findByRole("menuitem", { name: "登録を解除" }));
     expect(await screen.findByRole("alertdialog", { name: "購読フィードの登録を解除しますか" })).toHaveTextContent(
       "この購読フィードを範囲とするフィルター2件も一緒に削除されます。",

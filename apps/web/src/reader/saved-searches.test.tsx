@@ -8,10 +8,10 @@ const MINUTE = 60_000;
 const nav = () => screen.getByRole("navigation", { name: "項目" });
 const list = () => screen.getByRole("region", { name: "記事の一覧" });
 const rowTitles = () => within(list()).queryAllByRole("listitem").map((item) => item.querySelector("[data-title]")?.textContent);
-const named = (name: string) => new RegExp(`^${name}\\s*\\d*$`);
+const named = (name: string) => new RegExp(`^${name}(、未読\\d+件)?$`);
 const entry = (name: string) => within(nav()).queryByRole("link", { name: named(name) });
 const savedList = () => screen.getByRole("list", { name: "保存した検索" });
-const savedNames = () => within(savedList()).getAllByRole("link").map((link) => link.textContent!.replace(/\d+$/, "").trim());
+const savedNames = () => within(savedList()).getAllByRole("link").map((link) => link.textContent!.replace(/(、未読\d+件)?\d+$/, "").trim());
 const q = (text: string) => encodeURIComponent(text);
 
 /** Articles about batteries, one of them read, in category Alpha and a feed of it, and one about something else. */

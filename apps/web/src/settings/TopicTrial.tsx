@@ -1,7 +1,7 @@
 import type { TopicTrial, TopicTrialChange, TopicTrialRequest, TopicTrialStart } from "@smarternews/core/api";
 import { ApiError } from "@smarternews/client";
 import { useQuery } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useApp } from "../app/context.ts";
 import { ErrorNotice } from "../ui/controls.tsx";
 
@@ -48,51 +48,57 @@ export function useTopicTrial(topicId: number) {
   return { state, running, trial: query.data ?? null, error: query.error, start };
 }
 
+/**
+ * The trial's results. The status that reads out the waiting and the one sentence at the end is there, empty, from
+ * before the trial starts, and only its text changes: a status that appears with its text may not be read out.
+ * The rest of the results are left for the reader to go through.
+ */
 export function TopicTrialResults({ trial: view }: { trial: ReturnType<typeof useTopicTrial> }) {
   const headingId = useId();
-  if (view.state.kind === "idle") return null;
+  const idle = view.state.kind === "idle";
+  const { before, said, after } = idle ? {} : trialParts(view);
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-sm rounded-md border border-outline px-md py-sm">
-      <h3 id={headingId} className="type-label-md">
-        試しの結果
-      </h3>
-      <TrialBody view={view} />
+    <section aria-labelledby={idle ? undefined : headingId} className={idle ? "contents" : "flex flex-col gap-sm rounded-md border border-outline px-md py-sm"}>
+      {idle ? null : (
+        <h3 id={headingId} className="type-label-md">
+          試しの結果
+        </h3>
+      )}
+      {before}
+      {/* Out of the flow while empty, so that it adds no gap; not hidden, so that what comes into it is read out. */}
+      <div role="status" className={said ? undefined : "sr-only"}>
+        {said}
+      </div>
+      {after}
     </section>
   );
 }
 
-function TrialBody({ view }: { view: ReturnType<typeof useTopicTrial> }) {
-  if (view.state.kind === "refused") return <p className="type-body-md text-warning">{REFUSED[view.state.status]}</p>;
+/** What comes before the status, what it reads out, and what comes after it. */
+function trialParts(view: ReturnType<typeof useTopicTrial>): { before?: ReactNode; said?: ReactNode; after?: ReactNode } {
+  if (view.state.kind === "refused") return { said: <p className="type-body-md text-warning">{REFUSED[view.state.status]}</p> };
   if (view.error) {
-    return view.error instanceof ApiError && view.error.kind === "not_found" ? (
-      <p className="type-body-md text-on-surface-muted">試しの結果がありません。もう一度試してください。</p>
-    ) : (
-      <ErrorNotice error={view.error} />
-    );
+    // An error notice is read out as an alert already.
+    return view.error instanceof ApiError && view.error.kind === "not_found"
+      ? { said: <p className="type-body-md text-on-surface-muted">試しの結果がありません。もう一度試してください。</p> }
+      : { after: <ErrorNotice error={view.error} /> };
   }
-  if (view.running || !view.trial) return <p className="type-body-md text-on-surface-muted">試しています…</p>;
+  if (view.running || !view.trial) return { said: <p className="type-body-md text-on-surface-muted">試しています…</p> };
   const { trial } = view;
-  if (trial.status === "stopped_by_limit") return <p className="type-body-md text-warning">{STOPPED}</p>;
+  if (trial.status === "stopped_by_limit") return { said: <p className="type-body-md text-warning">{STOPPED}</p> };
   if (trial.status === "failed" || !trial.result) {
-    return <p className="type-body-md text-error">試せませんでした。{trial.error ?? ""}</p>;
+    return { said: <p className="type-body-md text-error">試せませんでした。{trial.error ?? ""}</p> };
   }
-  return <TrialResult result={trial.result} />;
-}
-
-function TrialResult({ result }: { result: NonNullable<TopicTrial["result"]> }) {
-  return (
-    <div className="flex flex-col gap-sm">
-      <p className="type-label-sm text-on-surface-muted">保存していない文章での結果です。保存はしていません。</p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs type-label-sm">
-        <dt className="text-on-surface-muted">検索語</dt>
-        <dd className="break-words">{result.queries.join(" / ")}</dd>
-        <dt className="text-on-surface-muted">判定基準</dt>
-        <dd className="break-words">{result.criteria}</dd>
-      </dl>
+  const { result } = trial;
+  return {
+    before: <TrialWording result={result} />,
+    said: (
       <p className="type-body-md">
         {result.tried}件を試し、{result.changes.length}件の結論が入れ替わりました。
       </p>
-      {result.changes.length === 0 ? (
+    ),
+    after:
+      result.changes.length === 0 ? (
         <p className="type-body-md text-on-surface-muted">入れ替わる候補はありません。</p>
       ) : (
         <ul className="flex flex-col">
@@ -100,8 +106,21 @@ function TrialResult({ result }: { result: NonNullable<TopicTrial["result"]> }) 
             <ChangeItem key={change.candidateId} change={change} minImportance={result.minImportance} />
           ))}
         </ul>
-      )}
-    </div>
+      ),
+  };
+}
+
+function TrialWording({ result }: { result: NonNullable<TopicTrial["result"]> }) {
+  return (
+    <>
+      <p className="type-label-sm text-on-surface-muted">保存していない文章での結果です。保存はしていません。</p>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs type-label-sm">
+        <dt className="text-on-surface-muted">検索語</dt>
+        <dd className="break-words">{result.queries.join(" / ")}</dd>
+        <dt className="text-on-surface-muted">判定基準</dt>
+        <dd className="break-words">{result.criteria}</dd>
+      </dl>
+    </>
   );
 }
 

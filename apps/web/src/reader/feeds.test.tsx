@@ -24,11 +24,16 @@ const article = () => screen.getByRole("article", { name: "記事" });
 const opened = () => screen.findByRole("article", { name: "記事" });
 const rowTitles = () => within(list()).queryAllByRole("listitem").map((item) => item.querySelector("[data-title]")?.textContent);
 const row = (title: RegExp) => within(list()).getByRole("link", { name: title }).closest("li")!;
-/** The entries of the navigation as "label count", in order, without the two management links. */
+/** The entries of the navigation as "label count", as shown, in order, without the two management links. */
 const navLines = () =>
   within(nav())
     .getAllByRole("link")
-    .map((link) => link.textContent!.replace(/\s+/g, " ").trim())
+    .map((link) =>
+      link
+        .textContent!.replace(/、(未読|スター)\d+件/, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
     .filter((text) => text !== "設定" && text !== "実行履歴");
 
 const at = (minutes: number) => new Date(Date.parse("2026-03-01T10:00:00.000Z") + minutes * 60_000).toISOString();
@@ -90,7 +95,7 @@ describe("the icons of feeds in the navigation", () => {
     renderApp({ server, route: `/f/${blog.id}` });
     await within(list()).findByRole("link", { name: /New post/ });
     expect(frameOf(/Tools/)).toBeNull();
-    expect(frameOf(/未読/)).toBeNull();
+    expect(frameOf(/^未読/)).toBeNull();
     expect(list().querySelector("img")).toBeNull();
   });
 
@@ -383,7 +388,7 @@ describe("a feed article that is opened", () => {
     await within(await opened()).findByRole("heading", { level: 2, name: "New post" });
     await waitFor(() => expect(row(/New post/)).toHaveAttribute("data-read", "true"));
     expect(rowTitles()).toEqual(["New post", "Old post"]);
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog1"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog、未読1件"));
     expect(newPost).toBeGreaterThan(0);
   });
 
@@ -496,7 +501,7 @@ describe("marking everything read", () => {
     await waitFor(() => expect(navLines()).toEqual(["未読4", "すべて", "スター", "AI生成2", "購読フィード2", "最近読んだ記事", "注釈", "ダイジェスト", "Tools2", "AI生成1", "Blog", "Releases1", "Cars1", "未分類1", "Loose1"]));
 
     await user.click(screen.getByRole("button", { name: "取り消す" }));
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog、未読2件"));
   });
 
   it("marks only generated articles under the top AI生成", async () => {
@@ -505,7 +510,7 @@ describe("marking everything read", () => {
     await screen.findByRole("link", { name: /Car news/ });
     await user.click(screen.getByRole("button", { name: "すべて既読にする" }));
     expect(await screen.findByText("2件を既読にしました")).toBeInTheDocument();
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog2"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Blog/ })).toHaveTextContent("Blog、未読2件"));
   });
 
   it("marks only feed articles under the top 購読フィード", async () => {
@@ -516,7 +521,7 @@ describe("marking everything read", () => {
     expect(await screen.findByText("4件を既読にしました")).toBeInTheDocument();
     // The two generated articles stay unread.
     await waitFor(() => expect(within(nav()).getByRole("link", { name: /^未読/ })).toHaveTextContent("未読2"));
-    expect(within(nav()).getAllByRole("link", { name: /^AI生成/ })[0]).toHaveTextContent("AI生成2");
+    expect(within(nav()).getAllByRole("link", { name: /^AI生成/ })[0]).toHaveTextContent("AI生成、未読2件");
     expect(within(nav()).getByRole("link", { name: /^購読フィード/ })).toHaveTextContent(/^購読フィード$/);
     expect(path()).toBe("/feeds");
   });
@@ -701,7 +706,7 @@ describe("an article that other feeds delivered too", () => {
     renderApp({ server, route: `/f/${releases.id}` });
     await within(list()).findByRole("link", { name: /Big news \(Releases\)/ });
     expect(rowTitles()).toEqual(["Big news (Releases)", "Release 3", "Release 2"]);
-    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Releases/ })).toHaveTextContent("Releases3"));
+    await waitFor(() => expect(within(nav()).getByRole("link", { name: /Releases/ })).toHaveTextContent("Releases、未読3件"));
   });
 
   it("opens the copy in the list of the other feed when its name is chosen", async () => {
