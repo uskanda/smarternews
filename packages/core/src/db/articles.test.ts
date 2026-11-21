@@ -17,16 +17,19 @@ import {
   recordArticleOpened,
   openEventArticles,
   recentNewsArticles,
+  recentTopicHeadlines,
   reviseArticle,
   requestAutoSummary,
   saveAutoSummary,
   setArticleFlags,
+  starredStoryTips,
   type ArticleContent,
 } from "./articles.ts";
 import { createCategory } from "./categories.ts";
 import type { Database } from "./database.ts";
 import { updateFeed } from "./feeds.ts";
 import { updateSettings } from "./settings.ts";
+import { createTopic } from "./topics.ts";
 
 const NOW = "2026-03-01T12:00:00.000Z";
 
@@ -81,6 +84,26 @@ describe("what only generated articles take part in", () => {
 
     expect(deleteUnstarredArticlesBefore(db, "2026-01-01T00:00:00.000Z")).toBe(1);
     expect(db.prepare("SELECT id FROM articles").all()).toEqual([{ id: feedArticle }]);
+  });
+});
+
+describe("the headlines handed to web search by the model", () => {
+  it("gives the topic's ten generated articles written or updated last, without feed articles or a time limit", () => {
+    const db = createTestDb();
+    const clock = fakeClock(NOW);
+    const category = createCategory(db, { name: "Tools", kind: "news" }, clock);
+    const topic = createTopic(db, category.id, { text: "Topic" }, clock);
+    const other = createTopic(db, category.id, { text: "Other" }, clock);
+    const content = { kind: "news" as const, summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null, previousArticleId: null, refs: [] };
+    for (let day = 1; day <= 12; day += 1) {
+      const at = `2025-${String(day).padStart(2, "0")}-01T00:00:00.000Z`;
+      insertArticle(db, { ...content, categoryId: category.id, title: `Story ${day}`, now: at, topicIds: [topic.id] });
+    }
+    insertArticle(db, { ...content, categoryId: category.id, title: "Other topic", now: NOW, topicIds: [other.id] });
+    const feedArticle = seedFeedArticle(db, seedFeed(db, { categoryId: category.id }), { at: NOW });
+    db.prepare("INSERT INTO article_topics (article_id, topic_id) VALUES (?, ?)").run(feedArticle, topic.id);
+
+    expect(recentTopicHeadlines(db, topic.id)).toEqual(["Story 12", "Story 11", "Story 10", "Story 9", "Story 8", "Story 7", "Story 6", "Story 5", "Story 4", "Story 3"]);
   });
 });
 
@@ -687,6 +710,253 @@ describe("the list oldest first", () => {
   });
 });
 
+describe("star times", () => {
+  const TEN = "2026-03-01T10:00:00.000Z";
+  const ELEVEN = "2026-03-01T11:00:00.000Z";
+  const NOON = "2026-03-01T12:00:00.000Z";
+
+  function oneArticle() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    return { db, id: generated(db, category, {}, "2026-02-01T00:00:00.000Z") };
+  }
+
+  it("records when an article is starred, and answers it in the article and the list", () => {
+    const { db, id } = oneArticle();
+    expect(getArticle(db, id).starredAt).toBeNull();
+    expect(setArticleFlags(db, id, { starred: true }, TEN).starredAt).toBe(TEN);
+    expect(getArticle(db, id).starredAt).toBe(TEN);
+    expect(listArticles(db, { starred: "true" }, NOW).items[0]!.starredAt).toBe(TEN);
+  });
+
+  it("keeps the time when an article already starred is starred again", () => {
+    const { db, id } = oneArticle();
+    setArticleFlags(db, id, { starred: true }, TEN);
+    expect(setArticleFlags(db, id, { starred: true }, ELEVEN).starredAt).toBe(TEN);
+  });
+
+  it("clears the time when the star is taken away, and takes the new time when it is given back", () => {
+    const { db, id } = oneArticle();
+    setArticleFlags(db, id, { starred: true }, TEN);
+    expect(setArticleFlags(db, id, { starred: false }, ELEVEN).starredAt).toBeNull();
+    expect(setArticleFlags(db, id, { starred: false }, ELEVEN).starredAt).toBeNull();
+    expect(setArticleFlags(db, id, { starred: true }, NOON).starredAt).toBe(NOON);
+  });
+
+  it("leaves the time alone when only whether the article is read changes", () => {
+    const { db, id } = oneArticle();
+    setArticleFlags(db, id, { starred: true }, TEN);
+    expect(setArticleFlags(db, id, { isRead: true }, ELEVEN).starredAt).toBe(TEN);
+  });
+});
+
+describe("the list of starred articles by star time", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function listing() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    /** An article last updated at `at`, starred at `starredAt` unless that is left out. */
+    const article = (title: string, at: string, starredAt?: string) => {
+      const id = generated(db, category, { title }, at);
+      if (starredAt !== undefined) setArticleFlags(db, id, { starred: true }, starredAt);
+      return id;
+    };
+    const titles = (query: ArticleListQuery) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, article, titles };
+  }
+
+  it("lists the starred articles last starred first, whatever their last update", () => {
+    const s = listing();
+    s.article("Fresh, starred yesterday", ago(HOUR), ago(24 * HOUR));
+    s.article("Three weeks old, starred now", ago(21 * 24 * HOUR), NOW);
+    s.article("Not starred", ago(HOUR / 2));
+    expect(s.titles({ starred: "true", order: "starred" })).toEqual(["Three weeks old, starred now", "Fresh, starred yesterday"]);
+    expect(s.titles({ starred: "true" })).toEqual(["Fresh, starred yesterday", "Three weeks old, starred now"]);
+  });
+
+  it("lists a hidden duplicate that has a star, as the newest first list of starred articles does", () => {
+    const s = listing();
+    const feed = seedFeed(s.db, { categoryId: s.category });
+    const other = seedFeed(s.db, { categoryId: s.category });
+    const kept = seedFeedArticle(s.db, feed, { title: "Kept", at: ago(2 * HOUR) });
+    const duplicate = seedFeedArticle(s.db, other, { title: "Duplicate", at: ago(HOUR), duplicateOf: kept });
+    setArticleFlags(s.db, duplicate, { starred: true }, NOW);
+    expect(s.titles({ starred: "true", order: "starred" })).toEqual(["Duplicate"]);
+  });
+
+  it("pages by star time without repeating or skipping articles starred at the same time", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) s.article(`#${index}`, ago(index * HOUR), ago(index < 60 ? 200 * 60_000 : index * 60_000));
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    const times: string[] = [];
+    let cursor: string | undefined;
+    let last: ReturnType<typeof listArticles> | undefined;
+    do {
+      last = listArticles(s.db, { starred: "true", order: "starred", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(last.items.length);
+      seen.push(...last.items.map((item) => item.title));
+      times.push(...last.items.map((item) => item.starredAt!));
+      cursor = last.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    expect(times).toEqual([...times].sort().reverse());
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it("refuses a cursor of another order, and a cursor by star time in another order", () => {
+    const s = listing();
+    for (let index = 0; index < 5; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR), ago(index * HOUR));
+    const byStar = listArticles(s.db, { starred: "true", order: "starred", limit: 2 }, NOW);
+    const newest = listArticles(s.db, { starred: "true", limit: 2 }, NOW);
+    const oldest = listArticles(s.db, { starred: "true", order: "oldest", limit: 2 }, NOW);
+    expect(listArticles(s.db, { starred: "true", order: "starred", limit: 2, cursor: byStar.nextCursor! }, NOW).items.map((item) => item.title)).toEqual([
+      "#2",
+      "#3",
+    ]);
+    for (const query of [
+      { starred: "true", order: "starred", cursor: newest.nextCursor! },
+      { starred: "true", order: "starred", cursor: oldest.nextCursor! },
+      { starred: "true", cursor: byStar.nextCursor! },
+      { starred: "true", order: "oldest", cursor: byStar.nextCursor! },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid" }));
+    }
+  });
+
+  it("refuses the order by star time for a list that is not of starred articles", () => {
+    const s = listing();
+    for (const query of [
+      { order: "starred" },
+      { category: s.category, order: "starred" },
+      { starred: "false", order: "starred" },
+      { kind: "event", starred: "true", order: "starred" },
+      { recentlyRead: "true", order: "starred" },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "order" })] }));
+    }
+  });
+});
+
+describe("the list by relevance", () => {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(new Date(NOW).getTime() - ms).toISOString();
+
+  function listing() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW)).id;
+    const feed = seedFeed(db, { categoryId: category });
+    const article = (title: string, at: string, importance = 3) => generated(db, category, { title, importance }, at);
+    const feedArticle = (title: string, at: string, scores: { feed?: number; term?: number } = {}) => {
+      const id = seedFeedArticle(db, feed, { title, at });
+      db.prepare("UPDATE articles SET feed_score = ?, term_match = ? WHERE id = ?").run(scores.feed ?? 0, scores.term ?? 0, id);
+      return id;
+    };
+    const titles = (query: ArticleListQuery) => listArticles(db, query, NOW).items.map((item) => item.title);
+    return { db, category, feed, article, feedArticle, titles };
+  }
+
+  it("moves an article later by 48 hours times its relevance, and gives each article that time", () => {
+    const s = listing();
+    s.article("Important, a day old", ago(24 * HOUR), 5);
+    s.article("Minor, an hour old", ago(HOUR), 1);
+    s.article("Important, three days old", ago(72 * HOUR), 5);
+    s.article("Middling, ten hours old", ago(10 * HOUR), 3);
+    expect(s.titles({ order: "relevance" })).toEqual([
+      "Important, a day old",
+      "Middling, ten hours old",
+      "Minor, an hour old",
+      "Important, three days old",
+    ]);
+    const items = listArticles(s.db, { order: "relevance" }, NOW).items;
+    expect(items[0]!.rankAt).toBe(new Date(new Date(NOW).getTime() + 24 * HOUR).toISOString());
+    expect(items[2]!.rankAt).toBe(items[2]!.updatedAt);
+    // The newest first list is as it was.
+    expect(s.titles({})).toEqual(["Minor, an hour old", "Middling, ten hours old", "Important, a day old", "Important, three days old"]);
+  });
+
+  it("weighs a feed article half by its feed's behaviour and half by a term match, on the scale of importance", () => {
+    const s = listing();
+    s.feedArticle("Plain", ago(HOUR));
+    s.feedArticle("Term", ago(HOUR), { term: 1 });
+    s.feedArticle("Often opened feed", ago(2 * HOUR), { feed: 1 });
+    s.feedArticle("Both", ago(30 * HOUR), { feed: 1, term: 1 });
+    s.article("Importance 5, ten hours old", ago(10 * HOUR), 5);
+    // Term: +24h → 23h ahead. Often opened: +24h → 22h. Both: +48h → 18h. Importance 5: +48h → 38h.
+    expect(s.titles({ category: s.category, order: "relevance" })).toEqual([
+      "Importance 5, ten hours old",
+      "Term",
+      "Often opened feed",
+      "Both",
+      "Plain",
+    ]);
+    expect(s.titles({ feed: s.feed, unread: "true", order: "relevance" })).toEqual(["Term", "Often opened feed", "Both", "Plain"]);
+    expect(s.titles({ origin: "generated", order: "relevance" })).toEqual(["Importance 5, ten hours old"]);
+  });
+
+  it("pages by relevance without repeating or skipping articles of the same rank", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) {
+      if (index % 2 === 0) s.article(`#${index}`, ago((index % 10) * HOUR), (index % 5) + 1);
+      else s.feedArticle(`#${index}`, ago((index % 7) * HOUR), { feed: (index % 3) / 2, term: index % 4 === 1 ? 1 : 0 });
+    }
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    const ranks: string[] = [];
+    let cursor: string | undefined;
+    let last: ReturnType<typeof listArticles> | undefined;
+    do {
+      last = listArticles(s.db, { order: "relevance", limit: 50, ...(cursor ? { cursor } : {}) }, NOW);
+      sizes.push(last.items.length);
+      seen.push(...last.items.map((item) => item.title));
+      ranks.push(...last.items.map((item) => item.rankAt));
+      cursor = last.nextCursor ?? undefined;
+    } while (cursor);
+    expect(sizes).toEqual([50, 50, 20]);
+    expect(new Set(seen).size).toBe(120);
+    expect(ranks).toEqual([...ranks].sort().reverse());
+  });
+
+  it("keeps the order of a page already read when an article is opened before the next page", () => {
+    const s = listing();
+    for (let index = 0; index < 6; index += 1) s.feedArticle(`#${index}`, ago((index + 1) * HOUR));
+    const first = listArticles(s.db, { order: "relevance", limit: 3 }, NOW);
+    recordArticleOpened(s.db, first.items[2]!.id, NOW);
+    const next = listArticles(s.db, { order: "relevance", limit: 3, cursor: first.nextCursor! }, NOW);
+    expect([...first.items, ...next.items].map((item) => item.title)).toEqual(["#0", "#1", "#2", "#3", "#4", "#5"]);
+  });
+
+  it("refuses a cursor of another order, and the order for the events and the recently read articles", () => {
+    const s = listing();
+    for (let index = 0; index < 5; index += 1) s.article(`#${index}`, ago((index + 1) * HOUR));
+    const newest = listArticles(s.db, { limit: 2 }, NOW);
+    const relevance = listArticles(s.db, { order: "relevance", limit: 2 }, NOW);
+    expect(listArticles(s.db, { order: "relevance", limit: 2, cursor: relevance.nextCursor! }, NOW).items.map((item) => item.title)).toEqual([
+      "#2",
+      "#3",
+    ]);
+    for (const query of [
+      { order: "relevance", cursor: newest.nextCursor! },
+      { cursor: relevance.nextCursor! },
+      { order: "oldest", cursor: relevance.nextCursor! },
+      { kind: "event", order: "relevance" },
+      { recentlyRead: "true", order: "relevance" },
+    ] as ArticleListQuery[]) {
+      expect(() => listArticles(s.db, query, NOW)).toThrow(expect.objectContaining({ code: "invalid" }));
+    }
+  });
+
+  it("marks every unread article read by the time the list was read, however few were loaded", () => {
+    const s = listing();
+    for (let index = 0; index < 120; index += 1) s.article(`#${index}`, ago((index + 1) * 60_000), (index % 5) + 1);
+    const page = listArticles(s.db, { category: s.category, unread: "true", order: "relevance", limit: 50 }, NOW);
+    expect(markArticlesRead(s.db, { categoryId: s.category, before: page.asOf }, NOW)).toHaveLength(120);
+  });
+});
+
 describe("open times", () => {
   const TEN = "2026-03-01T10:00:00.000Z";
   const ELEVEN = "2026-03-01T11:00:00.000Z";
@@ -815,6 +1085,63 @@ describe("what a follow-up added", () => {
     expect(getArticle(s.db, s.id).updateNote).toBeNull();
   });
 
+  describe("the notes since the reader last read the article", () => {
+    const notes = (s: ReturnType<typeof story>) => getArticle(s.db, s.id).updateNotes;
+    const stored = (s: ReturnType<typeof story>) =>
+      s.db.prepare("SELECT note, created_at FROM article_update_notes WHERE article_id = ? ORDER BY id").all(s.id);
+
+    it("are none for an article never rewritten", () => {
+      expect(notes(story())).toEqual([]);
+    });
+
+    it("keep every rewrite since it was read, oldest first, while the list gives the last one", () => {
+      const s = story();
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", "発売日が決まりました。");
+      expect(notes(s)).toEqual([
+        { note: "価格が発表されました。", createdAt: "2026-03-01T13:00:00.000Z" },
+        { note: "発売日が決まりました。", createdAt: "2026-03-01T14:00:00.000Z" },
+      ]);
+      expect(listArticles(s.db, {}, NOW).items[0]!.updateNote).toBe("発売日が決まりました。");
+    });
+
+    it("keep the note of an earlier rewrite when the last one has none, which stores nothing", () => {
+      const s = story();
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", null);
+      expect(notes(s)).toEqual([{ note: "価格が発表されました。", createdAt: "2026-03-01T13:00:00.000Z" }]);
+      expect(stored(s)).toEqual([{ note: "価格が発表されました。", created_at: "2026-03-01T13:00:00.000Z" }]);
+      expect(getArticle(s.db, s.id).updateNote).toBeNull();
+    });
+
+    it("are only those after the reader read it again", () => {
+      const s = story();
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T13:30:00.000Z");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", "発売日が決まりました。");
+      expect(notes(s)).toEqual([{ note: "発売日が決まりました。", createdAt: "2026-03-01T14:00:00.000Z" }]);
+    });
+
+    it("are the note of the last rewrite only in an article never read, and none when it has none", () => {
+      const s = story();
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.revise(["https://example.org/c"], "2026-03-01T14:00:00.000Z", "発売日が決まりました。");
+      expect(notes(s)).toEqual([{ note: "発売日が決まりました。", createdAt: "2026-03-01T14:00:00.000Z" }]);
+      s.revise(["https://example.org/d"], "2026-03-01T15:00:00.000Z", null);
+      expect(notes(s)).toEqual([]);
+    });
+
+    it("go with the article", () => {
+      const s = story();
+      s.revise(["https://example.org/b"], "2026-03-01T13:00:00.000Z", "価格が発表されました。");
+      s.db.prepare("DELETE FROM articles WHERE id = ?").run(s.id);
+      expect(stored(s)).toEqual([]);
+    });
+  });
+
   it("marks new the sources added after the reader read the article, and keeps them new once it is opened", () => {
     const s = story();
     setArticleFlags(s.db, s.id, { isRead: true }, "2026-03-01T12:30:00.000Z");
@@ -868,5 +1195,193 @@ describe("what a follow-up added", () => {
 
     db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(ids[1]!, ids[0]!);
     expect(getArticle(db, ids[1]!).previousArticles.map((entry) => entry.id)).toEqual([ids[0]]);
+  });
+});
+
+describe("marking all as read and events", () => {
+  const event = (key: string, endsAt: string) => ({
+    key,
+    startsAt: "2026-02-01T00:00:00.000Z",
+    endsAt,
+    venue: null,
+    fee: null,
+    registration: "unknown" as const,
+  });
+
+  function events() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Meetups", kind: "event" }, fakeClock(NOW));
+    const ended = generated(db, category.id, { event: event("ended", "2026-02-28T00:00:00.000Z") });
+    const ending = generated(db, category.id, { event: event("ending", NOW) });
+    const coming = generated(db, category.id, { event: event("coming", "2026-03-05T00:00:00.000Z") });
+    return { db, category: category.id, ended, ending, coming };
+  }
+
+  it("leaves the events that have ended unread, as no list shows them", () => {
+    const s = events();
+    expect(markArticlesRead(s.db, { categoryId: s.category, before: "2026-03-02T00:00:00.000Z" }, NOW)).toEqual([s.ending, s.coming]);
+    expect(getArticle(s.db, s.ended).isRead).toBe(false);
+  });
+
+  it("leaves them unread when the range is everything too", () => {
+    const s = events();
+    expect(markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, NOW)).toEqual([s.ending, s.coming]);
+    expect(getArticle(s.db, s.ended).isRead).toBe(false);
+    expect(getCounts(s.db, NOW).unread).toBe(0);
+  });
+});
+
+describe("starred stories", () => {
+  const DAY = 86_400_000;
+  const content = { title: "t", summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null };
+  const daysAgo = (days: number) => new Date(Date.parse(NOW) - days * DAY).toISOString();
+
+  function stories() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Tools", kind: "news" }, fakeClock(NOW));
+    const add = (options: { daysAgo: number; previous?: number | null; starred?: boolean; title?: string; categoryId?: number; kind?: "news" | "event" }) => {
+      const at = daysAgo(options.daysAgo);
+      const event =
+        options.kind === "event"
+          ? { key: `e-${Math.random()}`, startsAt: NOW, endsAt: NOW, venue: null, fee: null, registration: "unknown" as const }
+          : null;
+      const id = insertArticle(db, {
+        ...content,
+        title: options.title ?? `Story ${options.daysAgo}`,
+        event,
+        categoryId: options.categoryId ?? category.id,
+        kind: options.kind ?? "news",
+        now: at,
+        previousArticleId: options.previous ?? null,
+        refs: [],
+        topicIds: [],
+      });
+      if (options.starred) setArticleFlags(db, id, { starred: true }, at);
+      return id;
+    };
+    const since = daysAgo(90);
+    const tips = (limit = 20, exclude: Set<number> = new Set()) => starredStoryTips(db, category.id, since, limit, exclude).map((entry) => entry.id);
+    return { db, category, add, tips };
+  }
+
+  describe("what the grouping step is given", () => {
+    it("gives starred news articles of the category updated in the last 90 days, newest first", () => {
+      const s = stories();
+      const atEdge = s.add({ daysAgo: 90, starred: true });
+      const recent = s.add({ daysAgo: 30, starred: true });
+      s.add({ daysAgo: 91, starred: true });
+      s.add({ daysAgo: 30 });
+      const other = createCategory(s.db, { name: "Other", kind: "news" }, fakeClock(NOW));
+      s.add({ daysAgo: 30, starred: true, categoryId: other.id });
+      s.add({ daysAgo: 30, starred: true, kind: "event" });
+      const feedArticle = seedFeedArticle(s.db, seedFeed(s.db, { categoryId: s.category.id }), { at: daysAgo(30), starred: true });
+      expect(feedArticle).toBeGreaterThan(0);
+
+      expect(s.tips()).toEqual([recent, atEdge]);
+    });
+
+    it("gives at most the given number, the most recently updated", () => {
+      const s = stories();
+      const ids = Array.from({ length: 25 }, (_, index) => s.add({ daysAgo: 60 - index, starred: true }));
+      expect(s.tips()).toEqual(ids.slice(5).reverse());
+      expect(s.tips(3)).toEqual(ids.slice(22).reverse());
+    });
+
+    it("gives the newest later article in place of a starred one, once", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 40, starred: true });
+      const later = s.add({ daysAgo: 20, previous: starred });
+      const latest = s.add({ daysAgo: 10, previous: later, starred: true });
+      expect(s.tips()).toEqual([latest]);
+    });
+
+    it("takes the newest branch where the chain forks, and stops where it comes back", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 40, starred: true });
+      s.add({ daysAgo: 30, previous: starred });
+      const newer = s.add({ daysAgo: 20, previous: starred });
+      expect(s.tips()).toEqual([newer]);
+
+      const looped = s.add({ daysAgo: 50, starred: true });
+      const back = s.add({ daysAgo: 45, previous: looped });
+      s.db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(back, looped);
+      expect(s.tips()).toEqual([newer, back]);
+    });
+
+    it("skips what it is told to leave out without counting it", () => {
+      const s = stories();
+      const older = s.add({ daysAgo: 40, starred: true });
+      const newer = s.add({ daysAgo: 5, starred: true });
+      expect(s.tips(1, new Set([newer]))).toEqual([older]);
+    });
+  });
+
+  describe("what the API gives", () => {
+    it("gives the later articles of a story, newest first, at most 20, for any generated article", () => {
+      const s = stories();
+      const first = s.add({ daysAgo: 60, title: "A" });
+      const second = s.add({ daysAgo: 40, previous: first, title: "B" });
+      const third = s.add({ daysAgo: 20, previous: second, title: "C" });
+      expect(getArticle(s.db, first).laterArticles).toEqual([
+        { id: third, title: "C", firstPublishedAt: daysAgo(20) },
+        { id: second, title: "B", firstPublishedAt: daysAgo(40) },
+      ]);
+      expect(getArticle(s.db, third).laterArticles).toEqual([]);
+
+      let previous = third;
+      for (let index = 0; index < 25; index += 1) previous = s.add({ daysAgo: 19 - index * 0.1, previous });
+      expect(getArticle(s.db, first).laterArticles).toHaveLength(20);
+      expect(getArticle(s.db, first).laterArticles[0]!.id).toBe(previous);
+
+      const looped = s.add({ daysAgo: 80, title: "X" });
+      const back = s.add({ daysAgo: 70, previous: looped, title: "Y" });
+      s.db.prepare("UPDATE articles SET previous_article_id = ? WHERE id = ?").run(back, looped);
+      expect(getArticle(s.db, looped).laterArticles.map((entry) => entry.id)).toEqual([back]);
+      expect(getArticle(s.db, back).laterArticles.map((entry) => entry.id)).toEqual([looped]);
+    });
+
+    it("says whether an article follows a starred one, up its chain", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 60, starred: true });
+      const later = s.add({ daysAgo: 40, previous: starred });
+      const latest = s.add({ daysAgo: 20, previous: later });
+      const plain = s.add({ daysAgo: 20 });
+      const plainLater = s.add({ daysAgo: 10, previous: plain });
+      const followsStarred = (id: number) => listArticles(s.db, {}, NOW).items.find((item) => item.id === id)!.followsStarred;
+
+      expect([starred, later, latest, plain, plainLater].map(followsStarred)).toEqual([false, true, true, false, false]);
+      expect(getArticle(s.db, latest).followsStarred).toBe(true);
+    });
+
+    it("counts the unread later articles of a starred article, and none for one without a star", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 60, starred: true });
+      const later = s.add({ daysAgo: 40, previous: starred });
+      const latest = s.add({ daysAgo: 20, previous: later });
+      const unreadFollowUps = (id: number) => listArticles(s.db, {}, NOW).items.find((item) => item.id === id)!.unreadFollowUps;
+
+      expect(unreadFollowUps(starred)).toBe(2);
+      expect(unreadFollowUps(later)).toBe(0);
+      setArticleFlags(s.db, later, { isRead: true }, NOW);
+      expect(unreadFollowUps(starred)).toBe(1);
+      setArticleFlags(s.db, latest, { isRead: true }, NOW);
+      expect(unreadFollowUps(starred)).toBe(0);
+      expect(getArticle(s.db, starred).unreadFollowUps).toBe(0);
+
+      const feedArticle = seedFeedArticle(s.db, seedFeed(s.db, { categoryId: s.category.id }), { at: NOW, starred: true });
+      expect(unreadFollowUps(feedArticle)).toBe(0);
+      expect(listArticles(s.db, {}, NOW).items.find((item) => item.id === feedArticle)!.followsStarred).toBe(false);
+    });
+
+    it("narrows the list to the starred articles and those that follow one", () => {
+      const s = stories();
+      const starred = s.add({ daysAgo: 60, starred: true });
+      const later = s.add({ daysAgo: 40, previous: starred });
+      s.add({ daysAgo: 20 });
+      expect(listArticles(s.db, { starredStory: "true" }, NOW).items.map((item) => item.id)).toEqual([later, starred]);
+      expect(listArticles(s.db, { starredStory: "true", unread: "true" }, NOW).items.map((item) => item.id)).toEqual([later, starred]);
+      setArticleFlags(s.db, later, { isRead: true }, NOW);
+      expect(listArticles(s.db, { starredStory: "true", unread: "true" }, NOW).items.map((item) => item.id)).toEqual([starred]);
+    });
   });
 });

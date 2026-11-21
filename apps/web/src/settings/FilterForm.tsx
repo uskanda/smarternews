@@ -1,15 +1,17 @@
 import type { Category, Feed, Filter, FilterAction, FilterCondition, FilterField, FilterMatch, FilterScope } from "@smarternews/core/api";
 import { MAX_FILTER_CONDITIONS } from "@smarternews/core/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { ApiError, describeProblem, type FieldProblem } from "@smarternews/client";
 import { useCategories, useFeeds } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { Button, messageFor } from "../ui/controls.tsx";
-import { useUnsaved } from "./unsaved.tsx";
+import { useDialogCancel } from "../ui/FormDialog.tsx";
+import { useUnsaved } from "../ui/unsaved.tsx";
 
-// The inputs of a filter, shared by the settings of filters and the dialog that makes one from a selection.
+// The inputs of a filter, shared by the settings of filters and the dialog that makes one from a selection. The
+// scope and the conditions are shared by the settings of rules too.
 
 const SELECT = "rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error";
 const INPUT = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error";
@@ -20,13 +22,13 @@ const FIELD_LABEL: Record<FilterField, string> = { title: "タイトル", conten
 const MATCH_LABEL: Record<FilterMatch, string> = { contains: "部分一致", regex: "正規表現" };
 
 /** The scope as the select holds it: "all", "c:<category id>", "f:<feed id>", or "" while none is chosen. */
-type ScopeKey = string;
+export type ScopeKey = string;
 
 export function scopeKey(scope: FilterScope): ScopeKey {
   return scope.type === "category" ? `c:${scope.categoryId}` : scope.type === "feed" ? `f:${scope.feedId}` : "all";
 }
 
-function scopeOf(key: ScopeKey): FilterScope | null {
+export function scopeOf(key: ScopeKey): FilterScope | null {
   if (key === "all") return { type: "all" };
   const [kind, id] = key.split(":");
   if (kind === "c") return { type: "category", categoryId: Number(id) };
@@ -68,14 +70,14 @@ function labelOf(path: string): string {
 }
 
 /** Why the server refused a condition or the scope, in the app's words. */
-function problemText(problem: FieldProblem): string {
+export function problemText(problem: FieldProblem): string {
   if (problem.code === "format" && /^conditions\.\d+\.value$/.test(problem.path)) return "正規表現として読めません。かっこや記号の対応を確かめてください。";
   if (problem.code === "no_such_item" && problem.path.startsWith("scope")) return "この範囲はもうありません。選び直してください。";
   if (problem.code === "not_allowed" && problem.path === "scope") return "残すフィルターには全体を選べません。";
   return describeProblem(problem, labelOf(problem.path));
 }
 
-interface DraftCondition {
+export interface DraftCondition {
   key: number;
   fields: FilterField[];
   match: FilterMatch;
@@ -89,7 +91,7 @@ interface Draft {
 }
 
 let conditionSerial = 0;
-function newCondition(from?: FilterCondition): DraftCondition {
+export function newCondition(from?: FilterCondition): DraftCondition {
   conditionSerial += 1;
   return { key: conditionSerial, fields: from ? [...from.fields] : ["title"], match: from?.match ?? "contains", value: from?.value ?? "" };
 }
@@ -190,6 +192,123 @@ function ConditionInput({
 }
 
 /**
+ * The select of a scope: 全体 unless `allowAll` is false, then the scopes of `preferred` as この記事, the news
+ * categories and the feeds. Without 全体 it starts with a choice to make. Shared by filters and rules.
+ */
+export function ScopeSelect({
+  id,
+  value,
+  onChange,
+  allowAll = true,
+  preferred = [],
+  problem,
+}: {
+  id: string;
+  value: ScopeKey;
+  onChange: (next: ScopeKey) => void;
+  allowAll?: boolean;
+  preferred?: FilterScope[];
+  problem: string | null;
+}) {
+  const categories = useCategories().data ?? [];
+  const feeds = useFeeds().data ?? [];
+  // Feeds may belong to news categories only, so only those can hold feed articles.
+  const preferredKeys = preferred.map(scopeKey);
+  const newsCategories = categories.filter((category) => category.kind === "news" && !preferredKeys.includes(`c:${category.id}`));
+  const otherFeeds = feeds.filter((feed) => !preferredKeys.includes(`f:${feed.id}`));
+  return (
+    <div className="flex flex-col gap-xs">
+      <label htmlFor={id} className="type-label-md">
+        範囲
+      </label>
+      <select id={id} value={value} onChange={(event) => onChange(event.target.value)} aria-invalid={problem ? true : undefined} className={`${SELECT} max-w-measure`}>
+        {allowAll ? (
+          <option value="all">全体</option>
+        ) : (
+          <option value="" disabled>
+            選んでください
+          </option>
+        )}
+        {preferred.length > 0 ? (
+          <optgroup label="この記事">
+            {preferred.map((each) => (
+              <option key={scopeKey(each)} value={scopeKey(each)}>
+                {scopeLabel(each, categories, feeds)}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+        {newsCategories.length > 0 ? (
+          <optgroup label="カテゴリ">
+            {newsCategories.map((category) => (
+              <option key={category.id} value={`c:${category.id}`}>
+                {category.name}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+        {otherFeeds.length > 0 ? (
+          <optgroup label="購読フィード">
+            {otherFeeds.map((feed) => (
+              <option key={feed.id} value={`f:${feed.id}`}>
+                {feed.title}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+      </select>
+      {problem ? <p className="type-label-sm text-error">{problem}</p> : null}
+    </div>
+  );
+}
+
+/** The conditions of a filter or a rule, each with its fields, method and value, to add to and take from. */
+export function ConditionsInput({
+  conditions,
+  onChange,
+  problemAt,
+}: {
+  conditions: DraftCondition[];
+  onChange: (next: DraftCondition[]) => void;
+  /** The refusal of the server for a path such as `conditions.1`, in the app's words. */
+  problemAt: (path: string) => string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-sm">
+      <p className="type-label-md">条件（すべてに合う記事が対象）</p>
+      {conditions.map((condition, index) => (
+        <ConditionInput
+          key={condition.key}
+          index={index}
+          condition={condition}
+          error={problemAt(`conditions.${index}`)}
+          onChange={(next) => onChange(conditions.map((each) => (each.key === condition.key ? next : each)))}
+          onRemove={conditions.length > 1 ? () => onChange(conditions.filter((each) => each.key !== condition.key)) : null}
+        />
+      ))}
+      <div>
+        <Button onClick={() => onChange([...conditions, newCondition()])} disabled={conditions.length >= MAX_FILTER_CONDITIONS}>
+          条件を足す
+        </Button>
+      </div>
+      <p className="type-label-sm text-on-surface-muted">
+        大文字と小文字、全角と半角は区別しません。部分一致は記号もそのまま探します。内容は、リンク先のURLを除いた本文です。
+      </p>
+    </div>
+  );
+}
+
+/** The conditions of a draft as the API takes them. */
+export function conditionsOf(conditions: DraftCondition[]): FilterCondition[] {
+  return conditions.map((condition) => ({ fields: condition.fields, match: condition.match, value: condition.value.trim() }));
+}
+
+/** Whether every condition has a field and a value. */
+export function conditionsComplete(conditions: DraftCondition[]): boolean {
+  return conditions.every((condition) => condition.fields.length > 0 && condition.value.trim().length > 0);
+}
+
+/**
  * The inputs of a filter: kind, scope and conditions, with a count before saving. Used to add and to edit.
  * `initial` is what a new filter starts from. `preferred` are scopes put first, after 全体, as この記事.
  * `onCreated` takes over once a new filter is added; without it the inputs are emptied and a notice says so.
@@ -213,35 +332,35 @@ export function FilterForm({
   const { api } = useApp();
   const refresh = useRefresh();
   const toast = useToast();
-  const categories = useCategories().data ?? [];
-  const feeds = useFeeds().data ?? [];
   const [draft, setDraft] = useState<Draft>(() => draftOf(filter ?? initial));
   const [problems, setProblems] = useState<FieldProblem[]>([]);
   const [general, setGeneral] = useState<string | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Counts the changes to the draft, so that a count asked for before one can be told apart and dropped.
+  const version = useRef(0);
   const scopeId = useId();
-  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again.
+  // A new filter counts once a value is written: the kind, scope and fields alone are quickly chosen again. One
+  // that starts filled in, as from a selection, counts once it differs from what it started with.
+  const start = filter ?? initial;
   useUnsaved(
     label ?? (filter ? "フィルターの編集" : "新しいフィルター"),
-    filter
-      ? contentOf(draft) !== contentOf({ ...filter, scope: scopeKey(filter.scope) })
+    start
+      ? contentOf(draft) !== contentOf({ ...start, scope: scopeKey(start.scope) })
       : draft.conditions.some((condition) => condition.value.trim() !== ""),
   );
+  const cancel = useDialogCancel(onDone ?? (() => {}));
 
   const scope = scopeOf(draft.scope);
-  const complete = scope !== null && draft.conditions.every((condition) => condition.fields.length > 0 && condition.value.trim().length > 0);
-  const body = () => ({
-    action: draft.action,
-    scope: scope!,
-    conditions: draft.conditions.map((condition) => ({ fields: condition.fields, match: condition.match, value: condition.value.trim() })),
-  });
+  const complete = scope !== null && conditionsComplete(draft.conditions);
+  const body = () => ({ action: draft.action, scope: scope!, conditions: conditionsOf(draft.conditions) });
   const problemAt = (path: string) => {
     const found = problems.find((problem) => problem.path === path || problem.path.startsWith(`${path}.`));
     return found ? problemText(found) : null;
   };
 
   function change(next: Partial<Draft>) {
+    version.current += 1;
     setDraft((current) => ({ ...current, ...next }));
     setProblems([]);
     setGeneral(null);
@@ -261,13 +380,17 @@ export function FilterForm({
   }
 
   async function check() {
+    const asked = version.current;
     setBusy(true);
     try {
       const result = await api.previewFilter({ ...body(), ...(filter ? { id: filter.id } : {}) });
+      // An answer about conditions that have changed since would show the old count beside the new ones.
+      if (version.current !== asked) return;
       setProblems([]);
       setGeneral(null);
       setPreview(result.hiddenCount);
     } catch (error) {
+      if (version.current !== asked) return;
       setPreview(null);
       refused(error);
     } finally {
@@ -292,6 +415,7 @@ export function FilterForm({
           onCreated(saved);
           return;
         }
+        version.current += 1;
         setDraft(draftOf());
         setPreview(null);
         toast({ message: `フィルターを追加しました。${saved.hiddenCount > 0 ? `${saved.hiddenCount}件を隠しています。` : "いま隠している記事はありません。"}` });
@@ -303,11 +427,6 @@ export function FilterForm({
     }
   }
 
-  const scopeProblem = problemAt("scope");
-  // Feeds may belong to news categories only, so only those can hold feed articles.
-  const preferredKeys = preferred.map(scopeKey);
-  const newsCategories = categories.filter((category) => category.kind === "news" && !preferredKeys.includes(`c:${category.id}`));
-  const otherFeeds = feeds.filter((feed) => !preferredKeys.includes(`f:${feed.id}`));
   return (
     <form noValidate onSubmit={save} className="flex max-w-measure-article flex-col gap-md" aria-label={filter ? "フィルターの編集" : undefined}>
       <fieldset className="flex flex-wrap gap-lg type-body-md">
@@ -331,75 +450,16 @@ export function FilterForm({
           ? "すべての条件に合う記事を隠します。"
           : "範囲の記事のうち、すべての条件に合うものだけを残し、ほかを隠します。同じ範囲に残すフィルターが複数あれば、どれかに合う記事を残します。"}
       </p>
-      <div className="flex flex-col gap-xs">
-        <label htmlFor={scopeId} className="type-label-md">
-          範囲
-        </label>
-        <select
-          id={scopeId}
-          value={draft.scope}
-          onChange={(event) => change({ scope: event.target.value })}
-          aria-invalid={scopeProblem ? true : undefined}
-          className={`${SELECT} max-w-measure`}
-        >
-          {draft.action === "keep" ? (
-            <option value="" disabled>
-              選んでください
-            </option>
-          ) : (
-            <option value="all">全体</option>
-          )}
-          {preferred.length > 0 ? (
-            <optgroup label="この記事">
-              {preferred.map((each) => (
-                <option key={scopeKey(each)} value={scopeKey(each)}>
-                  {scopeLabel(each, categories, feeds)}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-          {newsCategories.length > 0 ? (
-            <optgroup label="カテゴリ">
-              {newsCategories.map((category) => (
-                <option key={category.id} value={`c:${category.id}`}>
-                  {category.name}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-          {otherFeeds.length > 0 ? (
-            <optgroup label="購読フィード">
-              {otherFeeds.map((feed) => (
-                <option key={feed.id} value={`f:${feed.id}`}>
-                  {feed.title}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-        </select>
-        {scopeProblem ? <p className="type-label-sm text-error">{scopeProblem}</p> : null}
-      </div>
-      <div className="flex flex-col gap-sm">
-        <p className="type-label-md">条件（すべてに合う記事が対象）</p>
-        {draft.conditions.map((condition, index) => (
-          <ConditionInput
-            key={condition.key}
-            index={index}
-            condition={condition}
-            error={problemAt(`conditions.${index}`)}
-            onChange={(next) => change({ conditions: draft.conditions.map((each) => (each.key === condition.key ? next : each)) })}
-            onRemove={draft.conditions.length > 1 ? () => change({ conditions: draft.conditions.filter((each) => each.key !== condition.key) }) : null}
-          />
-        ))}
-        <div>
-          <Button onClick={() => change({ conditions: [...draft.conditions, newCondition()] })} disabled={draft.conditions.length >= MAX_FILTER_CONDITIONS}>
-            条件を足す
-          </Button>
-        </div>
-        <p className="type-label-sm text-on-surface-muted">
-          大文字と小文字、全角と半角は区別しません。部分一致は記号もそのまま探します。内容は、リンク先のURLを除いた本文です。
-        </p>
-      </div>
+      <ScopeSelect
+        id={scopeId}
+        value={draft.scope}
+        onChange={(next) => change({ scope: next })}
+        // A keep filter over everything would hide every feed article it does not match.
+        allowAll={draft.action !== "keep"}
+        preferred={preferred}
+        problem={problemAt("scope")}
+      />
+      <ConditionsInput conditions={draft.conditions} onChange={(conditions) => change({ conditions })} problemAt={problemAt} />
       {general ? (
         <p role="alert" className="type-label-sm text-error">
           {general}
@@ -417,7 +477,7 @@ export function FilterForm({
         <Button onClick={() => void check()} disabled={!complete || busy}>
           隠れる件数を確かめる
         </Button>
-        {onDone ? <Button onClick={onDone}>やめる</Button> : null}
+        {onDone ? <Button onClick={cancel}>やめる</Button> : null}
       </div>
     </form>
   );

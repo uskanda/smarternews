@@ -1,23 +1,39 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBlocker } from "react-router";
-import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-import { Button } from "../ui/controls.tsx";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { Button } from "./controls.tsx";
 
-// What a settings page holds that is not saved yet, gathered from its parts, so that one question covers the page.
-// React Router keeps one blocker at a time, so each page has one guard, and the parts only say what they hold.
+// What a settings page or a dialog holds that is not saved yet, gathered from its parts, so that one question
+// covers it. React Router keeps one blocker at a time, so each page has one guard, and the parts only say what
+// they hold. A dialog that holds a form gathers its own parts, closer to them than the page's guard.
 
-interface Unsaved {
+export interface Unsaved {
   /** Marks the part `id` as holding changes under `label`, or as holding none when `label` is null. */
   mark: (id: string, label: string | null) => void;
   /** Lets the next move go without a question: what was being edited is gone, or was just saved. */
   leave: () => void;
 }
 
-const UnsavedContext = createContext<Unsaved | null>(null);
+export const UnsavedContext = createContext<Unsaved | null>(null);
+
+/** The parts that hold changes, by id, with what marks them and turns them off again. */
+export function useUnsavedParts(): { parts: ReadonlyMap<string, string>; mark: Unsaved["mark"] } {
+  const [parts, setParts] = useState<ReadonlyMap<string, string>>(new Map());
+  const mark = useCallback((id: string, label: string | null) => {
+    setParts((current) => {
+      if (label === null ? !current.has(id) : current.get(id) === label) return current;
+      const next = new Map(current);
+      if (label === null) next.delete(id);
+      else next.set(id, label);
+      return next;
+    });
+  }, []);
+  return { parts, mark };
+}
 
 /** Asks before the page is left while a part below it holds changes, and has the browser ask before a reload. */
 export function UnsavedGuard({ children }: { children: ReactNode }) {
-  const [parts, setParts] = useState<ReadonlyMap<string, string>>(new Map());
+  const { parts, mark } = useUnsavedParts();
   const leaving = useRef(false);
   // Moving within the page, such as to a section by its hash, loses nothing.
   const blocker = useBlocker(({ currentLocation, nextLocation }) => parts.size > 0 && !leaving.current && currentLocation.pathname !== nextLocation.pathname);
@@ -34,15 +50,6 @@ export function UnsavedGuard({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", confirm);
   }, [dirty]);
 
-  const mark = useCallback((id: string, label: string | null) => {
-    setParts((current) => {
-      if (label === null ? !current.has(id) : current.get(id) === label) return current;
-      const next = new Map(current);
-      if (label === null) next.delete(id);
-      else next.set(id, label);
-      return next;
-    });
-  }, []);
   const leave = useCallback(() => {
     leaving.current = true;
   }, []);
@@ -71,8 +78,8 @@ export function UnsavedGuard({ children }: { children: ReactNode }) {
 }
 
 /**
- * Tells the page's guard that this part holds changes while `dirty`, named `label` in the question.
- * Outside a guard, such as in a dialog over the list of articles, it does nothing.
+ * Tells the page's guard, or the dialog that holds this part, that it holds changes while `dirty`, named `label`
+ * in the question. Outside both, it does nothing.
  */
 export function useUnsaved(label: string, dirty: boolean): void {
   const unsaved = useContext(UnsavedContext);

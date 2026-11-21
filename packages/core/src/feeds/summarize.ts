@@ -58,7 +58,8 @@ async function textOf(deps: SummaryDeps, pages: PageFetcher, article: { id: numb
   if (article.url !== null) {
     const page = await pages.fetchPage(article.url);
     // The page text is used for this one call and kept nowhere.
-    const text = page.ok ? extractArticle(page.html, page.url, SUMMARIZE_INPUT_CHARS).text : "";
+    // Taken out the way full content would be: by the feed's content selector, if it has one.
+    const text = page.ok ? extractArticle(page.html, page.url, SUMMARIZE_INPUT_CHARS, full.contentSelector).text : "";
     if (text.length >= SUMMARY_MIN_CHARS) return { text, source: "page" };
   }
   return deliveredText(article);

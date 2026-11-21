@@ -85,12 +85,13 @@ providers:
       topicRewritesPerDay: 20,
       judgeBatchSize: 30,
       pagesPerRun: 20,
+      subscriptionCandidatesPerRun: 60,
       runRetries: 2,
       monthlyBudgetUsd: 100,
       budgetWarnRatio: 0.8,
       budgetResetDay: 1,
     });
-    expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000, allowPrivateHosts: [] });
+    expect(config.fetch).toEqual({ userAgent: null, hostIntervalMs: 1000, timeoutMs: 15000, maxBytes: 2000000, feedMaxBytes: 10000000, allowPrivateHosts: [] });
   });
 
   it("takes the hosts on the own network that may be fetched", () => {

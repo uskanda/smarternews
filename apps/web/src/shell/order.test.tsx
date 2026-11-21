@@ -80,7 +80,7 @@ describe("the menu of an entry", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 
     fireEvent.contextMenu(link("A"));
-    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["上へ移動", "下へ移動"]);
+    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["上へ移動", "下へ移動", "カテゴリの設定"]);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 
@@ -90,6 +90,17 @@ describe("the menu of an entry", () => {
     }
     fireEvent.contextMenu(within(nav()).getAllByRole("link", { name: /^AI生成/ })[1]!);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens the settings of a category from its menu", async () => {
+    const { server, b } = seeded();
+    const { user, path } = await ready({ server, route: "/all" });
+
+    fireEvent.contextMenu(link("B"));
+    await user.click(await screen.findByRole("menuitem", { name: "カテゴリの設定" }));
+
+    await waitFor(() => expect(path()).toBe(`/settings/categories/${b.id}`));
+    expect(await screen.findByRole("heading", { level: 1, name: "B" })).toBeInTheDocument();
   });
 
   it("keeps the one-letter keys from the article behind it", async () => {
@@ -108,7 +119,7 @@ describe("the menu of an entry", () => {
     expect(path()).toBe(`/all/${newer}`);
     expect(screen.getByRole("menu")).toBeInTheDocument();
     // The open menu hides the rest of the page from the accessibility tree.
-    expect(screen.getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "記事の操作", hidden: true })).getByRole("button", { name: "スターを付ける", hidden: true })).toBeInTheDocument();
   });
 
   it("cannot move the first entry up or the last one down", async () => {
@@ -128,7 +139,8 @@ describe("the menu of an entry", () => {
     link("A").focus();
     await user.keyboard("{Shift>}{F10}{/Shift}");
     await screen.findByRole("menu");
-    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    // From カテゴリの設定 at the end, one up is 下へ移動.
+    await user.keyboard("{End}{ArrowUp}{Enter}");
 
     await waitFor(() => expect(groupLines().filter((line) => !line.startsWith(" "))).toEqual(["B", "A", "C", "Events", "未分類"]));
     await waitFor(() => expect(listCategories(server.db).map((category) => category.name)).toEqual(["B", "A", "C", "Events"]));
@@ -180,6 +192,81 @@ describe("the menu of an entry", () => {
     expect(await screen.findByText("並べ替えられませんでした。もう一度試してください。")).toBeInTheDocument();
     offline = false;
     await waitFor(() => expect(groupLines()).toEqual(START));
+  });
+});
+
+describe("moves in a row", () => {
+  const MOVES = (request: string) => request.startsWith("POST ") && request.endsWith("/move");
+  const feedsOfA = (server: TestServer, categoryId: number) =>
+    listFeeds(server.db)
+      .filter((feed) => feed.categoryId === categoryId)
+      .map((feed) => feed.title);
+
+  async function moveUp(user: ReturnType<typeof renderApp>["user"], name: string) {
+    fireEvent.contextMenu(link(name));
+    await user.click(await screen.findByRole("menuitem", { name: "上へ移動" }));
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  }
+
+  it("keeps the order after the last move when the answers arrive the other way round", async () => {
+    const { server, a } = seeded();
+    const { user, held, release } = await ready({ server, route: "/all", holdAnswer: MOVES });
+
+    await moveUp(user, "Z");
+    await moveUp(user, "Z");
+    expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  Z", "  X", "  Y"]);
+
+    // The newest answer first, as the network may hand them over.
+    for (let round = 0; round < 10 && held().length > 0; round += 1) {
+      await release(held().length - 1);
+      await wait(10);
+    }
+
+    expect(held()).toEqual([]);
+    expect(feedsOfA(server, a.id)).toEqual(["Z", "X", "Y"]);
+    expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  Z", "  X", "  Y"]);
+  });
+
+  it("keeps the order when a fetch of the feeds that started before the move answers after it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => void vi.useRealTimers());
+    const { server, a } = seeded();
+    let holding = false;
+    const { user, held, release } = await ready({
+      server,
+      route: "/all",
+      holdAnswer: (request) => holding && request === "GET /api/v1/feeds",
+      advanceTimers: (ms) => vi.advanceTimersByTimeAsync(ms).then(() => {}),
+    });
+
+    holding = true;
+    await act(() => vi.advanceTimersByTimeAsync(61_000));
+    await waitFor(() => expect(held()).toContain("GET /api/v1/feeds"));
+    holding = false;
+
+    await moveUp(user, "Z");
+    await waitFor(() => expect(feedsOfA(server, a.id)).toEqual(["X", "Z", "Y"]));
+    while (held().length > 0) await release(0);
+    await wait(10);
+
+    expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  X", "  Z", "  Y"]);
+  });
+
+  it("drops the moves after one that fails, shows the stored order and says so", async () => {
+    const { server, a } = seeded();
+    const { user, held, release, requests } = await ready({ server, route: "/all", holdAnswer: MOVES });
+
+    await moveUp(user, "Z");
+    await moveUp(user, "Z");
+    await release(0, "fail");
+
+    expect(await screen.findByText("並べ替えられませんでした。もう一度試してください。")).toBeInTheDocument();
+    await wait(10);
+    expect(held()).toEqual([]);
+    expect(requests.filter(MOVES)).toHaveLength(1);
+    // The server stored the first move before the connection broke; the second one was never sent.
+    expect(feedsOfA(server, a.id)).toEqual(["X", "Z", "Y"]);
+    await waitFor(() => expect(groupLines().slice(0, 5)).toEqual(["A", "  AI生成", "  X", "  Z", "  Y"]));
   });
 });
 

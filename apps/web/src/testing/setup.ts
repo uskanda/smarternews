@@ -5,6 +5,7 @@ import { resetCollapsedState } from "../lib/collapsed.ts";
 import { resetHideReadState } from "../lib/hide-read.ts";
 import { resetHotkeys } from "../lib/keys.ts";
 import { resetPaneState } from "../lib/panes.ts";
+import { resetScrollMemory } from "../lib/scroll-memory.ts";
 import { resetScrollReadState } from "../lib/scroll-read.ts";
 import { resetThemeState } from "../lib/theme.ts";
 
@@ -14,10 +15,12 @@ configure({ asyncUtilTimeout: 5000 });
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   resetPaneState();
   resetCollapsedState();
   resetThemeState();
   resetScrollReadState();
+  resetScrollMemory();
   resetHideReadState();
   resetHotkeys();
 });
@@ -33,10 +36,26 @@ export function setViewport(next: number): void {
 }
 const listeners = new Set<() => void>();
 
+// The font size the browser is set to: what an em in a media query and the root element's font size measure.
+// Tests choose it through `setFontSize`; 16px is the browser's default.
+let fontSize = 16;
+export function setFontSize(next: number): void {
+  fontSize = next;
+  document.documentElement.style.fontSize = `${next}px`;
+  for (const listener of listeners) listener();
+}
+
+/** A length of a media query in pixels: `720px`, or `45em` at the font size the browser is set to. */
+function length(query: string, feature: string): number | null {
+  const match = new RegExp(`${feature}:\\s*(\\d+(?:\\.\\d+)?)(px|em)`).exec(query);
+  if (!match) return null;
+  return Number(match[1]) * (match[2] === "em" ? fontSize : 1);
+}
+
 function matches(query: string): boolean {
-  const min = /min-width:\s*(\d+)px/.exec(query);
-  const max = /max-width:\s*(\d+)px/.exec(query);
-  return (!min || width >= Number(min[1])) && (!max || width <= Number(max[1]));
+  const min = length(query, "min-width");
+  const max = length(query, "max-width");
+  return (min === null || width >= min) && (max === null || width <= max);
 }
 
 window.matchMedia = ((query: string) => {
@@ -58,6 +77,8 @@ window.matchMedia = ((query: string) => {
 afterEach(() => {
   width = 1280;
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+  fontSize = 16;
+  document.documentElement.style.fontSize = "";
   listeners.clear();
 });
 
@@ -76,8 +97,10 @@ let inView = new WeakSet<Element>();
 class FakeIntersectionObserver {
   readonly targets = new Set<Element>();
   readonly callback: IntersectionObserverCallback;
-  constructor(callback: IntersectionObserverCallback) {
+  readonly options: IntersectionObserverInit;
+  constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
     this.callback = callback;
+    this.options = options;
   }
   observe(target: Element) {
     this.targets.add(target);
@@ -110,6 +133,10 @@ export function intersect(target: Element, isIntersecting = true, { stays = isIn
   for (const observer of [...intersectionObservers]) {
     if (observer.targets.has(target)) observer.tell(target, isIntersecting);
   }
+}
+/** The options of the observers watching `target` now. */
+export function intersectionOptions(target: Element): IntersectionObserverInit[] {
+  return [...intersectionObservers].filter((observer) => observer.targets.has(target)).map((observer) => observer.options);
 }
 afterEach(() => {
   intersectionObservers.clear();

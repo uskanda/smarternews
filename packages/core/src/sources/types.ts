@@ -11,6 +11,11 @@ export interface RawCandidate {
   title: string;
   snippet: string;
   siteName: string;
+  /**
+   * The URL of the outlet, when a search names it apart from the page. Google News gives it, and it tells the site
+   * of a result whose redirect link could not be resolved.
+   */
+  siteUrl?: string;
   publishedAt: Date | null;
   sourceKind: SourceKind;
 }

@@ -57,8 +57,8 @@ export function seedFeedArticle(
   const body = options.body ?? `Content ${feedSerial}`;
   const result = db
     .prepare(
-      `INSERT INTO articles (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at, created_at, is_read, starred, duplicate_of)
-       VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO articles (category_id, origin, feed_id, item_key, kind, title, summary, body, content_text, author, first_published_at, updated_at, created_at, is_read, starred, starred_at, duplicate_of)
+       VALUES (?, 'feed', ?, ?, 'news', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       feed.category_id as number | null,
@@ -74,6 +74,8 @@ export function seedFeedArticle(
       options.storedAt ?? at,
       options.isRead ? 1 : 0,
       options.starred ? 1 : 0,
+      // Starred when it was stored, as a star given before star times were kept has its last update.
+      options.starred ? at : null,
       options.duplicateOf ?? null,
     );
   const id = Number(result.lastInsertRowid);

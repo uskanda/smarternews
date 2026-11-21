@@ -7,7 +7,8 @@ import { FetchError, type Fetcher } from "./http.ts";
  * not a document, or the request failed otherwise.
  */
 export type PageResult =
-  | { ok: true; html: string; url: string }
+  /** `permanentUrl` is where the permanent redirects in a row from the request led, or null (`HttpResponse`). */
+  | { ok: true; html: string; url: string; permanentUrl: string | null }
   | { ok: false; reason: "robots" | "limit" }
   /** `retryAfter` is the Retry-After header as it came, for the fetch of a web feed; full content ignores it. */
   | { ok: false; reason: "http"; status: number; detail: string; retryAfter?: string }
@@ -51,6 +52,11 @@ export class PageFetcher {
     return result;
   }
 
+  /** Whether robots.txt lets a URL that is no page, such as an icon, be fetched. Counts nothing against the limit. */
+  async allows(url: string): Promise<boolean> {
+    return (await this.#allowed(url)) === "yes";
+  }
+
   async #request(url: string): Promise<PageResult> {
     try {
       const response = await this.#fetcher.get(url, { headers: { accept: "text/html,application/xhtml+xml" } });
@@ -61,7 +67,7 @@ export class PageFetcher {
       if (response.contentType !== "" && !/html|xml/i.test(response.contentType)) {
         return { ok: false, reason: "not-html", detail: response.contentType };
       }
-      return { ok: true, html: response.text, url: response.url };
+      return { ok: true, html: response.text, url: response.url, permanentUrl: response.permanentUrl };
     } catch (error) {
       const kind = error instanceof FetchError ? error.kind : "error";
       return { ok: false, reason: kind, detail: (error as Error).message };

@@ -12,19 +12,26 @@ export function listPathOf(target: ListTarget, slugOf: (categoryId: number) => s
       return `/f/${target.feedId}`;
     case "recentlyRead":
       return "/recently-read";
+    case "savedSearch":
+      return `/s/${target.savedSearchId}`;
     default:
       return `/${target.type}`;
   }
 }
 
+/** The settings page of a category. */
+export function categorySettingsPath(categoryId: number): string {
+  return `/settings/categories/${categoryId}`;
+}
+
 /** The page of a category with the editor of one of its topics open. */
 export function topicEditPath(categoryId: number, topicId: number): string {
-  return `/settings/categories/${categoryId}#topic-${topicId}`;
+  return `${categorySettingsPath(categoryId)}#topic-${topicId}`;
 }
 
 /** The page of a category at the row of one of its topics in the topic stats. */
 export function topicStatsPath(categoryId: number, topicId: number): string {
-  return `/settings/categories/${categoryId}#topic-stats-${topicId}`;
+  return `${categorySettingsPath(categoryId)}#topic-stats-${topicId}`;
 }
 
 /** True on the list itself and on an article opened from it, but not on a list below it. */

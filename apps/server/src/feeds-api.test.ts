@@ -15,6 +15,36 @@ function rss(title: string, items: Array<{ key: string; title?: string; publishe
   return `<?xml version="1.0"?><rss version="2.0"><channel><title>${title}</title><link>https://blog.example.org/</link>${body}</channel></rss>`;
 }
 
+describe("a subscribed feed as a topic source", () => {
+  it("is off unless asked for, and only a feed of a category can be one", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const category = s.category("Tools");
+    const refused = await s.post("/api/v1/feeds", { url: FEED, topicSource: true });
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error.fields).toEqual([expect.objectContaining({ path: "topicSource", code: "not_allowed" })]);
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([]);
+
+    const created = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    expect(created.topicSource).toBe(false);
+    expect((await s.patch(`/api/v1/feeds/${created.id}`, { topicSource: true })).status).toBe(400);
+    expect((await s.patch(`/api/v1/feeds/${created.id}`, { topicSource: "yes" })).status).toBe(400);
+    const moved = await s.patch(`/api/v1/feeds/${created.id}`, { categoryId: category.id, topicSource: true });
+    expect(moved.status).toBe(200);
+    expect(await (await s.get("/api/v1/feeds")).json()).toEqual([expect.objectContaining({ id: created.id, topicSource: true })]);
+    expect((await (await s.get(`/api/v1/feeds/${created.id}`)).json()).topicSource).toBe(true);
+  });
+
+  it("can be switched on at registration in a category", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const category = s.category("Tools");
+    const created = await s.post("/api/v1/feeds", { url: FEED, categoryId: category.id, topicSource: true });
+    expect(created.status).toBe(201);
+    expect((await created.json()).topicSource).toBe(true);
+  });
+});
+
 describe("subscribed feeds", () => {
   it("registers a feed and lists it with its category, interval and fetch state", async () => {
     const s = testServer();
@@ -89,6 +119,47 @@ describe("subscribed feeds", () => {
     expect(articles.items).toHaveLength(1);
   });
 
+  it("changes the URL after fetching the new one, and keeps the articles and their stars", async () => {
+    const s = testServer();
+    const moved = "https://blog.example.net/feed.xml";
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const [article] = (await (await s.get("/api/v1/articles")).json()).items;
+    await s.patch(`/api/v1/articles/${article.id}`, { starred: true });
+    s.site.set(moved, rss("Example Blog", [{ key: "b" }, { key: "a" }]));
+
+    const response = await s.patch(`/api/v1/feeds/${feed.id}`, { url: moved, title: "Mine" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ url: moved, title: "Mine", articleCount: 2, starredCount: 1, movedFrom: null, movedAt: null });
+  });
+
+  it("refuses a new URL that is not a feed with 400 and the field, and changes nothing", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    s.site.set("https://blog.example.net/", () => new Response("<html>hello</html>", { headers: { "content-type": "text/html" } }));
+
+    const response = await s.patch(`/api/v1/feeds/${feed.id}`, { url: "https://blog.example.net/", title: "Mine" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.fields).toEqual([{ path: "url", message: expect.stringMatching(/not a feed/), code: "unreachable" }]);
+    expect(await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).toMatchObject({ url: FEED, title: "Example Blog" });
+  });
+
+  it("gives the URL a permanent redirect replaced as movedFrom, with movedAt", async () => {
+    const s = testServer();
+    const moved = "https://blog.example.net/feed.xml";
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    s.site.set(FEED, () => new Response(null, { status: 301, headers: { location: moved } }));
+    s.site.set(moved, rss("Example Blog", [{ key: "a" }]));
+
+    for (let n = 0; n < 3; n++) await s.post(`/api/v1/feeds/${feed.id}/fetch`);
+
+    expect(await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).toMatchObject({ url: moved, movedFrom: FEED, movedAt: s.clock().toISOString() });
+  });
+
   it("deletes a feed with its articles", async () => {
     const s = testServer();
     s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
@@ -135,6 +206,78 @@ describe("subscribed feeds", () => {
     expect((await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).goneAt).toBe(s.clock().toISOString());
   });
 
+  it("asks for every enabled feed to be fetched, answers at once with the counts, and fetches them afterwards", async () => {
+    const OTHER = "https://other.example.org/feed.xml";
+    const PAUSED = "https://paused.example.org/feed.xml";
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    s.site.set(OTHER, rss("Other", [{ key: "o1" }]));
+    s.site.set(PAUSED, rss("Paused", [{ key: "p1" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    await s.post("/api/v1/feeds", { url: OTHER, intervalMinutes: 120 });
+    const paused = await (await s.post("/api/v1/feeds", { url: PAUSED })).json();
+    await s.patch(`/api/v1/feeds/${paused.id}`, { enabled: false });
+    s.clock.advance(60_000);
+    s.site.set(FEED, rss("Example Blog", [{ key: "b" }, { key: "a" }]));
+    s.site.set(OTHER, rss("Other", [{ key: "o2" }, { key: "o1" }]));
+    s.site.set(PAUSED, rss("Paused", [{ key: "p2" }, { key: "p1" }]));
+    const before = s.site.requests.length;
+
+    const response = await s.post("/api/v1/feeds/fetch");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ requested: 2, skipped: 0, requestedAt: "2026-03-01T12:01:00.000Z" });
+    await s.poller.idle();
+    const list = await (await s.get("/api/v1/feeds")).json();
+    expect(list.map((entry: { articleCount: number }) => entry.articleCount)).toEqual([2, 2, 1]);
+    expect(list.every((entry: { fetchRequestedAt: string | null }) => entry.fetchRequestedAt === null)).toBe(true);
+    expect(list.find((entry: { id: number }) => entry.id === feed.id)).toMatchObject({ lastSucceededAt: "2026-03-01T12:01:00.000Z", nextFetchAt: "2026-03-01T12:31:00.000Z" });
+    expect(s.site.requests.length).toBe(before + 2);
+  });
+
+  it("shows which feeds still wait for the fetch of all, and passes by one that waits for a Retry-After", async () => {
+    const BUSY = "https://busy.example.org/feed.xml";
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    s.site.set(BUSY, rss("Busy", [{ key: "x" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    const busy = await (await s.post("/api/v1/feeds", { url: BUSY })).json();
+    s.site.set(BUSY, () => new Response("busy", { status: 429, headers: { "retry-after": "18000" } }));
+    await s.post(`/api/v1/feeds/${busy.id}/fetch`);
+    s.clock.advance(60_000);
+    let release: () => void = () => {};
+    s.site.set(FEED, async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return new Response(rss("Example Blog", [{ key: "b" }, { key: "a" }]), { headers: { "content-type": "application/xml" } });
+    });
+    const before = s.site.requests.length;
+
+    expect(await (await s.post("/api/v1/feeds/fetch")).json()).toMatchObject({ requested: 1, skipped: 1 });
+
+    // The site has not answered yet: the feed waits, due since the request.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).toMatchObject({ fetchRequestedAt: "2026-03-01T12:01:00.000Z", nextFetchAt: "2026-03-01T12:01:00.000Z" });
+    expect(await (await s.get(`/api/v1/feeds/${busy.id}`)).json()).toMatchObject({ fetchRequestedAt: null, nextFetchAt: "2026-03-01T17:00:00.000Z" });
+    release();
+    await s.poller.idle();
+
+    expect(await (await s.get(`/api/v1/feeds/${feed.id}`)).json()).toMatchObject({ fetchRequestedAt: null, articleCount: 2 });
+    expect(s.site.requests.length).toBe(before + 1);
+  });
+
+  it("asks for nothing when no feed is enabled", async () => {
+    const s = testServer();
+    s.site.set(FEED, rss("Example Blog", [{ key: "a" }]));
+    const feed = await (await s.post("/api/v1/feeds", { url: FEED })).json();
+    await s.patch(`/api/v1/feeds/${feed.id}`, { enabled: false });
+    const before = s.site.requests.length;
+
+    expect(await (await s.post("/api/v1/feeds/fetch")).json()).toMatchObject({ requested: 0, skipped: 0 });
+    await s.poller.idle();
+
+    expect(s.site.requests.length).toBe(before);
+  });
+
   it("answers 404 for a feed that does not exist", async () => {
     const s = testServer();
     expect((await s.post("/api/v1/feeds/41/fetch")).status).toBe(404);
@@ -168,7 +311,7 @@ describe("subscribed feeds", () => {
     }
     await s.post(`/api/v1/feeds/${feed.id}/fetch`);
 
-    expect(s.site.requests.length).toBe(12);
+    expect(s.site.requests.filter((request) => request.url === FEED)).toHaveLength(12);
     expect(await (await s.get("/api/v1/runs")).json()).toEqual([]);
     expect((await (await s.get("/api/v1/providers")).json()).llmCallsToday).toBe(0);
   });
@@ -280,6 +423,7 @@ describe("articles of subscribed feeds", () => {
         { feedId: inCategory.id, unread: 2 },
         { feedId: loose.id, unread: 1 },
       ],
+      savedSearches: [],
     });
   });
 

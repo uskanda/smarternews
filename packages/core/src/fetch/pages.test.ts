@@ -27,7 +27,18 @@ describe("PageFetcher", () => {
       ok: true,
       html: "<p>hello</p>",
       url: "https://example.org/news/1",
+      permanentUrl: null,
     });
+  });
+
+  it("hands back where a permanent redirect of the page leads", async () => {
+    const { pages } = setup({
+      "http://example.org/robots.txt": robots(""),
+      "http://example.org/news": () => new Response(null, { status: 301, headers: { location: "https://example.org/news" } }),
+      "https://example.org/robots.txt": robots(""),
+      "https://example.org/news": () => html("<p>hello</p>"),
+    });
+    await expect(pages.fetchPage("http://example.org/news")).resolves.toMatchObject({ ok: true, url: "https://example.org/news", permanentUrl: "https://example.org/news" });
   });
 
   it("sends no request for a page that robots.txt forbids", async () => {

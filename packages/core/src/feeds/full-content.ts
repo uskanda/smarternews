@@ -19,7 +19,7 @@ export interface FullContentDeps {
 }
 
 /** Characters as a reader counts them, after runs of white space are made one. */
-function chars(text: string): number {
+export function chars(text: string): number {
   return [...text.replace(/\s+/g, " ").trim()].length;
 }
 
@@ -27,8 +27,25 @@ function failure(reason: FullContentErrorReason, detail: string | null = null): 
   return { reason, detail };
 }
 
+/**
+ * The body of a fetched page rewritten as Markdown, or `no-content`. With a content selector, the first element
+ * it matches is the body; a page where it matches nothing with text is read by Readability (`matched` false).
+ */
+export function takeContent(
+  db: Database,
+  page: { html: string; url: string },
+  contentSelector: string | null,
+): { markdown: string; text: string; matched: boolean } | FullContentError {
+  const extracted = extractArticle(page.html, page.url, MAX_CONTENT_CHARS, contentSelector);
+  if (extracted.html.length === 0) return failure("no-content");
+  // The same rules as the delivered content: what another site wrote is never kept as HTML.
+  const converted = convertContent(extracted.html, page.url, getSettings(db).outputLanguage, { embeds: true });
+  if (converted.text.length === 0) return failure("no-content");
+  return { ...converted, matched: extracted.matched };
+}
+
 /** Why a page that could not be had was not had, as the article records it. */
-function pageFailure(page: Exclude<PageResult, { ok: true }>): FullContentError {
+export function pageFailure(page: Exclude<PageResult, { ok: true }>): FullContentError {
   switch (page.reason) {
     case "robots":
       return failure("robots");
@@ -46,16 +63,13 @@ function pageFailure(page: Exclude<PageResult, { ok: true }>): FullContentError 
 async function contentOf(
   deps: FullContentDeps,
   pages: PageFetcher,
-  article: { url: string | null; contentText: string },
+  article: { url: string | null; contentText: string; contentSelector: string | null },
 ): Promise<{ markdown: string; text: string } | FullContentError> {
   if (article.url === null) return failure("no-url");
   const page = await pages.fetchPage(article.url);
   if (!page.ok) return pageFailure(page);
-  const extracted = extractArticle(page.html, page.url, MAX_CONTENT_CHARS);
-  if (extracted.html.length === 0) return failure("no-content");
-  // The same rules as the delivered content: what another site wrote is never kept as HTML.
-  const converted = convertContent(extracted.html, page.url, getSettings(deps.db).outputLanguage);
-  if (converted.text.length === 0) return failure("no-content");
+  const converted = takeContent(deps.db, page, article.contentSelector);
+  if ("reason" in converted) return converted;
   const taken = chars(converted.text);
   const delivered = chars(article.contentText);
   // A notice to subscribe, or a part of the page that is not the article, is shorter than the excerpt.

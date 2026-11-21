@@ -20,6 +20,7 @@ const SOURCE_LABEL: Record<SourceKind, string> = {
   feed: "フィード",
   "news-search": "ニュース検索",
   "llm-search": "LLM検索",
+  subscription: "購読フィード",
 };
 
 /** "1/4件（25%）": a part of the articles the topic made, and its share rounded to a whole percent. */
@@ -37,6 +38,8 @@ function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
     ["基準未満", `${entry.belowMinimum}件`],
     ["件数上限", `${entry.overLimit}件`],
     ["日付で外れた候補", `${entry.rejectedByDate}件`],
+    ["サイトの除外", `${entry.blockedSite}件`],
+    ["印のある記事の続報", `${entry.rejectedByMark}件`],
     ["作った記事", `${entry.created}件`],
     ["更新した記事", `${entry.updated}件`],
     ["開いた記事", ofCreated(entry.opened, entry.created)],
@@ -44,7 +47,7 @@ function rowsOf(entry: TopicStatsCounts): Array<[string, string]> {
     ["外れ", ofCreated(entry.missed, entry.created)],
     [
       "よく除外されるサイト",
-      entry.topRejectedSites.length > 0 ? entry.topRejectedSites.map((site) => `${site.siteName} ${site.count}件`).join("、") : "なし",
+      entry.topRejectedSites.length > 0 ? entry.topRejectedSites.map((site) => `${site.host} ${site.count}件`).join("、") : "なし",
     ],
   ];
 }
@@ -124,7 +127,7 @@ export function TopicStatsSection({ category }: { category: Category }) {
   const [ranked, setRanked] = useState(false);
   const entries = stats.data ? (ranked ? rankTopicStats(stats.data.topics) : stats.data.topics) : [];
   return (
-    <section aria-label="トピックの成績" className="flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl">
+    <section id="topic-stats" aria-label="トピックの成績" className="flex flex-col gap-md border-b border-outline px-lg py-xl md:px-2xl">
       <div className="flex flex-wrap items-center justify-between gap-md">
         <h2 className="type-headline-md">トピックの成績</h2>
         <Checkbox label="問題のあるトピックを先頭へ" checked={ranked} onChange={(event) => setRanked(event.target.checked)} />

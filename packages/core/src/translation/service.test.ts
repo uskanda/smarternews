@@ -305,20 +305,59 @@ describe("translating an article with full content", () => {
     expect(translation.segments).toHaveLength(30);
   });
 
-  it("stores no translation when the full content is stored while the delivered content is being translated", async () => {
+  it("translates the full content anew when it is stored while the delivered content is being translated", async () => {
     const s = setup();
     const id = seedFeedArticle(s.db, s.feedId, { title: "A title", body: "Only an excerpt." });
     const translate = s.google.translate.bind(s.google);
     s.google.translate = async (items, target) => {
+      s.google.translate = translate;
       saveFullContent(s.db, id, { markdown: "Full one.", text: "Full one.", now: START });
       return translate(items, target);
     };
 
-    await expect(s.service.translateArticle(id)).rejects.toMatchObject({ code: "unavailable" });
-    expect(getArticle(s.db, id).translation).toBeNull();
+    const translation = await s.service.translateArticle(id);
 
-    s.google.translate = translate;
-    expect((await s.service.translateArticle(id)).segments.map((segment) => segment.original)).toEqual(["Full one."]);
+    expect(translation.segments.map((segment) => [segment.original, segment.translated])).toEqual([["Full one.", "訳:Full one."]]);
+    expect(translation.translatedTitle).toBe("訳:A title");
+    expect(getArticle(s.db, id).translation).toEqual(translation);
+  });
+
+  it("gives up, storing nothing, when the content changes again while it is translated anew", async () => {
+    const s = setup();
+    const id = seedFeedArticle(s.db, s.feedId, { title: "A title", body: "Only an excerpt." });
+    const translate = s.google.translate.bind(s.google);
+    let round = 0;
+    s.google.translate = async (items, target) => {
+      round += 1;
+      saveFullContent(s.db, id, { markdown: `Full ${round}.`, text: `Full ${round}.`, now: START });
+      return translate(items, target);
+    };
+
+    await expect(s.service.translateArticle(id)).rejects.toMatchObject({ code: "unavailable" });
+    expect(round).toBe(2);
+    expect(getArticle(s.db, id)).toMatchObject({ translation: null, translatedTitle: null });
+  });
+
+  it("gives a request that joins the translation under way the translation of the full content too", async () => {
+    const s = setup();
+    const id = seedFeedArticle(s.db, s.feedId, { title: "A title", body: "Only an excerpt." });
+    const translate = s.google.translate.bind(s.google);
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    s.google.translate = async (items, target) => {
+      s.google.translate = translate;
+      await gate;
+      return translate(items, target);
+    };
+
+    const first = s.service.translateArticle(id);
+    saveFullContent(s.db, id, { markdown: "Full one.", text: "Full one.", now: START });
+    const second = s.service.translateArticle(id);
+    open();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.segments.map((segment) => segment.translated)).toEqual(["訳:Full one."]);
+    expect(b).toEqual(a);
   });
 });
 

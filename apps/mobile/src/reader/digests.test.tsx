@@ -54,6 +54,18 @@ describe("the digests screen", () => {
     expect(await screen.findByText("2026年3月1日 13:00 〜 19:00")).toBeOnTheScreen();
   });
 
+  it("shows a digest of a list with the label 一覧 and what it was made of, in place of its period", async () => {
+    const { server } = await twoDigests();
+    await server.advance(HOUR);
+    await server.digest({ executiveSummary: "Of the starred.", trigger: "list", target: { type: "starred", label: "スター" } });
+    await renderApp({ server, url: "/digests" });
+
+    expect(await screen.findByText("Of the starred.")).toBeOnTheScreen();
+    expect(screen.getByText("一覧・スター")).toBeOnTheScreen();
+    expect(screen.queryByText(/〜/)).toBeNull();
+    expect((await pastList()).getByText("一覧・スター・1件の記事から")).toBeOnTheScreen();
+  });
+
   it("switches to a past digest that is pressed", async () => {
     const { server } = await twoDigests();
     await renderApp({ server, url: "/digests" });
