@@ -2310,7 +2310,7 @@ describe("events", () => {
     expect(screen.queryByText("読み込み中…")).not.toBeInTheDocument();
   });
 
-  it("says why the events could not be fetched, and fetches them again on 再試行", async () => {
+  it("says why the events could not be fetched, and fetches them again on もう一度試す", async () => {
     const { server } = seeded();
     const state = watchEventList(server);
     state.fail = true;
@@ -2319,7 +2319,7 @@ describe("events", () => {
     const alert = await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByRole("alert");
     expect(screen.queryByText(EMPTY)).not.toBeInTheDocument();
     state.fail = false;
-    await user.click(within(alert).getByRole("button", { name: "再試行" }));
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
 
     await within(eventList()).findByRole("link", { name: /Morning class/ });
     expect(within(eventList()).queryByRole("alert")).not.toBeInTheDocument();
