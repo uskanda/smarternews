@@ -2,8 +2,8 @@ import { FEED_STATS_DAYS, pageSelectorsSchema, type Feed, type FeedFetchAllResul
 import { systemClock, type Clock } from "../clock.ts";
 import { DomainError, notFound } from "../errors.ts";
 import { normalizeUrl } from "../fetch/url.ts";
-import { checkSelectorsUsable } from "../feeds/page.ts";
-import { hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
+import { checkContentSelectorUsable, checkSelectorsUsable } from "../feeds/page.ts";
+import { forgetUnreadFullContent, hasAnnotation, hiddenByFilters, hiddenDuplicate } from "./articles.ts";
 import { findCategory } from "./categories.ts";
 import { transaction, type Database } from "./database.ts";
 import { refreshFiltered } from "./filters.ts";
@@ -101,12 +101,15 @@ function toFeed(row: Row, { baseMinutes, staleDays, now }: FeedContext): Feed {
     autoSummarize: bool(row.auto_summarize),
     translate: bool(row.translate),
     fetchFullContent: bool(row.fetch_full_content),
+    contentSelector: strOrNull(row.content_selector),
     topicSource: bool(row.topic_source),
     lastFetchedAt: strOrNull(row.last_fetched_at),
     lastSucceededAt: strOrNull(row.last_succeeded_at),
     lastError: strOrNull(row.last_error),
     failureCount: num(row.failure_count),
     goneAt: strOrNull(row.gone_at),
+    movedFrom: strOrNull(row.moved_from),
+    movedAt: strOrNull(row.moved_at),
     nextFetchAt: enabled ? nextFetchFrom(row, baseMinutes).toISOString() : null,
     fetchRequestedAt: strOrNull(row.fetch_requested_at),
     articleCount: num(row.article_count),
@@ -294,6 +297,8 @@ export interface NewFeed {
   translate?: boolean;
   /** Fetch the full content of the articles this feed delivers from now on. */
   fetchFullContent?: boolean;
+  /** The element of an article's page that holds its body. None unless given. */
+  contentSelector?: string | null;
   /** Offer the feed's articles to the runs of its category as candidates. Only for a feed of a category. */
   topicSource?: boolean;
 }
@@ -311,14 +316,15 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
   if (format === "page" && input.selectors === undefined) {
     throw new DomainError("invalid", "a web feed needs selectors", [{ path: "selectors", message: "a web feed needs selectors", code: "required" }]);
   }
+  if (input.contentSelector) checkContentSelectorUsable(input.contentSelector);
   const now = clock().toISOString();
   const result = db
     .prepare(
       `INSERT INTO feeds
          (url, title, title_set_by_user, site_url, category_id, interval_minutes, enabled, created_at, position,
           auto_summarize, auto_summarize_since, translate, fetch_full_content, fetch_full_content_since, format, page_selectors,
-          relevance_score, topic_source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          relevance_score, content_selector, topic_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       url,
@@ -339,6 +345,7 @@ export function insertFeed(db: Database, input: NewFeed, clock: Clock): Feed {
       input.selectors ? JSON.stringify(input.selectors) : null,
       // A new feed has too few articles of its own: it takes the average of the others until the next count.
       feedRelevanceScores(db, clock()).fallback,
+      input.contentSelector || null,
       input.topicSource ? 1 : 0,
     );
   return getFeed(db, num(result.lastInsertRowid), clock());
@@ -358,13 +365,20 @@ function checkSelectorsFit(format: FeedFormat, selectors: PageSelectors | undefi
  * Changes a feed. Switching summaries or full content on records the time: only articles stored after it are
  * summarised, or have their full content fetched. Switching either on again when it is on keeps the earlier time.
  */
-export function updateFeed(db: Database, id: number, patch: FeedUpdate, clock: Clock = systemClock): Feed {
+export function updateFeed(db: Database, id: number, patch: Omit<FeedUpdate, "url">, clock: Clock = systemClock): Feed {
   const current = getFeed(db, id);
   if (patch.categoryId !== undefined) checkFeedCategory(db, patch.categoryId);
   // A feed that leaves its category keeps the switch: it counts again once the feed is in a category.
   checkTopicSource(patch.topicSource, patch.categoryId !== undefined ? patch.categoryId : current.categoryId);
   checkSelectorsFit(current.format, patch.selectors);
+  if (patch.contentSelector) checkContentSelectorUsable(patch.contentSelector);
   transaction(db, () => {
+    if (patch.contentSelector !== undefined && patch.contentSelector !== current.contentSelector) {
+      db.prepare("UPDATE feeds SET content_selector = ? WHERE id = ?").run(patch.contentSelector, id);
+      // What was taken out of the pages by the old selector goes, so that the articles still to be read have it
+      // taken again by the new one. Read articles keep theirs: their pages may be gone.
+      forgetUnreadFullContent(db, id);
+    }
     // Used from the next fetch on; the articles stored before stay as they are.
     if (patch.selectors !== undefined) db.prepare("UPDATE feeds SET page_selectors = ? WHERE id = ?").run(JSON.stringify(patch.selectors), id);
     if (patch.title !== undefined) db.prepare("UPDATE feeds SET title = ?, title_set_by_user = 1 WHERE id = ?").run(patch.title, id);
@@ -467,6 +481,47 @@ export function recordFetchFailure(db: Database, id: number, result: FetchFailur
             gone_at = CASE WHEN ? THEN coalesce(gone_at, ?) ELSE NULL END
       WHERE id = ?`,
   ).run(result.now, result.error.slice(0, 500), result.retryAfterUntil ?? null, result.gone ? 1 : 0, result.now, id);
+}
+
+/** How many successful fetches in a row a permanent redirect to the same target needs before the URL follows it. */
+export const MOVES_TO_FOLLOW = 3;
+
+/**
+ * Counts a successful fetch toward following where its permanent redirects led (`target`, null for none). The
+ * count starts again at a fetch that was not redirected for good, or was redirected elsewhere; at
+ * `MOVES_TO_FOLLOW` the URL of the feed becomes the target, and the URL it had is recorded with the time. A
+ * target that is the URL of another feed is not counted, and changes nothing. Returns whether the URL changed.
+ * A failed fetch does not come here: it leaves the count as it is.
+ */
+export function followMove(db: Database, id: number, target: string | null, now: string): boolean {
+  const row = db.prepare("SELECT url, move_target, move_count FROM feeds WHERE id = ?").get(id);
+  if (!row) return false;
+  const url = target === null ? null : normalizeUrl(target);
+  if (url === null || url === str(row.url)) {
+    db.prepare("UPDATE feeds SET move_target = NULL, move_count = 0 WHERE id = ?").run(id);
+    return false;
+  }
+  if (db.prepare("SELECT 1 FROM feeds WHERE url = ? AND id <> ?").get(url, id)) return false;
+  const count = strOrNull(row.move_target) === url ? num(row.move_count) + 1 : 1;
+  if (count < MOVES_TO_FOLLOW) {
+    db.prepare("UPDATE feeds SET move_target = ?, move_count = ? WHERE id = ?").run(url, count, id);
+    return false;
+  }
+  db.prepare("UPDATE feeds SET url = ?, moved_from = url, moved_at = ?, move_target = NULL, move_count = 0 WHERE id = ?").run(url, now, id);
+  return true;
+}
+
+/**
+ * Gives the feed a URL the user chose and checked. What was learnt about the old one goes: the values of
+ * conditional requests, the failures, the end of delivery, and the moves counted or followed.
+ */
+export function replaceFeedUrl(db: Database, id: number, url: string): void {
+  db.prepare(
+    `UPDATE feeds
+        SET url = ?, etag = NULL, last_modified = NULL, last_error = NULL, failure_count = 0, retry_after_until = NULL, gone_at = NULL,
+            move_target = NULL, move_count = 0, moved_from = NULL, moved_at = NULL
+      WHERE id = ?`,
+  ).run(normalizeUrl(url), id);
 }
 
 /** Forgets the items a feed has not listed since the given time. Their articles are purged by then. */

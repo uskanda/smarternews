@@ -8,6 +8,7 @@ import {
   listKey,
   nextEventCategory,
   parseListKey,
+  SAVED_SEARCHES_LABEL,
   stepTarget,
   type FeedState,
   type ListTarget,
@@ -16,7 +17,7 @@ import {
 } from "@smarternews/client";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders } from "../api/queries.ts";
+import { useArticle, useAttention, useCategories, useCounts, useFeeds, useProviders, useSavedSearches } from "../api/queries.ts";
 import { useApp } from "../app/context.ts";
 import { unfold, useCollapsed } from "../lib/collapsed.ts";
 import { useFetchAllCompletion, useFetchAllFeedsNow } from "../lib/fetch-now.ts";
@@ -31,6 +32,7 @@ import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { Button } from "../ui/controls.tsx";
 import { JumpDialog } from "./JumpDialog.tsx";
 import { EntryMenu, openEntryMenu, useNavDrag, useNavMoves } from "./order.tsx";
+import { SavedSearchMenu } from "./saved-searches.tsx";
 
 const KEYS: Array<[string, string]> = [
   ["j", "次の記事"],
@@ -55,7 +57,7 @@ const KEYS: Array<[string, string]> = [
   ["g e", "次のイベントのカテゴリへ移る"],
   ["g r", "「最近読んだ記事」へ移る"],
   ["g u", "名前を打って、カテゴリか購読フィードへ移る"],
-  ["Shift+F10", "フォーカスのあるカテゴリと購読フィードで、項目のメニューを開く（並べ替え、登録の解除）"],
+  ["Shift+F10", "フォーカスのあるカテゴリ、購読フィード、保存した検索で、項目のメニューを開く（並べ替え、登録の解除、改名、削除）"],
   ["/", "検索欄へ移る"],
   ["?", "この一覧を開く"],
 ];
@@ -274,7 +276,7 @@ function FetchAllButton() {
 
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   // What is drawn, dragged and moved by the menu is what is shown: a move then never passes a hidden feed by.
-  const { shown: model, pathOf: pathOfTarget } = useNavModels();
+  const { shown: model, pathOf: pathOfTarget, failed } = useNavModels();
   const feeds = useFeeds().data;
   const attention = useAttention().data?.count ?? 0;
   const collapsed = useCollapsed();
@@ -282,6 +284,8 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const pathOf = (entry: NavEntry) => pathOfTarget(entry.target) ?? "/unread";
   // The fold buttons take a column of their own. It exists only once something can be folded.
   const foldable = model.groups.some((group) => group.children.length > 0);
+  const savedHeading = useId();
+  const savedIds = model.savedSearches.flatMap((entry) => (entry.target.type === "savedSearch" ? [entry.target.savedSearchId] : []));
 
   const navigate = useNavigate();
   const element = useRef<HTMLElement>(null);
@@ -315,6 +319,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
       className="relative flex h-full flex-col gap-lg overflow-y-auto bg-background p-sm"
     >
       <SearchBox onNavigate={onNavigate} />
+      <NavFetchFailure failed={failed} />
       <ul className="flex flex-col gap-px">
         {model.views.map((entry) => (
           <li key={listKey(entry.target)} className="flex">
@@ -327,6 +332,22 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
           <NavItem to="/digests" label="ダイジェスト" onNavigate={onNavigate} />
         </li>
       </ul>
+      {model.savedSearches.length > 0 ? (
+        <div className="flex flex-col gap-px">
+          <h2 id={savedHeading} className="px-sm pb-xs type-label-sm text-on-surface-muted">
+            {SAVED_SEARCHES_LABEL}
+          </h2>
+          <ul aria-labelledby={savedHeading} className="flex flex-col gap-px">
+            {model.savedSearches.map((entry) => (
+              <li key={listKey(entry.target)} onKeyDown={openEntryMenu} className="flex">
+                <SavedSearchMenu entry={entry} shown={savedIds}>
+                  <ListItem entry={entry} to={pathOf(entry)} onNavigate={onNavigate} />
+                </SavedSearchMenu>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="flex flex-col gap-px">
         <div className="flex items-center justify-between gap-sm px-sm pb-xs">
           <h2 className="type-label-sm text-on-surface-muted">カテゴリ</h2>
@@ -432,7 +453,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
 
 /** The list of the left pane that is open, with an article opened from it or not; null on any other page. */
 function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTarget) => string | null): ListTarget | null {
-  const entries = [...model.views, ...model.groups.flatMap((group) => [group.entry, ...group.children])];
+  const entries = [...model.views, ...model.savedSearches, ...model.groups.flatMap((group) => [group.entry, ...group.children])];
   return (
     entries.find((entry) => {
       const path = pathOf(entry.target);
@@ -445,13 +466,36 @@ function currentEntry(model: NavModel, pathname: string, pathOf: (target: ListTa
  * The entries of the left pane: `full` holds every one, `shown` those the pane shows — without the entries that
  * have no unread article when this browser hides them. The open entry is found in `full`, so that it stays.
  */
-function useNavModels(): { full: NavModel; shown: NavModel; current: ListTarget | null; pathOf: (target: ListTarget) => string | null } {
-  const counts = useCounts().data;
-  const categories = useCategories().data;
-  const feeds = useFeeds().data;
+function useNavModels(): {
+  full: NavModel;
+  shown: NavModel;
+  current: ListTarget | null;
+  pathOf: (target: ListTarget) => string | null;
+  failed: NavFetch[];
+} {
+  const countsQuery = useCounts();
+  const categoriesQuery = useCategories();
+  const feedsQuery = useFeeds();
+  const counts = countsQuery.data;
+  const categories = categoriesQuery.data;
+  const feeds = feedsQuery.data;
+  // Only what failed with nothing to show: a fetch again that fails leaves the pane as it was, and says nothing.
+  const failed = (
+    [
+      ["カテゴリ", categoriesQuery],
+      ["購読フィード", feedsQuery],
+      ["件数", countsQuery],
+    ] as const
+  )
+    .filter(([, query]) => query.isError && query.data === undefined)
+    .map(([name, query]) => ({ name, refetch: () => void query.refetch() }));
+  const savedSearches = useSavedSearches().data;
   const hideRead = useHideRead();
   const { pathname } = useLocation();
-  const full = useMemo(() => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts }), [categories, feeds, counts]);
+  const full = useMemo(
+    () => buildNav({ categories: categories ?? [], feeds: feeds ?? [], counts, savedSearches: savedSearches ?? [] }),
+    [categories, feeds, counts, savedSearches],
+  );
   const pathOf = (target: ListTarget) => listPathOf(target, (categoryId) => categories?.find((category) => category.id === categoryId)?.slug);
   const current = currentEntry(full, pathname, pathOf);
   const currentKey = current === null ? null : listKey(current);
@@ -460,7 +504,31 @@ function useNavModels(): { full: NavModel; shown: NavModel; current: ListTarget 
     () => (hideRead ? hideEmptyEntries(full, { current: currentKey === null ? null : parseListKey(currentKey), counted }) : full),
     [full, hideRead, currentKey, counted],
   );
-  return { full, shown, current, pathOf };
+  return { full, shown, current, pathOf, failed };
+}
+
+/** A list the left pane is made from that could not be loaded. */
+interface NavFetch {
+  name: string;
+  refetch: () => void;
+}
+
+/** "カテゴリ", "カテゴリと件数", or "カテゴリ、購読フィード、件数". */
+function joinNames(names: string[]): string {
+  return names.length === 2 ? `${names[0]}と${names[1]}` : names.join("、");
+}
+
+/** One line under the search box: what the pane could not load, and one button that asks for all of it again. */
+function NavFetchFailure({ failed }: { failed: NavFetch[] }) {
+  if (failed.length === 0) return null;
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-x-sm gap-y-xs px-sm type-label-sm text-error">
+      <span>{joinNames(failed.map((entry) => entry.name))}を読み込めませんでした</span>
+      <Button size="sm" className="text-on-surface" onClick={() => failed.forEach((entry) => entry.refetch())}>
+        もう一度試す
+      </Button>
+    </div>
+  );
 }
 
 const OVERLAY = "fixed inset-0 z-40 bg-on-surface/40";

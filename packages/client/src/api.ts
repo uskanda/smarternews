@@ -36,6 +36,7 @@ import {
   feedStatsSchema,
   pageCandidatesSchema,
   selectorPreviewSchema,
+  contentPreviewSchema,
   importResultSchema,
   listViewSchema,
   listViewsSchema,
@@ -99,6 +100,7 @@ import {
   type PageCandidates,
   type PageSelectors,
   type SelectorPreview,
+  type ContentPreview,
   type ProviderStatus,
   type Usage,
   type Run,
@@ -120,6 +122,10 @@ import {
   type RulePreviewResult,
   type RuleUpdate,
   type HighlightTermCreate,
+  savedSearchSchema,
+  type SavedSearch,
+  type SavedSearchCreate,
+  type SavedSearchUpdate,
   type TermGroup,
   type TermGroupCreate,
   type TermGroupUpdate,
@@ -388,6 +394,9 @@ export function createApi(options: ApiOptions) {
     pagePreview: (url: string, selectors: PageSelectors): Promise<SelectorPreview> =>
       json(selectorPreviewSchema, "/feeds/page/preview", body("POST", { url, selectors })),
     updateFeed: (id: number, patch: FeedUpdate): Promise<Feed> => json(feedSchema, `/feeds/${id}`, body("PATCH", patch)),
+    /** What a content selector, or none, takes out of the page of the feed's newest article. Stores nothing. */
+    contentPreview: (id: number, contentSelector: string | null): Promise<ContentPreview> =>
+      json(contentPreviewSchema, `/feeds/${id}/content-preview`, body("POST", { contentSelector })),
     /** Puts the feed into a category, before another feed there or last. Answers with all feeds in their order. */
     moveFeed: (id: number, to: FeedMove): Promise<Feed[]> => json(z.array(feedSchema), `/feeds/${id}/move`, body("POST", to)),
     deleteFeed: async (id: number): Promise<void> => void (await request(`/feeds/${id}`, { method: "DELETE" })),
@@ -440,6 +449,16 @@ export function createApi(options: ApiOptions) {
       json(termGroupSchema, `/term-groups/${groupId}/terms`, body("POST", input)),
     deleteHighlightTerm: async (groupId: number, termId: number): Promise<void> =>
       void (await request(`/term-groups/${groupId}/terms/${termId}`, { method: "DELETE" })),
+
+    /** The saved searches in their order. Their unread counts come with `counts`. */
+    savedSearches: (): Promise<SavedSearch[]> => json(z.array(savedSearchSchema), "/saved-searches"),
+    createSavedSearch: (input: SavedSearchCreate): Promise<SavedSearch> => json(savedSearchSchema, "/saved-searches", body("POST", input)),
+    updateSavedSearch: (id: number, patch: SavedSearchUpdate): Promise<SavedSearch> =>
+      json(savedSearchSchema, `/saved-searches/${id}`, body("PATCH", patch)),
+    deleteSavedSearch: async (id: number): Promise<void> => void (await request(`/saved-searches/${id}`, { method: "DELETE" })),
+    /** Puts the saved search before another one, or last. Answers with all saved searches in their order. */
+    moveSavedSearch: (id: number, before: number | null): Promise<SavedSearch[]> =>
+      json(z.array(savedSearchSchema), `/saved-searches/${id}/move`, body("POST", { before })),
 
     runCategory: (categoryId: number): Promise<Run> => json(runSchema, `/categories/${categoryId}/runs`, { method: "POST" }),
     runs: (filter: { category?: number; limit?: number } = {}): Promise<Run[]> => json(z.array(runSchema), `/runs${query(filter)}`),

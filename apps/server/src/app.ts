@@ -18,8 +18,11 @@ import {
   listMentionArticles,
   mentionArticlesQuerySchema,
   articleUpdateSchema,
+  contentPreviewRequestSchema,
+  previewContent,
   categoryCreateSchema,
   categoryUpdateSchema,
+  changeFeedUrl,
   createCategory,
   createTopic,
   deleteCategory,
@@ -119,6 +122,14 @@ import {
   highlightTermCreateSchema,
   listTermGroups,
   moveTermGroup,
+  listSavedSearches,
+  createSavedSearch,
+  updateSavedSearch,
+  deleteSavedSearch,
+  moveSavedSearch,
+  savedSearchCreateSchema,
+  savedSearchUpdateSchema,
+  savedSearchMoveSchema,
   termGroupCreateSchema,
   termGroupMoveSchema,
   termGroupUpdateSchema,
@@ -462,7 +473,25 @@ export function createApp(deps: AppDeps): Hono {
   api.get("/feeds/:id", (c) => c.json(feedAnswer(getFeed(db, idParam(c, "feed"), clock()))));
   // Counted from what the articles are now: no model is involved.
   api.get("/feeds/:id/stats", (c) => c.json(feedStats(db, idParam(c, "feed"), clock())));
-  api.patch("/feeds/:id", async (c) => c.json(feedAnswer(updateFeed(db, idParam(c, "feed"), parse(feedUpdateSchema, await jsonBody(c)), clock))));
+  // A change with a URL fetches it first, as registering does; any other change is stored at once.
+  api.patch("/feeds/:id", async (c) => {
+    const id = idParam(c, "feed");
+    const patch = parse(feedUpdateSchema, await jsonBody(c));
+    const feed =
+      patch.url === undefined
+        ? updateFeed(db, id, patch, clock)
+        : await poller.exclusive(() => changeFeedUrl({ db, clock, fetcher, translation, pages: poller.pageFetcher() }, id, patch));
+    // A changed content selector forgot the full content of unread articles: those that wait for it again are
+    // fetched now rather than at the next look. Nothing waits after any other change, and the look is cheap.
+    fullContent.tick();
+    return c.json(feedAnswer(feed));
+  });
+  // What a content selector takes out of the page of the feed's newest article. No model is called and nothing is stored.
+  api.post("/feeds/:id/content-preview", async (c) => {
+    const id = idParam(c, "feed");
+    const { contentSelector } = parse(contentPreviewRequestSchema, await jsonBody(c));
+    return c.json(await previewContent({ db, pages: poller.pageFetcher() }, id, contentSelector));
+  });
   api.post("/feeds/:id/move", async (c) => {
     moveFeed(db, idParam(c, "feed"), parse(feedMoveSchema, await jsonBody(c)));
     return c.json(listFeeds(db, clock()).map(feedAnswer));
@@ -526,6 +555,20 @@ export function createApp(deps: AppDeps): Hono {
     deleteHighlightTerm(db, idParam(c, "term group"), idParam(c, "term", "termId"));
     return c.body(null, 204);
   });
+
+  // saved searches: their unread counts come with the counts
+  api.get("/saved-searches", (c) => c.json(listSavedSearches(db)));
+  api.post("/saved-searches", async (c) => c.json(createSavedSearch(db, parse(savedSearchCreateSchema, await jsonBody(c)), clock), 201));
+  api.patch("/saved-searches/:id", async (c) =>
+    c.json(updateSavedSearch(db, idParam(c, "saved search"), parse(savedSearchUpdateSchema, await jsonBody(c)))),
+  );
+  api.delete("/saved-searches/:id", (c) => {
+    deleteSavedSearch(db, idParam(c, "saved search"));
+    return c.body(null, 204);
+  });
+  api.post("/saved-searches/:id/move", async (c) =>
+    c.json(moveSavedSearch(db, idParam(c, "saved search"), parse(savedSearchMoveSchema, await jsonBody(c)).before)),
+  );
 
   // runs
   api.post("/categories/:id/runs", (c) => c.json(queue.enqueue(idParam(c, "category"), "manual", null), 202));

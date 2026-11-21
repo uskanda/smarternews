@@ -1,5 +1,5 @@
 import type { Article, ArticleRef, ArticleTranslation } from "@smarternews/core/api";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Link } from "react-router";
 import { ApiError, type TermMatcher, eventTime, formatDate, formatDay, formatFull, fullContentErrorLabel, registrationLabel } from "@smarternews/client";
 import { useArticle, useArticleTranslation, useSummaryRequest, useTermMatcher } from "../api/queries.ts";
@@ -291,6 +291,22 @@ const SUMMARY_NOTES = {
   late: "要約に時間がかかっています。あとでこの記事を開き直してください。",
 } as const;
 
+/**
+ * A headline that can be pressed, in the expanded list: it looks like the headline it is, and shows the focus
+ * ring of every control.
+ */
+export function HeadlineButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="tap cursor-pointer rounded-sm text-left text-balance focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      {children}
+    </button>
+  );
+}
+
 /** The words of the star and read switches, the same above the headline and at the end of the article. */
 const starLabel = (article: Article) => (article.starred ? "スターを外す" : "スターを付ける");
 const readLabel = (article: Article) => (article.isRead ? "未読に戻す" : "既読にする");
@@ -313,6 +329,7 @@ export function ArticleView({
   fullContent,
   terms,
   focusAnnotation = null,
+  onHeadline,
 }: {
   id: number;
   categoryName: (categoryId: number | null) => string;
@@ -339,6 +356,8 @@ export function ArticleView({
   terms?: readonly string[];
   /** The annotation chosen in the list of annotations: the body is brought to it. */
   focusAnnotation?: number | null;
+  /** In the expanded list: what pressing the headline does, which makes the headline a button. */
+  onHeadline?: () => void;
 }) {
   const query = useArticle(id);
   const article = query.data;
@@ -431,7 +450,13 @@ export function ArticleView({
         </div>
         <div className="flex flex-col gap-xs">
           <h2 ref={heading} tabIndex={-1} className="text-balance type-headline-lg focus:outline-none" {...filterSource(!originalTitleShown)}>
-            <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
+            {onHeadline ? (
+              <HeadlineButton onClick={onHeadline}>
+                <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
+              </HeadlineButton>
+            ) : (
+              <Highlighted text={article.translatedTitle ?? article.title} terms={terms} groups={groups} />
+            )}
           </h2>
           {originalTitleShown ? (
             // The title as the site wrote it, marked with its language so that it is read out in that language.

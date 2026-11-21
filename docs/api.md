@@ -94,7 +94,9 @@ Settings fields:
 
 Import matches categories by `slug`, topics by `text`, subscribed feeds by `url`, filters by their action, scope and conditions, [rules](#rules) by their scope, conditions and actions, and term groups by `name`. A filter and a rule name a category by its `slug` and a feed by its `url`, and so does an entry of `listViews`; a file written before filters may hold `stopWords`, which become hide filters over everything. What matches is updated, the rest is created, and nothing is deleted: a term group takes the colour of the file and only gains the terms it lacks. The groups of the file come first, in the file's order. Registered feeds are not fetched at once; each is fetched when its turn comes. A [web feed](#web-feeds) is written with its `selectors`, and a subscription with `selectors` is registered as one; a file that gives selectors to a feed the server has, or none to a web feed it has, is invalid. An invalid file changes nothing. The response counts what was created and updated.
 
-`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, and `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only. Export leaves `listViews` out when no entry was changed. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` keeps its sort. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+`listViews` holds the [list views](#list-views) that differ from the defaults, one entry per item of the left pane: `list` is `unread`, `all`, `starred`, `generated`, `feeds` (the feed articles of every subscribed feed) or `uncategorized`, `{"category": "tools"}`, `{"category": "tools", "generatedOnly": true}` or `{"feed": "https://example.com/feed.xml"}`, `sort` is `newest`, `oldest` or `relevance`, or `starred` for the entry `starred` only, and `format` is `standard`, `compact` or `expanded`. Export leaves `listViews` out when no entry was changed, and an entry's `sort` and `format` out when they are the defaults. Import applies the entries after the categories and feeds of the file are stored, so an entry can name a feed that the same file subscribes to; entries the file does not name keep their views, and an entry without `sort` or `format` keeps that setting. An entry that names a category or feed found neither in the file nor on the server, an event category, the same item twice, or the `sort` `starred` for any entry but `starred` makes the whole file invalid. `listViewsUpdated` in the response counts the entries applied.
+
+`savedSearches` holds the [saved searches](#saved-searches) in their order: `name`, `query`, and `scope`, which is `{"category": "tools"}` or `{"feed": "https://example.com/feed.xml"}` and is left out for a search over every article. Export leaves `savedSearches` out when there are none. Import stores them after the categories and feeds of the file; one with the same name, words and scope as a saved search on the server is not saved again. The searches of the file come first, in the file's order, and the others follow. A scope that names a category or feed found neither in the file nor on the server makes the whole file invalid. `savedSearchesCreated` in the response counts the searches saved.
 
 ## Categories
 
@@ -238,7 +240,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/api/v1/topics/7/versions
 | `PATCH /api/v1/articles/:id` | Set `isRead` or `starred`, mark a generated article as a miss with `missed` (see [Misses](#misses)), or stop its follow-ups with `followUpsStopped` (see [Stopped follow-ups](#stopped-follow-ups)) |
 | `POST /api/v1/articles/mark-read` | Mark many as read |
 | `POST /api/v1/articles/mark-unread` | Put the named articles back to unread |
-| `GET /api/v1/counts` | Unread and starred totals, and counts per category and per feed |
+| `GET /api/v1/counts` | Unread and starred totals, and counts per category, per feed and per saved search |
 | `GET /api/v1/search` | Search the articles by words |
 | `POST /api/v1/articles/:id/open` | Record that the article's body was shown to a reader. Returns `openedAt` |
 | `POST /api/v1/articles/:id/summary` | Ask for the summary of a feed article that is open. It then goes ahead of the others and keeps waiting after it is read. Returns `status`: `queued`, `limit` (the day has no summaries left) or `none` (this article gets no summary) |
@@ -286,7 +288,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   -d '{"categoryId":1,"before":"2026-03-01T12:00:00.000Z"}' "$API/api/v1/articles/mark-read"
 ```
 
-`mark-read` marks the unread articles that were last updated before `before`. Pass the `asOf` of the first page of the list: articles that arrived after the list was read stay unread, and the articles of pages not loaded yet are marked too, whatever the order of the list. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. The response lists the articles it changed as `ids`, including the duplicates marked read with the articles kept for them, and `mark-unread` takes such a list to undo the change:
+`mark-read` marks the unread articles that were last updated before `before`. Pass the `asOf` of the first page of the list: articles that arrived after the list was read stay unread, and the articles of pages not loaded yet are marked too, whatever the order of the list. `categoryId`, `origin`, `feedId`, `uncategorized` (`true`) and `minImportance` narrow it; omit them all to cover everything. Events that have ended stay unread, as no list and no unread count shows them. The response lists the articles it changed as `ids`, including the duplicates marked read with the articles kept for them, and `mark-unread` takes such a list to undo the change:
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -311,6 +313,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/counts"
 | `generatedUnread` | Unread generated articles |
 | `uncategorizedUnread` | Unread articles of feeds without a category |
 | `categories` | Per category: `categoryId`, `unread`, `total`, `generatedUnread`, and `generatedTotal` (its generated articles, read or not) |
+| `savedSearches` | Per [saved search](#saved-searches): `id` and `unread`, the number of results it has with `unread=true`. Unlike the other counts, ended events are included, as in a search |
 | `feeds` | Per subscribed feed: `feedId` and `unread` |
 
 A category's `unread` and `total` include the articles of its subscribed feeds. Unread counts leave out events that have ended. No count includes a feed article that a filter hides. A hidden duplicate counts for its own feed and among the starred only, so a category's `unread` can be smaller than the sum of its feeds' `unread`.
@@ -430,6 +433,33 @@ The search index is kept by triggers that call a function the server registers w
 
 Generated articles without a star or an annotation are deleted 180 days after their last update, feed articles without a star or an annotation 90 days after the time they sort by. Starred and annotated articles are kept. An article whose last annotation is removed is deleted at the next purge once its time has passed.
 
+### Saved searches
+
+A saved search keeps the words of a search and at most one narrowing, a category or a feed, under a name. The web app lists them in the left pane and opens one as a search with `unread=true`; `counts` gives how many results each has so. Whether only unread articles are shown is not part of a saved search.
+
+| Operation | Purpose |
+|---|---|
+| `GET /api/v1/saved-searches` | List them in their order |
+| `POST /api/v1/saved-searches` | Save a search at the end (status 201) |
+| `PATCH /api/v1/saved-searches/:id` | Change its `name` |
+| `DELETE /api/v1/saved-searches/:id` | Remove it (status 204) |
+| `POST /api/v1/saved-searches/:id/move` | Put it before another one, `{"before":2}`, or last, `{"before":null}`. Answers with every saved search in the new order |
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Battery plants","query":"battery factory","categoryId":3}' "$API/api/v1/saved-searches"
+```
+
+Saved search fields:
+
+| Field | Content |
+|---|---|
+| `name` | 1 to 100 characters. Two saved searches may have the same name |
+| `query` | The words, as `q` of the search takes them: not empty, at most 200 characters |
+| `categoryId`, `feedId` | The narrowing, or `null`. At most one of them is set |
+
+Status 400 answers an empty name, words a search refuses, both `categoryId` and `feedId`, a category or feed that does not exist, and a `before` that names no saved search; status 404 answers a saved search that does not exist. The same words and narrowing may be saved more than once. Deleting the category or feed a saved search is narrowed to deletes the saved search too. Counting the saved searches calls no model.
+
 ## Mentions
 
 The names of people, organizations, products and places that an article mentions, at most ten an article. The model finds them in the call that writes a generated article, and in the call that summarises a feed article; no call is made only for names. So a feed article has names only when its feed has automatic summaries on and its summary has been written. A follow-up that rewrites a generated article replaces its names. A feed that rewrites its item, or stops summarising, leaves the names as they are. Articles stored before the server kept names have none. When the names of an answer are not valid, the article or summary is stored without them, and a rewritten article keeps its earlier names.
@@ -501,7 +531,8 @@ A subscribed feed is read as it is, like in any feed reader. Its items become fe
 | `POST /api/v1/feeds/page/candidates` | Propose selectors for a page without a feed, each with a preview. See [Web feeds](#web-feeds) |
 | `POST /api/v1/feeds/page/preview` | Show what a set of selectors takes out of a page |
 | `GET /api/v1/feeds/:id` | Read one |
-| `PATCH /api/v1/feeds/:id` | Change `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, `topicSource`, and `selectors` of a web feed |
+| `PATCH /api/v1/feeds/:id` | Change `url`, `title`, `categoryId`, `intervalMinutes`, `enabled`, `autoSummarize`, `translate`, `fetchFullContent`, `contentSelector`, `topicSource`, and `selectors` of a web feed |
+| `POST /api/v1/feeds/:id/content-preview` | Show what a content selector takes out of the page of the feed's newest article. See [Content selector](#content-selector) |
 | `POST /api/v1/feeds/:id/move` | Put it into a category, before another feed there or last. Returns all feeds in their new order |
 | `DELETE /api/v1/feeds/:id` | Delete it with all of its articles, starred ones included (status 204) |
 | `POST /api/v1/feeds/:id/fetch` | Fetch it now |
@@ -532,6 +563,8 @@ Subscribing fetches the URL once and answers when that is done. Status 400 means
 
 `categoryId` must name a category of the kind `news`, or be `null` for no category. `intervalMinutes` is 5 to 1440, or `null` to follow `feedIntervalMinutes` of the settings. `title` is taken from the feed unless you set it; once set, it stays. `autoSummarize`, `translate`, `fetchFullContent` and `topicSource` are `false` unless you send `true`, at registration or in a change. `topicSource` can be `true` only for a feed of a category: a feed of none is refused with status 400 and the field `topicSource`. A feed that leaves its category keeps the value, which counts again once the feed is in a category.
 
+A change with a `url` other than the feed's is checked the way subscribing is, and answers when the new URL has been fetched: 400 when it is not a feed (or, for a web feed, when the selectors take no article out of the page), and 409 when another feed has it. Then nothing changes. Otherwise the URL and the rest of the change are stored, the items the new URL delivers are stored as for any fetch, and the feed forgets what it knew of the old URL: its `ETag` and `Last-Modified`, the failures, `goneAt`, and `movedFrom` and `movedAt`. The articles stay with their stars, annotations and read marks, since items are recognised by the feed and their `guid` or `id`. An item with neither is recognised by its link, and a relative link resolves against the new URL.
+
 `move` takes `{"categoryId": 3, "before": 12}`: the category the feed goes into (`null` for none) and the feed it is placed before (`null` for last). Moving a category takes `{"before": 3}` in the same way. The lists of categories and feeds are returned in this order everywhere, and the settings file and OPML are written in it.
 
 `discover` returns `feeds`, a list of `url` and `title`. When the URL is itself a feed, the list holds that one feed. For a page it holds the feeds the page names with `<link rel="alternate">`, and it is empty when there are none.
@@ -550,10 +583,12 @@ Fields of a feed:
 | `autoSummarize` | True when a model summarises the articles this feed delivers. Only articles stored after it was switched on are summarised |
 | `translate` | True when the titles and contents of this feed's articles are translated into the output language. Switching it on translates nothing that is stored: an article the feed already has is translated when it is opened |
 | `fetchFullContent` | True when the server fetches the page of every article this feed delivers and stores its text as the full content. Only articles stored after it was switched on are fetched |
+| `contentSelector` | The CSS selector of the element that holds the article body on this feed's pages, or `null` to let Readability find it. See [Content selector](#content-selector) |
 | `topicSource` | True when the runs of the feed's category judge its articles as candidates of every enabled topic of the category. A run takes the articles stored within the category's window, leaving out hidden duplicates, articles the filters hide and pages judged before, newest first and at most `limits.subscriptionCandidatesPerRun` (60 by default) of config.yaml. Articles stored before it was switched on count too. The judgements take model calls: one for every `limits.judgeBatchSize` articles. The feed article stays in its lists as it was; the article it went into is named in its `summarizedIn` |
 | `lastFetchedAt`, `lastSucceededAt` | When it was last asked, and when that last worked |
 | `lastError`, `failureCount` | Why the last fetch failed, or `null`; and how many failed in a row |
 | `goneAt` | When the first of the 410 (Gone) answers in a row came, or `null`. Any other answer empties it. The feed stays enabled and goes on being fetched |
+| `movedFrom`, `movedAt` | The URL the feed had before permanent redirects replaced it, and when that happened; `null` until then, and again once the URL is changed by hand |
 | `nextFetchAt` | When it is fetched next, or `null` while it is paused. After a 429 or 503 answer with a `Retry-After` header, no earlier than the time it gives, one day ahead at most |
 | `fetchRequestedAt` | When a fetch of every feed was asked for, while this feed still waits for its turn; `nextFetchAt` is then the same time. `null` once it was fetched, and for a feed nothing asked for |
 | `articleCount`, `starredCount` | How many articles it has, and how many of them are starred |
@@ -564,11 +599,36 @@ Fields of a feed:
 
 A fetch that fails is recorded on the feed and not in the run history. After each failure in a row the wait before the next try doubles, up to one day; a success brings it back to the interval. A 429 or 503 answer with a `Retry-After` header, in seconds or as a date, also puts the next scheduled try no earlier than the time it gives, one day ahead at most; `fetch` itself does not wait for it. A 410 answer sets `goneAt`, and the feed goes on being fetched like after any failure. `fetch` answers with `status` (`updated`, `not_modified` or `failed`), `created` (the number of new articles), `error` when it failed, and `feed`.
 
+A site that moved for good is followed: when three successful fetches in a row are redirected with `301` or `308` to the same URL, the feed takes that URL and records the old one as `movedFrom`. Only the permanent redirects from the first request count, up to the first temporary one (`302`, `303`, `307`). A fetch that is not redirected for good, or is redirected elsewhere, starts the count again; a failed fetch leaves it as it is. A redirect to the URL of another subscribed feed is not followed.
+
 `POST /api/v1/feeds/fetch` asks for every enabled feed at once and answers before anything is fetched, with `requested`, `skipped` and `requestedAt`. The `requested` feeds are fetched without waiting for their interval or for the longer wait after failures, one at a time and in the same line as the scheduled fetches, so the pause between requests to one host holds. A feed that waits for the time a `Retry-After` gave is left out and counted in `skipped`; `POST /api/v1/feeds/:id/fetch` still fetches it. Paused feeds are in neither count. Until a feed is fetched it carries `fetchRequestedAt`, so a client learns that all are done when no feed has one. A fetch, successful or not, empties it, and the next fetch is scheduled from that one as usual. Pausing a feed empties it too. The requests survive a restart: what was not fetched before is fetched after it.
 
 An unchanged feed costs its site little: the server sends back the `ETag` and `Last-Modified` it was given, and a `304` answer counts as a success. Items are recognised by their `guid` or `id`, or by their link when they have neither. When a feed rewrites an item, the article is rewritten in place and keeps its place in the list and its read mark.
 
 The OPML import subscribes to the feeds that are not subscribed yet and skips the others. A folder becomes the category of the same name; when there is none, a `news` category without topics is created. Nested folders count as the outermost one, and a feed outside every folder gets no category. Feeds in a folder named like an `event` category get no category either. Nothing is deleted, moved or fetched by the import, and it answers with `feedsCreated`, `feedsSkipped` and `categoriesCreated`. The export writes the subscribed feeds only, with the categories that hold some as folders. Web feeds are not in it: OPML has no way to hold their selectors. The settings file has them.
+
+### Content selector
+
+Full content, and a summary that reads an article's page, take the article body out of the page with Readability. On a site where Readability takes the wrong part, such as a list of related articles or the comments, set `contentSelector` on the feed, at registration or in a change: the first element of the page that the CSS selector matches becomes the body instead, rewritten by the same rules. A page where it matches no element with text is read by Readability as before. Full content that is shorter than what the feed delivered is still refused with `shorter`. The selector is at most 300 characters; one that is not a CSS selector, or one the server cannot use, is refused with status 400 and the field `contentSelector`. `null` takes it away.
+
+A change of `contentSelector`, taking it away included, forgets the full content, its failure, and the content translation of the feed's unread articles, so that they are taken again by the new selector: right away for those that wait for full content, and when a reader asks for the others. Read articles keep theirs, and summaries stay. Sending the value the feed already has changes nothing.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"contentSelector":"article .post-body"}' "$API/api/v1/feeds/1"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"contentSelector":"article .post-body"}' "$API/api/v1/feeds/1/content-preview"
+```
+
+`content-preview` takes `{"contentSelector": ...}`, a selector or `null` for Readability, and fetches the page of the feed's newest article with a URL by the rules of full content. It answers one of:
+
+| `status` | Fields |
+|---|---|
+| `ok` | `article` (`id`, `title`, `url`); `matched`, false when the selector matched no element with text and the body is Readability's; `markdown`, the first 1000 characters of the body; `chars`, the characters of the whole body; `shorter`, true when the body is shorter than what the feed delivered |
+| `failed` | `article`, and `error` with `reason` and `detail` as for full content |
+| `no-article` | Nothing: the feed has no article with a URL |
+
+It calls no model and stores nothing. An unknown feed answers 404.
 
 ### Web feeds
 
@@ -796,12 +856,12 @@ Status 400 answers a rule without an action, a wrong regular expression, and a s
 
 ## List views
 
-Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. For now a list view holds one setting, `sort`: `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. An entry that was never changed is `newest`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
+Each entry of the left pane of the web app and the drawer of the Android app keeps how it lists its articles, so that both apps show it the same way. A list view holds two settings. `sort` is `newest`, `oldest` or `relevance` (see the `order` of [the article list](#articles)), and for `starred` alone also `starred`, by the time each article was starred. `format` is how the web app shows the list: `standard` (three lines a row beside the article pane), `compact` (the title alone on one line) or `expanded` (each article in full, one after another, without the article pane); the Android app keeps it as it is. An entry that was never changed is `newest` and `standard`. The server stores the views and answers them; it does not apply them to `GET /api/v1/articles` by itself, so an app reads the view of the entry it opens and sends `order` with the list.
 
 | Operation | Purpose |
 |---|---|
-| `GET /api/v1/list-views` | The entries whose view differs from the defaults, as `{"items":[{"key":"feed-12","sort":"oldest"}]}` |
-| `PATCH /api/v1/list-views/:key` | Change the view of one entry, `{"sort":"oldest"}`. What the body leaves out stays as it is. Answers with the view of the entry, such as `{"key":"feed-12","sort":"oldest"}` |
+| `GET /api/v1/list-views` | The entries whose view differs from the defaults, as `{"items":[{"key":"feed-12","sort":"oldest","format":"standard"}]}` |
+| `PATCH /api/v1/list-views/:key` | Change the view of one entry, `{"sort":"oldest"}` or `{"format":"compact"}`. What the body leaves out stays as it is. Answers with the view of the entry, such as `{"key":"feed-12","sort":"oldest","format":"standard"}` |
 
 ```bash
 curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

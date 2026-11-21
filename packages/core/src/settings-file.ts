@@ -16,6 +16,7 @@ import {
   type ListViewTarget,
   type SettingsFileListView,
   type SettingsFileListViewTarget,
+  type SettingsFileSavedSearch,
   type SettingsFileSubscription,
 } from "./api.ts";
 import type { Clock } from "./clock.ts";
@@ -25,6 +26,7 @@ import { findFeed, findFeedByUrl, insertFeed, listFeeds, orderFeeds, updateFeed 
 import { createFilter, findSameFilter, listFilters, updateFilter } from "./db/filters.ts";
 import { createRule, findSameRule, listRules, updateRule } from "./db/rules.ts";
 import { checkListViewTarget, listViewEntries, setListView, sortAllowed } from "./db/list-views.ts";
+import { createSavedSearch, listSavedSearches, orderSavedSearches } from "./db/saved-searches.ts";
 import { getSettings, updateSettings } from "./db/settings.ts";
 import { addHighlightTerm, createTermGroup, findTermGroupByName, listTermGroups, orderTermGroups, updateTermGroup } from "./db/term-highlights.ts";
 import { normalizeForMatch } from "./search/text.ts";
@@ -85,6 +87,7 @@ function toSubscription(feed: Feed): SettingsFileSubscription {
     ...(feed.autoSummarize ? { autoSummarize: true } : {}),
     ...(feed.translate ? { translate: true } : {}),
     ...(feed.fetchFullContent ? { fetchFullContent: true } : {}),
+    ...(feed.contentSelector !== null ? { contentSelector: feed.contentSelector } : {}),
     ...(feed.topicSource ? { topicSource: true } : {}),
     // OPML cannot hold them: the settings file is where a web feed is carried to another server.
     ...(feed.selectors !== null ? { selectors: feed.selectors } : {}),
@@ -120,7 +123,7 @@ function toFileRules(db: Database): SettingsFileRule[] {
 
 /** The list views that differ from the defaults, each entry named as the file names it, the defaults left out. */
 function toFileListViews(db: Database): SettingsFileListView[] {
-  return listViewEntries(db).map(({ target, sort }) => {
+  return listViewEntries(db).map(({ target, sort, format }) => {
     const list: SettingsFileListViewTarget =
       target.list === "category"
         ? { category: findCategory(db, target.categoryId)!.slug }
@@ -129,12 +132,25 @@ function toFileListViews(db: Database): SettingsFileListView[] {
           : target.list === "feed"
             ? { feed: findFeed(db, target.feedId)!.url }
             : target.list;
-    return { list, ...(sort === "newest" ? {} : { sort }) };
+    return { list, ...(sort === "newest" ? {} : { sort }), ...(format === "standard" ? {} : { format }) };
   });
 }
 
+/** The saved searches in their order, each narrowing named as the file names it, and left out when there is none. */
+function toFileSavedSearches(db: Database): SettingsFileSavedSearch[] {
+  return listSavedSearches(db).map((saved) => ({
+    name: saved.name,
+    query: saved.query,
+    ...(saved.categoryId !== null
+      ? { scope: { category: findCategory(db, saved.categoryId)!.slug } }
+      : saved.feedId !== null
+        ? { scope: { feed: findFeed(db, saved.feedId)!.url } }
+        : {}),
+  }));
+}
+
 /**
- * Writes categories, topics, subscribed feeds, filters, term groups, list views, reader information and global settings as YAML.
+ * Writes categories, topics, subscribed feeds, filters, term groups, list views, saved searches, reader information and global settings as YAML.
  * Holds no secrets, no articles and no fetch state.
  */
 export function exportSettings(db: Database): string {
@@ -147,6 +163,7 @@ export function exportSettings(db: Database): string {
   const rules = toFileRules(db);
   const termGroups = listTermGroups(db).map((group) => ({ name: group.name, color: group.color, terms: group.terms.map((term) => term.text) }));
   const listViews = toFileListViews(db);
+  const savedSearches = toFileSavedSearches(db);
   const file: SettingsFileInput = {
     version: 1,
     settings: getSettings(db),
@@ -175,6 +192,7 @@ export function exportSettings(db: Database): string {
     ...(rules.length > 0 ? { rules } : {}),
     ...(termGroups.length > 0 ? { termGroups } : {}),
     ...(listViews.length > 0 ? { listViews } : {}),
+    ...(savedSearches.length > 0 ? { savedSearches } : {}),
   };
   return stringify(file, { lineWidth: 0 });
 }
@@ -236,6 +254,8 @@ function importSubscriptions(
             ...(entry.translate !== undefined ? { translate: entry.translate } : {}),
             // Likewise full content: only articles stored from now on have it fetched.
             ...(entry.fetchFullContent !== undefined ? { fetchFullContent: entry.fetchFullContent } : {}),
+            // A changed one forgets the full content of the feed's unread articles, as a change in the apps does.
+            ...(entry.contentSelector !== undefined ? { contentSelector: entry.contentSelector } : {}),
             ...(entry.topicSource !== undefined ? { topicSource: entry.topicSource } : {}),
             ...(entry.selectors !== undefined ? { selectors: entry.selectors } : {}),
           },
@@ -256,6 +276,7 @@ function importSubscriptions(
           autoSummarize: entry.autoSummarize,
           translate: entry.translate,
           fetchFullContent: entry.fetchFullContent,
+          contentSelector: entry.contentSelector,
           topicSource: entry.topicSource,
           format,
           selectors: entry.selectors,
@@ -398,7 +419,7 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
     if (entry.sort !== undefined && !sortAllowed(target, entry.sort)) {
       throw refuseAt(`listViews.${index}.sort`, "only the starred articles can be in the order by star time", "not_allowed");
     }
-    const patch = entry.sort === undefined ? {} : { sort: entry.sort };
+    const patch = { ...(entry.sort === undefined ? {} : { sort: entry.sort }), ...(entry.format === undefined ? {} : { format: entry.format }) };
     checkListViewTarget(db, target, patch);
     setListView(db, target, patch);
     result.listViewsUpdated += 1;
@@ -406,8 +427,49 @@ function importListViews(db: Database, file: SettingsFile, result: ImportResult)
 }
 
 /**
+ * Stores the saved searches of the file, once its categories and feeds are stored: a category is tied to the
+ * one of that slug, a feed to the one of that URL, on the server. One with the same name, words and narrowing
+ * is used as it is; the others are saved. The searches of the file come first, in its order, and the others
+ * follow. A narrowing found nowhere refuses the file.
+ */
+function importSavedSearches(db: Database, file: SettingsFile, result: ImportResult, clock: Clock): void {
+  const listed: number[] = [];
+  file.savedSearches.forEach((entry, index) => {
+    const path = `savedSearches.${index}.scope`;
+    let narrowing: { categoryId?: number; feedId?: number } = {};
+    if (entry.scope !== undefined && "category" in entry.scope) {
+      const category = findCategoryBySlug(db, entry.scope.category);
+      if (!category) throw refuseAt(`${path}.category`, `no category "${entry.scope.category}" in the file or on the server`);
+      narrowing = { categoryId: category.id };
+    } else if (entry.scope !== undefined) {
+      const feed = findFeedByUrl(db, entry.scope.feed);
+      if (!feed) throw refuseAt(`${path}.feed`, `no feed ${entry.scope.feed} in the file or on the server`);
+      narrowing = { feedId: feed.id };
+    }
+    const name = entry.name.trim();
+    const query = entry.query.trim();
+    const same = listSavedSearches(db).find(
+      (saved) =>
+        !listed.includes(saved.id) &&
+        saved.name === name &&
+        saved.query === query &&
+        saved.categoryId === (narrowing.categoryId ?? null) &&
+        saved.feedId === (narrowing.feedId ?? null),
+    );
+    if (same) {
+      listed.push(same.id);
+      return;
+    }
+    listed.push(createSavedSearch(db, { name, query, ...narrowing }, clock).id);
+    result.savedSearchesCreated += 1;
+  });
+  if (listed.length > 0) orderSavedSearches(db, listed);
+}
+
+/**
  * Applies a settings file. Categories are matched by slug, topics by text, subscribed feeds by URL,
- * filters by action, scope and conditions, term groups by name, and list views by their entry; whatever the file does not mention stays
+ * filters by action, scope and conditions, term groups by name, list views by their entry, and saved searches
+ * by name, words and narrowing; whatever the file does not mention stays
  * as it is. Nothing is stored when any part of the file is refused.
  */
 export function importSettings(db: Database, text: string, clock: Clock): ImportResult {
@@ -424,6 +486,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     termGroupsCreated: 0,
     highlightTermsCreated: 0,
     listViewsUpdated: 0,
+    savedSearchesCreated: 0,
   };
   transaction(db, () => {
     if (file.settings) updateSettings(db, file.settings);
@@ -478,6 +541,7 @@ export function importSettings(db: Database, text: string, clock: Clock): Import
     importRules(db, file, result, clock);
     importTermGroups(db, file, result, clock);
     importListViews(db, file, result);
+    importSavedSearches(db, file, result, clock);
   });
   return result;
 }

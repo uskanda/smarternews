@@ -1198,6 +1198,39 @@ describe("what a follow-up added", () => {
   });
 });
 
+describe("marking all as read and events", () => {
+  const event = (key: string, endsAt: string) => ({
+    key,
+    startsAt: "2026-02-01T00:00:00.000Z",
+    endsAt,
+    venue: null,
+    fee: null,
+    registration: "unknown" as const,
+  });
+
+  function events() {
+    const db = createTestDb();
+    const category = createCategory(db, { name: "Meetups", kind: "event" }, fakeClock(NOW));
+    const ended = generated(db, category.id, { event: event("ended", "2026-02-28T00:00:00.000Z") });
+    const ending = generated(db, category.id, { event: event("ending", NOW) });
+    const coming = generated(db, category.id, { event: event("coming", "2026-03-05T00:00:00.000Z") });
+    return { db, category: category.id, ended, ending, coming };
+  }
+
+  it("leaves the events that have ended unread, as no list shows them", () => {
+    const s = events();
+    expect(markArticlesRead(s.db, { categoryId: s.category, before: "2026-03-02T00:00:00.000Z" }, NOW)).toEqual([s.ending, s.coming]);
+    expect(getArticle(s.db, s.ended).isRead).toBe(false);
+  });
+
+  it("leaves them unread when the range is everything too", () => {
+    const s = events();
+    expect(markArticlesRead(s.db, { before: "2026-03-02T00:00:00.000Z" }, NOW)).toEqual([s.ending, s.coming]);
+    expect(getArticle(s.db, s.ended).isRead).toBe(false);
+    expect(getCounts(s.db, NOW).unread).toBe(0);
+  });
+});
+
 describe("starred stories", () => {
   const DAY = 86_400_000;
   const content = { title: "t", summary: "s", body: "b", impact: null, importance: 3, unconfirmed: false, snippetOnly: false, event: null };

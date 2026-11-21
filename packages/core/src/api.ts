@@ -8,7 +8,7 @@ import { MAX_MENTION_NAME_CHARS, mentionKey, mentionSchema } from "./mentions.ts
 
 // The kinds of refusal of a field, which the apps word in their own language.
 export { FIELD_ERROR_CODES, FIELD_ERROR_UNITS, type FieldErrorCode, type FieldErrorUnit } from "./errors.ts";
-import { charCount } from "./search/text.ts";
+import { charCount, MAX_QUERY_CHARS } from "./search/text.ts";
 
 // Normalizing and matching search terms: the apps mark matches as the server finds them.
 export * from "./search/text.ts";
@@ -46,6 +46,7 @@ export const TOPIC_QUERY_MAX_CHARS = 200;
 export const TOPIC_QUERIES_MAX = 8;
 export const TERM_GROUP_NAME_MAX_CHARS = 100;
 export const HIGHLIGHT_TERM_MAX_CHARS = 100;
+export const SAVED_SEARCH_NAME_MAX_CHARS = 100;
 export const FEED_TITLE_MAX_CHARS = 200;
 
 const importanceSchema = z.number().int().min(IMPORTANCE_MIN).max(IMPORTANCE_MAX);
@@ -870,6 +871,11 @@ export const countsSchema = z.object({
     }),
   ),
   feeds: z.array(z.object({ feedId: z.number().int(), unread: z.number().int() })),
+  /**
+   * Per saved search, how many results it has opened unread only: ended events included, as in a search.
+   * Empty from a server without saved searches.
+   */
+  savedSearches: z.array(z.object({ id: z.number().int(), unread: z.number().int() })).default([]),
 });
 export type Counts = z.infer<typeof countsSchema>;
 
@@ -906,10 +912,19 @@ export function listViewKey(target: ListViewTarget): string {
 }
 
 /**
- * How one entry shows its articles. An entry the server does not answer has every default: newest first. Only
- * the entry of starred articles can be in the order by star time.
+ * The format of an article list on the web: `standard`, three lines a row beside the article pane; `compact`,
+ * the title alone on one line beside the article pane; `expanded`, each article in full, one after another,
+ * without the article pane. The Android app shows every list in its own format and keeps this one as it is.
  */
-export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema });
+export const listFormatSchema = z.enum(["standard", "compact", "expanded"]);
+export type ListFormat = z.infer<typeof listFormatSchema>;
+
+/**
+ * How one entry shows its articles. An entry the server does not answer has every default: newest first, in the
+ * standard format. Only the entry of starred articles can be in the order by star time. A view stored before
+ * there were formats is answered in the standard format.
+ */
+export const listViewSchema = z.object({ key: z.string(), sort: listSortSchema, format: listFormatSchema.default("standard") });
 export type ListView = z.infer<typeof listViewSchema>;
 
 /** The entries whose view differs from the defaults. */
@@ -917,7 +932,7 @@ export const listViewsSchema = z.object({ items: z.array(listViewSchema) });
 export type ListViews = z.infer<typeof listViewsSchema>;
 
 /** A change to one entry's view. What is left out stays as it is. */
-export const listViewUpdateSchema = z.object({ sort: listSortSchema }).partial();
+export const listViewUpdateSchema = z.object({ sort: listSortSchema, format: listFormatSchema }).partial();
 export type ListViewUpdate = z.infer<typeof listViewUpdateSchema>;
 
 // ---- subscribed feeds --------------------------------------------------------------------------
@@ -987,6 +1002,11 @@ export const feedSchema = z.object({
   /** Whether the full content of the articles this feed delivers from now on is fetched from their pages. */
   fetchFullContent: z.boolean(),
   /**
+   * The element of an article's page that holds its body, for full content and for the summaries that read the
+   * page. Null means Readability finds it; so it does on a page where the selector matches nothing.
+   */
+  contentSelector: z.string().nullable(),
+  /**
    * Whether runs of the feed's category offer its articles to the judge as candidates of the category's topics.
    * Only a feed of a category can have it on.
    */
@@ -1000,6 +1020,12 @@ export const feedSchema = z.object({
    * other answer. The feed stays enabled.
    */
   goneAt: z.string().nullable(),
+  /**
+   * The URL the feed had before permanent redirects replaced it, and when that happened. Null until then, and
+   * again once the URL changes another way.
+   */
+  movedFrom: z.string().nullable(),
+  movedAt: z.string().nullable(),
   /** When the feed is fetched next, no earlier than a Retry-After of the last failure asked. Null while it is disabled. */
   nextFetchAt: z.string().nullable(),
   /**
@@ -1054,6 +1080,8 @@ const feedFields = z.object({
   autoSummarize: z.boolean().optional(),
   translate: z.boolean().optional(),
   fetchFullContent: z.boolean().optional(),
+  /** Null takes it away. A change of it forgets the full content of the feed's unread articles. */
+  contentSelector: cssSelectorSchema.nullable().optional(),
   topicSource: z.boolean().optional(),
 });
 
@@ -1070,8 +1098,11 @@ export const feedCreateSchema = feedFields
   });
 export type FeedCreate = z.infer<typeof feedCreateSchema>;
 
-/** A change to a subscription. The format never changes; selectors are taken only by a web feed. */
-export const feedUpdateSchema = feedFields.omit({ url: true }).extend({ selectors: pageSelectorsSchema.optional() });
+/**
+ * A change to a subscription. The format never changes; selectors are taken only by a web feed. A new URL is
+ * checked the way a subscription is: it is fetched first, and nothing is stored unless it reads.
+ */
+export const feedUpdateSchema = feedFields.partial({ url: true }).extend({ selectors: pageSelectorsSchema.optional() });
 export type FeedUpdate = z.infer<typeof feedUpdateSchema>;
 
 /** Where a category goes: before another one, or last. */
@@ -1118,6 +1149,36 @@ export const pageCandidatesSchema = z.object({
   fallback: selectorFallbackSchema.nullable(),
 });
 export type PageCandidates = z.infer<typeof pageCandidatesSchema>;
+
+/** A content selector to try on a feed's newest article, or null for what Readability finds. */
+export const contentPreviewRequestSchema = z.object({ contentSelector: cssSelectorSchema.nullable() });
+export type ContentPreviewRequest = z.infer<typeof contentPreviewRequestSchema>;
+
+/** The characters of the converted body a content preview shows at most. */
+export const CONTENT_PREVIEW_CHARS = 1000;
+
+const contentPreviewArticleSchema = z.object({ id: z.number().int(), title: z.string(), url: z.string() });
+
+/**
+ * What a content selector takes out of the page of a feed's newest article with a URL: nothing when the feed
+ * has no such article, why when the page could not be read, or the start of the body as full content would
+ * store it. `matched` is false when the selector matched no element with text, and the body is Readability's.
+ * `chars` counts the whole body; `shorter` is true when it is shorter than what the feed delivered, which full
+ * content would refuse.
+ */
+export const contentPreviewSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("no-article") }),
+  z.object({ status: z.literal("failed"), article: contentPreviewArticleSchema, error: fullContentErrorSchema }),
+  z.object({
+    status: z.literal("ok"),
+    article: contentPreviewArticleSchema,
+    matched: z.boolean(),
+    markdown: z.string(),
+    chars: z.number().int(),
+    shorter: z.boolean(),
+  }),
+]);
+export type ContentPreview = z.infer<typeof contentPreviewSchema>;
 
 /** What one fetch of a feed did, and the feed as it is afterwards. */
 export const feedFetchResultSchema = z.object({
@@ -1334,6 +1395,52 @@ export type TermGroupMove = z.infer<typeof termGroupMoveSchema>;
 
 export const highlightTermCreateSchema = z.object({ text: highlightTermTextSchema });
 export type HighlightTermCreate = z.infer<typeof highlightTermCreateSchema>;
+
+// ---- saved searches ----------------------------------------------------------------------------
+
+const savedSearchNameSchema = z.string().trim().min(1, "a name is required").max(SAVED_SEARCH_NAME_MAX_CHARS);
+/** The words of a saved search, as a search takes them: not empty, at most 200 characters. */
+const savedSearchQuerySchema = z.string().superRefine((query, context) => {
+  if (query.trim().length === 0) context.addIssue({ code: "custom", message: "is empty", params: { code: "required" } });
+  else if (charCount(query.trim()) > MAX_QUERY_CHARS) {
+    context.addIssue({ code: "custom", message: `is too long: at most ${MAX_QUERY_CHARS} characters`, params: { code: "too_big" } });
+  }
+});
+
+/**
+ * The words of a search with at most one narrowing, under a name, in the order of the left pane. Whether only
+ * unread articles count is not part of it: the list opens unread only.
+ */
+export const savedSearchSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  query: z.string(),
+  categoryId: z.number().int().nullable(),
+  feedId: z.number().int().nullable(),
+});
+export type SavedSearch = z.infer<typeof savedSearchSchema>;
+
+export const savedSearchCreateSchema = z
+  .object({
+    name: savedSearchNameSchema,
+    query: savedSearchQuerySchema,
+    categoryId: z.number().int().optional(),
+    feedId: z.number().int().optional(),
+  })
+  .refine((input) => input.categoryId === undefined || input.feedId === undefined, {
+    message: "narrow to a category or to a feed, not both",
+    path: ["feedId"],
+    params: { code: "not_allowed" },
+  });
+export type SavedSearchCreate = z.infer<typeof savedSearchCreateSchema>;
+
+/** Only the name changes: a search with other words or another narrowing is saved anew. */
+export const savedSearchUpdateSchema = z.object({ name: savedSearchNameSchema });
+export type SavedSearchUpdate = z.infer<typeof savedSearchUpdateSchema>;
+
+/** Where a saved search goes: before another one, or last. */
+export const savedSearchMoveSchema = z.object({ before: z.number().int().nullable() });
+export type SavedSearchMove = z.infer<typeof savedSearchMoveSchema>;
 
 // ---- runs --------------------------------------------------------------------------------------
 
@@ -1831,6 +1938,8 @@ const settingsFileSubscriptionSchema = z.object({
   translate: z.boolean().optional(),
   /** Left out, a new feed does not fetch full content and a known one keeps what it has. */
   fetchFullContent: z.boolean().optional(),
+  /** Left out, a new feed has none and a known one keeps what it has. */
+  contentSelector: cssSelectorSchema.optional(),
   /** Left out, a new feed is no topic source and a known one keeps what it has. */
   topicSource: z.boolean().optional(),
   /** The selectors of a web feed. Written for a web feed only: a subscription without them is a feed. */
@@ -1910,8 +2019,20 @@ export type SettingsFileListViewTarget = z.infer<typeof settingsFileListViewTarg
 const settingsFileListViewSchema = z.object({
   list: settingsFileListViewTargetSchema,
   sort: listSortSchema.optional(),
+  format: listFormatSchema.optional(),
 });
 export type SettingsFileListView = z.infer<typeof settingsFileListViewSchema>;
+
+/**
+ * A saved search in the file: its narrowing, a category by its slug or a feed by its URL, as a filter's scope
+ * names them, and left out for a search over every article.
+ */
+const settingsFileSavedSearchSchema = z.object({
+  name: savedSearchNameSchema,
+  query: savedSearchQuerySchema,
+  scope: z.union([z.object({ category: slugSchema }).strict(), z.object({ feed: feedUrlSchema }).strict()]).optional(),
+});
+export type SettingsFileSavedSearch = z.infer<typeof settingsFileSavedSearchSchema>;
 
 export const settingsFileSchema = z.object({
   version: z.literal(1),
@@ -1928,6 +2049,8 @@ export const settingsFileSchema = z.object({
   termGroups: z.array(settingsFileTermGroupSchema).default([]),
   /** The entries whose list view differs from the defaults. Left out when there are none. */
   listViews: z.array(settingsFileListViewSchema).default([]),
+  /** In the order of the left pane. Left out when there are none. */
+  savedSearches: z.array(settingsFileSavedSearchSchema).default([]),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 /** The file as it is written: lists that are empty may be left out. */
@@ -1946,6 +2069,8 @@ export const importResultSchema = z.object({
   highlightTermsCreated: z.number().int(),
   /** The entries of `listViews` that were applied. */
   listViewsUpdated: z.number().int(),
+  /** Absent from a server without saved searches. */
+  savedSearchesCreated: z.number().int().default(0),
 });
 export type ImportResult = z.infer<typeof importResultSchema>;
 

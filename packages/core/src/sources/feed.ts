@@ -54,40 +54,54 @@ function atomLink(link: unknown): string {
   return String((alternate ?? links[0])?.["@_href"] ?? "").trim();
 }
 
-function rssItem(item: Node): FeedItem {
+/**
+ * The guid of an RSS item as the address of its page: only when it is a permalink, as RSS 2.0 takes every guid
+ * not marked `isPermaLink="false"`, and an HTTP or HTTPS address. Empty otherwise.
+ */
+function permalinkOf(guid: unknown): string {
+  if (guid && typeof guid === "object" && String((guid as Node)["@_isPermaLink"] ?? "").trim().toLowerCase() === "false") return "";
+  const text = textOf(guid).trim();
+  return /^https?:\/\/[^\s]+$/i.test(text) && URL.canParse(text) ? text : "";
+}
+
+/** The time zone a date without an offset is read in, when the caller gives none. */
+const DEFAULT_TIME_ZONE = "UTC";
+
+function rssItem(item: Node, timeZone: string): FeedItem {
   return {
     title: plainTitle(textOf(item.title)),
-    url: rssLink(item.link),
+    url: rssLink(item.link) || permalinkOf(item.guid),
     snippet: plainText(textOf(item.description)),
-    publishedAt: parseDate(textOf(item.pubDate)) ?? parseDate(textOf(item["dc:date"])),
+    publishedAt: parseDate(textOf(item.pubDate), timeZone) ?? parseDate(textOf(item["dc:date"]), timeZone),
   };
 }
 
-function atomEntry(entry: Node): FeedItem {
+function atomEntry(entry: Node, timeZone: string): FeedItem {
   return {
     title: plainTitle(textOf(entry.title)),
     url: atomLink(entry.link),
     snippet: plainText(textOf(entry.summary) || textOf(entry.content)),
-    publishedAt: parseDate(textOf(entry.published)) ?? parseDate(textOf(entry.updated)),
+    publishedAt: parseDate(textOf(entry.published), timeZone) ?? parseDate(textOf(entry.updated), timeZone),
   };
 }
 
-/** Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed. */
-export function parseFeed(xml: string): ParsedFeed {
-  const json = parseJsonFeed(xml);
+/** Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed. A date without an offset is read in `timeZone`. */
+export function parseFeed(xml: string, timeZone: string = DEFAULT_TIME_ZONE): ParsedFeed {
+  const json = parseJsonFeed(xml, null, timeZone);
   if (json) return { title: json.title, items: json.items.map(({ title, url, snippet, publishedAt }) => ({ title, url, snippet, publishedAt })) };
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
-  if (rss) return { title: plainText(textOf(rss.title), 200), items: ((rss.item as Node[] | undefined) ?? []).map(rssItem) };
+  const readItem = (item: Node) => rssItem(item, timeZone);
+  if (rss) return { title: plainText(textOf(rss.title), 200), items: ((rss.item as Node[] | undefined) ?? []).map(readItem) };
   const rdf = root["rdf:RDF"] as Node | undefined;
   if (rdf) {
     return {
       title: plainText(textOf((rdf.channel as Node | undefined)?.title), 200),
-      items: ((rdf.item as Node[] | undefined) ?? []).map(rssItem),
+      items: ((rdf.item as Node[] | undefined) ?? []).map(readItem),
     };
   }
   const atom = root.feed as Node | undefined;
-  if (atom) return { title: plainText(textOf(atom.title), 200), items: ((atom.entry as Node[] | undefined) ?? []).map(atomEntry) };
+  if (atom) return { title: plainText(textOf(atom.title), 200), items: ((atom.entry as Node[] | undefined) ?? []).map((entry) => atomEntry(entry, timeZone)) };
   throw new Error("the document is not a feed");
 }
 
@@ -228,16 +242,17 @@ function mediaTitle(node: Node): string | null {
 }
 
 /**
- * The files an item attaches: its enclosures, then the media:content of the item and of its media:group, then
- * their media:thumbnail. Relative addresses are resolved against `base`, the item's page. An address that is
- * not HTTP or HTTPS, is too long, or was listed before is left out.
+ * The files an item attaches: its enclosures, RSS ones and then the Atom links of rel "enclosure", then the
+ * media:content of the item and of its media:group, then their media:thumbnail. Relative addresses are
+ * resolved against `base`, the item's page. An address that is not HTTP or HTTPS, is too long, or was listed
+ * before is left out.
  */
 function attachmentsOf(item: Node, base: string | null): FeedAttachment[] {
   const attachments: FeedAttachment[] = [];
   const seen = new Set<string>();
-  const add = (node: Node, attachment: Omit<FeedAttachment, "url">) => {
+  const add = (node: Node, attachment: Omit<FeedAttachment, "url">, attribute = "url") => {
     if (attachments.length >= MAX_ATTACHMENTS) return;
-    const url = absoluteUrl(attributeOf(node, "url"), base);
+    const url = absoluteUrl(attributeOf(node, attribute), base);
     if (url === null || url.length > MAX_ATTACHMENT_URL_CHARS || seen.has(url)) return;
     seen.add(url);
     attachments.push({ url, ...attachment });
@@ -250,6 +265,11 @@ function attachmentsOf(item: Node, base: string | null): FeedAttachment[] {
   for (const enclosure of nodesOf(item.enclosure)) {
     const mimeType = orNull(attributeOf(enclosure, "type").toLowerCase());
     add(enclosure, { kind: kindOf("", mimeType), mimeType, size: sizeOf(attributeOf(enclosure, "length")), title: null, thumbnail: false });
+  }
+  for (const link of nodesOf(item.link).filter((node) => attributeOf(node, "rel").toLowerCase() === "enclosure")) {
+    const mimeType = orNull(attributeOf(link, "type").toLowerCase());
+    const title = orNull(plainText(attributeOf(link, "title"), 200));
+    add(link, { kind: kindOf("", mimeType), mimeType, size: sizeOf(attributeOf(link, "length")), title, thumbnail: false }, "href");
   }
   const contents = scopes.flatMap((scope) => nodesOf(scope.node["media:content"]).map((node) => ({ node, title: mediaTitle(node) ?? scope.title })));
   for (const { node, title } of contents) {
@@ -315,8 +335,8 @@ function mediaOf(item: Node, url: string, contentHtml: string, feedUrl: string |
   return { attachments: attachmentsOf(item, base), description: contentHtml.length > 0 ? null : descriptionOf(item) };
 }
 
-function rssSubscriptionItem(item: Node, feedUrl: string | null): SubscriptionItem {
-  const read = rssItem(item);
+function rssSubscriptionItem(item: Node, feedUrl: string | null, timeZone: string): SubscriptionItem {
+  const read = rssItem(item, timeZone);
   const contentHtml = (textOf(item["content:encoded"]) || textOf(item.description)).trim();
   return {
     ...read,
@@ -375,7 +395,7 @@ function jsonAuthor(item: Node): string | null {
   return orNull(plainTitle(stringOf((first as Node).name), 200));
 }
 
-function jsonItem(item: Node): SubscriptionItem {
+function jsonItem(item: Node, timeZone: string): SubscriptionItem {
   const summary = stringOf(item.summary).trim();
   const text = stringOf(item.content_text);
   const html = stringOf(item.content_html);
@@ -386,7 +406,7 @@ function jsonItem(item: Node): SubscriptionItem {
     title: plainTitle(stringOf(item.title)),
     url: (stringOf(item.url) || stringOf(item.external_url)).trim(),
     snippet,
-    publishedAt: parseDate(item.date_published) ?? parseDate(item.date_modified),
+    publishedAt: parseDate(item.date_published, timeZone) ?? parseDate(item.date_modified, timeZone),
     key: orNull(id),
     author: jsonAuthor(item),
     contentHtml: html.trim().length > 0 ? html.trim() : textAsHtml(text),
@@ -399,8 +419,11 @@ function jsonItem(item: Node): SubscriptionItem {
   };
 }
 
-/** A JSON Feed read in full, or null when the text is not one. `feedUrl` resolves a relative favicon. */
-export function parseJsonFeed(text: string, feedUrl: string | null = null): ParsedSubscription | null {
+/**
+ * A JSON Feed read in full, or null when the text is not one. `feedUrl` resolves a relative favicon. A date
+ * without an offset is read in `timeZone`.
+ */
+export function parseJsonFeed(text: string, feedUrl: string | null = null, timeZone: string = DEFAULT_TIME_ZONE): ParsedSubscription | null {
   if (!text.trimStart().startsWith("{")) return null;
   let root: unknown;
   try {
@@ -416,17 +439,17 @@ export function parseJsonFeed(text: string, feedUrl: string | null = null): Pars
     siteUrl: siteLink(feed.home_page_url, (link) => stringOf(link).trim()),
     // `icon` is a picture of 512 by 512 for a list of feeds; `favicon` is the one for a small place.
     iconUrl: absoluteUrl(stringOf(feed.favicon).trim(), feedUrl),
-    items: items.map(jsonItem),
+    items: items.map((item) => jsonItem(item, timeZone)),
   };
 }
 
 /**
  * Reads RSS 2.0, RSS 1.0 (RDF), Atom and JSON Feed with everything a reader shows: identifier, author, content,
  * feed categories and, but for JSON Feed, attachments. `feedUrl`, the address the document came from, resolves the
- * relative pages of items. It also resolves a relative icon.
+ * relative pages of items. It also resolves a relative icon. A date without an offset is read in `timeZone`.
  */
-export function parseSubscription(xml: string, feedUrl: string | null = null): ParsedSubscription {
-  const json = parseJsonFeed(xml, feedUrl);
+export function parseSubscription(xml: string, feedUrl: string | null = null, timeZone: string = DEFAULT_TIME_ZONE): ParsedSubscription {
+  const json = parseJsonFeed(xml, feedUrl, timeZone);
   if (json) return json;
   const root = parseXml(xml);
   const rss = (root.rss as Node | undefined)?.channel as Node | undefined;
@@ -435,7 +458,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
       title: plainText(textOf(rss.title), 200),
       siteUrl: siteLink(rss.link, rssLink),
       iconUrl: null,
-      items: ((rss.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl)),
+      items: ((rss.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl, timeZone)),
     };
   }
   const rdf = root["rdf:RDF"] as Node | undefined;
@@ -445,7 +468,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
       title: plainText(textOf(channel?.title), 200),
       siteUrl: siteLink(channel?.link, rssLink),
       iconUrl: null,
-      items: ((rdf.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl)),
+      items: ((rdf.item as Node[] | undefined) ?? []).map((item) => rssSubscriptionItem(item, feedUrl, timeZone)),
     };
   }
   const atom = root.feed as Node | undefined;
@@ -458,7 +481,7 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
       siteUrl: siteLink(atom.link, atomLink),
       iconUrl: absoluteUrl(textOf(atom.icon).trim(), feedUrl),
       items: entries.map((entry, index) => {
-        const read = atomEntry(entry);
+        const read = atomEntry(entry, timeZone);
         const contentHtml = atomContent(entry, rawEntries[index]);
         return {
           ...read,
@@ -474,15 +497,22 @@ export function parseSubscription(xml: string, feedUrl: string | null = null): P
   throw new Error("the document is not a feed");
 }
 
+/** A feed or a feed of search results, fetched under the size limit of feeds. */
 export async function fetchXml(fetcher: Fetcher, url: string): Promise<string> {
-  const response = await fetcher.get(url, { headers: { accept: "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*"} });
+  const response = await fetcher.get(url, {
+    headers: { accept: "application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*" },
+    maxBytes: fetcher.feedMaxBytes,
+  });
   if (response.status < 200 || response.status >= 300) throw new Error(`HTTP status ${response.status}: ${url}`);
   return response.text;
 }
 
-/** Candidates from one feed. Items older than `since` are left out; items without a date are kept. */
-export async function collectFeed(fetcher: Fetcher, feedUrl: string, since: Date | null): Promise<RawCandidate[]> {
-  const feed = parseFeed(await fetchXml(fetcher, feedUrl));
+/**
+ * Candidates from one feed. Items older than `since` are left out; items without a date are kept. A date
+ * without an offset is read in `timeZone`.
+ */
+export async function collectFeed(fetcher: Fetcher, feedUrl: string, since: Date | null, timeZone: string = DEFAULT_TIME_ZONE): Promise<RawCandidate[]> {
+  const feed = parseFeed(await fetchXml(fetcher, feedUrl), timeZone);
   const candidates: RawCandidate[] = [];
   for (const item of feed.items) {
     if (item.url.length === 0 || item.title.length === 0) continue;

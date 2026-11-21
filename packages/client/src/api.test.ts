@@ -152,7 +152,7 @@ describe("the API client", () => {
     server.category("Security");
     const text = await api.exportSettings();
     expect(text).toContain("slug: security");
-    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
+    await expect(api.importSettings(text)).resolves.toEqual({ categoriesCreated: 0, categoriesUpdated: 1, topicsCreated: 0, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0, savedSearchesCreated: 0 });
   });
 
   it("subscribes to a feed, changes it, fetches it now and deletes it", async () => {
@@ -168,6 +168,9 @@ describe("the API client", () => {
     expect(feed).toMatchObject({ title: "Blog", articleCount: 1 });
     expect(await api.feeds()).toHaveLength(1);
     expect((await api.updateFeed(feed.id, { title: "Mine", enabled: false })).title).toBe("Mine");
+    const https = "https://www.example.org/feed.xml";
+    server.site.set(https, `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><item><title>One</title><guid>1</guid><link>https://blog.example.org/1</link></item></channel></rss>`);
+    expect(await api.updateFeed(feed.id, { url: https })).toMatchObject({ url: https, articleCount: 1, movedFrom: null });
     expect(await api.fetchFeed(feed.id)).toMatchObject({ status: "updated", created: 0, feed: { id: feed.id } });
     // The feed is paused, so a fetch of all asks for nothing.
     expect(await api.fetchAllFeeds()).toEqual({ requested: 0, skipped: 0, requestedAt: server.clock().toISOString() });
@@ -339,6 +342,25 @@ describe("the API client", () => {
     expect(sent().body).toEqual({ url: page, format: "page", selectors: { item: "li.post" }, fetchFullContent: true });
     expect(feed).toMatchObject({ format: "page", selectors: { item: "li.post" } });
     expect((await api.updateFeed(feed.id, { selectors: { item: "li.post", date: "time" } })).selectors).toEqual({ item: "li.post", date: "time" });
+  });
+
+  it("changes the content selector of a feed and asks for a preview of it on the feed's path", async () => {
+    const { api, server, seen } = setup(API_TOKEN);
+    const page = "https://town.example.org/news";
+    server.site.set(page, () =>
+      new Response('<html><head><title>Town</title></head><body><ul><li class="post"><a href="/1">One story</a></li></ul></body></html>', {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const sent = () => ({ url: seen.at(-1)!.url, body: JSON.parse(String(seen.at(-1)!.body)) });
+    const feed = await api.createFeed({ url: page, format: "page", selectors: { item: "li.post" } });
+
+    expect((await api.updateFeed(feed.id, { contentSelector: "main .story" })).contentSelector).toBe("main .story");
+    expect(sent()).toEqual({ url: `/api/v1/feeds/${feed.id}`, body: { contentSelector: "main .story" } });
+
+    const preview = await api.contentPreview(feed.id, ".story");
+    expect(sent()).toEqual({ url: `/api/v1/feeds/${feed.id}/content-preview`, body: { contentSelector: ".story" } });
+    expect(preview).toMatchObject({ status: "failed", article: { title: "One story", url: "https://town.example.org/1" }, error: { reason: "http" } });
   });
 
   it("downloads the subscribed feeds as OPML and uploads the document back", async () => {
@@ -545,9 +567,10 @@ describe("list views", () => {
     expect(await api.listViews()).toEqual({ items: [] });
     expect(seen.at(-1)!.url).toBe("/api/v1/list-views");
 
-    expect(await api.updateListView("unread", { sort: "oldest" })).toEqual({ key: "unread", sort: "oldest" });
+    expect(await api.updateListView("unread", { sort: "oldest" })).toEqual({ key: "unread", sort: "oldest", format: "standard" });
     expect(seen.at(-1)!.url).toBe("/api/v1/list-views/unread");
-    expect(await api.listViews()).toEqual({ items: [{ key: "unread", sort: "oldest" }] });
+    expect(await api.updateListView("unread", { format: "compact" })).toEqual({ key: "unread", sort: "oldest", format: "compact" });
+    expect(await api.listViews()).toEqual({ items: [{ key: "unread", sort: "oldest", format: "compact" }] });
     await expect(api.updateListView("recently-read", { sort: "oldest" })).rejects.toMatchObject({ kind: "invalid" });
   });
 

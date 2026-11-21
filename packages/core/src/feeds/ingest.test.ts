@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { getArticle, insertArticle, listArticles, saveFullContent, searchArticles, setArticleFlags } from "../db/articles.ts";
 import { createCategory } from "../db/categories.ts";
 import { replaceMentions } from "../db/mentions.ts";
-import { getFeed, insertFeed, listFeeds, updateFeed } from "../db/feeds.ts";
+import { saveArticleNote } from "../db/annotations.ts";
+import { deleteFeed, getFeed, insertFeed, listFeeds, updateFeed } from "../db/feeds.ts";
+import { DomainError } from "../errors.ts";
 import { updateSettings } from "../db/settings.ts";
 import { createFilter } from "../db/filters.ts";
 import { createRule } from "../db/rules.ts";
@@ -17,7 +19,7 @@ import { fakeTranslator } from "../testing/translation.ts";
 import type { Translator } from "../translation/adapter.ts";
 import { LlmTranslator } from "../translation/llm.ts";
 import { TranslationService } from "../translation/service.ts";
-import { fetchFeed, MAX_NEW_ITEMS, subscribe } from "./ingest.ts";
+import { changeFeedUrl, fetchFeed, MAX_NEW_ITEMS, subscribe } from "./ingest.ts";
 
 const START = "2026-03-01T12:00:00.000Z";
 const HOUR = 3_600_000;
@@ -351,6 +353,70 @@ describe("fetchFeed", () => {
     await fetchFeed(s.deps, feed.id);
 
     expect(s.list().map((article) => article.title)).toEqual(["Release 2.0"]);
+  });
+});
+
+describe("reading what a feed delivers", () => {
+  const raw = (items: string) => () => xml(`<?xml version="1.0"?><rss version="2.0"><channel><title>Raw</title>${items}</channel></rss>`);
+
+  it("sorts by dates with abbreviated zones, and leaves out the old ones", async () => {
+    const s = setup(
+      raw(`
+        <item><title>Tokyo</title><link>https://example.org/t</link><guid>t</guid><pubDate>Sun, 01 Mar 2026 15:00:00 JST</pubDate></item>
+        <item><title>Paris</title><link>https://example.org/p</link><guid>p</guid><pubDate>Sun, 01 Mar 2026 09:00:00 CET</pubDate></item>
+        <item><title>Old</title><link>https://example.org/o</link><guid>o</guid><pubDate>Fri, 01 Mar 2024 09:00:00 JST</pubDate></item>
+        <item><title>India</title><link>https://example.org/i</link><guid>i</guid><pubDate>Fri, 01 Mar 2024 09:00:00 IST</pubDate></item>`),
+    );
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(s.list().map((article) => [article.title, article.firstPublishedAt])).toEqual([
+      ["India", START],
+      ["Paris", "2026-03-01T08:00:00.000Z"],
+      ["Tokyo", "2026-03-01T06:00:00.000Z"],
+    ]);
+  });
+
+  it("reads a date without an offset in the time zone of the settings", async () => {
+    const s = setup(raw(`<item><title>Local</title><link>https://example.org/l</link><guid>l</guid><dc:date xmlns:dc="http://purl.org/dc/elements/1.1/">2026-03-01T15:00:00</dc:date></item>`));
+    updateSettings(s.db, { timeZone: "Asia/Tokyo" });
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(s.list()[0]!.firstPublishedAt).toBe("2026-03-01T06:00:00.000Z");
+  });
+
+  it("decodes the named references of HTML in titles", async () => {
+    const s = setup([{ title: "Q1 &mdash; results&hellip;" }]);
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(s.list()[0]!.title).toBe("Q1 — results…");
+  });
+
+  it("takes the page of an item without a link from a guid that is a permalink", async () => {
+    const s = setup(
+      raw(`
+        <item><title>Permalink</title><guid>https://example.org/posts/1?utm_source=rss</guid></item>
+        <item><title>Not a permalink</title><guid isPermaLink="false">https://example.org/?p=2</guid></item>`),
+    );
+    await subscribe(s.deps, { url: FEED_URL });
+    expect(Object.fromEntries(s.list().map((article) => [article.title, article.primaryUrl]))).toEqual({
+      Permalink: "https://example.org/posts/1",
+      "Not a permalink": null,
+    });
+  });
+
+  it("subscribes to a feed larger than the limit of pages, up to the limit of feeds", async () => {
+    const items = Array.from({ length: 50 }, (_unused, index) => ({ title: `Episode ${index}`, key: `e${index}`, content: "x".repeat(200) }));
+    const body = rss(items);
+    const db = createTestDb();
+    const clock = fakeClock(START);
+    const fake = fakeFetch({ [FEED_URL]: () => xml(body) }, clock);
+    const limited = (feedMaxBytes: number) =>
+      new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 2048, feedMaxBytes, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+
+    await expect(subscribe({ db, clock, fetcher: limited(4096) }, { url: FEED_URL })).rejects.toMatchObject({
+      code: "invalid",
+      message: expect.stringMatching(/larger than 4096 bytes/),
+    });
+    const feed = await subscribe({ db, clock, fetcher: limited(1_000_000) }, { url: FEED_URL });
+    expect(getFeed(db, feed.id).articleCount).toBe(50);
+    expect(await fetchFeed({ db, clock, fetcher: limited(1_000_000) }, feed.id)).toMatchObject({ status: "updated" });
   });
 });
 
@@ -1617,5 +1683,331 @@ describe("a web feed", () => {
     for (const feed of feeds) await fetchFeed(s.deps, feed.id);
     expect(s.list().length).toBeGreaterThan(0);
     expect(s.llmCalls()).toBe(0);
+  });
+});
+
+const OLD_URL = "http://old.example.org/feed.xml";
+const NEW_URL = "https://new.example.org/feed.xml";
+const OTHER_URL = "https://other.example.org/feed.xml";
+const MID_URL = "https://mid.example.org/feed.xml";
+
+/** A feed at `OLD_URL` whose answer can be changed, and the same items at the other URLs. */
+function moveSetup() {
+  const db = createTestDb();
+  const clock = fakeClock(START);
+  const items: Item[] = [
+    { title: "First post", key: "k1", link: "/posts/1" },
+    { title: "Second post", key: "k2", link: "/posts/2" },
+  ];
+  let answer: () => Response = () => xml(rss(items));
+  const same = () => xml(rss(items));
+  const fake = fakeFetch({ [OLD_URL]: () => answer(), [NEW_URL]: same, [OTHER_URL]: same, [MID_URL]: same }, clock);
+  const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+  const deps = { db, clock, fetcher };
+  const llm = fakeLlm(db, clock, {});
+  return {
+    db,
+    clock,
+    deps,
+    requests: fake.requests,
+    llmCalls: () => Object.values(llm.requests).flat().length,
+    /** Answers the old URL with a redirect of this status to `location`. */
+    redirect(location: string, status = 301) {
+      answer = () => new Response(null, { status, headers: { location } });
+    },
+    respond(next: () => Response) {
+      answer = next;
+    },
+    async fetchTimes(feedId: number, times: number) {
+      for (let n = 0; n < times; n++) {
+        clock.advance(HOUR);
+        expect(await fetchFeed(deps, feedId)).not.toMatchObject({ status: "failed" });
+      }
+    },
+    list: () => listArticles(db, {}, clock().toISOString()).items,
+  };
+}
+
+describe("a feed that moved for good", () => {
+  it("takes the target of a permanent redirect as its URL at the third successful fetch in a row, and keeps its articles", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    const [first] = s.list();
+    setArticleFlags(s.db, first!.id, { starred: true }, START);
+    saveArticleNote(s.db, first!.id, "A note", START);
+    s.redirect(NEW_URL);
+
+    await s.fetchTimes(feed.id, 2);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: OLD_URL, movedFrom: null, movedAt: null });
+
+    await s.fetchTimes(feed.id, 1);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: NEW_URL, movedFrom: OLD_URL, movedAt: s.clock().toISOString(), lastError: null, starredCount: 1, annotatedCount: 1 });
+    expect(s.list()).toHaveLength(2);
+
+    // From then on the feed is asked at its new URL.
+    await s.fetchTimes(feed.id, 1);
+    expect(s.requests.at(-1)!.url).toBe(NEW_URL);
+    expect(s.list()).toHaveLength(2);
+    expect(s.llmCalls()).toBe(0);
+  });
+
+  it("starts counting again after a fetch that is not redirected", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 2);
+    s.respond(() => xml(rss([{ title: "First post", key: "k1" }])));
+    await s.fetchTimes(feed.id, 1);
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 2);
+    expect(getFeed(s.db, feed.id).url).toBe(OLD_URL);
+    await s.fetchTimes(feed.id, 1);
+    expect(getFeed(s.db, feed.id).url).toBe(NEW_URL);
+  });
+
+  it("starts counting again when the redirect leads elsewhere", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 2);
+    s.redirect(OTHER_URL);
+    await s.fetchTimes(feed.id, 1);
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 2);
+    expect(getFeed(s.db, feed.id).url).toBe(OLD_URL);
+  });
+
+  it("leaves the count as it is after a failed fetch", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 2);
+    s.respond(() => new Response("oops", { status: 500 }));
+    expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed" });
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 1);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: NEW_URL, movedFrom: OLD_URL, failureCount: 0 });
+  });
+
+  it("does not count a redirect to a target that is no feed: the fetch fails", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect("https://new.example.org/");
+    for (let n = 0; n < 3; n++) expect(await fetchFeed(s.deps, feed.id)).toMatchObject({ status: "failed" });
+    expect(getFeed(s.db, feed.id).url).toBe(OLD_URL);
+  });
+
+  it("counts a not-modified answer of the target as a success", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.deps.fetcher = new Fetcher({
+      userAgent: "t",
+      hostIntervalMs: 0,
+      timeoutMs: 1000,
+      maxBytes: 5_000_000,
+      fetchImpl: fakeFetch({
+        [OLD_URL]: () => new Response(null, { status: 301, headers: { location: `${NEW_URL}?unchanged` } }),
+        [NEW_URL]: () => new Response(null, { status: 304 }),
+      }).fetchImpl,
+      clock: s.clock,
+      sleep: async () => {},
+    });
+    await s.fetchTimes(feed.id, 3);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: `${NEW_URL}?unchanged`, movedFrom: OLD_URL });
+  });
+
+  it("takes the target of the permanent redirects before a temporary one", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.deps.fetcher = new Fetcher({
+      userAgent: "t",
+      hostIntervalMs: 0,
+      timeoutMs: 1000,
+      maxBytes: 5_000_000,
+      fetchImpl: fakeFetch({
+        [OLD_URL]: () => new Response(null, { status: 301, headers: { location: `${MID_URL}?step` } }),
+        [`${MID_URL}?step`]: () => new Response(null, { status: 302, headers: { location: NEW_URL } }),
+        [NEW_URL]: () => xml(rss([{ title: "First post", key: "k1" }])),
+      }).fetchImpl,
+      clock: s.clock,
+      sleep: async () => {},
+    });
+    await s.fetchTimes(feed.id, 3);
+    expect(getFeed(s.db, feed.id).url).toBe(`${MID_URL}?step`);
+  });
+
+  it("never follows a temporary redirect", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL, 302);
+    await s.fetchTimes(feed.id, 3);
+    s.redirect(NEW_URL, 307);
+    await s.fetchTimes(feed.id, 3);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: OLD_URL, movedFrom: null });
+  });
+
+  it("follows a 308 as it does a 301", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL, 308);
+    await s.fetchTimes(feed.id, 3);
+    expect(getFeed(s.db, feed.id).url).toBe(NEW_URL);
+  });
+
+  it("neither counts nor follows a redirect to the URL of another feed, and records the fetch as a success", async () => {
+    const s = moveSetup();
+    const other = await subscribe(s.deps, { url: NEW_URL });
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 4);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: OLD_URL, movedFrom: null, lastError: null, failureCount: 0 });
+    // Once the other feed is gone, counting starts from nothing.
+    deleteFeed(s.db, other.id);
+    await s.fetchTimes(feed.id, 2);
+    expect(getFeed(s.db, feed.id).url).toBe(OLD_URL);
+    await s.fetchTimes(feed.id, 1);
+    expect(getFeed(s.db, feed.id).url).toBe(NEW_URL);
+  });
+
+  it("follows the permanent redirect of a web feed only by fetches whose page gives articles", async () => {
+    const OLD_PAGE = "http://old.example.org/news/";
+    const NEW_PAGE = "https://new.example.org/news/";
+    const db = createTestDb();
+    const clock = fakeClock(START);
+    const list = (inner: string) => `<!doctype html><html><head><title>News</title></head><body><ul>${inner}</ul></body></html>`;
+    let target = list('<li class="post"><a href="/posts/1">Post 1</a></li>');
+    let old: () => Response = () => html(target);
+    const fake = fakeFetch(
+      { "http://old.example.org/robots.txt": () => new Response("", { status: 404 }), "https://new.example.org/robots.txt": () => new Response("", { status: 404 }), [OLD_PAGE]: () => old(), [NEW_PAGE]: () => html(target) },
+      clock,
+    );
+    const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+    const deps = { db, clock, fetcher };
+    const feed = await subscribe(deps, { url: OLD_PAGE, format: "page", selectors: { item: "li.post" } });
+    old = () => new Response(null, { status: 301, headers: { location: NEW_PAGE } });
+
+    await fetchFeed(deps, feed.id);
+    target = list("");
+    expect(await fetchFeed(deps, feed.id)).toMatchObject({ status: "failed" });
+    target = list('<li class="post"><a href="/posts/1">Post 1</a></li>');
+    await fetchFeed(deps, feed.id);
+    expect(getFeed(db, feed.id).url).toBe(OLD_PAGE);
+    await fetchFeed(deps, feed.id);
+    expect(getFeed(db, feed.id)).toMatchObject({ url: NEW_PAGE, movedFrom: OLD_PAGE });
+  });
+});
+
+describe("changing the URL of a feed", () => {
+  it("fetches the new URL, keeps the articles with their stars, notes and reading, and forgets what it knew of the old one", async () => {
+    const s = moveSetup();
+    s.respond(() => new Response(rss([{ title: "First post", key: "k1", link: "/posts/1" }, { title: "Second post", key: "k2", link: "/posts/2" }]), { headers: { "content-type": "application/xml", etag: '"old"' } }));
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    const [first, second] = s.list();
+    setArticleFlags(s.db, first!.id, { starred: true }, START);
+    saveArticleNote(s.db, first!.id, "A note", START);
+    setArticleFlags(s.db, second!.id, { isRead: true }, START);
+    s.respond(() => new Response("oops", { status: 410 }));
+    await fetchFeed(s.deps, feed.id);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ failureCount: 1 });
+
+    s.clock.advance(HOUR);
+    const changed = await changeFeedUrl(s.deps, feed.id, { url: NEW_URL, title: "Moved blog" });
+
+    expect(changed).toMatchObject({
+      url: NEW_URL,
+      title: "Moved blog",
+      lastError: null,
+      failureCount: 0,
+      goneAt: null,
+      movedFrom: null,
+      lastSucceededAt: s.clock().toISOString(),
+      starredCount: 1,
+      annotatedCount: 1,
+      articleCount: 2,
+    });
+    expect(s.list().find((article) => article.id === second!.id)).toMatchObject({ isRead: true });
+    // The ETag of the old URL is not sent to the new one.
+    s.clock.advance(HOUR);
+    await fetchFeed(s.deps, feed.id);
+    expect(s.requests.at(-1)).toMatchObject({ url: NEW_URL });
+    expect(s.requests.at(-1)!.headers["if-none-match"]).toBeUndefined();
+    expect(s.llmCalls()).toBe(0);
+  });
+
+  it("stores the new items the new URL delivers", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.deps.fetcher = new Fetcher({
+      userAgent: "t",
+      hostIntervalMs: 0,
+      timeoutMs: 1000,
+      maxBytes: 5_000_000,
+      fetchImpl: fakeFetch({ [NEW_URL]: () => xml(rss([{ title: "Third post", key: "k3" }, { title: "First post", key: "k1" }])) }).fetchImpl,
+      clock: s.clock,
+      sleep: async () => {},
+    });
+    expect(await changeFeedUrl(s.deps, feed.id, { url: NEW_URL })).toMatchObject({ articleCount: 3 });
+  });
+
+  it("forgets a move that permanent redirects made", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    s.redirect(NEW_URL);
+    await s.fetchTimes(feed.id, 3);
+    expect(getFeed(s.db, feed.id).movedFrom).toBe(OLD_URL);
+    expect(await changeFeedUrl(s.deps, feed.id, { url: OTHER_URL })).toMatchObject({ url: OTHER_URL, movedFrom: null, movedAt: null });
+  });
+
+  it("refuses a URL that is no feed, as a fault of the URL, and changes nothing", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    const error = await changeFeedUrl(s.deps, feed.id, { url: "https://new.example.org/", title: "Renamed" }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DomainError);
+    expect((error as DomainError).fields).toEqual([expect.objectContaining({ path: "url", code: "unreachable" })]);
+    expect(getFeed(s.db, feed.id)).toMatchObject({ url: OLD_URL, title: "Example Feed" });
+  });
+
+  it("refuses the URL of another feed without fetching it", async () => {
+    const s = moveSetup();
+    await subscribe(s.deps, { url: NEW_URL });
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    const asked = s.requests.length;
+    await expect(changeFeedUrl(s.deps, feed.id, { url: `${NEW_URL}?utm_source=x` })).rejects.toThrow(/already subscribed/);
+    expect(s.requests).toHaveLength(asked);
+    expect(getFeed(s.db, feed.id).url).toBe(OLD_URL);
+  });
+
+  it("changes the rest without a fetch when the URL is the one the feed has", async () => {
+    const s = moveSetup();
+    const feed = await subscribe(s.deps, { url: OLD_URL });
+    const asked = s.requests.length;
+    expect(await changeFeedUrl(s.deps, feed.id, { url: `${OLD_URL}#top`, title: "Renamed" })).toMatchObject({ url: OLD_URL, title: "Renamed" });
+    expect(s.requests).toHaveLength(asked);
+  });
+
+  it("checks a web feed with its selectors, or with the ones sent along", async () => {
+    const OLD_PAGE = "https://old.example.org/news/";
+    const NEW_PAGE = "https://new.example.org/news/";
+    const db = createTestDb();
+    const clock = fakeClock(START);
+    const list = (inner: string) => `<!doctype html><html><head><title>News</title></head><body>${inner}</body></html>`;
+    const fake = fakeFetch(
+      {
+        "https://old.example.org/robots.txt": () => new Response("", { status: 404 }),
+        "https://new.example.org/robots.txt": () => new Response("", { status: 404 }),
+        // Absolute links: an item without a key is told apart by its link, and a relative one resolves against the page.
+        [OLD_PAGE]: () => html(list('<ul><li class="post"><a href="https://blog.example.org/posts/1">Post 1</a></li></ul>')),
+        [NEW_PAGE]: () => html(list('<div class="card"><a href="https://blog.example.org/posts/1">Post 1</a></div>')),
+      },
+      clock,
+    );
+    const fetcher = new Fetcher({ userAgent: "t", hostIntervalMs: 0, timeoutMs: 1000, maxBytes: 5_000_000, fetchImpl: fake.fetchImpl, clock, sleep: async () => {} });
+    const deps = { db, clock, fetcher };
+    const feed = await subscribe(deps, { url: OLD_PAGE, format: "page", selectors: { item: "li.post" } });
+
+    await expect(changeFeedUrl(deps, feed.id, { url: NEW_PAGE })).rejects.toThrow(/no article could be taken out/);
+    expect(getFeed(db, feed.id).url).toBe(OLD_PAGE);
+    const changed = await changeFeedUrl(deps, feed.id, { url: NEW_PAGE, selectors: { item: "div.card" } });
+    expect(changed).toMatchObject({ url: NEW_PAGE, selectors: { item: "div.card" }, articleCount: 1 });
   });
 });

@@ -43,6 +43,33 @@ export function gate(): { wait: Promise<void>; open: () => void } {
   return { wait, open };
 }
 
+/**
+ * A gate for the first request whose line contains `match`: pass `hold` to `renderApp`, and `open` it to let the
+ * request reach the server. Later requests that match go through at once.
+ */
+export function gateFirst(match: string) {
+  let release: () => void = () => {};
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  return {
+    hold: (request: string) => {
+      if (held || !request.includes(match)) return undefined;
+      held = true;
+      return opened;
+    },
+    /** Whether the request has come and is waiting. */
+    waiting: () => held,
+    open: async () => {
+      await act(async () => {
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    },
+  };
+}
+
 /** The browser's back. jsdom goes through its history after a task. */
 export async function back(): Promise<void> {
   await act(async () => {
@@ -59,6 +86,20 @@ export function makeServer(start?: string, options: Parameters<typeof testServer
   const server = testServer(start, options);
   updateSettings(server.db, { timeZone: "UTC", outputLanguage: "ja", advanceAfterMarkAll: false });
   return server;
+}
+
+/**
+ * Makes the requests for the given paths below /api/v1, such as "categories", fail as if the server were down,
+ * whatever their query. The returned set holds the paths that fail: delete one, or clear it, to let them through.
+ */
+export function failPaths(server: TestServer, paths: string[]): Set<string> {
+  const failing = new Set(paths);
+  const original = server.app.request.bind(server.app);
+  server.app.request = ((input: string, init?: RequestInit) => {
+    const path = String(input).split("?")[0]!;
+    return [...failing].some((name) => path.endsWith(`/api/v1/${name}`)) ? Promise.reject(new TypeError("fetch failed")) : original(input, init);
+  }) as typeof server.app.request;
+  return failing;
 }
 
 /** Renders the whole app against a real API with an in-memory database. */

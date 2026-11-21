@@ -5,7 +5,7 @@ import { ApiError, checkRequired, conflictLabel, fieldError, fieldMessage, UNCAT
 import { useApp } from "../app/context.ts";
 import { useToast } from "../shell/toast.tsx";
 import { AutoSummarize, FetchFullContent, Translate } from "./FeedSwitches.tsx";
-import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, type SelectorTexts } from "./PageSelectors.tsx";
+import { CandidateChoice, CandidateStatus, SelectorEditor, textsOf, useCandidates, useLatest, type SelectorTexts } from "./PageSelectors.tsx";
 import { Button, Field, messageFor } from "../ui/controls.tsx";
 import { useUnsaved } from "../ui/unsaved.tsx";
 
@@ -106,6 +106,11 @@ export function AddFeedForm({
   const [manual, setManual] = useState<SelectorTexts>(textsOf(null));
   const [tested, setTested] = useState<PageSelectors | null>(null);
   const firstChoice = useRef<HTMLInputElement>(null);
+  // Looking for feeds: an answer that comes after the URL changed or the form went away is dropped.
+  const discovery = useLatest();
+  // What is subscribed with is what the fields hold when the feed is subscribed, also after a wait for discovery.
+  const choices = useRef({ category, autoSummarize, translate, fetchFullContent });
+  choices.current = { category, autoSummarize, translate, fetchFullContent };
   useEffect(() => {
     if (found) firstChoice.current?.focus();
   }, [found]);
@@ -139,10 +144,12 @@ export function AddFeedForm({
     // The page gives titles, links and dates only: the text comes from full content, so it starts switched on.
     setFetchFullContent(true);
     const result = await candidates.ask(pageUrl);
-    if (result && result.candidates.length > 0) setChosenCandidate(0);
+    if (result === null) return;
+    if (result.candidates.length > 0) setChosenCandidate(0);
   }
 
   async function subscribe(feedUrl: string, selectors?: PageSelectors) {
+    const { category, autoSummarize, translate, fetchFullContent } = choices.current;
     const created = await api.createFeed({
       url: feedUrl,
       ...(selectors ? { format: "page" as const, selectors } : {}),
@@ -163,15 +170,16 @@ export function AddFeedForm({
     onAdded?.();
   }
 
-  async function run(action: () => Promise<void>) {
+  /** Runs the request numbered `request`; once it is not the latest, its failure and its end change nothing. */
+  async function run(request: number, action: () => Promise<void>) {
     setBusy(true);
     setProblem(null);
     try {
       await action();
     } catch (error) {
-      setProblem(explain(error));
+      if (discovery.current(request)) setProblem(explain(error));
     } finally {
-      setBusy(false);
+      if (discovery.current(request)) setBusy(false);
     }
   }
 
@@ -182,23 +190,26 @@ export function AddFeedForm({
       setProblem(empty);
       return;
     }
-    void run(async () => {
+    const request = discovery.next();
+    void run(request, async () => {
       if (page !== null) {
         const selectors = pageSelectors(candidates.state.status === "ready" ? candidates.state.result : null);
         return selectors ? subscribe(page, selectors) : undefined;
       }
       if (found !== null && chosen) return subscribe(chosen);
-      return findFeeds(url.trim(), true);
+      return findFeeds(request, url.trim(), true);
     });
   }
 
   /**
-   * Looks for the feeds of a URL. A single one is subscribed to at once when the reader sent the URL, and offered
-   * like several when the form looked by itself.
+   * Looks for the feeds of a URL as the request numbered `request`, whose answer is dropped once it is not the
+   * latest. A single feed is subscribed to at once when the reader sent the URL, and offered like several when the
+   * form looked by itself.
    */
-  async function findFeeds(target: string, subscribeOne: boolean) {
+  async function findFeeds(request: number, target: string, subscribeOne: boolean) {
     // The URL may be a feed or a page that points to feeds; the server tells which.
     const { feeds } = await api.discoverFeeds(target);
+    if (!discovery.current(request)) return;
     if (feeds.length === 0) {
       setProblem("このページにフィードは見つかりませんでした。フィードのURLが分かるときは、それを直接入力してください。");
       // Only a page without a feed is offered as a web feed: a feed is read more reliably than a page.
@@ -210,12 +221,11 @@ export function AddFeedForm({
     setChosen(feeds[0]!.url);
   }
 
-  // Once only, though an effect may run twice while developing.
-  const discovered = useRef(false);
+  // An effect may run twice while developing: the end of the first run drops its request, and the second one asks again.
   useEffect(() => {
-    if (discoverUrl === undefined || discovered.current) return;
-    discovered.current = true;
-    void run(() => findFeeds(discoverUrl, false));
+    if (discoverUrl === undefined) return;
+    const request = discovery.next();
+    void run(request, () => findFeeds(request, discoverUrl, false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the URL it was opened with, looked for once
   }, []);
 
@@ -227,7 +237,12 @@ export function AddFeedForm({
         inputMode="url"
         autoComplete="off"
         value={url}
+        // Read-only while feeds are looked for, keeping the focus: the answer is for the URL as it was sent.
+        readOnly={busy && page === null}
         onChange={(event) => {
+          // A request under way is for the URL before this change: its answer is dropped.
+          discovery.next();
+          setBusy(false);
           setUrl(event.target.value);
           setFound(null);
           leavePage();

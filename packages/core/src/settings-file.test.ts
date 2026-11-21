@@ -9,6 +9,7 @@ import { createRule, listRules } from "./db/rules.ts";
 import { applyInterpretation, createTopic, listTopics } from "./db/topics.ts";
 import { addHighlightTerm, createTermGroup, listTermGroups, moveTermGroup } from "./db/term-highlights.ts";
 import { getListView, listListViews, updateListView } from "./db/list-views.ts";
+import { createSavedSearch, listSavedSearches, moveSavedSearch } from "./db/saved-searches.ts";
 import { listCategoryVersions, listTopicVersions } from "./db/versions.ts";
 import { exportSettings, importSettings } from "./settings-file.ts";
 import { createTestDb, fakeClock, seedFeedArticle } from "./testing/db.ts";
@@ -79,7 +80,7 @@ categories:
 `,
       clock,
     );
-    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0 });
+    expect(result).toEqual({ categoriesCreated: 1, categoriesUpdated: 1, topicsCreated: 1, topicsUpdated: 0, feedsCreated: 0, feedsUpdated: 0, filtersCreated: 0, rulesCreated: 0, termGroupsCreated: 0, highlightTermsCreated: 0, listViewsUpdated: 0, savedSearchesCreated: 0 });
     expect(findCategoryBySlug(db, "security")).toMatchObject({ name: "Security", minImportance: 4 });
     expect(findCategoryBySlug(db, "local-events")).toMatchObject({ kind: "event", windowDays: 7 });
   });
@@ -659,6 +660,7 @@ describe("the example settings file", () => {
       termGroupsCreated: 2,
       highlightTermsCreated: 3,
       listViewsUpdated: 1,
+      savedSearchesCreated: 1,
     });
     expect(listTermGroups(db).map((group) => [group.name, group.color, group.terms.map((term) => term.text)])).toEqual([
       ["Rust", "orange", ["Rust", "cargo"]],
@@ -724,6 +726,46 @@ describe("summaries of feeds in the settings file", () => {
 
   it("refuses a setting that is not true or false", () => {
     expect(() => importSettings(createTestDb(), file("    autoSummarize: sometimes\n"), clock)).toThrow(/expected format/);
+  });
+});
+
+describe("the content selector of feeds in the settings file", () => {
+  const A = "https://a.example.org/feed.xml";
+  const B = "https://b.example.org/feed.xml";
+  const file = (line: string) => `version: 1\nsubscriptions:\n  - url: ${A}\n${line}`;
+
+  it("writes the selector of the feeds that have one only, and an empty server takes it over", () => {
+    const db = createTestDb();
+    insertFeed(db, { url: A, title: "A", contentSelector: "article .body" }, clock);
+    insertFeed(db, { url: B, title: "B" }, clock);
+    const exported = exportSettings(db);
+    const written = parse(exported) as { subscriptions: Array<Record<string, unknown>> };
+    expect(written.subscriptions.map((entry) => entry.contentSelector)).toEqual(["article .body", undefined]);
+    expect(Object.keys(written.subscriptions[1]!)).not.toContain("contentSelector");
+
+    const target = createTestDb();
+    importSettings(target, exported, clock);
+    expect(listFeeds(target).map((feed) => [feed.url, feed.contentSelector])).toEqual([[A, "article .body"], [B, null]]);
+    expect(exportSettings(target)).toBe(exported);
+  });
+
+  it("registers a feed without a selector with none, leaves a known feed as it is, and changes it when the file says so", () => {
+    const db = createTestDb();
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBeNull();
+
+    updateFeed(db, listFeeds(db)[0]!.id, { contentSelector: "main" }, clock);
+    importSettings(db, file(""), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBe("main");
+    importSettings(db, file("    contentSelector: article\n"), clock);
+    expect(listFeeds(db)[0]!.contentSelector).toBe("article");
+  });
+
+  it("refuses a value that is not a CSS selector, or one the engine cannot use, and changes nothing", () => {
+    const db = createTestDb();
+    expect(() => importSettings(db, file('    contentSelector: "div["\n'), clock)).toThrow(/expected format/);
+    expect(() => importSettings(db, file('    contentSelector: "div:frobnicate"\n'), clock)).toThrow(/content selector cannot be used/);
+    expect(listFeeds(db)).toEqual([]);
   });
 });
 
@@ -954,7 +996,48 @@ describe("list views in the settings file", () => {
     const feed = insertFeed(db, { url: FEED, title: "A", categoryId: tools.id }, clock);
     return { db, tools, feed };
   }
-  const views = (db: ReturnType<typeof createTestDb>) => listListViews(db).items;
+  /** The stored views, the standard format left out as the file leaves it out. */
+  const views = (db: ReturnType<typeof createTestDb>) =>
+    listListViews(db).items.map(({ format, ...view }) => (format === "standard" ? view : { ...view, format }));
+
+  it("carry the format of a list, and leave out the standard one", () => {
+    const { db, tools } = changed();
+    updateListView(db, "unread", { format: "compact" });
+    updateListView(db, `category-${tools.id}`, { sort: "oldest", format: "expanded" });
+    updateListView(db, "all", { sort: "oldest" });
+    const written = exportSettings(db);
+    expect(parse(written).listViews).toEqual([
+      { list: "unread", format: "compact" },
+      { list: { category: "tools" }, sort: "oldest", format: "expanded" },
+      { list: "all", sort: "oldest" },
+    ]);
+
+    const other = createTestDb();
+    expect(importSettings(other, written, clock).listViewsUpdated).toBe(3);
+    const otherTools = listCategories(other).find((category) => category.slug === "tools")!;
+    expect(views(other)).toEqual([
+      { key: "unread", sort: "newest", format: "compact" },
+      { key: `category-${otherTools.id}`, sort: "oldest", format: "expanded" },
+      { key: "all", sort: "oldest" },
+    ]);
+  });
+
+  it("keep the stored format when an entry leaves it out, as a file written before formats does", () => {
+    const { db } = changed();
+    updateListView(db, "unread", { sort: "oldest", format: "expanded" });
+
+    importSettings(db, "version: 1\nlistViews: [{ list: unread, sort: newest }]\n", clock);
+
+    expect(views(db)).toEqual([{ key: "unread", sort: "newest", format: "expanded" }]);
+    importSettings(db, "version: 1\nlistViews: [{ list: unread, format: standard }]\n", clock);
+    expect(views(db)).toEqual([]);
+  });
+
+  it("refuse the whole file for a format it does not know", () => {
+    const { db } = changed();
+    expect(() => importSettings(db, "version: 1\nlistViews: [{ list: unread, format: cards }]\n", clock)).toThrow();
+    expect(views(db)).toEqual([]);
+  });
 
   it("are written for the entries that were changed, a category by its slug and a feed by its URL", () => {
     const { db, tools, feed } = changed();
@@ -1178,5 +1261,72 @@ describe("web feeds in the settings file", () => {
     expect(error).toMatchObject({ code: "invalid", fields: [{ path: "subscriptions.0.selectors.item", message: "not a CSS selector" }] });
     expect(listCategories(db)).toEqual([]);
     expect(listFeeds(db)).toEqual([]);
+  });
+});
+
+describe("saved searches in the settings file", () => {
+  const FEED = "https://a.example.org/feed.xml";
+  function seededSearches() {
+    const db = createTestDb();
+    const tools = createCategory(db, { slug: "tools", name: "道具", kind: "news" }, clock);
+    const feed = insertFeed(db, { url: FEED, title: "A" }, clock);
+    const first = createSavedSearch(db, { name: "Aの AI", query: "AI 量子", feedId: feed.id }, clock);
+    createSavedSearch(db, { name: "量子", query: "量子" }, clock);
+    createSavedSearch(db, { name: "道具の電池", query: "電池", categoryId: tools.id }, clock);
+    moveSavedSearch(db, first.id, null);
+    return db;
+  }
+  const searches = (db: ReturnType<typeof createTestDb>) =>
+    listSavedSearches(db).map((saved) => [saved.name, saved.query, saved.categoryId !== null, saved.feedId !== null]);
+
+  it("are written in their order, a category by its slug and a feed by its URL", () => {
+    expect(parse(exportSettings(seededSearches())).savedSearches).toEqual([
+      { name: "量子", query: "量子" },
+      { name: "道具の電池", query: "電池", scope: { category: "tools" } },
+      { name: "Aの AI", query: "AI 量子", scope: { feed: FEED } },
+    ]);
+  });
+
+  it("are not written when there are none", () => {
+    expect(parse(exportSettings(createTestDb()))).not.toHaveProperty("savedSearches");
+  });
+
+  it("make the same file again on an empty server", () => {
+    const written = exportSettings(seededSearches());
+    const other = createTestDb();
+    const result = importSettings(other, written, clock);
+    expect(result.savedSearchesCreated).toBe(3);
+    expect(searches(other)).toEqual([
+      ["量子", "量子", false, false],
+      ["道具の電池", "電池", true, false],
+      ["Aの AI", "AI 量子", false, true],
+    ]);
+    expect(exportSettings(other)).toBe(written);
+  });
+
+  it("are not made twice when the same file is read again, and those the file leaves out follow", () => {
+    const db = seededSearches();
+    createSavedSearch(db, { name: "ほか", query: "ほか" }, clock);
+    const text = `version: 1\nsavedSearches: [{ name: 道具の電池, query: 電池, scope: { category: tools } }, { name: 量子, query: 量子 }]\n`;
+    expect(importSettings(db, text, clock).savedSearchesCreated).toBe(0);
+    expect(importSettings(db, text, clock).savedSearchesCreated).toBe(0);
+    expect(listSavedSearches(db).map((saved) => saved.name)).toEqual(["道具の電池", "量子", "Aの AI", "ほか"]);
+  });
+
+  it("refuse a category found nowhere, and store nothing of the file", () => {
+    const db = createTestDb();
+    const text = `version: 1\nsettings: { readerInfo: changed }\nsavedSearches: [{ name: A, query: 量子, scope: { category: nowhere } }]\n`;
+    expect(() => importSettings(db, text, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "savedSearches.0.scope.category", code: "no_such_item" })] }),
+    );
+    expect(listSavedSearches(db)).toEqual([]);
+    expect(getSettings(db).readerInfo).not.toBe("changed");
+  });
+
+  it("refuse empty words", () => {
+    const db = createTestDb();
+    expect(() => importSettings(db, `version: 1\nsavedSearches: [{ name: A, query: " " }]\n`, clock)).toThrow(
+      expect.objectContaining({ code: "invalid", fields: [expect.objectContaining({ path: "savedSearches.0.query" })] }),
+    );
   });
 });

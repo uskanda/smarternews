@@ -739,13 +739,16 @@ export interface ArticleForFullContent {
   url: string | null;
   /** What the feed delivered, without markup. The full content must not be shorter. */
   contentText: string;
+  /** The feed's content selector, or null for what Readability finds. */
+  contentSelector: string | null;
 }
 
 const FULL_CONTENT_COLUMNS = `a.id, a.content_text,
-  (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url`;
+  (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url,
+  (SELECT f.content_selector FROM feeds f WHERE f.id = a.feed_id) AS content_selector`;
 
 function toArticleForFullContent(row: Row): ArticleForFullContent {
-  return { id: num(row.id), url: strOrNull(row.url), contentText: str(row.content_text) };
+  return { id: num(row.id), url: strOrNull(row.url), contentText: str(row.content_text), contentSelector: strOrNull(row.content_selector) };
 }
 
 /** The feed article whose full content is fetched next: of those that wait, the one stored last. */
@@ -796,6 +799,25 @@ export function saveFullContent(db: Database, id: number, content: { markdown: s
         WHERE id = ?`,
     ).run(content.markdown, content.text, content.now, id);
     deleteArticleTranslation(db, id);
+  });
+}
+
+/**
+ * Forgets the full content and the failures of a feed's unread articles, with the translations of their
+ * content, which may be of the full content. They wait for full content again if their feed fetches it. Read
+ * articles keep theirs, and every summary stays.
+ */
+export function forgetUnreadFullContent(db: Database, feedId: number): void {
+  transaction(db, () => {
+    db.prepare(
+      `DELETE FROM article_translations WHERE article_id IN
+         (SELECT id FROM articles WHERE origin = 'feed' AND feed_id = ? AND is_read = 0 AND full_content_status IS NOT NULL)`,
+    ).run(feedId);
+    db.prepare(
+      `UPDATE articles SET full_content = NULL, full_content_text = NULL, full_content_at = NULL, full_content_status = NULL,
+              full_content_error = NULL, full_content_error_detail = NULL
+        WHERE origin = 'feed' AND feed_id = ? AND is_read = 0 AND full_content_status IS NOT NULL`,
+    ).run(feedId);
   });
 }
 
@@ -1024,16 +1046,15 @@ function likePattern(term: string): string {
 }
 
 /**
- * A page of the articles that have every term of the query, newest first by last update, generated and
- * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
- * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
- * hidden duplicates unless a feed is named or only starred articles are asked for, as in the article list.
- * Starred articles are found newest first by last update too. Each article comes with an excerpt, taken
- * from the reader's notes when no field of the article has the terms. The index holds the highlighted texts
- * and notes of every article, so they are matched like the fields.
- * `asOf` is `now`, when the result was read, as in the article list.
+ * Which articles `a` a search finds, with the terms it matched: the condition the results are read with, and
+ * the unread count of a saved search is counted with. Terms of three or more characters use the trigram
+ * index; shorter ones are matched with LIKE against the same text.
  */
-export function searchArticles(db: Database, query: ArticleSearchQuery, now: string = new Date().toISOString()): ArticleSearchResult {
+function searchConditions(query: Pick<ArticleSearchQuery, "q" | "category" | "feed" | "unread" | "starred">): {
+  terms: string[];
+  where: string;
+  params: Array<string | number>;
+} {
   const terms = parseSearchTerms(query.q);
   const long = terms.filter((term) => charCount(term) > SHORT_TERM_CHARS);
   const short = terms.filter((term) => charCount(term) <= SHORT_TERM_CHARS);
@@ -1060,7 +1081,22 @@ export function searchArticles(db: Database, query: ArticleSearchQuery, now: str
   }
   if (query.unread === "true") where.push("a.is_read = 0");
   if (query.starred === "true") where.push("a.starred = 1");
-  const page = pageArticles(db, where.join(" AND "), params, query);
+  return { terms, where: where.join(" AND "), params };
+}
+
+/**
+ * A page of the articles that have every term of the query, newest first by last update, generated and
+ * delivered alike, read ones and ended events included. Terms of three or more characters use the trigram
+ * index; shorter ones are matched with LIKE against the same text. What filters hide is left out, and so are
+ * hidden duplicates unless a feed is named or only starred articles are asked for, as in the article list.
+ * Starred articles are found newest first by last update too. Each article comes with an excerpt, taken
+ * from the reader's notes when no field of the article has the terms. The index holds the highlighted texts
+ * and notes of every article, so they are matched like the fields.
+ * `asOf` is `now`, when the result was read, as in the article list.
+ */
+export function searchArticles(db: Database, query: ArticleSearchQuery, now: string = new Date().toISOString()): ArticleSearchResult {
+  const { terms, where, params } = searchConditions(query);
+  const page = pageArticles(db, where, params, query);
   const ids = page.items.map((item) => item.id);
   const fields = new Map(
     db
@@ -1177,9 +1213,10 @@ export function markArticlesRead(
   filter: { categoryId?: number; uncategorized?: boolean; origin?: Origin; feedId?: number; minImportance?: number; before: string },
   now: string,
 ): number[] {
-  // What filters hide is in no list, so it is not marked either: it comes back unread when the filter goes.
-  const where = ["is_read = 0", "updated_at < ?", `NOT ${hiddenByFilters("articles")}`];
-  const params: Array<string | number> = [new Date(filter.before).toISOString()];
+  // What filters hide is in no list, so it is not marked either: it comes back unread when the filter goes. An
+  // event that has ended is in no list either, and stays out of the unread counts already.
+  const where = ["is_read = 0", "updated_at < ?", `NOT ${hiddenByFilters("articles")}`, "(kind <> 'event' OR event_ends_at >= ?)"];
+  const params: Array<string | number> = [new Date(filter.before).toISOString(), now];
   if (filter.categoryId !== undefined) {
     where.push("category_id = ?");
     params.push(filter.categoryId);
@@ -1270,7 +1307,7 @@ export function getCounts(db: Database, now: string): Counts {
       .all()
       .map((row): [number, Counts["feeds"][number]] => [num(row.id), { feedId: num(row.id), unread: 0 }]),
   );
-  const counts: Counts = { unread: 0, starred: 0, generatedUnread: 0, uncategorizedUnread: 0, categories: [], feeds: [] };
+  const counts: Counts = { unread: 0, starred: 0, generatedUnread: 0, uncategorizedUnread: 0, categories: [], feeds: [], savedSearches: [] };
   for (const row of groups) {
     // A hidden duplicate counts for its own feed and among the starred only. Generated articles have none.
     const unread = num(row.unread) - num(row.unread_duplicates);
@@ -1294,7 +1331,30 @@ export function getCounts(db: Database, now: string): Counts {
   }
   counts.categories = [...categories.values()];
   counts.feeds = [...feeds.values()];
+  counts.savedSearches = countSavedSearches(db);
   return counts;
+}
+
+/**
+ * Per saved search, how many results it has opened unread only: the conditions of the search itself, so that
+ * the count and the list agree, ended events included. One count over the search index per saved search.
+ */
+function countSavedSearches(db: Database): Counts["savedSearches"] {
+  return db
+    .prepare("SELECT id, query, category_id, feed_id FROM saved_searches ORDER BY position, id")
+    .all()
+    .map((row) => {
+      const category = numOrNull(row.category_id);
+      const feed = numOrNull(row.feed_id);
+      const { where, params } = searchConditions({
+        q: str(row.query),
+        ...(category !== null ? { category } : {}),
+        ...(feed !== null ? { feed } : {}),
+        unread: "true",
+      });
+      const counted = db.prepare(`SELECT count(*) AS n FROM articles a WHERE ${where}`).get(...params);
+      return { id: num(row.id), unread: num(counted?.n ?? 0) };
+    });
 }
 
 /** The newest articles for a feed, events that have ended left out. `categoryId` null means every enabled category. */

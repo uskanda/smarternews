@@ -123,6 +123,16 @@ export function checkSelectorsUsable(selectors: PageSelectors): void {
   }
 }
 
+/** Refuses a content selector the engine that reads pages cannot use, as `checkSelectorsUsable` does a set. */
+export function checkContentSelectorUsable(selector: string): void {
+  try {
+    emptyDocument.querySelector(selector);
+  } catch (error) {
+    const message = `the content selector cannot be used: ${error instanceof Error ? error.message : String(error)}`;
+    throw new DomainError("invalid", message, [{ path: "contentSelector", message, code: "format" }]);
+  }
+}
+
 /** Takes the articles out of a page with one set of selectors. Finding nothing is an answer, not an error. */
 export function extractPage(html: string, pageUrl: string, selectors: PageSelectors, timeZone: string): Extracted {
   const document = parseDocument(html);

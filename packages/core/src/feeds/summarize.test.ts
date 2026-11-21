@@ -72,6 +72,22 @@ describe("summarizeNext", () => {
     expect(s.calls()).toEqual([{ task: "summarize", ok: 1 }]);
   });
 
+  it("summarises from the element the feed's content selector matches, for a feed that does not fetch full content", async () => {
+    const comments = prose("comment", 900);
+    const s = setup({
+      "https://site.example.org/1": () =>
+        html(`<html><head><title>Page</title></head><body><article><div class="story"><p>${PAGE_TEXT}</p></div><section><p>${comments}</p><p>${comments}</p></section></article></body></html>`),
+    });
+    updateFeed(s.db, s.feed.id, { contentSelector: ".story" }, s.clock);
+    const id = s.article();
+
+    expect(await summarizeNext(s.deps, s.pages)).toBe("summarized");
+
+    expect(s.prompts()[0]).toContain("fulltext fulltext");
+    expect(s.prompts()[0]).not.toContain("comment");
+    expect(getArticle(s.db, id)).toMatchObject({ autoSummary: { source: "page" }, fullContent: null });
+  });
+
   it("stores no full content from the page it read for a feed that does not fetch full content", async () => {
     const s = setup({ "https://site.example.org/1": () => page(PAGE_TEXT) });
     const id = s.article();

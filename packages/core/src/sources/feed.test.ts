@@ -180,6 +180,46 @@ describe("parseSubscription", () => {
     const item = parseSubscription(ATOM_FULL).items[1]!;
     expect(item.contentHtml).toContain('<p>Inline <a href="https://example.net/x">link</a> here.</p>');
   });
+
+  it("takes the page of an RSS item without a link from a guid that is a permalink", () => {
+    const xml = `<rss version="2.0"><channel><title>T</title>
+      <item><title>Plain guid</title><guid>https://example.org/posts/1</guid></item>
+      <item><title>Marked permalink</title><guid isPermaLink="true"> https://example.org/posts/2 </guid></item>
+      <item><title>Not a permalink</title><guid isPermaLink="false">https://example.org/?p=3</guid></item>
+      <item><title>Not a web address</title><guid>tag:example.org,2026:4</guid></item>
+      <item><title>With a link</title><link>https://example.org/posts/5</link><guid>https://example.org/?p=5</guid></item>
+    </channel></rss>`;
+    const items = parseSubscription(xml).items;
+    expect(items.map(({ url, key }) => [url, key])).toEqual([
+      ["https://example.org/posts/1", "https://example.org/posts/1"],
+      ["https://example.org/posts/2", "https://example.org/posts/2"],
+      ["", "https://example.org/?p=3"],
+      ["", "tag:example.org,2026:4"],
+      ["https://example.org/posts/5", "https://example.org/?p=5"],
+    ]);
+    expect(parseFeed(xml).items[0]!.url).toBe("https://example.org/posts/1");
+  });
+
+  it("reads the dates of items without an offset in the time zone it is given", () => {
+    const xml = `<feed xmlns="http://www.w3.org/2005/Atom"><title>T</title>
+      <entry><id>1</id><title>A</title><link href="https://example.org/a"/><updated>2026-10-20T09:00:00</updated></entry>
+      <entry><id>2</id><title>B</title><link href="https://example.org/b"/><published>Tue, 20 Oct 2026 09:00:00 CEST</published></entry>
+      <entry><id>3</id><title>C</title><link href="https://example.org/c"/><published>Tue, 20 Oct 2026 09:00:00 IST</published></entry>
+    </feed>`;
+    expect(parseSubscription(xml, null, "Asia/Tokyo").items.map((item) => item.publishedAt)).toEqual([
+      new Date("2026-10-20T00:00:00Z"),
+      new Date("2026-10-20T07:00:00Z"),
+      null,
+    ]);
+    expect(parseSubscription(xml).items[0]!.publishedAt).toEqual(new Date("2026-10-20T09:00:00Z"));
+    const json = JSON.stringify({ version: "https://jsonfeed.org/version/1.1", title: "J", items: [{ id: "1", url: "https://example.org/j", date_published: "2026-10-20T09:00:00" }] });
+    expect(parseSubscription(json, null, "Asia/Tokyo").items[0]!.publishedAt).toEqual(new Date("2026-10-20T00:00:00Z"));
+  });
+
+  it("decodes the named references of HTML in titles", () => {
+    const xml = `<rss version="2.0"><channel><title>T</title><item><title>A &amp;mdash; B&amp;hellip;</title><link>https://example.org/a</link></item></channel></rss>`;
+    expect(parseSubscription(xml).items[0]!.title).toBe("A — B…");
+  });
 });
 
 const PODCAST = `<?xml version="1.0" encoding="UTF-8"?>
@@ -310,6 +350,25 @@ describe("parseSubscription with enclosures and Media RSS", () => {
     const xml = `<rss version="2.0"><channel><title>T</title><item><title>A</title><link>/posts/a</link><enclosure url="a.mp3" type="audio/mpeg"/></item></channel></rss>`;
     expect(parseSubscription(xml, "https://example.org/feed.xml").items[0]!.attachments[0]!.url).toBe("https://example.org/posts/a.mp3");
     expect(parseSubscription(xml).items[0]!.attachments).toEqual([]);
+  });
+
+  it("reads the enclosure links of Atom entries first, like RSS enclosures", () => {
+    const xml = `<feed xmlns="http://www.w3.org/2005/Atom"><title>Cast</title>
+      <entry><id>urn:ep:1</id><title>Episode 1</title>
+        <link rel="alternate" href="https://example.org/cast/1"/>
+        <link rel="enclosure" type="audio/mpeg" length="12345678" title="Episode 1 (MP3)" href="https://cdn.example.org/ep1.mp3"/>
+        <link rel="enclosure" href="ep1.ogg" type="audio/ogg" length="unknown"/>
+        <link rel="enclosure" href="https://cdn.example.org/ep1.mp3" type="audio/mpeg"/>
+        <link rel="related" href="https://example.org/notes"/>
+        <media:thumbnail xmlns:media="http://search.yahoo.com/mrss/" url="https://cdn.example.org/ep1.jpg"/>
+      </entry></feed>`;
+    const [item] = parseSubscription(xml).items;
+    expect(item!.url).toBe("https://example.org/cast/1");
+    expect(item!.attachments).toEqual([
+      { url: "https://cdn.example.org/ep1.mp3", kind: "audio", mimeType: "audio/mpeg", size: 12345678, title: "Episode 1 (MP3)", thumbnail: false },
+      { url: "https://example.org/cast/ep1.ogg", kind: "audio", mimeType: "audio/ogg", size: null, title: null, thumbnail: false },
+      { url: "https://cdn.example.org/ep1.jpg", kind: "image", mimeType: null, size: null, title: null, thumbnail: true },
+    ]);
   });
 
   it("leaves the attachments of a JSON Feed item unread", () => {
@@ -550,6 +609,36 @@ describe("collectFeed", () => {
       ["https://example.org/blog/2", "Example JSON"],
       ["https://other.example.net/story", "Example JSON"],
     ]);
+  });
+
+  it("reads abbreviated zones and dates without an offset in the time zone it is given", async () => {
+    const feed = `<rss version="2.0"><channel><title>T</title>
+      <item><title>Recent</title><link>https://example.org/recent</link><pubDate>Sun, 01 Mar 2026 20:00:00 JST</pubDate></item>
+      <item><title>Old</title><link>https://example.org/old</link><pubDate>Fri, 27 Feb 2026 09:00:00 JST</pubDate></item>
+      <item><title>Local</title><link>https://example.org/local</link><dc:date xmlns:dc="http://purl.org/dc/elements/1.1/">2026-03-01T20:00:00</dc:date></item>
+    </channel></rss>`;
+    const since = new Date("2026-02-28T12:00:00Z");
+    const candidates = await collectFeed(fetcher({ "https://example.org/feed.xml": () => xml(feed) }), "https://example.org/feed.xml", since, "Asia/Tokyo");
+    expect(candidates.map(({ title, publishedAt }) => [title, publishedAt])).toEqual([
+      ["Recent", new Date("2026-03-01T11:00:00Z")],
+      ["Local", new Date("2026-03-01T11:00:00Z")],
+    ]);
+  });
+
+  it("takes feeds up to the limit of feeds, which may exceed the one of pages", async () => {
+    const items = Array.from({ length: 400 }, (_, index) => `<item><title>Item ${index}</title><link>https://example.org/${index}</link></item>`).join("");
+    const big = `<rss version="2.0"><channel><title>Big</title>${items}</channel></rss>`;
+    const limited = (feedMaxBytes: number) =>
+      new Fetcher({
+        userAgent: "t",
+        hostIntervalMs: 0,
+        timeoutMs: 1000,
+        maxBytes: 1024,
+        feedMaxBytes,
+        fetchImpl: fakeFetch({ "https://example.org/feed.xml": () => xml(big) }).fetchImpl,
+      });
+    expect(await collectFeed(limited(100_000), "https://example.org/feed.xml", null)).toHaveLength(400);
+    await expect(collectFeed(limited(2048), "https://example.org/feed.xml", null)).rejects.toThrow(/larger than 2048 bytes/);
   });
 
   it("fails when the feed answers with an error status", async () => {

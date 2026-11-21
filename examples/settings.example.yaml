@@ -60,6 +60,9 @@ categories:
         translate: true        # titles and contents are translated into outputLanguage; they leave this server for that
         fetchFullContent: true # the page of each new article is fetched and its text kept as the full content
         topicSource: true      # runs of this category judge its articles as candidates of every topic; a feed of a category only
+        # The element of the article's page that holds its body, for full content and summaries. Left out,
+        # Readability finds the body; so it does on a page where the selector matches nothing.
+        contentSelector: "article .post-body"
   - slug: local-events
     name: Local events
     kind: event
@@ -114,10 +117,20 @@ termGroups:
   - name: Standards
     color: purple
     terms: [RFC]
-# List views: how an entry of the left pane and the drawer orders its articles, newest or oldest first. Only
-# the entries that are not newest first are listed. An entry is unread, all, starred, generated or
-# uncategorized; a category by its slug, with `generatedOnly: true` for its generated articles; or a feed by
-# its URL. Event categories are always ordered by start.
+# List views: how an entry of the left pane and the drawer orders its articles, newest or oldest first, and
+# the format the web app shows it in: standard, compact (the title alone) or expanded (every article in full).
+# Only the entries that differ from newest first and standard are listed. An entry is unread, all, starred,
+# generated or uncategorized; a category by its slug, with `generatedOnly: true` for its generated articles; or
+# a feed by its URL. Event categories are always ordered by start.
 listViews:
   - list: { feed: "https://www.rfc-editor.org/rfcrss.xml" }
     sort: oldest
+    format: expanded
+# Saved searches: the words of a search under a name, listed in the left pane of the web app with how many
+# unread articles they find. A search may be narrowed to a category by its slug or to a feed by its URL; the
+# scope is left out for a search over every article. A search with the same name, words and scope is not
+# saved twice.
+savedSearches:
+  - name: Rust security
+    query: rust vulnerability
+    scope: { category: security }

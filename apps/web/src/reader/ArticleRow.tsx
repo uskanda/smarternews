@@ -23,6 +23,7 @@ export const ArticleRow = memo(function ArticleRow({
   excerpt = null,
   excerptFromNote = false,
   terms,
+  compact = false,
 }: {
   article: ArticleSummary;
   to: string;
@@ -40,6 +41,11 @@ export const ArticleRow = memo(function ArticleRow({
   excerptFromNote?: boolean;
   /** In search results: the words to mark in the headline and the excerpt. */
   terms?: readonly string[];
+  /**
+   * The format with titles only: one line of the title, with the name and the time on its right. The summary, the
+   * count of sources and the badges of term groups are left out; the marks that help choose a row stay.
+   */
+  compact?: boolean;
 }) {
   // A feed article has no importance, and so no mark.
   const marked = (article.importance ?? 0) >= 4;
@@ -51,27 +57,61 @@ export const ArticleRow = memo(function ArticleRow({
   // The term groups are judged by what the row shows: a group whose terms are only in the body gets no badge.
   const matcher = useTermMatcher();
   const groups = matcher.groupsIn([headline, line]);
+  const shownTime = formatShort(time === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, new Date(now));
+  const marks = (
+    <>
+      {marked ? (
+        <span
+          aria-hidden="true"
+          className={`absolute left-xs w-xs rounded-sm bg-mark ${article.importance === 5 ? (compact ? "inset-y-sm" : "inset-y-md") : compact ? "top-sm h-lg" : "top-md h-lg"}`}
+        />
+      ) : null}
+      {selected ? <SelectedMark /> : null}
+    </>
+  );
+  const title = (
+    <>
+      {article.isRead ? null : <span className="sr-only">未読。</span>}
+      {marked ? <span className="sr-only">重要度{article.importance}。</span> : null}
+      <span data-title className={article.importance === 5 ? "headline-mark" : ""}>
+        <Highlighted text={headline} terms={terms} groups={matcher} />
+      </span>
+    </>
+  );
+  if (compact) {
+    // One line: the title takes what is left, and the name, the time and the marks that choose a row stay whole.
+    return (
+      <li
+        data-compact
+        data-read={article.isRead}
+        data-importance={marked ? article.importance : undefined}
+        className={`relative border-b border-outline ${selected ? "bg-selected" : ""}`}
+      >
+        {marks}
+        <Link to={to} aria-current={selected ? "true" : undefined} className="flex items-baseline gap-md py-sm pr-lg pl-lg">
+          <span title={headline} className={`min-w-0 flex-1 truncate ${article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}`}>
+            {title}
+          </span>
+          <span className="flex shrink-0 items-center gap-x-sm type-label-sm text-on-surface-muted">
+            {article.revision > 0 ? <Badge>更新</Badge> : null}
+            {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
+            {article.starred ? <StarMark /> : null}
+            <span className="max-w-[10em] truncate">{sourceName}</span>
+            <span className="tabular-nums">{shownTime}</span>
+          </span>
+        </Link>
+      </li>
+    );
+  }
   return (
     <li
       data-read={article.isRead}
       data-importance={marked ? article.importance : undefined}
       className={`relative border-b border-outline ${selected ? "bg-selected" : ""}`}
     >
-      {marked ? (
-        <span
-          aria-hidden="true"
-          className={`absolute left-xs w-xs rounded-sm bg-mark ${article.importance === 5 ? "inset-y-md" : "top-md h-lg"}`}
-        />
-      ) : null}
-      {selected ? <SelectedMark /> : null}
+      {marks}
       <Link to={to} aria-current={selected ? "true" : undefined} className="flex flex-col gap-px py-md pr-lg pl-lg">
-        <span className={article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>
-          {article.isRead ? null : <span className="sr-only">未読。</span>}
-          {marked ? <span className="sr-only">重要度{article.importance}。</span> : null}
-          <span data-title className={article.importance === 5 ? "headline-mark" : ""}>
-            <Highlighted text={headline} terms={terms} groups={matcher} />
-          </span>
-        </span>
+        <span className={article.isRead ? "type-body-md text-on-surface-muted" : "type-label-md"}>{title}</span>
         {excerpt !== null ? (
           <span data-excerpt className="line-clamp-2 type-body-md text-on-surface-muted">
             {excerptFromNote ? <span data-excerpt-note className="excerpt-note type-label-sm">メモ</span> : null}
@@ -89,7 +129,7 @@ export const ArticleRow = memo(function ArticleRow({
         )}
         <span className="flex flex-wrap items-center gap-x-md gap-y-xs type-label-sm text-on-surface-muted">
           <span>{sourceName}</span>
-          <span className="tabular-nums">{formatShort(time === "read" ? (article.readAt ?? article.updatedAt) : article.updatedAt, timeZone, new Date(now))}</span>
+          <span className="tabular-nums">{shownTime}</span>
           {article.origin === "generated" ? <span>出典{article.refCount}件</span> : null}
           {article.revision > 0 ? <Badge>更新</Badge> : null}
           {article.unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
