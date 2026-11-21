@@ -171,6 +171,23 @@ describe("applying the rules to a new feed article", () => {
     expect(flags(db, duplicate)).toMatchObject({ starred: false, notifyAt: null });
   });
 
+  it("meets a condition on the feed categories by one of the values", () => {
+    const db = createTestDb();
+    const feed = seedFeed(db);
+    createRule(db, rule([{ fields: ["feedCategories"], match: "regex", value: "^Tech$" }], ["star"]), clock);
+    const tech = seedFeedArticle(db, feed, { title: "a", feedCategories: ["Science", "Tech"] });
+    const finTech = seedFeedArticle(db, feed, { title: "b", feedCategories: ["FinTech"] });
+
+    applyRules(db, tech, NOW);
+    applyRules(db, finTech, NOW);
+
+    expect(flags(db, tech).starred).toBe(true);
+    expect(flags(db, finTech).starred).toBe(false);
+    expect(previewRule(db, { scope: { type: "all" }, conditions: [{ fields: ["feedCategories"], match: "contains", value: "tech" }] })).toEqual({
+      matchCount: 2,
+    });
+  });
+
   it("leaves a generated article alone", () => {
     const db = createTestDb();
     createRule(db, rule([title("x")], ["star"]), clock);

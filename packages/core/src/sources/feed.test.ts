@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Fetcher } from "../fetch/http.ts";
 import { fakeFetch, xml } from "../testing/http.ts";
-import { collectFeed, MAX_ATTACHMENT_URL_CHARS, MAX_ATTACHMENTS, parseFeed, parseSubscription } from "./feed.ts";
+import { collectFeed, MAX_ATTACHMENT_URL_CHARS, MAX_ATTACHMENTS, MAX_CATEGORIES, MAX_CATEGORY_CHARS, parseFeed, parseSubscription } from "./feed.ts";
 
 const RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -158,6 +158,7 @@ describe("parseSubscription", () => {
       contentHtml: "<p>Version 3 is <b>out</b>.</p><p>Second paragraph.</p>",
       attachments: [],
       description: null,
+      categories: [],
     });
     expect(feed.items[1]).toMatchObject({ key: null, author: "Sam Editor", contentHtml: "<p>Only a description.</p>", publishedAt: null });
   });
@@ -380,6 +381,85 @@ describe("parseSubscription with enclosures and Media RSS", () => {
   });
 });
 
+const RSS_CATEGORIES = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+  <title>Example News</title>
+  <item>
+    <title>Many kinds</title>
+    <link>https://example.org/news/1</link>
+    <category>Tech</category>
+    <category domain="https://example.org/sections">Science</category>
+    <category>  Tech  </category>
+    <category></category>
+    <category><![CDATA[<b>Space</b> &amp; Sky]]></category>
+    <dc:subject>AI</dc:subject>
+  </item>
+  <item>
+    <title>One kind</title>
+    <link>https://example.org/news/2</link>
+    <category>Sports</category>
+  </item>
+  <item>
+    <title>No kind</title>
+    <link>https://example.org/news/3</link>
+  </item>
+</channel></rss>`;
+
+const ATOM_CATEGORIES = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Notes</title>
+  <entry>
+    <id>tag:example.net,2026:1</id>
+    <title>First note</title>
+    <link href="https://example.net/notes/1"/>
+    <category term="tech" label="Technology"/>
+    <category term="science"/>
+    <category label="  "/>
+  </entry>
+</feed>`;
+
+const RDF_CATEGORIES = `<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://example.com/rss"><title>Example Advisories</title></channel>
+  <item rdf:about="https://example.com/advisory/7">
+    <title>Advisory 7</title>
+    <link>https://example.com/advisory/7</link>
+    <dc:subject>Security</dc:subject>
+  </item>
+</rdf:RDF>`;
+
+describe("parseSubscription with feed categories", () => {
+  it("reads category and dc:subject of RSS 2.0 items, trimmed, as plain text, without empty values and repeats", () => {
+    const items = parseSubscription(RSS_CATEGORIES).items;
+    expect(items.map((item) => item.categories)).toEqual([["Tech", "Science", "Space & Sky", "AI"], ["Sports"], []]);
+  });
+
+  it("reads dc:subject of RSS 1.0 items", () => {
+    expect(parseSubscription(RDF_CATEGORIES).items[0]!.categories).toEqual(["Security"]);
+  });
+
+  it("reads the label of an Atom category, and its term when it has no label", () => {
+    expect(parseSubscription(ATOM_CATEGORIES).items[0]!.categories).toEqual(["Technology", "science"]);
+  });
+
+  it("keeps a bounded number of categories, each cut to a bounded length", () => {
+    const many = Array.from({ length: 30 }, (_, index) => `<category>kind ${index}</category>`).join("");
+    const long = `<category>${"a".repeat(MAX_CATEGORY_CHARS + 50)}</category>`;
+    const xml = `<rss version="2.0"><channel><title>T</title><item><title>A</title><link>https://example.org/a</link>${long}${many}</item></channel></rss>`;
+    const [item] = parseSubscription(xml).items;
+    expect(item!.categories).toHaveLength(MAX_CATEGORIES);
+    expect(item!.categories[0]!.length).toBeLessThanOrEqual(MAX_CATEGORY_CHARS);
+    expect(item!.categories[1]).toBe("kind 0");
+  });
+
+  it("reads the tags of a JSON Feed item that are text, and nothing when there are none", () => {
+    const items = parseSubscription(JSON_FEED).items;
+    expect(items[0]!.categories).toEqual(["Tech", "AI"]);
+    expect(items[1]!.categories).toEqual([]);
+  });
+});
+
 const JSON_FEED = JSON.stringify({
   version: "https://jsonfeed.org/version/1.1",
   title: "Example JSON",
@@ -394,6 +474,7 @@ const JSON_FEED = JSON.stringify({
       content_html: "<p>Full <b>body</b>.</p>",
       date_published: "2026-03-01T09:00:00Z",
       authors: [{ name: "Alex Writer" }],
+      tags: ["Tech", " ", "AI", "Tech", 7],
     },
     {
       id: "post-1",
@@ -425,6 +506,7 @@ describe("JSON Feed", () => {
       contentHtml: "<p>Full <b>body</b>.</p>",
       attachments: [],
       description: null,
+      categories: ["Tech", "AI"],
     });
   });
 

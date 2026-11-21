@@ -14,8 +14,8 @@ import type {
 } from "../api.ts";
 import type { Clock } from "../clock.ts";
 import { DomainError, notFound, type FieldError } from "../errors.ts";
-import { compileConditions, conditionProblems, matchesAll, normalizedValue, type CompiledCondition } from "../filters/match.ts";
-import { keptByReader, pageArticles } from "./articles.ts";
+import { compileConditions, conditionProblems, matchesAll, normalizedValue, type CompiledCondition, type MatchableArticle } from "../filters/match.ts";
+import { feedCategoriesOf, keptByReader, pageArticles } from "./articles.ts";
 import { transaction, type Database } from "./database.ts";
 import { json, num, str, strOrNull, type Row } from "./rows.ts";
 
@@ -169,24 +169,27 @@ function storedFilters(db: Database): StoredFilter[] {
 
 // ---- matching ----------------------------------------------------------------------------------
 
-interface ArticleText {
+interface ArticleText extends MatchableArticle {
   id: number;
-  title: string;
-  contentText: string;
-  author: string | null;
-  url: string | null;
 }
 
 /** The feed articles `a` that meet `where`, with what conditions look at. */
 function articleTexts(db: Database, where = "1", params: Array<string | number | null> = []): ArticleText[] {
   return db
     .prepare(
-      `SELECT a.id, a.title, a.content_text, a.author,
+      `SELECT a.id, a.title, a.content_text, a.author, a.feed_categories,
               (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
          FROM articles a WHERE a.origin = 'feed' AND (${where})`,
     )
     .all(...params)
-    .map((row) => ({ id: num(row.id), title: str(row.title), contentText: str(row.content_text), author: strOrNull(row.author), url: strOrNull(row.url) }));
+    .map((row) => ({
+      id: num(row.id),
+      title: str(row.title),
+      contentText: str(row.content_text),
+      author: strOrNull(row.author),
+      url: strOrNull(row.url),
+      feedCategories: feedCategoriesOf(strOrNull(row.feed_categories)),
+    }));
 }
 
 /** Matches one filter's conditions against every feed article again. */

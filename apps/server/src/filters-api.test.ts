@@ -3,11 +3,12 @@ import { testServer } from "./testing.ts";
 
 const FEED = "https://shop.example.org/feed.xml";
 
-function rss(items: Array<{ key: string; title: string; content?: string }>): string {
+function rss(items: Array<{ key: string; title: string; content?: string; categories?: string[] }>): string {
   const body = items
     .map(
       (item) =>
         `<item><title>${item.title}</title><guid>${item.key}</guid><link>https://shop.example.org/${item.key}</link>` +
+        (item.categories ?? []).map((category) => `<category>${category}</category>`).join("") +
         `<description>${item.content ?? "text"}</description><pubDate>Sun, 01 Mar 2026 11:00:00 GMT</pubDate></item>`,
     )
     .join("");
@@ -22,8 +23,8 @@ async function setup() {
   s.site.set(
     FEED,
     rss([
-      { key: "a", title: "春の特売" },
-      { key: "b", title: "新製品", content: "この記事は提供です" },
+      { key: "a", title: "春の特売", categories: ["PR", "Sale"] },
+      { key: "b", title: "新製品", content: "この記事は提供です", categories: ["PRESS"] },
       { key: "c", title: "入荷のお知らせ" },
     ]),
   );
@@ -44,6 +45,20 @@ describe("filters", () => {
     const counts = await (await s.get("/api/v1/counts")).json();
     expect(counts).toMatchObject({ unread: 2, uncategorizedUnread: 2, feeds: [{ feedId: feed.id, unread: 2 }] });
     expect(await (await s.get("/api/v1/filters")).json()).toEqual([expect.objectContaining({ hiddenCount: 1 })]);
+  });
+
+  it("match the feed categories, and the article gives them", async () => {
+    const { s, titles } = await setup();
+    const condition = { fields: ["feedCategories"], match: "regex", value: "^PR$" };
+
+    const created = await s.post("/api/v1/filters", hide(condition));
+
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({ conditions: [condition], hiddenCount: 1 });
+    expect((await titles()).sort()).toEqual(["入荷のお知らせ", "新製品"].sort());
+    const items: Array<{ id: number; title: string }> = (await (await s.get("/api/v1/articles")).json()).items;
+    const press = items.find((item) => item.title === "新製品")!;
+    expect(await (await s.get(`/api/v1/articles/${press.id}`)).json()).toMatchObject({ feedCategories: ["PRESS"] });
   });
 
   it("cover the content once the condition is changed to cover it", async () => {

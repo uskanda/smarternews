@@ -38,6 +38,21 @@ describe("a hide filter", () => {
     expect(listed(db)).toEqual(["新製品"]);
   });
 
+  it("matches the feed categories of the stored feed articles, each category alone", () => {
+    const db = createTestDb();
+    const feed = seedFeed(db);
+    seedFeedArticle(db, feed, { title: "Chip", feedCategories: ["Science", "Tech"] });
+    seedFeedArticle(db, feed, { title: "Bank", feedCategories: ["FinTech"] });
+    seedFeedArticle(db, feed, { title: "Plain" });
+    const condition: FilterCondition = { fields: ["feedCategories"], match: "regex", value: "^tech$" };
+
+    expect(previewFilter(db, hide([condition]))).toEqual({ hiddenCount: 1 });
+    const filter = createFilter(db, hide([condition]), clock);
+
+    expect(filter).toMatchObject({ hiddenCount: 1, conditions: [condition] });
+    expect(listed(db)).toEqual(["Bank", "Plain"]);
+  });
+
   it("refuses the same filter twice, however the value is written", () => {
     const db = createTestDb();
     createFilter(db, hide([title("PR")]), clock);

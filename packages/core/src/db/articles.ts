@@ -352,6 +352,18 @@ function attachmentsOf(row: Row): ArticleAttachment[] {
   });
 }
 
+/** The stored feed categories of a feed article. A list that cannot be read counts as none; entries not text are left out. */
+export function feedCategoriesOf(stored: string | null): string[] {
+  if (stored === null) return [];
+  let entries: unknown;
+  try {
+    entries = JSON.parse(stored);
+  } catch {
+    return [];
+  }
+  return Array.isArray(entries) ? entries.filter((entry): entry is string => typeof entry === "string" && entry.length > 0) : [];
+}
+
 function toArticle(db: Database, row: Row): Article {
   const id = num(row.id);
   const body = str(row.body);
@@ -388,6 +400,7 @@ function toArticle(db: Database, row: Row): Article {
     annotations: annotationsOf(db, id),
     mentions: mentionsOf(db, id),
     attachments: attachmentsOf(row),
+    feedCategories: str(row.origin) === "feed" ? feedCategoriesOf(strOrNull(row.feed_categories)) : [],
     missed: isMissed(db, id),
     followUpsStopped: bool(row.follow_ups_stopped),
   };

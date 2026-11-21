@@ -102,6 +102,26 @@ describe("adding a filter", () => {
     expect(within(form).getByLabelText("条件1の値")).toHaveValue("");
   });
 
+  it("offers 分類 as a field, which matches the feed categories one by one", async () => {
+    const server = makeServer();
+    const feed = feedOf(server, "Shop");
+    seedFeedArticle(server.db, feed.id, { title: "広告", feedCategories: ["Local", "PR"] });
+    seedFeedArticle(server.db, feed.id, { title: "取材", feedCategories: ["PRESS"] });
+    const { user } = renderApp({ server, route: "/settings/filters" });
+    const form = await section("フィルターの追加");
+
+    const fields = within(form).getByRole("group", { name: "条件1の欄" });
+    await user.click(within(fields).getByRole("checkbox", { name: "タイトル" }));
+    await user.click(within(fields).getByRole("checkbox", { name: "分類" }));
+    await user.selectOptions(within(form).getByLabelText("条件1の方法"), "regex");
+    await user.type(within(form).getByLabelText("条件1の値"), "^PR$");
+    await user.click(within(form).getByRole("button", { name: "フィルターを追加" }));
+
+    expect(await screen.findByText("フィルターを追加しました。1件を隠しています。")).toBeInTheDocument();
+    expect(await rowOf("分類が正規表現「^PR$」に合う")).toHaveTextContent("1件を隠しています");
+    expect(listFilters(server.db)).toMatchObject([{ conditions: [{ fields: ["feedCategories"], match: "regex", value: "^PR$" }] }]);
+  });
+
   it("offers no 全体 to a keep filter, and adds nothing until a scope is chosen", async () => {
     const { user } = renderApp({ server: withArticles().server, route: "/settings/filters" });
     const form = await section("フィルターの追加");
@@ -200,7 +220,7 @@ describe("the filter page by keyboard on a narrow screen", () => {
     within(form).getByLabelText("範囲").focus();
     await user.tab();
     expect(within(form).getByRole("checkbox", { name: "タイトル" })).toHaveFocus();
-    for (let step = 0; step < 4; step += 1) await user.tab();
+    for (let step = 0; step < 5; step += 1) await user.tab();
     expect(within(form).getByLabelText("条件1の方法")).toHaveFocus();
     await user.tab();
     expect(value).toHaveFocus();

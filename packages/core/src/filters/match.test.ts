@@ -7,6 +7,7 @@ const article = (patch: Partial<MatchableArticle> = {}): MatchableArticle => ({
   contentText: "",
   author: null,
   url: null,
+  feedCategories: [],
   ...patch,
 });
 
@@ -78,6 +79,30 @@ describe("the fields of a condition", () => {
   it("matches the content text, which holds no link targets", () => {
     // The stored content text has the link targets taken out already: only the words of the link remain.
     expect(meets([contains(["content"], "campaign")], article({ contentText: "詳しくはこちら" }))).toBe(false);
+  });
+});
+
+describe("the feed categories", () => {
+  it("match each category alone, so that ^ and $ hold one whole category", () => {
+    const exact = [regex(["feedCategories"], "^Tech$")];
+    expect(meets(exact, article({ feedCategories: ["Science", "Tech"] }))).toBe(true);
+    expect(meets(exact, article({ feedCategories: ["FinTech"] }))).toBe(false);
+    expect(meets(exact, article({ feedCategories: ["tech"] }))).toBe(true);
+  });
+
+  it("find a part of any one category, never across two", () => {
+    expect(meets([contains(["feedCategories"], "sport")], article({ feedCategories: ["Local", "Sports"] }))).toBe(true);
+    expect(meets([contains(["feedCategories"], "ab")], article({ feedCategories: ["a", "b"] }))).toBe(false);
+    expect(meets([regex(["feedCategories"], "a\\sb|a\\nb")], article({ feedCategories: ["a", "b"] }))).toBe(false);
+  });
+
+  it("never meet a condition for an article without them", () => {
+    expect(meets([regex(["feedCategories"], ".*")], article({ feedCategories: [] }))).toBe(false);
+    expect(meets([regex(["title", "feedCategories"], "^新製品")], article({ feedCategories: [] }))).toBe(true);
+  });
+
+  it("are not the title", () => {
+    expect(meets([contains(["title"], "Tech")], article({ feedCategories: ["Tech"] }))).toBe(false);
   });
 });
 

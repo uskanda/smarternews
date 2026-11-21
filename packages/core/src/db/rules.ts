@@ -14,7 +14,7 @@ import {
 import type { Clock } from "../clock.ts";
 import { DomainError, notFound, type FieldError } from "../errors.ts";
 import { compileConditions, conditionProblems, matchesAll, normalizedValue, Texts } from "../filters/match.ts";
-import { hiddenByFilters, hiddenDuplicate, SUMMARY_COLUMNS, toSummary } from "./articles.ts";
+import { feedCategoriesOf, hiddenByFilters, hiddenDuplicate, SUMMARY_COLUMNS, toSummary } from "./articles.ts";
 import type { Database } from "./database.ts";
 import { json, num, numOrNull, str, strOrNull, type Row } from "./rows.ts";
 
@@ -160,13 +160,14 @@ interface RuleArticle {
   contentText: string;
   author: string | null;
   url: string | null;
+  feedCategories: string[];
 }
 
 /** The feed articles `a` that meet `where`, with what conditions look at. */
 function ruleArticles(db: Database, where: string, params: Array<string | number | null>): RuleArticle[] {
   return db
     .prepare(
-      `SELECT a.id, a.feed_id, a.category_id, a.title, a.content_text, a.author,
+      `SELECT a.id, a.feed_id, a.category_id, a.title, a.content_text, a.author, a.feed_categories,
               (SELECT url FROM article_refs r WHERE r.article_id = a.id ORDER BY r.position LIMIT 1) AS url
          FROM articles a WHERE a.origin = 'feed' AND (${where})`,
     )
@@ -179,6 +180,7 @@ function ruleArticles(db: Database, where: string, params: Array<string | number
       contentText: str(row.content_text),
       author: strOrNull(row.author),
       url: strOrNull(row.url),
+      feedCategories: feedCategoriesOf(strOrNull(row.feed_categories)),
     }));
 }
 

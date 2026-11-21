@@ -17,8 +17,9 @@ const SELECT = "rounded-md border border-outline-strong bg-surface px-sm py-xs t
 const INPUT = "w-full rounded-md border border-outline-strong bg-surface px-sm py-xs type-body-md text-on-surface aria-invalid:border-error";
 
 export const ACTION_LABEL: Record<FilterAction, string> = { hide: "隠すフィルター", keep: "残すフィルター" };
-const FIELDS: FilterField[] = ["title", "content", "author", "url"];
-const FIELD_LABEL: Record<FilterField, string> = { title: "タイトル", content: "内容", author: "著者", url: "URL" };
+const FIELDS: FilterField[] = ["title", "content", "author", "url", "feedCategories"];
+// 分類 is the feed categories: what the feed files an article under, not the categories of this app.
+const FIELD_LABEL: Record<FilterField, string> = { title: "タイトル", content: "内容", author: "著者", url: "URL", feedCategories: "分類" };
 const MATCH_LABEL: Record<FilterMatch, string> = { contains: "部分一致", regex: "正規表現" };
 
 /** The scope as the select holds it: "all", "c:<category id>", "f:<feed id>", or "" while none is chosen. */

@@ -200,6 +200,8 @@ export const ArticlePage = memo(function ArticlePage({
       ? [
           sourceName || (feeds.data?.find((entry) => entry.id === article.feedId)?.title ?? ""),
           article.author,
+          // What the feed files the article under, not a category of this app.
+          article.feedCategories.join("、"),
           `${formatFull(article.updatedAt, timeZone)} に公開`,
         ]
       : [

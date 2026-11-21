@@ -376,6 +376,27 @@ describe("a feed article that is opened", () => {
     expect(open.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("shows the feed categories beside the author, and nothing for an article without them", async () => {
+    const server = makeServer();
+    const blog = feedOf(server, "Blog");
+    const tagged = seedFeedArticle(server.db, blog.id, { title: "Tagged", author: "山田", feedCategories: ["Tech", "AI"] });
+    const plain = seedFeedArticle(server.db, blog.id, { title: "Plain", author: "山田" });
+
+    const first = renderApp({ server, route: `/f/${blog.id}/${tagged}` });
+    const pane = await opened();
+    await within(pane).findByRole("heading", { level: 2, name: "Tagged" });
+    const author = within(pane).getByText("山田");
+    const categories = within(pane).getByText("Tech、AI");
+    expect(author.nextElementSibling).toBe(categories);
+    first.unmount();
+
+    renderApp({ server, route: `/f/${blog.id}/${plain}` });
+    const other = await opened();
+    await within(other).findByRole("heading", { level: 2, name: "Plain" });
+    expect(other).not.toHaveTextContent("Tech");
+    expect(within(other).getByText("山田").nextElementSibling).toHaveTextContent("に公開");
+  });
+
   it("is marked as read, and stays in the unread list until the list changes", async () => {
     const { server, blog, newPost } = seeded();
     const { user } = renderApp({ server, route: `/f/${blog.id}` });
