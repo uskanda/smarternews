@@ -12,7 +12,7 @@ import {
 import { seedFeedArticle } from "@smarternews/core/testing";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { back, gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
+import { back, failPaths, gate, makeServer, renderApp, type TestServer } from "../testing/harness.tsx";
 import { intersect, intersectionOptions, setFontSize } from "../testing/setup.ts";
 
 const MINUTE = 60_000;
@@ -2217,7 +2217,7 @@ describe("events", () => {
     event("Morning class", "2026-03-11T10:00:00.000Z", "2026-03-11T12:00:00.000Z", { venue: "City Hall", registration: "required" });
     event("Evening talk", "2026-03-11T18:00:00.000Z", "2026-03-11T20:00:00.000Z", { venue: "Library", fee: "500円", registration: "not_required" });
     event("Week-long festival", "2026-03-08T00:00:00.000Z", "2026-03-12T23:59:59.999Z");
-    return { server };
+    return { server, event };
   }
 
   it("groups the events that have not ended by day, soonest first, with those under way on top", async () => {
@@ -2275,6 +2275,129 @@ describe("events", () => {
     expect(evening).toHaveFocus();
     expect(evening.closest("li")!.querySelector("[data-selected-mark]")).not.toBeNull();
     expect(morning.closest("li")!.querySelector("[data-selected-mark]")).toBeNull();
+  });
+
+  const eventList = () => screen.getByRole("region", { name: "イベントの一覧" });
+  const EMPTY = "これから開催されるイベントはありません。";
+
+  /** Holds or fails the requests for the list of events while `state` says so; the rest go through. */
+  function watchEventList(server: TestServer) {
+    const state: { hold: boolean; fail: boolean; release: () => void } = { hold: false, fail: false, release: () => {} };
+    const original = server.app.request.bind(server.app);
+    server.app.request = ((input: string, init?: RequestInit) => {
+      if (!/\/articles\?.*kind=event/.test(String(input))) return original(input, init);
+      if (state.fail) return Promise.resolve(new Response(JSON.stringify({ error: { code: "internal", message: "boom" } }), { status: 500 }));
+      if (state.hold) return new Promise<Response>((resolve) => (state.release = () => resolve(original(input, init) as Promise<Response>)));
+      return original(input, init);
+    }) as typeof server.app.request;
+    onTestFinished(() => {
+      server.app.request = original;
+    });
+    return state;
+  }
+
+  it("says that it is loading while the events are fetched, not that there are none", async () => {
+    const { server } = seeded();
+    const state = watchEventList(server);
+    state.hold = true;
+    renderApp({ server, route: "/c/local-events" });
+
+    expect(await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByText("読み込み中…")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY)).not.toBeInTheDocument();
+    state.hold = false;
+    state.release();
+    await within(eventList()).findByRole("link", { name: /Morning class/ });
+    expect(screen.queryByText("読み込み中…")).not.toBeInTheDocument();
+  });
+
+  it("says why the events could not be fetched, and fetches them again on もう一度試す", async () => {
+    const { server } = seeded();
+    const state = watchEventList(server);
+    state.fail = true;
+    const { user } = renderApp({ server, route: "/c/local-events" });
+
+    const alert = await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByRole("alert");
+    expect(screen.queryByText(EMPTY)).not.toBeInTheDocument();
+    state.fail = false;
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
+
+    await within(eventList()).findByRole("link", { name: /Morning class/ });
+    expect(within(eventList()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says that there are none only once the fetch has succeeded", async () => {
+    const server = makeServer("2026-03-10T12:00:00.000Z");
+    server.category("Local events", "event");
+    renderApp({ server, route: "/c/local-events" });
+    expect(await screen.findByText(EMPTY)).toBeInTheDocument();
+  });
+
+  it("loads the events past the first 50 on さらに読み込む", async () => {
+    const server = makeServer("2026-03-10T12:00:00.000Z");
+    const category = server.category("Local events", "event");
+    for (let index = 0; index < 51; index += 1) {
+      const day = String(11 + Math.floor(index / 10)).padStart(2, "0");
+      const hour = String(8 + (index % 10)).padStart(2, "0");
+      server.article(category.id, {
+        title: `Event ${index + 1}`,
+        kind: "event",
+        event: { key: `e${index}`, startsAt: `2026-03-${day}T${hour}:00:00.000Z`, endsAt: `2026-03-${day}T${hour}:30:00.000Z`, venue: null, fee: null, registration: "unknown" },
+      });
+    }
+    const { user } = renderApp({ server, route: "/c/local-events" });
+
+    await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByText("Event 50");
+    expect(within(eventList()).queryByText("Event 51")).not.toBeInTheDocument();
+    await user.click(within(eventList()).getByRole("button", { name: "さらに読み込む" }));
+
+    await within(eventList()).findByText("Event 51");
+    expect(within(eventList()).queryByRole("button", { name: "さらに読み込む" })).not.toBeInTheDocument();
+  });
+
+  it("fetches the events again on 読み直す", async () => {
+    const { server, event } = seeded();
+    const { user } = renderApp({ server, route: "/c/local-events" });
+    await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByRole("link", { name: /Morning class/ });
+
+    event("Just announced", "2026-03-14T10:00:00.000Z", "2026-03-14T12:00:00.000Z");
+    await user.click(within(eventList()).getByRole("button", { name: "読み直す" }));
+
+    expect(await within(eventList()).findByRole("link", { name: /Just announced/ })).toBeInTheDocument();
+  });
+
+  it("marks the events of the category read with すべて既読にする, and offers the undo", async () => {
+    const { server } = seeded();
+    const other = server.article(server.category("Tools").id, { title: "Other news" });
+    server.clock.advance(MINUTE);
+    const { user } = renderApp({ server, route: "/c/local-events" });
+    await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByRole("link", { name: /Morning class/ });
+    expect(within(eventList()).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(eventList()).queryByRole("button", { name: /^並び順/ })).not.toBeInTheDocument();
+
+    await user.click(within(eventList()).getByRole("button", { name: "すべて既読にする" }));
+
+    // The event that has ended is in no list, so it is not counted.
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("4件を既読にしました");
+    expect(getArticle(server.db, other).isRead).toBe(false);
+    await waitFor(() => expect(within(eventList()).getByRole("link", { name: /Morning class/ }).closest("li")).toHaveAttribute("data-read", "true"));
+    expect(within(eventList()).queryByRole("button", { name: "すべて既読にする" })).not.toBeInTheDocument();
+
+    await user.click(within(status).getByRole("button", { name: "取り消す" }));
+    await waitFor(() => expect(within(eventList()).getByRole("link", { name: /Morning class/ }).closest("li")).toHaveAttribute("data-read", "false"));
+  });
+
+  it("does not send a lower bound of importance left in the address", async () => {
+    const { server } = seeded();
+    const ids = server.db.prepare("SELECT id FROM articles WHERE kind = 'event' AND event_ends_at >= ?").all("2026-03-10T12:00:00.000Z").map((entry) => entry.id as number);
+    server.db.prepare("UPDATE articles SET importance = 2").run();
+    server.clock.advance(MINUTE);
+    const { user } = renderApp({ server, route: "/c/local-events?min=4" });
+    await within(await screen.findByRole("region", { name: "イベントの一覧" })).findByRole("link", { name: /Morning class/ });
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual(ids.map(() => true)));
   });
 });
 
@@ -2555,7 +2678,30 @@ describe("keys on the list and the article", () => {
     await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false, false]));
   });
 
-  it("marks nothing with Shift+A in an event category", async () => {
+  it("marks the events of an event category read with Shift+A, and offers the undo", async () => {
+    const server = makeServer("2026-03-10T12:00:00.000Z");
+    const category = server.category("Local events", "event");
+    const ids = ["Morning class", "Evening talk"].map((title, index) =>
+      server.article(category.id, {
+        title,
+        kind: "event",
+        event: { key: title, startsAt: `2026-03-11T1${index}:00:00.000Z`, endsAt: `2026-03-11T1${index}:30:00.000Z`, venue: null, fee: null, registration: "unknown" },
+      }),
+    );
+    server.clock.advance(MINUTE);
+    const { user } = renderApp({ server, route: "/c/local-events" });
+    await screen.findByRole("link", { name: /Evening talk/ });
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([true, true]));
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("2件を既読にしました");
+    await user.click(within(status).getByRole("button", { name: "取り消す" }));
+    await waitFor(() => expect(ids.map((id) => getArticle(server.db, id).isRead)).toEqual([false, false]));
+  });
+
+  it("marks nothing with Shift+A in an event category without unread events", async () => {
     const server = makeServer("2026-03-10T12:00:00.000Z");
     const category = server.category("Local events", "event");
     const id = server.article(category.id, {
@@ -2563,13 +2709,29 @@ describe("keys on the list and the article", () => {
       kind: "event",
       event: { key: "class", startsAt: "2026-03-11T10:00:00.000Z", endsAt: "2026-03-11T12:00:00.000Z", venue: null, fee: null, registration: "unknown" },
     });
+    setArticleFlags(server.db, id, { isRead: true }, server.clock().toISOString());
     const { user, requests } = renderApp({ server, route: "/c/local-events" });
     await screen.findByRole("link", { name: /Morning class/ });
+    expect(screen.queryByRole("button", { name: "すべて既読にする" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "読み直す" })).toBeInTheDocument();
 
     await user.keyboard("{Shift>}A{/Shift}");
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(getArticle(server.db, id).isRead).toBe(false);
+    expect(requests.some((request) => request.startsWith("POST") && request.includes("mark-read"))).toBe(false);
+  });
+
+  it("marks nothing with Shift+A in the recently read articles", async () => {
+    const server = makeServer();
+    const read = server.article(server.category("Tools").id, { title: "Read one" });
+    setArticleFlags(server.db, read, { isRead: true }, server.clock().toISOString());
+    server.article(server.category("Security").id, { title: "Still unread" });
+    const { user, requests } = renderApp({ server, route: "/recently-read" });
+    await within(list()).findByRole("link", { name: /Read one/ });
+
+    await user.keyboard("{Shift>}A{/Shift}");
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(requests.some((request) => request.startsWith("POST") && request.includes("mark-read"))).toBe(false);
   });
 
@@ -3578,5 +3740,60 @@ describe("recording that an article was opened", () => {
     await waitFor(() => expect(opens).toHaveLength(1));
     expect(getArticle(server.db, id!).openedAt).toBeNull();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("a list whose category or feed could not be loaded", () => {
+  it("says that the categories could not be loaded, not that it is loading, and loads the list on a retry", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id, { title: "Story" });
+    const failing = failPaths(server, ["categories"]);
+    const { user } = renderApp({ server, route: "/c/security" });
+
+    const alert = await within(list()).findByRole("alert");
+    expect(within(list()).queryByText("読み込み中…")).not.toBeInTheDocument();
+
+    failing.clear();
+    await user.click(within(alert).getByRole("button", { name: "もう一度試す" }));
+    expect(await within(list()).findByRole("link", { name: /Story/ })).toBeInTheDocument();
+    expect(within(list()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says that the feeds could not be loaded on the list of a feed", async () => {
+    const server = makeServer();
+    const feed = insertFeed(server.db, { url: "https://x.example.org/feed.xml", title: "X", categoryId: null }, server.clock);
+    failPaths(server, ["feeds"]);
+    renderApp({ server, route: `/f/${feed.id}` });
+
+    expect(await within(list()).findByRole("alert")).toBeInTheDocument();
+    expect(within(list()).queryByText("読み込み中…")).not.toBeInTheDocument();
+  });
+
+  it("asks for the categories again on r when they failed", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id, { title: "Story" });
+    const failing = failPaths(server, ["categories"]);
+    const { user } = renderApp({ server, route: "/c/security" });
+    await within(list()).findByRole("alert");
+
+    failing.clear();
+    await user.keyboard("r");
+
+    expect(await within(list()).findByRole("link", { name: /Story/ })).toBeInTheDocument();
+    expect(within(nav()).getByRole("link", { name: /Security/ })).toBeInTheDocument();
+  });
+
+  it("does not ask for the categories or the feeds again on r when they arrived", async () => {
+    const server = makeServer();
+    server.article(server.category("Security").id, { title: "Story" });
+    const { user, requests } = renderApp({ server, route: "/c/security" });
+    await within(list()).findByRole("link", { name: /Story/ });
+    const asked = () => requests.filter((request) => /^GET \S*\/api\/v1\/(categories|feeds)$/.test(request)).length;
+    const before = asked();
+
+    await user.keyboard("r");
+    expect(await screen.findByText("新しい記事はありませんでした", { selector: '[role="status"] > span' })).toBeInTheDocument();
+
+    expect(asked()).toBe(before);
   });
 });

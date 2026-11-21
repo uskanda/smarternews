@@ -1,5 +1,5 @@
 import type { Article, ArticleListQuery, ArticleSummary, Category, DigestTargetRequest, Feed, ListFormat, ListSort } from "@smarternews/core/api";
-import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -60,7 +60,7 @@ import { categorySettingsPath, listPathOf } from "../lib/paths.ts";
 import { lineHeights } from "../styles/sizes.ts";
 import { PaneResizer } from "../ui/PaneResizer.tsx";
 import { useToast } from "../shell/toast.tsx";
-import { Button, Checkbox, ErrorNotice, Loading } from "../ui/controls.tsx";
+import { Button, Checkbox, ErrorNotice, Loading, messageFor } from "../ui/controls.tsx";
 import { LoadMore } from "../ui/LoadMore.tsx";
 import { AddFeedDialog } from "./AddFeedDialog.tsx";
 import { AddTopicButton } from "./AddTopicDialog.tsx";
@@ -110,6 +110,9 @@ const TITLES: Record<Exclude<View, "category" | "category-generated" | "feed" | 
   annotations: ANNOTATIONS_LABEL,
 };
 const EMPTY: ArticleSummary[] = [];
+
+/** Whether a query's last fetch failed, with or without data from before. */
+const hasFailed = (query: Query): boolean => query.state.status === "error";
 const NO_IDS: ReadonlySet<number> = new Set();
 
 /**
@@ -257,6 +260,9 @@ export function ReaderPage({ view }: { view: View }) {
     if (view === "search" || view === "mention") return null;
     return { type: view };
   }, [view, inCategory, category, feed, savedSearch]);
+  // The categories or the feeds the path waits for, when they could not be loaded: the list never comes without them.
+  const awaited = inCategory ? categories : view === "feed" ? feeds : null;
+  const awaitedFailed = awaited !== null && awaited.isError && awaited.data === undefined ? awaited : null;
   const isEvents = view === "category" && category?.kind === "event";
   const readToggle = target !== null && hasReadToggle(target) && !isEvents;
   // Search results, saved or not, and the articles of a name never offer marking everything read: they are found
@@ -270,7 +276,8 @@ export function ReaderPage({ view }: { view: View }) {
   const annotationParam = isAnnotations ? search.get("annotation") : null;
   const focusAnnotation = annotationParam && /^\d{1,15}$/.test(annotationParam) ? Number(annotationParam) : null;
   const includeRead = search.get("read") === "1";
-  const importantOnly = importanceFilter && search.get("min") === "4";
+  // An event category offers no such filter, so a `min=4` left in the address does not narrow marking all as read.
+  const importantOnly = importanceFilter && !isEvents && search.get("min") === "4";
   // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
   const listViews = useListViews();
   const viewsSettled = listViews.isSuccess || listViews.isError;
@@ -688,6 +695,9 @@ export function ReaderPage({ view }: { view: View }) {
       client.invalidateQueries({ queryKey: ["counts"] }),
       // The list of annotations is not a list of articles, so it is fetched again on its own.
       isAnnotations ? client.invalidateQueries({ queryKey: ["annotations"] }) : undefined,
+      // The categories and the feeds only when they failed: the left pane and the list of one wait for them.
+      client.invalidateQueries({ queryKey: ["categories"], predicate: hasFailed }),
+      client.invalidateQueries({ queryKey: ["feeds"], predicate: hasFailed }),
     ]);
   }
 
@@ -1033,8 +1043,10 @@ export function ReaderPage({ view }: { view: View }) {
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = expandedList ? topItem : (opened ?? items[index]);
   // The article the keys of its body work on: the one in the article pane, or the one at the top of the expanded list.
   const focused: Article | undefined = expandedList ? topArticle : opened && opened.id === articleId ? opened : undefined;
-  // A page not loaded yet may hold unread articles, which marking all as read takes too.
-  const canMarkAll = listControls && (view === "unread" || readToggle) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
+  // A page not loaded yet may hold unread articles, which marking all as read takes too. An event category has no
+  // switch for the read events, but its unread ones are still a list to finish.
+  const canMarkAll =
+    listControls && (view === "unread" || readToggle || isEvents) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
   useHotkeys(
     {
       // The list of annotations moves through its own rows.
@@ -1112,11 +1124,36 @@ export function ReaderPage({ view }: { view: View }) {
   // all again. A row shows the time of day, 昨日, or a date, none of which changes within the minute.
   const listMinute = Math.floor(now().getTime() / 60_000) * 60_000;
 
+  const listActions = (
+    <>
+      {canMarkAll ? (
+        <span className="flex">
+          <Button className="rounded-r-none!" disabled={markingAll} onClick={() => void runMarkAll(markAllRead)}>
+            すべて既読にする
+          </Button>
+          <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
+        </span>
+      ) : null}
+      <Button onClick={() => void refreshByUser()} disabled={refreshing}>
+        {refreshing ? "読み直し中…" : "読み直す"}
+      </Button>
+    </>
+  );
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} moveRef={annotationMove} />
   ) : isEvents ? (
     <EventList
       title={title}
+      actions={listActions}
+      state={{
+        // Until the views are known the list is not fetched, and is no more done than while it is.
+        pending: list.isPending,
+        error: list.isError ? list.error : null,
+        retry: () => void list.refetch(),
+        hasMore: list.hasNextPage,
+        loadingMore: list.isFetchingNextPage,
+        loadMore: () => void list.fetchNextPage(),
+      }}
       settingsPath={category ? categorySettingsPath(category.id) : null}
       events={items}
       selectedId={current}
@@ -1133,19 +1170,7 @@ export function ReaderPage({ view }: { view: View }) {
           <h1 className="min-w-0 grow basis-[6em] truncate type-headline-md" title={title}>
             {title}
           </h1>
-          <div className="flex flex-wrap gap-sm">
-            {canMarkAll ? (
-              <span className="flex">
-                <Button className="rounded-r-none!" disabled={markingAll} onClick={() => void runMarkAll(markAllRead)}>
-                  すべて既読にする
-                </Button>
-                <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
-              </span>
-            ) : null}
-            <Button onClick={() => void refreshByUser()} disabled={refreshing}>
-              {refreshing ? "読み直し中…" : "読み直す"}
-            </Button>
-          </div>
+          <div className="flex flex-wrap gap-sm">{listActions}</div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
           {readToggle ? (
@@ -1225,7 +1250,13 @@ export function ReaderPage({ view }: { view: View }) {
         {/* A next page that could not be loaded is said below the rows, where the reader is. */}
         {wordsProblem !== null ? <ErrorNotice message={wordsProblem} /> : null}
         {active.isError && !active.isFetchNextPageError ? <ErrorNotice error={active.error} onRetry={() => void active.refetch()} /> : null}
-        {active.isPending && !active.isError && !(isSearch && words.length === 0) && wordsProblem === null && !(isMention && mentionName.length === 0) ? <Loading /> : null}
+        {awaitedFailed ? (
+          <ErrorNotice
+            message={`${inCategory ? "カテゴリ" : "購読フィード"}を読み込めませんでした。${messageFor(awaitedFailed.error)}`}
+            onRetry={() => void awaitedFailed.refetch()}
+          />
+        ) : null}
+        {active.isPending && !active.isError && awaitedFailed === null && !(isSearch && words.length === 0) && wordsProblem === null && !(isMention && mentionName.length === 0) ? <Loading /> : null}
         {isSearch && (words.length === 0 || (results.isSuccess && items.length === 0)) ? (
           <SearchEmpty words={words} narrowed={narrowed} onWiden={widen} />
         ) : null}

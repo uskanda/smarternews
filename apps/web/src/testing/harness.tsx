@@ -88,6 +88,20 @@ export function makeServer(start?: string, options: Parameters<typeof testServer
   return server;
 }
 
+/**
+ * Makes the requests for the given paths below /api/v1, such as "categories", fail as if the server were down,
+ * whatever their query. The returned set holds the paths that fail: delete one, or clear it, to let them through.
+ */
+export function failPaths(server: TestServer, paths: string[]): Set<string> {
+  const failing = new Set(paths);
+  const original = server.app.request.bind(server.app);
+  server.app.request = ((input: string, init?: RequestInit) => {
+    const path = String(input).split("?")[0]!;
+    return [...failing].some((name) => path.endsWith(`/api/v1/${name}`)) ? Promise.reject(new TypeError("fetch failed")) : original(input, init);
+  }) as typeof server.app.request;
+  return failing;
+}
+
 /** Renders the whole app against a real API with an in-memory database. */
 export function renderApp(options: RenderOptions = {}) {
   const server = options.server ?? makeServer();
