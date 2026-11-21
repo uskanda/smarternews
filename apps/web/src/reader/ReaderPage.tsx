@@ -276,7 +276,8 @@ export function ReaderPage({ view }: { view: View }) {
   const annotationParam = isAnnotations ? search.get("annotation") : null;
   const focusAnnotation = annotationParam && /^\d{1,15}$/.test(annotationParam) ? Number(annotationParam) : null;
   const includeRead = search.get("read") === "1";
-  const importantOnly = importanceFilter && search.get("min") === "4";
+  // An event category offers no such filter, so a `min=4` left in the address does not narrow marking all as read.
+  const importantOnly = importanceFilter && !isEvents && search.get("min") === "4";
   // The order the entry keeps. The list waits for the views, so that it is not fetched first in the wrong order.
   const listViews = useListViews();
   const viewsSettled = listViews.isSuccess || listViews.isError;
@@ -1042,8 +1043,10 @@ export function ReaderPage({ view }: { view: View }) {
   const selected: Pick<Article, "id" | "isRead" | "starred" | "primaryUrl"> | undefined = expandedList ? topItem : (opened ?? items[index]);
   // The article the keys of its body work on: the one in the article pane, or the one at the top of the expanded list.
   const focused: Article | undefined = expandedList ? topArticle : opened && opened.id === articleId ? opened : undefined;
-  // A page not loaded yet may hold unread articles, which marking all as read takes too.
-  const canMarkAll = listControls && (view === "unread" || readToggle) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
+  // A page not loaded yet may hold unread articles, which marking all as read takes too. An event category has no
+  // switch for the read events, but its unread ones are still a list to finish.
+  const canMarkAll =
+    listControls && (view === "unread" || readToggle || isEvents) && (fetched.some((item) => !item.isRead) || Boolean(active.hasNextPage));
   useHotkeys(
     {
       // The list of annotations moves through its own rows.
@@ -1121,11 +1124,36 @@ export function ReaderPage({ view }: { view: View }) {
   // all again. A row shows the time of day, 昨日, or a date, none of which changes within the minute.
   const listMinute = Math.floor(now().getTime() / 60_000) * 60_000;
 
+  const listActions = (
+    <>
+      {canMarkAll ? (
+        <span className="flex">
+          <Button className="rounded-r-none!" disabled={markingAll} onClick={() => void runMarkAll(markAllRead)}>
+            すべて既読にする
+          </Button>
+          <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
+        </span>
+      ) : null}
+      <Button onClick={() => void refreshByUser()} disabled={refreshing}>
+        {refreshing ? "読み直し中…" : "読み直す"}
+      </Button>
+    </>
+  );
   const listPane = isAnnotations ? (
     <AnnotationList selected={focusAnnotation} timeZone={timeZone} now={now()} moveRef={annotationMove} />
   ) : isEvents ? (
     <EventList
       title={title}
+      actions={listActions}
+      state={{
+        // Until the views are known the list is not fetched, and is no more done than while it is.
+        pending: list.isPending,
+        error: list.isError ? list.error : null,
+        retry: () => void list.refetch(),
+        hasMore: list.hasNextPage,
+        loadingMore: list.isFetchingNextPage,
+        loadMore: () => void list.fetchNextPage(),
+      }}
       settingsPath={category ? categorySettingsPath(category.id) : null}
       events={items}
       selectedId={current}
@@ -1142,19 +1170,7 @@ export function ReaderPage({ view }: { view: View }) {
           <h1 className="min-w-0 grow basis-[6em] truncate type-headline-md" title={title}>
             {title}
           </h1>
-          <div className="flex flex-wrap gap-sm">
-            {canMarkAll ? (
-              <span className="flex">
-                <Button className="rounded-r-none!" disabled={markingAll} onClick={() => void runMarkAll(markAllRead)}>
-                  すべて既読にする
-                </Button>
-                <MarkOlderMenu disabled={markingAll} onChoose={(period) => void runMarkAll(() => markOlderRead(period))} />
-              </span>
-            ) : null}
-            <Button onClick={() => void refreshByUser()} disabled={refreshing}>
-              {refreshing ? "読み直し中…" : "読み直す"}
-            </Button>
-          </div>
+          <div className="flex flex-wrap gap-sm">{listActions}</div>
         </div>
         <div className="flex flex-wrap gap-x-lg gap-y-xs">
           {readToggle ? (

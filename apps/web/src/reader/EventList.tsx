@@ -1,7 +1,19 @@
 import type { ArticleSummary } from "@smarternews/core/api";
+import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { eventTime, groupEvents, registrationLabel } from "@smarternews/client";
+import { Button, ErrorNotice, Loading } from "../ui/controls.tsx";
 import { SelectedMark } from "./SelectedMark.tsx";
+
+/** Where the fetch of the events stands, and what loads the rest; the list of articles shows the same. */
+export type EventListState = {
+  pending: boolean;
+  error: unknown;
+  retry: () => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => void;
+};
 
 /** The link at the top of the list of a category to the settings of that category. */
 export function CategorySettingsLink({ to, className = "" }: { to: string; className?: string }) {
@@ -15,6 +27,8 @@ export function CategorySettingsLink({ to, className = "" }: { to: string; class
 /** Upcoming events of one category, grouped by the day they start. */
 export function EventList({
   title,
+  actions,
+  state,
   settingsPath,
   events,
   selectedId,
@@ -23,6 +37,9 @@ export function EventList({
   now,
 }: {
   title: string;
+  /** The buttons beside the title, as the list of articles has them. */
+  actions: ReactNode;
+  state: EventListState;
   /** The settings page of the category, linked under the heading. */
   settingsPath: string | null;
   events: ArticleSummary[];
@@ -32,14 +49,23 @@ export function EventList({
   now: Date;
 }) {
   const groups = groupEvents(events, timeZone, now);
+  const failed = state.error !== null && state.error !== undefined;
   return (
     <section aria-label="イベントの一覧" className="flex h-full min-h-0 flex-col bg-surface">
-      <header className="flex flex-col items-start gap-sm border-b border-outline px-lg py-md">
-        <h1 className="type-headline-md">{title}</h1>
-        {settingsPath ? <CategorySettingsLink to={settingsPath} /> : null}
+      <header className="flex flex-col gap-sm border-b border-outline px-lg py-md">
+        {/* As in the list of articles: the buttons go below the name only when it would keep less than six characters. */}
+        <div className="flex flex-wrap items-center justify-between gap-sm">
+          <h1 className="min-w-0 grow basis-[6em] truncate type-headline-md" title={title}>
+            {title}
+          </h1>
+          <div className="flex flex-wrap gap-sm">{actions}</div>
+        </div>
+        {settingsPath ? <CategorySettingsLink to={settingsPath} className="self-start" /> : null}
       </header>
       <div data-list-scroll className="min-h-0 flex-1 overflow-y-auto">
-        {groups.length === 0 ? (
+        {failed ? <ErrorNotice error={state.error} onRetry={state.retry} /> : null}
+        {state.pending && !failed ? <Loading /> : null}
+        {!state.pending && !failed && groups.length === 0 ? (
           <p className="p-lg type-body-md text-on-surface-muted">これから開催されるイベントはありません。</p>
         ) : null}
         {groups.map((group) => (
@@ -74,6 +100,13 @@ export function EventList({
             </ul>
           </div>
         ))}
+        {state.hasMore ? (
+          <div className="flex justify-center p-lg">
+            <Button onClick={state.loadMore} disabled={state.loadingMore}>
+              さらに読み込む
+            </Button>
+          </div>
+        ) : null}
       </div>
     </section>
   );
