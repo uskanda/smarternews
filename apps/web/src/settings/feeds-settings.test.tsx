@@ -71,6 +71,35 @@ describe("the list of subscribed feeds", () => {
     expect(row).toHaveTextContent("理由: サイトがエラーを返しました（HTTP 503）");
   });
 
+  it("counts the failures in a row from the second one", async () => {
+    const server = makeServer();
+    const once = feedOf(server, "Once");
+    const thrice = feedOf(server, "Thrice");
+    const error = "HTTP status 503: https://blog.example.org/feed.xml";
+    recordFetchFailure(server.db, once.id, { now: "2026-03-01T11:00:00.000Z", error });
+    for (const now of ["2026-03-01T09:00:00.000Z", "2026-03-01T10:00:00.000Z", "2026-03-01T11:00:00.000Z"]) recordFetchFailure(server.db, thrice.id, { now, error });
+    renderApp({ server, route: "/settings/feeds" });
+
+    const first = await rowOf("Once");
+    expect(first).toHaveTextContent("取得に失敗");
+    expect(first).not.toHaveTextContent("続けて失敗");
+    expect(await rowOf("Thrice")).toHaveTextContent("3回続けて失敗");
+  });
+
+  it("says when the next fetch is, soon once that time has passed, and nothing while paused", async () => {
+    const server = makeServer();
+    recordFetchSuccess(server.db, feedOf(server, "Ahead").id, { now: "2026-03-01T11:50:00.000Z" });
+    recordFetchSuccess(server.db, feedOf(server, "Late").id, { now: "2026-03-01T11:00:00.000Z" });
+    const paused = feedOf(server, "Paused");
+    recordFetchSuccess(server.db, paused.id, { now: "2026-03-01T11:50:00.000Z" });
+    updateFeed(server.db, paused.id, { enabled: false });
+    renderApp({ server, route: "/settings/feeds" });
+
+    expect(await rowOf("Ahead")).toHaveTextContent("次の取得 3月1日 12:20");
+    expect(await rowOf("Late")).toHaveTextContent("次の取得 まもなく");
+    expect(await rowOf("Paused")).not.toHaveTextContent("次の取得");
+  });
+
   it("says that a feed the site answers is gone has ended, instead of that it is failing", async () => {
     const server = makeServer();
     const blog = feedOf(server, "Blog");
