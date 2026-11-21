@@ -54,7 +54,7 @@ XMLのパーサーの `isArray` に `category` と `dc:subject` を足し、要�
 `MatchableArticle` に `feedCategories: string[]` を足す。`Texts` は、文字列の欄と並びの欄を分けずに、どの欄も「値の並び」として持つ。文字列の欄は値が1つの並びで、値のない欄は空の並びである。
 条件は、並びの値のどれかが合えば合ったとみなす。正規表現は値ごとに試すので、`^` と `$` は1つの値の両端を指す（`grilling.md` のQ2）。値をつないで照合しないので、値をまたぐ部分一致は起きない。
 `articleTexts` は `feed_categories` を読み、読めない値を空の並びにする。
-add-feed-rules のルールは、フィルターと同じ条件と照合を使う。そのため、ルールの照合で記事を読む `ruleArticles` も `feed_categories` を読み、ルールの条件にも「分類」の欄を書ける。
+`add-feed-rules` のルールは、フィルターの条件と照合をそのまま使う。そのため、ルールの照合で記事を読む `ruleArticles` も `feed_categories` を読み、ルールの条件にも「分類」の欄を書ける。
 
 ### 画面の表示
 
